@@ -1,0 +1,122 @@
+import AppKit
+import Darwin
+import Foundation
+
+/// MacWallpaperEngine keeps imports separate from Steam's installation and never edits source wallpapers.
+enum ClientPaths {
+    static var supportURL: URL {
+        if let override = ProcessInfo.processInfo.environment["MAC_WALLPAPER_ENGINE_HOME"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/mac-wallpaper-engine", isDirectory: true)
+    }
+
+    static var libraryURL: URL { supportURL.appendingPathComponent("Library", isDirectory: true) }
+    static var managedAssetsURL: URL { supportURL.appendingPathComponent("SceneAssets", isDirectory: true) }
+    static var assetsURL: URL {
+        if let configured = UserDefaults.standard.string(forKey: "MacWallpaperEngineAssetsPath"), !configured.isEmpty {
+            let url = URL(fileURLWithPath: configured, isDirectory: true)
+            if hasSceneAssets(at: url) { return url }
+        }
+        let installed = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
+            "Library/Application Support/Steam/steamapps/common/wallpaper_engine/assets", isDirectory: true)
+        let candidates = [managedAssetsURL, installed,
+                          supportURL.appendingPathComponent("Steam/steamapps/common/wallpaper_engine/assets")]
+        return candidates.first(where: { hasSceneAssets(at: $0) }) ?? managedAssetsURL
+    }
+    static var steamcmdURL: URL? {
+        let candidates = [
+            UserDefaults.standard.string(forKey: "MacWallpaperEngineSteamCMDPath"),
+            "/opt/homebrew/bin/steamcmd", "/usr/local/bin/steamcmd",
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Steam/steamcmd.sh").path
+        ].compactMap { $0 }
+        for candidate in candidates {
+            let url = URL(fileURLWithPath: candidate).resolvingSymlinksInPath()
+            guard FileManager.default.isExecutableFile(atPath: url.path) else { continue }
+            if let wrapper = try? String(contentsOf: url, encoding: .utf8),
+               wrapper.hasPrefix("#!/bin/bash"),
+               let expression = try? NSRegularExpression(pattern: #"exec\s+"([^"]+/steamcmd\.sh)""#),
+               let match = expression.firstMatch(in: wrapper, range: NSRange(wrapper.startIndex..., in: wrapper)),
+               let range = Range(match.range(at: 1), in: wrapper) {
+                let runtime = URL(fileURLWithPath: String(wrapper[range]))
+                if FileManager.default.isExecutableFile(atPath: runtime.path) { return runtime }
+            }
+            return url
+        }
+        return nil
+    }
+
+    static func prepare() throws {
+        try FileManager.default.createDirectory(at: libraryURL, withIntermediateDirectories: true)
+        let starter = libraryURL.appendingPathComponent("starter-aurora", isDirectory: true)
+        let starterMarker = supportURL.appendingPathComponent(".starter-installed")
+        if !FileManager.default.fileExists(atPath: starterMarker.path),
+           !FileManager.default.fileExists(atPath: starter.path),
+           let bundled = Bundle.main.url(forResource: "StarterWallpaper", withExtension: nil) {
+            let pending = supportURL.appendingPathComponent(".starter-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: pending) }
+            try FileManager.default.copyItem(at: bundled, to: pending)
+            try FileManager.default.moveItem(at: pending, to: starter)
+        }
+        // Remember installation so deleting the starter does not restore it on launch.
+        if FileManager.default.fileExists(atPath: starter.path),
+           !FileManager.default.fileExists(atPath: starterMarker.path) {
+            try Data().write(to: starterMarker, options: .atomic)
+        }
+        setenv("MAC_WALLPAPER_ENGINE_SUPPORT_ROOT", supportURL.path, 1)
+        setenv("MAC_WALLPAPER_ENGINE_LIBRARY_ROOT", libraryURL.path, 1)
+        setenv("MAC_WALLPAPER_ENGINE_ASSETS_ROOT", assetsURL.path, 1)
+    }
+
+    static func hasSceneAssets(at url: URL) -> Bool {
+        // These are referenced by the renderer's built-in image and effect materials.
+        ["shaders/genericimage2.vert", "shaders/genericimage2.frag", "materials/util/effectpassthrough.json"].allSatisfy { path in
+            let file = url.appendingPathComponent(path)
+            guard let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  values.isRegularFile == true, (values.fileSize ?? 0) > 0 else { return false }
+            return FileManager.default.isReadableFile(atPath: file.path)
+        }
+    }
+
+    static func configureAssetsFolder(at url: URL) throws {
+        guard hasSceneAssets(at: url) else {
+            throw WorkshopFailure(message: "This folder does not contain Wallpaper Engine’s shared shaders and materials. Choose its complete assets folder, or install scene assets through Steam.")
+        }
+        UserDefaults.standard.set(url.path, forKey: "MacWallpaperEngineAssetsPath")
+        setenv("MAC_WALLPAPER_ENGINE_ASSETS_ROOT", url.path, 1)
+    }
+
+    static func installSceneAssets(from source: URL, to destination: URL) throws {
+        guard hasSceneAssets(at: source) else {
+            throw WorkshopFailure(message: "Steam did not produce complete scene assets. Confirm this account owns Wallpaper Engine and retry. Existing assets have not been changed.")
+        }
+        try Task.checkCancellation()
+        if FileManager.default.fileExists(atPath: destination.path) {
+            _ = try FileManager.default.replaceItemAt(destination, withItemAt: source)
+        } else {
+            try FileManager.default.moveItem(at: source, to: destination)
+        }
+    }
+
+    static func selectAssetsFolder() -> Bool {
+        let panel = NSOpenPanel()
+        panel.title = "Locate Wallpaper Engine assets"
+        panel.message = "Choose the assets folder inside your legitimate Wallpaper Engine installation. These shared resources are required by many scenes."
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return false }
+        let assets = hasSceneAssets(at: url) ? url : url.appendingPathComponent("assets")
+        do {
+            try configureAssetsFolder(at: assets)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Assets folder not found"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+            return false
+        }
+        return true
+    }
+}

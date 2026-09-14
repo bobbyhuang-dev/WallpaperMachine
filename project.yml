@@ -1,0 +1,133 @@
+name: mac-wallpaper-engine
+options:
+  bundleIdPrefix: app.mac-wallpaper-engine
+  deploymentTarget:
+    macOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    ENABLE_HARDENED_RUNTIME: NO
+    DEVELOPMENT_TEAM: ""
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: YES
+    ENABLE_DEBUG_DYLIB: NO
+targets:
+  MacWallpaperEngine:
+    type: application
+    platform: macOS
+    sources:
+      - path: upstream/renderer/app/WallpaperEngine
+        excludes:
+          - Resources/Info.plist
+          - Bridge/Generated/WallpaperBridgeFFI.h
+          - Bridge/Generated/WallpaperBridgeFFI.modulemap
+      - path: Resources/StarterWallpaper
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.mac-wallpaper-engine
+        PRODUCT_NAME: MacWallpaperEngine
+        INFOPLIST_FILE: upstream/renderer/app/WallpaperEngine/Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated"
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated"
+        LIBRARY_SEARCH_PATHS:
+          - "$(SRCROOT)/upstream/renderer/target/release"
+          - /opt/homebrew/opt/ffmpeg@8/lib
+          - /opt/homebrew/lib
+          - /opt/homebrew/opt/quickjs-ng/lib
+          - /opt/homebrew/opt/glslang/lib
+        OTHER_SWIFT_FLAGS: "-Xcc -fmodule-map-file=$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated/WallpaperBridgeFFI.modulemap"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+          - /opt/homebrew/opt/ffmpeg@8/lib
+          - /opt/homebrew/lib
+          - /opt/homebrew/opt/quickjs-ng/lib
+        OTHER_LDFLAGS:
+          - -lwallpaper_bridge
+          - -lc++
+          - -lvulkan
+          - -llz4
+          - -lfreetype
+          - -lavformat
+          - -lavcodec
+          - -lavutil
+          - -lswresample
+          - -lavfilter
+          - -lavdevice
+          - -lswscale
+          - -lqjs
+          - -lglslang
+          - -lSPIRV
+          - -lglslang-default-resource-limits
+          - -liconv
+          - -framework Accelerate
+          - -framework AppKit
+          - -framework CoreAudio
+          - -framework CoreData
+          - -framework CoreFoundation
+          - -framework CoreGraphics
+          - -framework CoreImage
+          - -framework CoreMedia
+          - -framework CoreText
+          - -framework CoreVideo
+          - -framework Foundation
+          - -framework IOSurface
+          - -framework Metal
+          - -framework OpenGL
+          - -framework QuartzCore
+          - -framework VideoToolbox
+  MacWallpaperEngineTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests
+    dependencies:
+      - target: MacWallpaperEngine
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.mac-wallpaper-engine.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/MacWallpaperEngine.app/Contents/MacOS/MacWallpaperEngine"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated"
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated"
+        OTHER_SWIFT_FLAGS: "-Xcc -fmodule-map-file=$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated/WallpaperBridgeFFI.modulemap"
+  MacWallpaperEngineUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - UITests
+    dependencies:
+      - target: MacWallpaperEngine
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.mac-wallpaper-engine.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: MacWallpaperEngine
+schemes:
+  MacWallpaperEngine:
+    build:
+      targets:
+        MacWallpaperEngine: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - MacWallpaperEngineTests
+  MacWallpaperEngineUI:
+    build:
+      targets:
+        MacWallpaperEngine: all
+    test:
+      config: Debug
+      targets:
+        - MacWallpaperEngineUITests

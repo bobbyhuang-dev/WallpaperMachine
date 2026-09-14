@@ -1,0 +1,22 @@
+{
+  "application": "MacWallpaperEngine",
+  "project": "mac-wallpaper-engine",
+  "recorded": "2026-09-14",
+  "renderer": {
+    "repository": "https://github.com/bigsaltyfishes/wallpaper-engine-for-macos",
+    "revision": "8c19c002ff37930c68117dd591dfe3f44792e25e",
+    "license": "GPL-2.0-only",
+    "directory": "upstream/renderer",
+    "modified": true
+  },
+  "sceneEngine": {
+    "repository": "https://github.com/bigsaltyfishes/open-wallpaper-engine",
+    "revision": "c4c36357a40c363f7f9e03e624f3c8820b620ef6",
+    "directory": "upstream/renderer/external/open-wallpaper-engine"
+  },
+  "workshopBrowser": {
+    "implementation": "Independently implemented for this application; no Unayung GPLv3 source copied.",
+    "license": "GPL-2.0-only"
+  },
+  "distributionStatus": "Private development. LICENSING.md records deferred distribution review; dependency and asset audit remains required."
+}

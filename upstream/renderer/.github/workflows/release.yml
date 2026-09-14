@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    name: Release
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: metadata
+        run: |
+          TAG="$(git tag --points-at "$GITHUB_SHA" | sort -V | tail -n 1)"
+
+          if [ -n "$TAG" ]; then
+            {
+              echo "tag=$TAG"
+              echo "title=$TAG"
+              echo "prerelease=false"
+            } >> "$GITHUB_OUTPUT"
+          else
+            NIGHTLY_TAG="nightly-${GITHUB_SHA::12}"
+            {
+              echo "tag=$NIGHTLY_TAG"
+              echo "title=Nightly (Pre-release)"
+              echo "prerelease=true"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve Build artifact
+        id: build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_ID="$(
+            gh run list \
+              --workflow build.yml \
+              --commit "$GITHUB_SHA" \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId'
+          )"
+
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "error: no successful Build workflow run found for $GITHUB_SHA" >&2
+            exit 1
+          fi
+
+          PUSH_DATE="$(
+            gh run view "$RUN_ID" \
+              --json createdAt \
+              --jq '.createdAt[0:10]'
+          )"
+
+          {
+            echo "run_id=$RUN_ID"
+            echo "push_date=$PUSH_DATE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download Build artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download \
+            "${{ steps.build.outputs.run_id }}" \
+            --name "Wallpaper Engine for macOS" \
+            --dir release-artifacts
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.metadata.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ steps.metadata.outputs.title }}
+          body: "Push date: ${{ steps.build.outputs.push_date }}"
+          prerelease: ${{ steps.metadata.outputs.prerelease }}
+          files: release-artifacts/Wallpaper Engine for macOS.dmg

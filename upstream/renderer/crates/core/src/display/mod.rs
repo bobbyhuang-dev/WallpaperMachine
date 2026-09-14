@@ -1,5 +1,5 @@
 use objc2::rc::Retained;
-use objc2_core_graphics::CGColor;
+use objc2_core_graphics::{CGColor, CGColorSpace, kCGColorSpaceSRGB};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSThread};
 use objc2_quartz_core::{CAAutoresizingMask, CAMetalLayer};
 
@@ -269,6 +269,11 @@ impl DisplayDesc {
         );
         metal_layer.setContentsScale(scale_factor);
         metal_layer.setDrawableSize(drawable_size);
+        // Match the sRGB native desktop poster instead of interpreting the
+        // same final pixels in the display's (possibly wide-gamut) color space.
+        if let Some(color_space) = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB })) {
+            metal_layer.setColorspace(Some(&color_space));
+        }
         metal_layer.setBackgroundColor(Some(&layer_color));
 
         metal_layer

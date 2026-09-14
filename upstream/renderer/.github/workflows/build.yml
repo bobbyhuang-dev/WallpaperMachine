@@ -1,0 +1,54 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  build:
+    name: Build
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.4.1'
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            keep-env-derivations = true
+            keep-outputs = true
+
+      - name: Restore and save Nix store
+        uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'Cargo.lock', 'rust-toolchain.toml', '**/*.nix') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
+          gc-max-store-size-macos: 1073741824
+
+      - name: Build
+        run: nix build
+
+      - name: Package Applications artifact
+        run: sudo hdiutil create -volname "Wallpaper Engine for macOS" -srcfolder result/Applications -ov -format UDZO "Wallpaper Engine for macOS.dmg"
+
+      - name: Upload Applications artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Wallpaper Engine for macOS
+          path: Wallpaper Engine for macOS.dmg
+          if-no-files-found: error

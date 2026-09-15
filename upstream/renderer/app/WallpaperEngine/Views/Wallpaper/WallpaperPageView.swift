@@ -46,6 +46,46 @@ struct WallpaperPageView: View {
         }
     }
 
+    /// Kept out of `body`: inlined, the card and its menu push the surrounding
+    /// expression past the Swift type checker's limit on slower machines.
+    @ViewBuilder
+    private func card(_ wallpaper: BridgeWallpaperEntry, favorites: Set<String>,
+                      visible: [BridgeWallpaperEntry], proxy: ScrollViewProxy) -> some View {
+        WallpaperCardView(
+            wallpaper: wallpaper,
+            isFavorite: favorites.contains(wallpaper.id),
+            activeOnTarget: store.isWallpaperActive(id: wallpaper.id, displayId: navigation.targetDisplayID),
+            onActivate: { apply(wallpaper) },
+            toggleFavorite: { toggleFavorite(wallpaper.id) }
+        )
+        .id(wallpaper.id)
+        .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
+            guard focusedWallpaperID == wallpaper.id,
+                  press.modifiers.intersection([.command, .control, .option, .shift]).isEmpty else { return .ignored }
+            return moveFocus(press.key, from: wallpaper.id, in: visible, proxy: proxy)
+        }
+        .contextMenu { cardMenu(wallpaper, favorites: favorites) }
+    }
+
+    @ViewBuilder
+    private func cardMenu(_ wallpaper: BridgeWallpaperEntry, favorites: Set<String>) -> some View {
+        Button("Select & Customize") { select(wallpaper) }
+            .disabled(actionsDisabled)
+        Button("Apply to Selected Display") { apply(wallpaper) }
+            .disabled(actionsDisabled || store.activationNeedsRefresh)
+        Button(favorites.contains(wallpaper.id) ? "Remove from Favorites" : "Add to Favorites") {
+            toggleFavorite(wallpaper.id)
+        }
+        Divider()
+        Button("Delete…", role: .destructive) { wallpaperToDelete = wallpaper }
+            .disabled(actionsDisabled)
+            .help("Move this wallpaper to Trash; original imported files are kept")
+            .accessibilityIdentifier("library.delete.\(wallpaper.id)")
+        Button("Show in Finder") {
+            NSWorkspace.shared.activateFileViewerSelecting([ClientPaths.libraryURL.appendingPathComponent(wallpaper.id)])
+        }
+    }
+
     var body: some View {
         let favorites = favoriteIDs
         let visibleWallpapers = wallpapers(favorites: favorites)
@@ -78,36 +118,7 @@ struct WallpaperPageView: View {
                         } else {
                             LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                                 ForEach(visibleWallpapers, id: \.id) { wallpaper in
-                                    WallpaperCardView(
-                                        wallpaper: wallpaper,
-                                        isFavorite: favorites.contains(wallpaper.id),
-                                        activeOnTarget: store.isWallpaperActive(id: wallpaper.id, displayId: navigation.targetDisplayID),
-                                        onActivate: { apply(wallpaper) },
-                                        toggleFavorite: { toggleFavorite(wallpaper.id) }
-                                    )
-                                    .id(wallpaper.id)
-                                    .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
-                                        guard focusedWallpaperID == wallpaper.id,
-                                              press.modifiers.intersection([.command, .control, .option, .shift]).isEmpty else { return .ignored }
-                                        return moveFocus(press.key, from: wallpaper.id, in: visibleWallpapers, proxy: proxy)
-                                    }
-                                    .contextMenu {
-                                        Button("Select & Customize") { select(wallpaper) }
-                                            .disabled(actionsDisabled)
-                                        Button("Apply to Selected Display") { apply(wallpaper) }
-                                            .disabled(actionsDisabled || store.activationNeedsRefresh)
-                                        Button(favorites.contains(wallpaper.id) ? "Remove from Favorites" : "Add to Favorites") {
-                                            toggleFavorite(wallpaper.id)
-                                        }
-                                        Divider()
-                                        Button("Delete…", role: .destructive) { wallpaperToDelete = wallpaper }
-                                            .disabled(actionsDisabled)
-                                            .help("Move this wallpaper to Trash; original imported files are kept")
-                                            .accessibilityIdentifier("library.delete.\(wallpaper.id)")
-                                        Button("Show in Finder") {
-                                            NSWorkspace.shared.activateFileViewerSelecting([ClientPaths.libraryURL.appendingPathComponent(wallpaper.id)])
-                                        }
-                                    }
+                                    card(wallpaper, favorites: favorites, visible: visibleWallpapers, proxy: proxy)
                                 }
                             }
                             .environment(\.wallpaperCardFocus, $focusedWallpaperID)

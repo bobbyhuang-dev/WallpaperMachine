@@ -20,10 +20,11 @@ final class ControlPanelLayoutTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: defaultsName) }
         let workshop = WorkshopStore(downloader: WorkshopDownloadManager(sessionDirectory: session),
                                      supportDirectory: session, defaults: defaults)
+        let updater = AppUpdateStore(currentVersion: "0.1.0", client: DisabledAppUpdateClient())
 
         for language in ["en", "zh-Hans"] {
             let controller = NSHostingController(rootView:
-                ControlPanelView(store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop)
+                ControlPanelView(store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop, updater: updater)
                     .environment(\.locale, Locale(identifier: language))
                     .defaultAppStorage(defaults)
             )

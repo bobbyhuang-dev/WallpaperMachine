@@ -96,6 +96,11 @@ def main():
                 raise RuntimeError(f"Unbundled dependency: {file}: {dependency}")
             if dependency.startswith("@rpath/") and not (frameworks / Path(dependency).name).exists() and "libswift" not in dependency:
                 raise RuntimeError(f"Missing bundled dependency: {dependency}")
+    info = app / "Contents/Info.plist"
+    version = subprocess.check_output(["/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", info], text=True).strip()
+    archive = app.parent / f"MacWallpaperEngine-{version}-arm64.zip"
+    archive.unlink(missing_ok=True)
+    run(["ditto", "-c", "-k", "--keepParent", app, archive])
     if args.install:
         destination = Path.home() / "Applications/MacWallpaperEngine.app"
         destination.parent.mkdir(exist_ok=True)
@@ -104,6 +109,7 @@ def main():
         shutil.copytree(app, destination)
         print(f"Installed {destination}")
     print(f"Verified bundle: {app}")
+    print(f"Release archive: {archive}")
 
 
 if __name__ == "__main__":

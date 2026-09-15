@@ -120,15 +120,18 @@ final class ControlPanelNavigation: ObservableObject {
 struct ControlPanelView: View {
     let store: BridgeStore
     let workshop: WorkshopStore
+    let updater: AppUpdateStore
     @ObservedObject private var navigation: ControlPanelNavigation
     @State private var presentedError: ControlPanelError?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @AppStorage("MacWallpaperEngine.favoriteWallpaperIDs") private var favoriteIDsData = Data()
 
-    init(store: BridgeStore, navigation: ControlPanelNavigation, workshop: WorkshopStore) {
+    init(store: BridgeStore, navigation: ControlPanelNavigation, workshop: WorkshopStore,
+         updater: AppUpdateStore) {
         self.store = store
         self.navigation = navigation
         self.workshop = workshop
+        self.updater = updater
     }
 
     private var sidebarSelection: Binding<ControlPanelSidebarItem?> {
@@ -272,6 +275,7 @@ struct ControlPanelView: View {
         }
         .environment(store)
         .environment(workshop)
+        .environment(updater)
         .environmentObject(navigation)
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .navigationSplitViewStyle(.balanced)

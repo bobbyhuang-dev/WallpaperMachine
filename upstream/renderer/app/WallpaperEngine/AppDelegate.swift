@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var controlPanelWindow: NSWindow?
     private let controlPanelNavigation = ControlPanelNavigation()
     private lazy var workshopStore = WorkshopStore()
+    private lazy var appUpdater = AppUpdateStore()
     private var displayChangeObserver: NSObjectProtocol?
     private var desktopWallpaperSync: DesktopWallpaperSync?
     private var store: BridgeStore?
@@ -131,6 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 sender.reply(toApplicationShouldTerminate: false)
                 return
             }
+            appUpdater.cancel()
             await workshopStore.steamCMDSetup.shutdown()
             await workshopStore.downloader.shutdown()
             do {
@@ -267,6 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let settings = menuItem(titleKey: "Settings…", action: #selector(openSettings))
         settings.keyEquivalent = ","
         applicationMenu.addItem(settings)
+        applicationMenu.addItem(menuItem(titleKey: "Check for Updates…", action: #selector(checkForUpdates)))
         applicationMenu.addItem(.separator())
         let quit = menuItem(titleKey: "Quit MacWallpaperEngine", action: #selector(exitApplication))
         quit.keyEquivalent = "q"
@@ -344,6 +347,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         showControlPanel(selection: .settings)
     }
 
+    @objc func checkForUpdates() {
+        showControlPanel(selection: .settings)
+        Task { _ = await appUpdater.checkForUpdates() }
+    }
+
     private func showControlPanel(selection: SidebarSelection) {
         controlPanelNavigation.selection = selection
         NSApp.setActivationPolicy(.regular)
@@ -374,7 +382,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     ControlPanelView(
                         store: store,
                         navigation: controlPanelNavigation,
-                        workshop: workshopStore
+                        workshop: workshopStore,
+                        updater: appUpdater
                     )
                 )
             )
@@ -468,6 +477,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 playbackSnapshotCurrent = false
             }
             rebuildMenu()
+            if startupError == nil, lastError == nil {
+                Task { _ = await appUpdater.checkForUpdates() }
+            }
         }
     }
 

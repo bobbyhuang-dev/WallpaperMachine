@@ -19,7 +19,12 @@ startup: it does not create the control panel, initialize the renderer, or resto
 wallpapers.
 
 Existing native tests cover import validation, duplicates, cancellation, downloader
-lifecycle, authentication, saved sessions, and scene-asset installation. Download
+lifecycle, authentication, saved sessions, scene-asset installation, and GitHub
+Release update discovery/download state. App-update tests use fixture JSON and a
+fake client: they never contact GitHub, download a real archive, or replace the
+running app. They cover version comparison, asset selection, host allowlisting,
+progress clamping, classified errors, and install retry/timeout. Live GitHub
+checks, archive extraction, and Applications replacement remain a manual smoke. Download
 tests exercise three simultaneous private terminals, per-item secrets and
 cancellation, duplicate-click suppression, FIFO slot handoff after failure/cancel,
 shutdown without launching queued work, and protection against stale credential

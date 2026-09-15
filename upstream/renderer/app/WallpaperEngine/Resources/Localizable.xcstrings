@@ -2970,6 +2970,146 @@
           }
         }
       }
+    },
+    "Check for Updates…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Check for Updates…"}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "检查更新…"}}
+      }
+    },
+    "Check Again" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Check Again"}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "再次检查"}}
+      }
+    },
+    "Download Update" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Download Update"}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载更新"}}
+      }
+    },
+    "Downloading %lld percent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Downloading %lld percent"}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在下载 %lld%"}}
+      }
+    },
+    "Restart and Install" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Restart and Install"}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "重启并安装"}}
+      }
+    },
+    "Retry installation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Retry installation"}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "重试安装"}}
+      }
+    },
+    "Open GitHub Releases" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Open GitHub Releases"}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "打开 GitHub Releases"}}
+      }
+    },
+    "Version %@ is available from GitHub Releases." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Version %@ is available from GitHub Releases."}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "GitHub Releases 上有新版本 %@。"}}
+      }
+    },
+    "Downloading version %@ — %lld percent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Downloading version %@ — %lld percent"}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在下载 %@ — %lld%"}}
+      }
+    },
+    "Version %@ is ready. Restart the app to install it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Version %@ is ready. Restart the app to install it."}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "版本 %@ 已就绪。重启应用即可安装。"}}
+      }
+    },
+    "Updates are checked against the latest published GitHub Release. Download and restart-install happen only after you confirm." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Updates are checked against the latest published GitHub Release. Download and restart-install happen only after you confirm."}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "更新对照最新发布的 GitHub Release。下载和重启安装都只会在你确认后进行。"}}
+      }
+    },
+    "In-app updates are available only in installed builds." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "In-app updates are available only in installed builds."}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "只有已安装的版本才支持应用内更新。"}}
+      }
+    },
+    "Couldn't reach GitHub Releases. Check your connection and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Couldn't reach GitHub Releases. Check your connection and try again."}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法连接 GitHub Releases。请检查网络后重试。"}}
+      }
+    },
+    "The GitHub Release update metadata is unavailable." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "The GitHub Release update metadata is unavailable."}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "GitHub Release 更新信息不可用。"}}
+      }
+    },
+    "The update couldn't be verified, so it wasn't installed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "The update couldn't be verified, so it wasn't installed."}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "更新未能通过校验，因此没有安装。"}}
+      }
+    },
+    "The updater doesn't have permission to install this update." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "The updater doesn't have permission to install this update."}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "更新程序没有权限安装此更新。"}}
+      }
+    },
+    "The update couldn't be completed. Try again or install it from GitHub Releases." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "The update couldn't be completed. Try again or install it from GitHub Releases."}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "更新未能完成。请重试，或从 GitHub Releases 安装。"}}
+      }
+    },
+    "Restart and install this update?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Restart and install this update?"}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "要重启并安装此更新吗？"}}
+      }
+    },
+    "The current app will quit and be replaced. Wallpapers and settings are kept." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "The current app will quit and be replaced. Wallpapers and settings are kept."}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "当前应用将退出并被替换。壁纸和设置会保留。"}}
+      }
+    },
+    "Update download progress" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "Update download progress"}},
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "更新下载进度"}}
+      }
     }
   },
   "version" : "1.0"

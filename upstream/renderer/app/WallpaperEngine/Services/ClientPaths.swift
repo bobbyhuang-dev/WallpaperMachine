@@ -25,27 +25,7 @@ enum ClientPaths {
                           supportURL.appendingPathComponent("Steam/steamapps/common/wallpaper_engine/assets")]
         return candidates.first(where: { hasSceneAssets(at: $0) }) ?? managedAssetsURL
     }
-    static var steamcmdURL: URL? {
-        let candidates = [
-            UserDefaults.standard.string(forKey: "MacWallpaperEngineSteamCMDPath"),
-            "/opt/homebrew/bin/steamcmd", "/usr/local/bin/steamcmd",
-            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Steam/steamcmd.sh").path
-        ].compactMap { $0 }
-        for candidate in candidates {
-            let url = URL(fileURLWithPath: candidate).resolvingSymlinksInPath()
-            guard FileManager.default.isExecutableFile(atPath: url.path) else { continue }
-            if let wrapper = try? String(contentsOf: url, encoding: .utf8),
-               wrapper.hasPrefix("#!/bin/bash"),
-               let expression = try? NSRegularExpression(pattern: #"exec\s+"([^"]+/steamcmd\.sh)""#),
-               let match = expression.firstMatch(in: wrapper, range: NSRange(wrapper.startIndex..., in: wrapper)),
-               let range = Range(match.range(at: 1), in: wrapper) {
-                let runtime = URL(fileURLWithPath: String(wrapper[range]))
-                if FileManager.default.isExecutableFile(atPath: runtime.path) { return runtime }
-            }
-            return url
-        }
-        return nil
-    }
+    static var managedSteamCMDURL: URL { supportURL.appendingPathComponent("SteamCMD", isDirectory: true) }
 
     static func prepare() throws {
         try FileManager.default.createDirectory(at: libraryURL, withIntermediateDirectories: true)

@@ -13,6 +13,33 @@ lifecycle, authentication, saved sessions, and scene-asset installation. Worksho
 service tests cover search and pagination beneath the UI (two tests use live Steam
 responses and therefore require network access). These remain in routine coverage.
 
+Deterministic Workshop tests additionally cover committed-query pagination,
+superseded requests, cancellation, and exact failed-request retry through the real
+page parser. Editor-state tests cover locale-specific scaling, invalid raw text,
+and independent wallpaper/field drafts.
+
+SteamCMD setup tests use isolated preferences/directories, URLProtocol archives,
+real system tar, and owned child processes. They cover publication/replacement,
+invalid discovery, traversal/link/archive-size boundaries, network failures,
+signature-policy blocking, cancellation, and no late writes. Runtime fixtures
+exercise canonical macOS path aliases and nested Mach-O executable dependencies.
+Fixtures do not prove that Valve's current distribution passes this Mac's policy.
+An official no-login installation smoke must use a disposable support root and
+the production providers, stop on any Gatekeeper/Rosetta/signature block, and never
+approve a prompt, re-sign downloaded code, or remove quarantine automatically.
+
+Approval tests operate only on isolated local fixtures: exact SHA-256 receipts,
+signature/policy-failure rejection, stale candidates, changed resources, private
+copies, and quarantine scope. Retained-install tests cover same-path retry/relaunch
+and explicit discard. The installation-to-downloader regression launches the
+published executable through the real PTY downloader and asserts imported manifest
+and media bytes; it does not use a separate prebuilt runtime folder.
+
+Control-panel layout tests measure offscreen NSHostingController proposals at
+760×560, 960×640, and 1240×800, long display menus, and English/Chinese empty-state
+reflow. They create no window, take no screenshot, and do not start the renderer.
+They establish layout bounds, not visual or desktop-integration correctness.
+
 Native desktop-poster tests use synthetic renderer pixels and an in-memory
 workspace. They cover lossless PNG dimensions/channel order/orientation, malformed
 frames, independent display/Space originals, duplicate-frame suppression, bounded
@@ -66,14 +93,32 @@ where needed. Note any checks skipped for unavailable hardware or assets.
 - Navigate Library, Workshop, Display, and Settings. Command-comma should reuse
   the existing window. Close and reopen the window without quitting or crashing.
 - Open and cancel Import. Search for a nonexistent local title, clear the search,
-  and confirm the collection returns. Select a wallpaper and refresh: selection
-  should survive.
-- Search Workshop, advance a page, navigate away and back: query/page should stay.
-  Open and dismiss download setup.
-- Apply a wallpaper and visually confirm it renders, switch to another, then
-  pause/resume. Relaunch and verify the expected wallpaper/playback state returns.
-- Try invalid media: confirm a useful failure and that a valid wallpaper still
-  applies afterward.
+  and confirm the collection returns. Single-click a wallpaper and refresh:
+  selection should survive. Double-click must not close the window.
+- Check Library/Workshop at 1240×800, 960×640, and 760×560 in light/dark mode. Inspectors stay
+  present; panes resize without losing the target or primary actions. Command-F,
+  grid arrows, Return/Space, text editing, and VoiceOver names remain scoped correctly.
+- Search Workshop, edit an unsubmitted query, then advance a page: pagination must
+  still use the displayed query. Submit to switch queries. Navigate away and back;
+  query/page/selection should stay. A failed request's Retry repeats that request.
+- Select a target display and apply; other displays keep their assignments.
+  Disconnected, disabled, or mirror targets are not silently redirected to primary.
+  Pause/resume and relaunch; expected wallpaper/playback state should return.
+- Leave invalid scaling text, refresh or change routes, then return: preserve text
+  and disable Apply Changes. Return stages only that field, not unrelated properties.
+  Check immediate audio/FPS/scaling-mode semantics versus pending Apply/Revert.
+- Install or locate SteamCMD in Settings and use the same runtime in Workshop
+  without restarting. Installation itself must not log in or start a download.
+  A blocked download remains present across relaunch/retry. Only explicitly confirm
+  Allow This SteamCMD after checking the shown path/fingerprint and understanding
+  the risk. Global Gatekeeper/signature checks remain enabled; updated bytes need
+  another approval. Verify category-sidebar filters never activate wallpapers.
+- Start a disposable download, close details and navigate elsewhere. The activity
+  bar restores its prompts; cancellation stops it without changing the old library.
+  Downloads do not auto-apply. Show in Library can reveal an item excluded by filters
+  and return to the original results; deleting it removes Workshop's installed badge.
+- Try invalid media and missing scene assets: show actionable failures without
+  blocking videos or losing an already downloaded scene. A valid wallpaper remains usable.
 - When relevant, check each connected display and sleep/wake behavior. Restore
   your original wallpaper configuration afterward.
 - Native desktop posters: apply both a video and a scene, visit each Desktop once,

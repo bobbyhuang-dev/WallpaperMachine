@@ -2,12 +2,8 @@ import SwiftUI
 
 struct DisplayConfigurationSection: View {
     let options: BridgeWallpaperOptionsSnapshot
-    let snapshotRevision: UInt64
-    let resetRevision: UInt64
     var displayIdFilter: String?
     var rowsAreCollapsible = true
-    @Binding var pendingScalingFactors: [String: Double]
-    @Binding var invalidScalingFactorDisplayIds: Set<String>
     @Binding var activeDisplayBridgeActionIds: Set<String>
     var onError: (Error) -> Void = { _ in }
 
@@ -29,11 +25,7 @@ struct DisplayConfigurationSection: View {
                     DisplayConfigurationRow(
                         wallpaperId: options.wallpaperId,
                         row: row,
-                        snapshotRevision: snapshotRevision,
-                        resetRevision: resetRevision,
                         collapsible: rowsAreCollapsible,
-                        pendingScalingFactors: $pendingScalingFactors,
-                        invalidScalingFactorDisplayIds: $invalidScalingFactorDisplayIds,
                         activeDisplayBridgeActionIds: $activeDisplayBridgeActionIds,
                         onError: onError
                     )
@@ -47,59 +39,42 @@ struct DisplayConfigurationSection: View {
 
 private struct DisplayConfigurationRow: View {
     @Environment(BridgeStore.self) private var store
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.locale) private var locale
 
     let wallpaperId: String
     let row: BridgeDisplayConfigRow
-    let snapshotRevision: UInt64
-    let resetRevision: UInt64
     let collapsible: Bool
-    @Binding var pendingScalingFactors: [String: Double]
-    @Binding var invalidScalingFactorDisplayIds: Set<String>
     @Binding var activeDisplayBridgeActionIds: Set<String>
     let onError: (Error) -> Void
-    @State private var enabled: Bool
     @State private var scalingMode: BridgeScalingMode
-    @State private var scalingFactorDraft: String
-    @State private var expanded: Bool
+    @State private var scalingFactor: Double
     @State private var targetFps: Double
-    @State private var muted: Bool
-    @State private var volume: Double
+    @State private var targetFpsIsEditing = false
     @State private var bridgeActionInProgress = false
     @FocusState private var scalingFactorFocused: Bool
 
     init(
         wallpaperId: String,
         row: BridgeDisplayConfigRow,
-        snapshotRevision: UInt64,
-        resetRevision: UInt64,
         collapsible: Bool,
-        pendingScalingFactors: Binding<[String: Double]>,
-        invalidScalingFactorDisplayIds: Binding<Set<String>>,
         activeDisplayBridgeActionIds: Binding<Set<String>>,
         onError: @escaping (Error) -> Void
     ) {
         self.wallpaperId = wallpaperId
         self.row = row
-        self.snapshotRevision = snapshotRevision
-        self.resetRevision = resetRevision
         self.collapsible = collapsible
-        _pendingScalingFactors = pendingScalingFactors
-        _invalidScalingFactorDisplayIds = invalidScalingFactorDisplayIds
         _activeDisplayBridgeActionIds = activeDisplayBridgeActionIds
         self.onError = onError
-        _enabled = State(initialValue: row.enabled)
         _scalingMode = State(initialValue: row.scalingMode)
-        _scalingFactorDraft = State(initialValue: Self.formattedScalingFactor(row.scalingFactor))
-        _expanded = State(initialValue: !collapsible)
+        _scalingFactor = State(initialValue: row.scalingFactor)
         _targetFps = State(initialValue: Double(Self.clampedTargetFps(row)))
-        _muted = State(initialValue: row.muted)
-        _volume = State(initialValue: Double(row.volume))
     }
 
     var body: some View {
         Group {
             if collapsible {
-                DisclosureGroup(isExpanded: $expanded) {
+                DisclosureGroup(isExpanded: expanded) {
                     controls
                         .padding(.top, 8)
                 } label: {
@@ -118,16 +93,11 @@ private struct DisplayConfigurationRow: View {
                 .fill(Color.secondary.opacity(0.08))
         }
         .onChange(of: row) { _, updatedRow in
-            reset(from: updatedRow)
-        }
-        .onChange(of: wallpaperId) { _, _ in
-            reset(from: row)
-        }
-        .onChange(of: snapshotRevision) { _, _ in
-            reset(from: row)
-        }
-        .onChange(of: resetRevision) { _, _ in
-            reset(from: row)
+            scalingMode = updatedRow.scalingMode
+            scalingFactor = updatedRow.scalingFactor
+            if !targetFpsIsEditing {
+                targetFps = Double(Self.clampedTargetFps(updatedRow))
+            }
         }
     }
 
@@ -135,7 +105,8 @@ private struct DisplayConfigurationRow: View {
         HStack {
             Text(row.title)
                 .font(.headline)
-            if row.dirty {
+                .fixedSize(horizontal: false, vertical: true)
+            if row.dirty || scalingDraft != nil {
                 Text("Modified")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -145,20 +116,10 @@ private struct DisplayConfigurationRow: View {
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Toggle("Enable", isOn: Binding {
-                enabled
-            } set: { isEnabled in
-                performAsyncBridgeAction {
-                    try await store.setDisplayConfigEnabledAsync(
-                        wallpaperId: wallpaperId,
-                        displayId: row.displayId,
-                        enabled: isEnabled
-                    )
-                    enabled = isEnabled
-                }
-            })
-            .toggleStyle(.switch)
-            .disabled(bridgeActionInProgress)
+            Text("Scaling mode and frame rate changes take effect immediately.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             Picker("Scaling Mode", selection: Binding {
                 scalingMode
@@ -178,23 +139,35 @@ private struct DisplayConfigurationRow: View {
                 Text("Fill").tag(BridgeScalingMode.fill)
             }
             .pickerStyle(.menu)
-            .disabled(!enabled || bridgeActionInProgress)
+            .accessibilityLabel(Text("Scaling mode for \(row.title)"))
 
-            HStack {
-                Text("Scaling Factor")
-                Spacer()
-                TextField("", text: $scalingFactorDraft)
-                    .textFieldStyle(.roundedBorder)
-                    .multilineTextAlignment(.trailing)
-                    .monospacedDigit()
-                    .frame(width: 72)
-                    .focused($scalingFactorFocused)
-                    .onChange(of: scalingFactorDraft) { _, value in
-                        updatePendingScalingFactor(value)
-                    }
-                    .onSubmit(commitScalingFactor)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Scaling Factor")
+                    Spacer()
+                    TextField("", text: scalingText)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .monospacedDigit()
+                        .frame(width: 88)
+                        .focused($scalingFactorFocused)
+                        .accessibilityLabel(Text("Scaling factor for \(row.title)"))
+                        .accessibilityValue(Text("\(scalingText.wrappedValue) times"))
+                        .accessibilityHint(Text(scalingDraft?.errorMessage ?? String(localized: "Apply Changes saves the scaling factor.")))
+                        .onSubmit(commitScalingFactor)
+                }
+
+                if let errorMessage = scalingDraft?.errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Apply Changes saves the scaling factor.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .disabled(!enabled || bridgeActionInProgress)
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
@@ -202,77 +175,61 @@ private struct DisplayConfigurationRow: View {
                     Spacer()
                     EditableNumberField(
                         value: UInt32(targetFps.rounded()),
-                        range: 1...row.maxFps
+                        range: 1...row.maxFps,
+                        accessibilityName: String(localized: "Target frame rate for \(row.title)")
                     ) { editedValue in
                         setTargetFps(editedValue)
                     }
                 }
 
                 Slider(
-                    value: Binding {
-                        targetFps
-                    } set: { value in
-                        targetFps = value
-                    },
+                    value: $targetFps,
                     in: 1...Double(row.maxFps),
                     step: 1,
                     onEditingChanged: { editing in
+                        targetFpsIsEditing = editing
                         if !editing {
                             setTargetFps(UInt32(targetFps.rounded()))
                         }
                     }
                 )
-                .disabled(!enabled || bridgeActionInProgress)
+                .accessibilityLabel(Text("Target frame rate for \(row.title)"))
+                .accessibilityValue(Text("\(UInt32(targetFps.rounded()).formatted(.number.grouping(.never))) frames per second"))
             }
-            .disabled(!enabled || bridgeActionInProgress)
+        }
+        .disabled(actionsAreDisabled)
+    }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Volume")
+    private var fieldKey: WallpaperEditorState.FieldKey {
+        WallpaperEditorState.FieldKey(wallpaperID: wallpaperId, fieldID: row.displayId)
+    }
 
-                HStack {
-                    Button {
-                        setMuted(!muted)
-                    } label: {
-                        Label(muted ? "Unmute" : "Mute", systemImage: muted ? "speaker.slash" : "speaker.wave.2")
-                    }
-                    .labelStyle(.iconOnly)
-                    .disabled(!enabled || bridgeActionInProgress)
+    private var scalingDraft: WallpaperEditorState.ScalingDraft? {
+        store.editorState.scalingDrafts[fieldKey]
+    }
 
-                    Slider(
-                        value: Binding {
-                            volume
-                        } set: { value in
-                            volume = value
-                        },
-                        in: 0...1,
-                        onEditingChanged: { editing in
-                            if !editing {
-                                setVolume(Float(volume))
-                            }
-                        }
-                    )
-                    .disabled(muted || !enabled || bridgeActionInProgress)
-                    .opacity(muted ? 0.45 : 1.0)
-                }
-            }
-            .disabled(!enabled || bridgeActionInProgress)
-
+    private var scalingText: Binding<String> {
+        let key = fieldKey
+        return Binding {
+            store.editorState.scalingDrafts[key]?.text
+                ?? scalingFactor.formatted(WallpaperEditorState.scalingFormat(locale: locale))
+        } set: { text in
+            store.editorState.setScalingText(text, key: key, locale: locale)
         }
     }
 
-    private func reset(from row: BridgeDisplayConfigRow) {
-        enabled = row.enabled
-        scalingMode = row.scalingMode
-        scalingFactorDraft = Self.formattedScalingFactor(row.scalingFactor)
-        pendingScalingFactors.removeValue(forKey: row.displayId)
-        invalidScalingFactorDisplayIds.remove(row.displayId)
-        targetFps = Double(Self.clampedTargetFps(row))
-        muted = row.muted
-        volume = Double(row.volume)
+    private var expanded: Binding<Bool> {
+        let key = WallpaperEditorState.FieldKey(wallpaperID: wallpaperId, fieldID: "display:\(row.displayId)")
+        return Binding {
+            store.editorState.expandedSections[key] ?? true
+        } set: { expanded in
+            store.editorState.expandedSections[key] = expanded
+        }
     }
 
-    private static func formattedScalingFactor(_ factor: Double) -> String {
-        factor.formatted(.number.precision(.fractionLength(1...3)))
+    private var actionsAreDisabled: Bool {
+        bridgeActionInProgress || store.activatingWallpaperID != nil || store.applyingWallpaperID != nil
+            || store.isWallpaperEditInProgress(id: wallpaperId)
     }
 
     private static func clampedTargetFps(_ row: BridgeDisplayConfigRow) -> UInt32 {
@@ -280,22 +237,8 @@ private struct DisplayConfigurationRow: View {
     }
 
     private func commitScalingFactor() {
-        guard let factor = pendingScalingFactors[row.displayId] else {
-            if invalidScalingFactorDisplayIds.contains(row.displayId) {
-                scalingFactorDraft = Self.formattedScalingFactor(row.scalingFactor)
-                invalidScalingFactorDisplayIds.remove(row.displayId)
-                onError(ScalingFactorValidationError())
-            }
-            return
-        }
-
-        guard factor.isFinite, factor > 0 else {
-            scalingFactorDraft = Self.formattedScalingFactor(row.scalingFactor)
-            pendingScalingFactors.removeValue(forKey: row.displayId)
-            invalidScalingFactorDisplayIds.remove(row.displayId)
-            onError(ScalingFactorValidationError())
-            return
-        }
+        let key = fieldKey
+        guard let draft = store.editorState.scalingDrafts[key], let factor = draft.value else { return }
 
         performAsyncBridgeAction {
             try await store.editScalingFactorAsync(
@@ -303,79 +246,56 @@ private struct DisplayConfigurationRow: View {
                 displayId: row.displayId,
                 factor: factor
             )
-            try await store.applyWallpaperOptionsAsync(wallpaperId: wallpaperId)
-            scalingFactorDraft = Self.formattedScalingFactor(factor)
-            pendingScalingFactors.removeValue(forKey: row.displayId)
-            invalidScalingFactorDisplayIds.remove(row.displayId)
+            scalingFactor = factor
+            if store.editorState.scalingDrafts[key]?.text == draft.text {
+                store.editorState.clearScaling(key)
+            }
             scalingFactorFocused = false
-        }
-    }
-
-    private func updatePendingScalingFactor(_ value: String) {
-        let committed = Self.formattedScalingFactor(row.scalingFactor)
-        guard value != committed else {
-            pendingScalingFactors.removeValue(forKey: row.displayId)
-            invalidScalingFactorDisplayIds.remove(row.displayId)
-            return
-        }
-
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let factor = Double(trimmed), factor.isFinite, factor > 0 {
-            pendingScalingFactors[row.displayId] = factor
-            invalidScalingFactorDisplayIds.remove(row.displayId)
-        } else {
-            pendingScalingFactors.removeValue(forKey: row.displayId)
-            invalidScalingFactorDisplayIds.insert(row.displayId)
         }
     }
 
     private func setTargetFps(_ fps: UInt32) {
         let fps = min(max(fps, 1), row.maxFps)
         performAsyncBridgeAction {
-            try await store.setTargetFpsAsync(
-                wallpaperId: wallpaperId,
-                displayId: row.displayId,
-                fps: fps
-            )
-            targetFps = Double(fps)
-        }
-    }
-
-    private func setMuted(_ muted: Bool) {
-        performAsyncBridgeAction {
-            try await store.setMutedAsync(wallpaperId: wallpaperId, muted: muted)
-            self.muted = muted
-        }
-    }
-
-    private func setVolume(_ volume: Float) {
-        performAsyncBridgeAction {
-            try await store.setVolumeAsync(wallpaperId: wallpaperId, volume: volume)
-            self.volume = Double(volume)
+            do {
+                try await store.setTargetFpsAsync(
+                    wallpaperId: wallpaperId,
+                    displayId: row.displayId,
+                    fps: fps
+                )
+                targetFps = Double(fps)
+            } catch {
+                targetFps = Double(Self.clampedTargetFps(row))
+                throw error
+            }
         }
     }
 
     private func performAsyncBridgeAction(_ action: @escaping () async throws -> Void) {
-        guard !bridgeActionInProgress else {
-            return
-        }
+        guard isEnabled, !actionsAreDisabled else { return }
 
+        let actionId = "\(wallpaperId):\(row.displayId)"
+        let errorRevision = store.latestBridgeErrorRevision
         bridgeActionInProgress = true
-        activeDisplayBridgeActionIds.insert(row.displayId)
+        activeDisplayBridgeActionIds.insert(actionId)
         Task {
+            defer {
+                bridgeActionInProgress = false
+                activeDisplayBridgeActionIds.remove(actionId)
+            }
             do {
                 try await action()
             } catch {
-                onError(error)
+                if store.latestBridgeErrorRevision == errorRevision {
+                    onError(error)
+                }
             }
-            bridgeActionInProgress = false
-            activeDisplayBridgeActionIds.remove(row.displayId)
         }
     }
 }
 
 struct ScalingFactorValidationError: LocalizedError {
     var errorDescription: String? {
-        "Scaling factor must be greater than 0."
+        String(localized: "Enter a finite scaling factor greater than zero.")
     }
 }

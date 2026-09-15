@@ -18,10 +18,11 @@ final class DownloaderTests: XCTestCase {
     func testImmediateShutdownWaitsForStagingCleanup() async throws {
         let root = try makeRuntime("IFS= read -r finish")
         defer { try? FileManager.default.removeItem(at: root) }
-        let downloader = WorkshopDownloader(sessionDirectory: root.appendingPathComponent("SteamSession"))
+        let downloader = WorkshopDownloader(sessionDirectory: root.appendingPathComponent("SteamSession"), runtimeProvider: ShellRuntimeProvider())
         downloader.start(item: item, username: "localcanceltest", executable: root.appendingPathComponent("runtime/steamcmd"), library: root.appendingPathComponent("Library"), onImported: {})
         await downloader.shutdown()
         XCTAssertFalse(downloader.isRunning)
+        XCTAssertTrue(downloader.wasCancelled)
         XCTAssertNil(downloader.downloadedID)
         let children = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
         XCTAssertFalse(children.contains { $0.hasPrefix(".mac-wallpaper-engine-workshop-") })
@@ -221,7 +222,7 @@ final class DownloaderTests: XCTestCase {
         let destination = root.appendingPathComponent("SceneAssets")
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         try Data("previous-incomplete-install".utf8).write(to: destination.appendingPathComponent("old"))
-        let downloader = WorkshopDownloader(sessionDirectory: root.appendingPathComponent("SteamSession"))
+        let downloader = WorkshopDownloader(sessionDirectory: root.appendingPathComponent("SteamSession"), runtimeProvider: ShellRuntimeProvider())
         downloader.installAssets(username: "localtest", executable: root.appendingPathComponent("runtime/steamcmd"), destination: destination, onInstalled: {})
         do {
             try await waitUntil { downloader.prompt == .password }
@@ -251,7 +252,7 @@ final class DownloaderTests: XCTestCase {
         let destination = root.appendingPathComponent("SceneAssets")
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         try Data("preserved".utf8).write(to: destination.appendingPathComponent("existing"))
-        let downloader = WorkshopDownloader(sessionDirectory: root.appendingPathComponent("SteamSession"))
+        let downloader = WorkshopDownloader(sessionDirectory: root.appendingPathComponent("SteamSession"), runtimeProvider: ShellRuntimeProvider())
         downloader.installAssets(username: "localtest", executable: root.appendingPathComponent("runtime/steamcmd"), destination: destination) {
             XCTFail("An incomplete install must not become the renderer's configured assets")
         }
@@ -277,7 +278,7 @@ final class DownloaderTests: XCTestCase {
             """)
         defer { try? FileManager.default.removeItem(at: root) }
         let destination = root.appendingPathComponent("SceneAssets")
-        let downloader = WorkshopDownloader(sessionDirectory: root.appendingPathComponent("SteamSession"))
+        let downloader = WorkshopDownloader(sessionDirectory: root.appendingPathComponent("SteamSession"), runtimeProvider: ShellRuntimeProvider())
         downloader.installAssets(username: "localtest", executable: root.appendingPathComponent("runtime/steamcmd"), destination: destination) {
             XCTFail("Cancellation must not publish partial scene assets")
         }
@@ -453,6 +454,7 @@ final class DownloaderTests: XCTestCase {
             throw error
         }
         XCTAssertNil(cancelled.downloadedID)
+        XCTAssertTrue(cancelled.wasCancelled)
         XCTAssertEqual(cancelled.savedAccount, "localtest")
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("Library/123456").path))
         try assertNoStaging(in: root)
@@ -498,6 +500,187 @@ final class DownloaderTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: outside, encoding: .utf8), "token:localtest")
         XCTAssertEqual((try files.attributesOfItem(atPath: outside.path)[.posixPermissions] as? NSNumber)?.intValue, 0o640)
         try assertNoStaging(in: root)
+    }
+
+    func testRestartRejectsRuntimeRemovedByPreviousProcess() async throws {
+        let root = try makeRuntime("rm steamcmd; exit 42")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let downloader = startDownload(in: root)
+        try await waitForStop(downloader)
+        XCTAssertNotNil(downloader.errorMessage)
+        XCTAssertNil(downloader.downloadedID)
+        XCTAssertFalse(downloader.wasCancelled)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("Library/123456").path))
+        try assertNoStaging(in: root)
+    }
+
+    func testDefaultRuntimeRejectsShellWithoutExecutingOrChangingIt() throws {
+        let root = try makeRuntime("printf unexpected > ../executed")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("runtime/steamcmd")
+        let original = try Data(contentsOf: executable)
+        XCTAssertThrowsError(try SteamCMDRuntimeService().resolve(executable: executable))
+        XCTAssertEqual(try Data(contentsOf: executable), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("executed").path))
+    }
+
+    func testMalformedMachOLoadCommandsAreRejectedWithoutModifyingSource() throws {
+        let root = try makeRuntime("exit 0")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("runtime/steamcmd")
+        // A 64-bit executable declares a load-command table that exceeds the actual file.
+        var malformed = Data()
+        for word in [UInt32(0xfeedfacf), 0x01000007, 3, 2, 1, 4096, 0, 0] {
+            var littleEndian = word.littleEndian
+            withUnsafeBytes(of: &littleEndian) { malformed.append(contentsOf: $0) }
+        }
+        try malformed.write(to: executable)
+        XCTAssertThrowsError(try SteamCMDRuntimeService().resolve(executable: executable)) { error in
+            XCTAssertEqual((error as? SteamCMDSetupIssue)?.kind, .incompleteRuntime)
+        }
+        XCTAssertEqual(try Data(contentsOf: executable), malformed)
+    }
+
+    func testDefaultProviderPreservesContainedFrameworkLinksAcrossPrivateVarAliases() async throws {
+        let files = FileManager.default
+        let directory = try makeMachOFrameworkRuntime()
+        defer { try? files.removeItem(at: directory) }
+        let root = directory.appendingPathComponent("MacOS", isDirectory: true)
+        let framework = root.appendingPathComponent("Frameworks/Breakpad.framework", isDirectory: true)
+        let aliasPath = root.path.hasPrefix("/private/var/") ? String(root.path.dropFirst("/private".count)) : root.path
+        let privatePath = aliasPath.hasPrefix("/var/") ? "/private" + aliasPath : aliasPath
+        let service = SteamCMDRuntimeService(processRunner: FixtureSystemAssessment())
+        let alias = URL(fileURLWithPath: aliasPath, isDirectory: true)
+        let physical = URL(fileURLWithPath: privatePath, isDirectory: true)
+        try await service.validateBootstrap(at: physical)
+        try await service.validate(at: alias)
+        XCTAssertEqual(try service.resolve(executable: alias.appendingPathComponent("steamcmd")),
+                       try service.resolve(executable: physical.appendingPathComponent("steamcmd")))
+        let staging = directory.appendingPathComponent("private-copy", isDirectory: true)
+        let prepared = try await service.prepare(executable: physical.appendingPathComponent("steamcmd"), staging: staging)
+        XCTAssertEqual(try Data(contentsOf: prepared), try Data(contentsOf: root.appendingPathComponent("steamcmd")))
+        XCTAssertEqual(try files.destinationOfSymbolicLink(atPath: staging.appendingPathComponent("Frameworks/Breakpad.framework/Resources").path), "Versions/Current/Resources")
+        XCTAssertEqual(try String(contentsOf: staging.appendingPathComponent("Frameworks/Breakpad.framework/Resources/Info.txt"), encoding: .utf8), "sealed-resource-fixture")
+
+        let outside = directory.appendingPathComponent("outside", isDirectory: true)
+        try files.createDirectory(at: outside, withIntermediateDirectories: false)
+        try Data("preserved".utf8).write(to: outside.appendingPathComponent("sentinel"))
+        try files.removeItem(at: framework.appendingPathComponent("Resources"))
+        try files.createSymbolicLink(atPath: framework.appendingPathComponent("Resources").path, withDestinationPath: "../../../outside")
+        do {
+            try await service.validate(at: physical)
+            XCTFail("A framework link escaping its container must be rejected")
+        } catch {
+            XCTAssertEqual((error as? SteamCMDSetupIssue)?.kind, .incompleteRuntime)
+        }
+        XCTAssertEqual(try String(contentsOf: outside.appendingPathComponent("sentinel"), encoding: .utf8), "preserved")
+    }
+
+    func testNestedHelperRetainsExecutableContextThroughDylibAndRPathChains() async throws {
+        let files = FileManager.default
+        let directory = try makeMachOFrameworkRuntime()
+        defer { try? files.removeItem(at: directory) }
+        let root = directory.appendingPathComponent("MacOS", isDirectory: true)
+        let version = root.appendingPathComponent("Frameworks/Breakpad.framework/Versions/A", isDirectory: true)
+        let helper = version.appendingPathComponent("Helpers/report_sender")
+        try files.createDirectory(at: helper.deletingLastPathComponent(), withIntermediateDirectories: false)
+        let images = [
+            (helper, fixtureMachO(fileType: 2, dependency: "@executable_path/../Resources/breakpadUtilities.dylib", rpaths: ["@executable_path/../Resources"])),
+            (version.appendingPathComponent("Resources/breakpadUtilities.dylib"), fixtureMachO(fileType: 6, dependency: "@rpath/helperSupport.dylib")),
+            (version.appendingPathComponent("Resources/helperSupport.dylib"), fixtureMachO(fileType: 6, dependency: "@executable_path/../Resources/last.dylib")),
+            (version.appendingPathComponent("Resources/last.dylib"), fixtureMachO(fileType: 6))
+        ]
+        for (url, contents) in images { try contents.write(to: url) }
+        try files.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
+        let service = SteamCMDRuntimeService(processRunner: FixtureSystemAssessment())
+        let staging = directory.appendingPathComponent("private-copy", isDirectory: true)
+        _ = try await service.prepare(executable: root.appendingPathComponent("steamcmd"), staging: staging)
+        for (url, contents) in images {
+            let relative = String(url.path.dropFirst(root.path.count + 1))
+            XCTAssertEqual(try Data(contentsOf: staging.appendingPathComponent(relative)), contents)
+        }
+
+        let outside = directory.appendingPathComponent("outside.dylib")
+        let sentinel = fixtureMachO(fileType: 6)
+        try sentinel.write(to: outside)
+        try fixtureMachO(fileType: 6, dependency: "@executable_path/../../../../../../outside.dylib")
+            .write(to: version.appendingPathComponent("Resources/last.dylib"))
+        do {
+            try await service.validate(at: root)
+            XCTFail("Nested executable context must not permit escaping the runtime")
+        } catch {
+            XCTAssertEqual((error as? SteamCMDSetupIssue)?.kind, .incompleteRuntime)
+        }
+        XCTAssertEqual(try Data(contentsOf: outside), sentinel)
+    }
+
+    private func makeMachOFrameworkRuntime() throws -> URL {
+        let files = FileManager.default
+        let directory = files.temporaryDirectory.appendingPathComponent("mwe-framework-links-\(UUID().uuidString)", isDirectory: true)
+        let root = directory.appendingPathComponent("MacOS", isDirectory: true)
+        let framework = root.appendingPathComponent("Frameworks/Breakpad.framework", isDirectory: true)
+        let version = framework.appendingPathComponent("Versions/A", isDirectory: true)
+        try files.createDirectory(at: version.appendingPathComponent("Resources"), withIntermediateDirectories: true)
+        try Data("sealed-resource-fixture".utf8).write(to: version.appendingPathComponent("Resources/Info.txt"))
+        try files.createSymbolicLink(atPath: framework.appendingPathComponent("Versions/Current").path, withDestinationPath: "A")
+        try files.createSymbolicLink(atPath: framework.appendingPathComponent("Resources").path, withDestinationPath: "Versions/Current/Resources")
+        try files.createSymbolicLink(atPath: framework.appendingPathComponent("Breakpad").path, withDestinationPath: "Versions/Current/Breakpad")
+        for (path, contents) in [
+            (root.appendingPathComponent("steamcmd"), fixtureMachO(fileType: 2)),
+            (root.appendingPathComponent("steamconsole.dylib"), fixtureMachO(fileType: 6, dependency: "@loader_path/crashhandler.dylib")),
+            (root.appendingPathComponent("crashhandler.dylib"), fixtureMachO(fileType: 6, dependency: "@loader_path/Breakpad.framework/Versions/A/Breakpad")),
+            (version.appendingPathComponent("Breakpad"), fixtureMachO(fileType: 6))
+        ] {
+            try contents.write(to: path)
+            try files.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path)
+        }
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: root.appendingPathComponent("steamcmd.sh"))
+        return directory
+    }
+
+    private func fixtureMachO(fileType: UInt32, dependency: String? = nil, rpaths: [String] = []) -> Data {
+        func words(_ values: [UInt32]) -> Data {
+            var result = Data()
+            for value in values {
+                var little = value.littleEndian
+                withUnsafeBytes(of: &little) { result.append(contentsOf: $0) }
+            }
+            return result
+        }
+        var commands = Data()
+        let entries = dependency.map { [(UInt32(0xc), $0)] } ?? []
+        for (command, path) in entries + rpaths.map({ (UInt32(0x8000001c), $0) }) {
+            let name = Data((path + "\0").utf8)
+            let header = command == 0xc ? 24 : 12
+            let length = (header + name.count + 3) & ~3
+            commands.append(words([command, UInt32(length), UInt32(header)]))
+            if command == 0xc { commands.append(words([0, 0, 0])) }
+            commands.append(name)
+            commands.append(Data(repeating: 0, count: length - header - name.count))
+        }
+        return words([0xfeedfacf, 0x01000007, 3, fileType, UInt32(entries.count + rpaths.count), UInt32(commands.count), 0, 0]) + commands
+    }
+
+    func testShutdownWaitsForOwnedDescendantsBeforeRemovingStaging() async throws {
+        let root = try makeRuntime("""
+            (trap '' TERM; sleep 3; printf late > ../late-write) &
+            printf 'password: '
+            IFS= read -r password
+            """)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let downloader = startDownload(in: root)
+        do {
+            try await waitUntil { downloader.prompt == .password }
+            await downloader.shutdown()
+            XCTAssertTrue(downloader.wasCancelled)
+            try assertNoStaging(in: root)
+            try await Task.sleep(for: .milliseconds(1300))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("late-write").path))
+            XCTAssertNil(downloader.downloadedID)
+        } catch {
+            await downloader.shutdown()
+            throw error
+        }
     }
 
     private func makeSessionRuntime() throws -> URL {
@@ -665,7 +848,7 @@ final class DownloaderTests: XCTestCase {
     }
 
     private func startDownload(in root: URL, username: String = "localtest", itemID: String = "123456", libraryName: String = "Library", rememberSession: Bool = true) -> WorkshopDownloader {
-        let downloader = WorkshopDownloader(sessionDirectory: root.appendingPathComponent("SteamSession"))
+        let downloader = WorkshopDownloader(sessionDirectory: root.appendingPathComponent("SteamSession"), runtimeProvider: ShellRuntimeProvider())
         let requestedItem = WorkshopItem(id: itemID, title: "Session fixture", creator: "Test", summary: "", previewURL: nil, tags: ["Video"], size: 0, subscriptions: 0)
         downloader.start(item: requestedItem, username: username, executable: root.appendingPathComponent("runtime/steamcmd"), library: root.appendingPathComponent(libraryName), rememberSession: rememberSession, onImported: {})
         return downloader
@@ -677,5 +860,50 @@ final class DownloaderTests: XCTestCase {
             guard Date() < deadline else { throw WorkshopFailure(message: "SteamCMD did not advance its interactive session") }
             try await Task.sleep(for: .milliseconds(20))
         }
+    }
+}
+
+/// Replaces only Valve runtime verification; PTY, child lifecycle, session and importer remain real.
+private struct ShellRuntimeProvider: SteamCMDRuntimeProviding {
+    func resolve(executable: URL) throws -> SteamCMDRuntime {
+        let root = executable.deletingLastPathComponent()
+        try check(root)
+        return SteamCMDRuntime(rootURL: root, executableURL: root.appendingPathComponent("steamcmd"))
+    }
+
+    func prepare(executable: URL, staging: URL) async throws -> URL {
+        try Task.checkCancellation()
+        let runtime = try resolve(executable: executable)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        let binary = staging.appendingPathComponent("steamcmd")
+        try FileManager.default.copyItem(at: runtime.executableURL, to: binary)
+        try check(staging)
+        return binary
+    }
+
+    func validateBootstrap(at root: URL) async throws { try check(root) }
+    func validate(at root: URL) async throws { try check(root) }
+
+    private func check(_ root: URL) throws {
+        try Task.checkCancellation()
+        let executable = root.appendingPathComponent("steamcmd")
+        let attributes = try FileManager.default.attributesOfItem(atPath: executable.path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular,
+              FileManager.default.isExecutableFile(atPath: executable.path),
+              try String(contentsOf: executable, encoding: .utf8).hasPrefix("#!/bin/sh\n") else {
+            throw WorkshopFailure(message: "The shell runtime fixture is missing or invalid")
+        }
+    }
+}
+
+/// The fixture exercises production filesystem/load-command validation, not Apple's trust policy.
+private struct FixtureSystemAssessment: SteamCMDProcessRunning {
+    func run(executable: URL, arguments: [String], workingDirectory: URL, environment: [String: String],
+             onOutput: @escaping @Sendable (Data) -> Void) async throws -> Int32 {
+        guard ["/usr/bin/codesign", "/usr/sbin/spctl", "/usr/bin/arch"].contains(executable.path) else {
+            throw WorkshopFailure(message: "The fixture must not execute a runtime program")
+        }
+        try Task.checkCancellation()
+        return 0
     }
 }

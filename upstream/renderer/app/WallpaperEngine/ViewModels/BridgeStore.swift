@@ -2,6 +2,15 @@ import AVFoundation
 import Foundation
 import Observation
 
+enum LibraryLoadState: Equatable {
+    case loading, loaded, failed(String)
+}
+
+struct WallpaperActionError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
 @MainActor
 @Observable
 final class BridgeStore {
@@ -15,6 +24,13 @@ final class BridgeStore {
     var latestBridgeErrorMessage: String?
     var latestBridgeErrorRevision: UInt64
     @ObservationIgnored var onSnapshotApplied: (() -> Void)?
+    let editorState = WallpaperEditorState()
+    private(set) var activatingWallpaperID: String?
+    private(set) var applyingWallpaperID: String?
+    private var activeWallpaperEdits: [String: Int] = [:]
+    private var wallpaperAppliesNeedingSave = Set<String>()
+    private(set) var activationNeedsRefresh = false
+    private(set) var libraryLoadState: LibraryLoadState = .loading
 
     convenience init() throws {
         self.init(bridge: try WallpaperBridge())
@@ -35,18 +51,40 @@ final class BridgeStore {
     }
 
     func refreshAllAsync() async throws {
-        let bundle = try await bridge.allSnapshots()
-        apply(bundle)
+        try requireIdleActivation()
+        do {
+            let bundle = try await (activationNeedsRefresh ? bridge.refreshDisplays() : bridge.allSnapshots())
+            apply(bundle)
+            libraryLoadState = .loaded
+            activationNeedsRefresh = false
+        } catch {
+            libraryLoadState = .failed(error.localizedDescription)
+            throw error
+        }
     }
 
     func bootstrapAsync() async throws {
-        let bundle = try await bridge.bootstrap()
-        apply(bundle)
+        libraryLoadState = .loading
+        do {
+            let bundle = try await bridge.bootstrap()
+            apply(bundle)
+            libraryLoadState = .loaded
+        } catch {
+            libraryLoadState = .failed(error.localizedDescription)
+            throw error
+        }
     }
 
     func refreshLibraryAsync() async throws {
-        let bundle = try await bridge.refreshLibrary()
-        apply(bundle)
+        try requireIdleActivation()
+        do {
+            let bundle = try await bridge.refreshLibrary()
+            apply(bundle)
+            libraryLoadState = .loaded
+        } catch {
+            libraryLoadState = .failed(error.localizedDescription)
+            throw error
+        }
     }
 
     func deleteWallpaperAsync(id: String) async throws {
@@ -60,6 +98,7 @@ final class BridgeStore {
         }
         try WallpaperDeletionService.moveToTrash(id: id, library: ClientPaths.libraryURL)
         try await refreshLibraryAsync()
+        editorState.discard(wallpaperID: id)
     }
 
     func refreshDisplaysAsync() async throws {
@@ -70,6 +109,129 @@ final class BridgeStore {
     func selectWallpaperAsync(id: String) async throws {
         let bundle = try await bridge.selectWallpaper(id: id)
         apply(bundle)
+    }
+
+    func activateWallpaperAsync(id: String, displayId: String) async throws {
+        try requireIdleActivation()
+        try requireIdleWallpaperEdits(id: id)
+        guard librarySnapshot.wallpapers.contains(where: { $0.id == id }) else {
+            throw WallpaperActionError(message: String(localized: "This wallpaper is no longer in your library. Refresh Library and choose another wallpaper."))
+        }
+        activatingWallpaperID = id
+        defer { activatingWallpaperID = nil }
+        try await selectWallpaperAsync(id: id)
+        guard !activationNeedsRefresh else {
+            throw WallpaperActionError(message: String(localized: "Refresh all wallpaper state before applying again."))
+        }
+        try validateActivationTarget(displayId)
+        guard let options = wallpaperOptionsSnapshot, options.wallpaperId == id else {
+            throw WallpaperActionError(message: String(localized: "Wallpaper settings are unavailable. Refresh Library and retry."))
+        }
+        if isWallpaperActive(id: id, displayId: displayId), !options.dirty,
+           !wallpaperAppliesNeedingSave.contains(id), !editorState.hasPendingEdits(wallpaperID: id) { return }
+        guard options.supported else {
+            throw WallpaperActionError(message: String(localized: "This wallpaper type cannot be played on macOS. You can still inspect or remove it from your library."))
+        }
+        guard let row = options.displayConfigurations.first(where: { $0.displayId == displayId }) else {
+            throw WallpaperActionError(message: String(localized: "No configuration is available for this display. Refresh Displays and retry."))
+        }
+        try validatePendingWallpaperEdits(id: id, options: options)
+        try await validateWallpaperForPlaybackAsync(id: id)
+        try await commitPendingWallpaperEditsAsync(id: id)
+        // Validation and async draft commits may outlive a display topology change.
+        try validateActivationTarget(displayId)
+        let previouslyActive = isWallpaperActive(id: id, displayId: displayId)
+        var applyCompleted = false
+        do {
+            try await setDisplayConfigEnabledAsync(wallpaperId: id, displayId: displayId, enabled: true)
+            try await applyValidatedWallpaperOptionsAsync(wallpaperId: id)
+            applyCompleted = true
+            try validateActivationTarget(displayId)
+            guard isWallpaperActive(id: id, displayId: displayId) else {
+                throw WallpaperActionError(message: String(localized: "The display did not report this wallpaper as active. Refresh Displays and retry."))
+            }
+        } catch {
+            // A bridge error may happen after reconciliation. Never infer rollback from a stale bundle.
+            do {
+                let actual = try await bridge.allSnapshots()
+                apply(actual)
+            } catch let refreshError {
+                activationNeedsRefresh = true
+                throw WallpaperActionError(message: String(localized: "Could not confirm the display state after applying: \(error.localizedDescription). Refresh failed: \(refreshError.localizedDescription). Refresh all wallpaper state before retrying."))
+            }
+            if isWallpaperActive(id: id, displayId: displayId), applyCompleted || !previouslyActive {
+                throw WallpaperActionError(message: String(localized: "The display assignment changed, but the operation could not be fully saved: \(error.localizedDescription)"))
+            }
+            do {
+                try await setDisplayConfigEnabledAsync(wallpaperId: id, displayId: displayId, enabled: row.enabled)
+            } catch let restoreError {
+                activationNeedsRefresh = true
+                throw WallpaperActionError(message: String(localized: "Could not apply the wallpaper: \(error.localizedDescription). Could not restore the display draft: \(restoreError.localizedDescription). Refresh all wallpaper state before retrying."))
+            }
+            throw error
+        }
+    }
+
+    func isWallpaperActive(id: String, displayId: String) -> Bool {
+        monitorInformationSnapshot.rows.contains {
+            $0.displayId == displayId && $0.wallpaperId == id && $0.mirrorTargetDisplayId == nil
+        }
+    }
+
+    private func validateActivationTarget(_ displayId: String) throws {
+        guard let target = settingsSnapshot.displays.first(where: { $0.displayId == displayId }),
+              target.enabled, target.mode == .standalone else {
+            throw WallpaperActionError(message: String(localized: "The selected display is unavailable, disabled, or mirroring another display. Choose an enabled independent display in Settings."))
+        }
+    }
+
+    private func requireIdleActivation() throws {
+        guard activatingWallpaperID == nil, applyingWallpaperID == nil else {
+            throw WallpaperActionError(message: String(localized: "Wait for the current wallpaper to finish applying."))
+        }
+    }
+
+    func isWallpaperEditInProgress(id: String) -> Bool { activeWallpaperEdits[id, default: 0] > 0 }
+
+    private func requireIdleWallpaperEdits(id: String) throws {
+        guard !isWallpaperEditInProgress(id: id) else {
+            throw WallpaperActionError(message: String(localized: "Wait for the pending setting to finish before applying."))
+        }
+    }
+
+    private func beginWallpaperEdit(_ id: String) { activeWallpaperEdits[id, default: 0] += 1 }
+    private func endWallpaperEdit(_ id: String) {
+        if activeWallpaperEdits[id, default: 0] <= 1 { activeWallpaperEdits.removeValue(forKey: id) }
+        else { activeWallpaperEdits[id, default: 0] -= 1 }
+    }
+
+    private func validatePendingWallpaperEdits(id: String, options: BridgeWallpaperOptionsSnapshot) throws {
+        for (key, draft) in editorState.scalingDrafts where key.wallpaperID == id {
+            guard draft.value != nil,
+                  options.displayConfigurations.contains(where: { $0.displayId == key.fieldID }) else {
+                throw WallpaperActionError(message: draft.errorMessage ?? String(localized: "A pending display setting is no longer available. Revert it before applying."))
+            }
+        }
+        for key in editorState.propertyTextDrafts.keys where key.wallpaperID == id {
+            guard options.properties.contains(where: { $0.id == key.fieldID && $0.kind == .textInput && $0.enabled }) else {
+                throw WallpaperActionError(message: String(localized: "A pending property is no longer editable. Revert it before applying."))
+            }
+        }
+    }
+
+    func commitPendingWallpaperEditsAsync(id: String) async throws {
+        let options = try await wallpaperOptionsSnapshotAsync(wallpaperId: id)
+        try validatePendingWallpaperEdits(id: id, options: options)
+        let scaling = editorState.scalingDrafts.filter { $0.key.wallpaperID == id }.sorted { $0.key.fieldID < $1.key.fieldID }
+        let text = editorState.propertyTextDrafts.filter { $0.key.wallpaperID == id }.sorted { $0.key.fieldID < $1.key.fieldID }
+        for (key, draft) in scaling {
+            if let value = draft.value {
+                try await editScalingFactorAsync(wallpaperId: id, displayId: key.fieldID, factor: value)
+            }
+        }
+        for (key, value) in text {
+            try await editPropertyAsync(wallpaperId: id, propertyId: key.fieldID, value: .string(value: value))
+        }
     }
 
     func wallpaperOptionsSnapshotAsync(
@@ -84,16 +246,22 @@ final class BridgeStore {
     }
 
     func setVolumeAsync(wallpaperId: String, volume: Float) async throws {
+        beginWallpaperEdit(wallpaperId)
+        defer { endWallpaperEdit(wallpaperId) }
         let bundle = try await bridge.setVolume(wallpaperId: wallpaperId, volume: volume)
         apply(bundle)
     }
 
     func setMutedAsync(wallpaperId: String, muted: Bool) async throws {
+        beginWallpaperEdit(wallpaperId)
+        defer { endWallpaperEdit(wallpaperId) }
         let bundle = try await bridge.setMuted(wallpaperId: wallpaperId, muted: muted)
         apply(bundle)
     }
 
     func setAudioResponseEnabledAsync(wallpaperId: String, enabled: Bool) async throws {
+        beginWallpaperEdit(wallpaperId)
+        defer { endWallpaperEdit(wallpaperId) }
         let bundle = try await bridge.setAudioResponseEnabled(wallpaperId: wallpaperId, enabled: enabled)
         apply(bundle)
     }
@@ -103,6 +271,8 @@ final class BridgeStore {
         displayId: String,
         enabled: Bool
     ) async throws {
+        beginWallpaperEdit(wallpaperId)
+        defer { endWallpaperEdit(wallpaperId) }
         let bundle = try await bridge.setDisplayConfigEnabled(
             wallpaperId: wallpaperId,
             displayId: displayId,
@@ -116,6 +286,8 @@ final class BridgeStore {
         displayId: String,
         mode: BridgeScalingMode
     ) async throws {
+        beginWallpaperEdit(wallpaperId)
+        defer { endWallpaperEdit(wallpaperId) }
         let bundle = try await bridge.setScalingMode(
             wallpaperId: wallpaperId,
             displayId: displayId,
@@ -125,11 +297,15 @@ final class BridgeStore {
     }
 
     func editScalingFactorAsync(wallpaperId: String, displayId: String, factor: Double) async throws {
+        beginWallpaperEdit(wallpaperId)
+        defer { endWallpaperEdit(wallpaperId) }
         let bundle = try await bridge.editScalingFactor(wallpaperId: wallpaperId, displayId: displayId, factor: factor)
         apply(bundle)
     }
 
     func setTargetFpsAsync(wallpaperId: String, displayId: String, fps: UInt32) async throws {
+        beginWallpaperEdit(wallpaperId)
+        defer { endWallpaperEdit(wallpaperId) }
         let bundle = try await bridge.setTargetFps(wallpaperId: wallpaperId, displayId: displayId, fps: fps)
         apply(bundle)
     }
@@ -139,11 +315,15 @@ final class BridgeStore {
         propertyId: String,
         value: BridgePropertyValue
     ) async throws {
+        beginWallpaperEdit(wallpaperId)
+        defer { endWallpaperEdit(wallpaperId) }
         let bundle = try await bridge.editProperty(wallpaperId: wallpaperId, propertyId: propertyId, value: value)
         apply(bundle)
     }
 
     func restorePropertyDefaultAsync(wallpaperId: String, propertyId: String) async throws {
+        beginWallpaperEdit(wallpaperId)
+        defer { endWallpaperEdit(wallpaperId) }
         let bundle = try await bridge.restorePropertyDefault(wallpaperId: wallpaperId, propertyId: propertyId)
         apply(bundle)
     }
@@ -199,28 +379,60 @@ final class BridgeStore {
     }
 
     func applyWallpaperOptionsAsync(wallpaperId: String) async throws {
+        try requireIdleActivation()
+        try requireIdleWallpaperEdits(id: wallpaperId)
+        guard !activationNeedsRefresh else {
+            throw WallpaperActionError(message: String(localized: "Refresh all wallpaper state before applying again."))
+        }
+        applyingWallpaperID = wallpaperId
+        defer { applyingWallpaperID = nil }
+        try await validateWallpaperForPlaybackAsync(id: wallpaperId)
+        try await commitPendingWallpaperEditsAsync(id: wallpaperId)
+        try await applyValidatedWallpaperOptionsAsync(wallpaperId: wallpaperId)
+    }
+
+    private func validateWallpaperForPlaybackAsync(id wallpaperId: String) async throws {
         let folder = ClientPaths.libraryURL.appendingPathComponent(wallpaperId)
         let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent("project.json"))) as? [String: Any]
         if let file = manifest?["file"] as? String, (manifest?["type"] as? String)?.lowercased() == "video" {
             let asset = AVURLAsset(url: folder.appendingPathComponent(file))
             guard try await asset.load(.isPlayable), !(try await asset.loadTracks(withMediaType: .video)).isEmpty else {
-                throw NSError(domain: "MacWallpaperEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "This video cannot be decoded. Import a complete, playable video file before applying it."])
+                throw NSError(domain: "MacWallpaperEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "This video cannot be decoded. Import a complete, playable video file before applying it.")])
             }
         }
         if (manifest?["type"] as? String)?.lowercased() == "scene" {
             let assets = ClientPaths.assetsURL
             guard ClientPaths.hasSceneAssets(at: assets) else {
-                throw NSError(domain: "MacWallpaperEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: "This wallpaper is downloaded, but Wallpaper Engine’s shared scene assets are not installed. Use Install scene assets… in Settings or the Workshop wallpaper, or locate the assets folder from your purchased installation."])
+                throw NSError(domain: "MacWallpaperEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: String(localized: "This wallpaper is downloaded, but Wallpaper Engine’s shared scene assets are not installed. Use Install scene assets… in Settings or the Workshop wallpaper, or locate the assets folder from your purchased installation.")])
             }
             setenv("MAC_WALLPAPER_ENGINE_ASSETS_ROOT", assets.path, 1)
         }
-        let bundle = try await bridge.applyWallpaperOptions(wallpaperId: wallpaperId)
-        apply(bundle)
+    }
+
+    private func applyValidatedWallpaperOptionsAsync(wallpaperId: String) async throws {
+        do {
+            let bundle = try await bridge.applyWallpaperOptions(wallpaperId: wallpaperId)
+            apply(bundle)
+            guard bundle.wallpaperOptions.wallpaperId == wallpaperId, !bundle.wallpaperOptions.dirty else {
+                throw WallpaperActionError(message: String(localized: "Applying was interrupted by another playback or display change. Your pending edits have been kept. Refresh and retry."))
+            }
+            editorState.discard(wallpaperID: wallpaperId)
+            wallpaperAppliesNeedingSave.remove(wallpaperId)
+        } catch {
+            wallpaperAppliesNeedingSave.insert(wallpaperId)
+            activationNeedsRefresh = true
+            throw error
+        }
     }
 
     func cancelWallpaperOptionsAsync(wallpaperId: String) async throws {
+        try requireIdleActivation()
+        try requireIdleWallpaperEdits(id: wallpaperId)
+        applyingWallpaperID = wallpaperId
+        defer { applyingWallpaperID = nil }
         let bundle = try await bridge.cancelWallpaperOptions(wallpaperId: wallpaperId)
         apply(bundle)
+        editorState.discard(wallpaperID: wallpaperId)
     }
 
     func pauseAllAsync() async throws {
@@ -237,6 +449,7 @@ final class BridgeStore {
         displayId: String,
         wallpaperId: String
     ) async throws {
+        try requireIdleActivation()
         let bundle = try await bridge.ejectWallpaperFromDisplay(displayId: displayId, wallpaperId: wallpaperId)
         apply(bundle)
     }
@@ -342,6 +555,10 @@ final class BridgeStore {
     }
 
     private func finishSnapshotApply() {
+        if let options = wallpaperOptionsSnapshot {
+            editorState.reconcile(wallpaperID: options.wallpaperId,
+                textPropertyIDs: Set(options.properties.filter { $0.kind == .textInput }.map(\.id)))
+        }
         self.snapshotRevision &+= 1
         onSnapshotApplied?()
         if let message = appSnapshot.errors.last,

@@ -6,7 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var statusItem: NSStatusItem?
     private var controlPanelWindow: NSWindow?
     private let controlPanelNavigation = ControlPanelNavigation()
-    private let workshopStore = WorkshopStore()
+    private lazy var workshopStore = WorkshopStore()
     private var displayChangeObserver: NSObjectProtocol?
     private var desktopWallpaperSync: DesktopWallpaperSync?
     private var store: BridgeStore?
@@ -80,6 +80,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // The test host must not instantiate services against the user's app-support folder.
+        if NSClassFromString("XCTestCase") != nil { return .terminateNow }
         guard !shutdownComplete else {
             return .terminateNow
         }
@@ -94,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         NSApp.setActivationPolicy(.accessory)
 
         Task {
+            await workshopStore.steamCMDSetup.shutdown()
             await workshopStore.downloader.shutdown()
             do {
                 try await store?.shutdownAsync()
@@ -300,6 +303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         NSApp.setActivationPolicy(.regular)
 
         if let controlPanelWindow {
+            constrainControlPanelWindowToScreen(controlPanelWindow)
             controlPanelWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -315,13 +319,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         window.titleVisibility = .visible
         window.titlebarAppearsTransparent = false
         window.toolbarStyle = .unified
-        window.center()
-        window.setFrameAutosaveName("MacWallpaperEngineMainWindow")
-        window.setContentSize(NSSize(width: 1240, height: 800))
         window.delegate = self
         window.isReleasedWhenClosed = false
+        let controller: NSHostingController<AnyView>
         if let store {
-            window.contentViewController = NSHostingController(
+            controller = NSHostingController(
                 rootView: AnyView(
                     ControlPanelView(
                         store: store,
@@ -331,14 +333,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 )
             )
         } else {
-            window.contentViewController = NSHostingController(
+            controller = NSHostingController(
                 rootView: AnyView(BridgeUnavailableView(error: startupError ?? lastError))
             )
         }
 
+        // AppKit owns this resizable window's bounds; content must accept its proposal
+        // instead of promoting a long label or a split pane's ideal width to a window minimum.
+        controller.sizingOptions = []
+        window.contentViewController = controller
+        window.contentMinSize = NSSize(width: 760, height: 560)
+        let frameName = "MacWallpaperEngineMainWindow"
+        if !window.setFrameUsingName(frameName) { window.center() }
+        constrainControlPanelWindowToScreen(window)
+        window.setFrameAutosaveName(frameName)
+
         controlPanelWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func constrainControlPanelWindowToScreen(_ window: NSWindow) {
+        guard !window.styleMask.contains(.fullScreen),
+              let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first else { return }
+        let visible = screen.visibleFrame
+        let minimumFrame = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: 760, height: 560))
+        let minimumSize = NSSize(width: min(minimumFrame.width, visible.width),
+                                 height: min(minimumFrame.height, visible.height))
+        window.contentMinSize = window.contentRect(forFrameRect: NSRect(origin: .zero, size: minimumSize)).size
+        var frame = window.frame
+        frame.size.width = min(max(frame.width, minimumSize.width), visible.width)
+        frame.size.height = min(max(frame.height, minimumSize.height), visible.height)
+        frame.origin.x = min(max(frame.minX, visible.minX), visible.maxX - frame.width)
+        frame.origin.y = min(max(frame.minY, visible.minY), visible.maxY - frame.height)
+        if frame != window.frame { window.setFrame(frame, display: false) }
     }
 
     @objc private func togglePlayback() {

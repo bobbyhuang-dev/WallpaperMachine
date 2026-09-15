@@ -847,7 +847,7 @@ async fn applied_options_persist_across_bridge_instances() {
 }
 
 #[tokio::test]
-async fn failed_wallpaper_persistence_writes_app_config_first() {
+async fn failed_save_reports_live_assignment_and_preserves_pending_scaling() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("wallpapers"), b"not a directory").unwrap();
 
@@ -865,16 +865,39 @@ async fn failed_wallpaper_persistence_writes_app_config_first() {
         .set_display_config_enabled("100".to_string(), "7".to_string(), true)
         .await
         .unwrap();
+    bridge
+        .edit_scaling_factor("100".to_string(), "7".to_string(), 1.5)
+        .await
+        .unwrap();
 
     bridge
         .apply_wallpaper_options("100".to_string())
         .await
         .expect_err("wallpaper config write should fail");
 
-    assert!(
-        root.path().join("config.toml").exists(),
-        "app config should be written before wallpaper persistence"
+    let monitor = bridge.monitor_information_snapshot().await.unwrap();
+    assert_eq!(monitor.rows[0].wallpaper_id, "100");
+    let pending = bridge
+        .wallpaper_options_snapshot("100".to_string())
+        .await
+        .unwrap();
+    assert!(pending.dirty);
+    assert_f64_close(pending.display_configurations[0].scaling_factor, 1.5);
+
+    let reverted = bridge
+        .cancel_wallpaper_options("100".to_string())
+        .await
+        .unwrap();
+    assert_f64_close(
+        reverted.wallpaper_options.display_configurations[0].scaling_factor,
+        1.0,
     );
+    fs::remove_file(root.path().join("wallpapers")).unwrap();
+    let saved = bridge
+        .apply_wallpaper_options("100".to_string())
+        .await
+        .unwrap();
+    assert!(!saved.wallpaper_options.dirty);
 }
 
 #[tokio::test]

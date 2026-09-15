@@ -48,13 +48,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         installApplicationMenu()
         logStartup("application menu installed")
         if let store {
+            let lockScreen = LockScreenWallpaperService(bridge: store.bridge)
+            store.lockScreenWallpaper = lockScreen
+            lockScreen.beforeActivation = { [weak self] in
+                guard let self else { return }
+                if self.desktopWallpaperSync == nil {
+                    self.desktopWallpaperSync = try DesktopWallpaperSync(
+                        folder: ClientPaths.supportURL.appendingPathComponent("DesktopPosters"))
+                }
+                self.desktopWallpaperSync?.suspendForNativeProvider()
+            }
+            lockScreen.afterDeactivation = { [weak self] in
+                self?.desktopWallpaperSync = nil
+                try self?.startDesktopWallpaperSync()
+            }
+            store.onSnapshotApplied = { [weak self, weak lockScreen] in
+                guard let self, !self.shutdownInProgress else { return }
+                if let lockScreen, lockScreen.isRequested {
+                    if lockScreen.errorMessage == nil {
+                        lockScreen.refresh()
+                    } else {
+                        self.desktopWallpaperSync?.refresh()
+                    }
+                } else {
+                    self.desktopWallpaperSync?.refresh()
+                }
+            }
             do {
-                let sync = try DesktopWallpaperSync(folder: ClientPaths.supportURL.appendingPathComponent("DesktopPosters"))
-                desktopWallpaperSync = sync
-                sync.start()
-                store.onSnapshotApplied = { [weak sync] in sync?.refresh() }
+                try lockScreen.start()
+                if !lockScreen.isRequested { try startDesktopWallpaperSync() }
             } catch {
-                logStartup("Native desktop poster sync unavailable: \(error.localizedDescription)")
+                lastError = error
+                logStartup("Native wallpaper recovery failed: \(error.localizedDescription)")
             }
         }
         bootstrapStore()
@@ -88,12 +113,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
 
         shutdownInProgress = true
-        store?.onSnapshotApplied = nil
-        desktopWallpaperSync?.stop()
+        desktopWallpaperSync?.suspendForNativeProvider()
         controlPanelWindow?.orderOut(nil)
         NSApp.setActivationPolicy(.accessory)
 
         Task {
+            do {
+                try await store?.lockScreenWallpaper?.shutdown()
+                desktopWallpaperSync?.stop()
+                desktopWallpaperSync = nil
+            } catch {
+                lastError = error
+                shutdownInProgress = false
+                rebuildMenu()
+                sender.reply(toApplicationShouldTerminate: false)
+                return
+            }
             await workshopStore.downloader.shutdown()
             do {
                 try await store?.shutdownAsync()
@@ -156,6 +191,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// Rust file channel rather than stderr.
     private func logStartup(_ message: String) {
         fputs("[WE] \(message)\n", stderr)
+    }
+
+    private func startDesktopWallpaperSync() throws {
+        guard desktopWallpaperSync == nil, !shutdownInProgress else {
+            desktopWallpaperSync?.refresh()
+            return
+        }
+        let sync = try DesktopWallpaperSync(folder: ClientPaths.supportURL.appendingPathComponent("DesktopPosters"))
+        desktopWallpaperSync = sync
+        sync.start()
+        sync.refresh()
     }
 
     private func installStatusItem() {

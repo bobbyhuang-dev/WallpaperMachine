@@ -32,37 +32,21 @@ enum DesktopPosterEncoder {
     }
 }
 
-@MainActor
-private final class SystemDesktopPictureWorkspace: DesktopPictureWorkspace {
-    static func id(_ screen: NSScreen) -> String? {
-        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.stringValue
-    }
-
-    private func screen(_ display: String) -> NSScreen? {
-        NSScreen.screens.first { Self.id($0) == display }
-    }
-
-    func currentPicture(display: String) -> DesktopPicture? {
-        guard let screen = screen(display), let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
-        let options = NSWorkspace.shared.desktopImageOptions(for: screen) ?? [:]
-        let color = (options[.fillColor] as? NSColor)?.usingColorSpace(.sRGB)
-            ?? NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
-        return DesktopPicture(url: url,
-                              scaling: (options[.imageScaling] as? NSNumber)?.intValue ?? Int(NSImageScaling.scaleProportionallyUpOrDown.rawValue),
-                              allowClipping: (options[.allowClipping] as? NSNumber)?.boolValue ?? true,
-                              fill: [color.redComponent, color.greenComponent, color.blueComponent, color.alphaComponent])
-    }
-
-    func setPicture(_ picture: DesktopPicture, display: String) throws {
-        guard let screen = screen(display) else { return }
-        try NSWorkspace.shared.setDesktopImageURL(picture.url, for: screen, options: picture.options)
-    }
+struct DesktopPosterFrame: Sendable {
+    var pixels: Data
+    var width: Int
+    var height: Int
+    var bgra: Bool
 }
 
-/// Mirrors renderer output into the native wallpaper used by Mission Control.
-/// Public NSWorkspace APIs update the active Space only; inactive Spaces are
-/// synchronized when the user visits them. Never switches Spaces, edits Apple's
-/// private wallpaper database, or restarts Dock/WallpaperAgent.
+struct DesktopPosterSurface {
+    var layer: CAMetalLayer
+    var display: String
+}
+
+/// The first ready frame is submitted to all native desktop Spaces immediately.
+/// Window enumeration and frame encoding are injected for headless regression
+/// tests, including layer replacement and out-of-order completion.
 @MainActor
 final class DesktopWallpaperSync {
     private let ledger: DesktopWallpaperLedger
@@ -70,21 +54,49 @@ final class DesktopWallpaperSync {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var posters: [ObjectIdentifier: Data] = [:]
     private var revisions: [ObjectIdentifier: UInt64] = [:]
-    private var pendingRefresh: Task<Void, Never>?
+    private let surfaces: @MainActor () -> [DesktopPosterSurface]
+    private let frameCenter: NotificationCenter
+    private let workspaceCenter: NotificationCenter?
+    private let encode: @Sendable (DesktopPosterFrame) async throws -> Data
+    private var retry: Task<Void, Never>?
     private var stopped = false
 
-    init(folder: URL) throws {
-        ledger = try DesktopWallpaperLedger(folder: folder, workspace: SystemDesktopPictureWorkspace())
+    convenience init(folder: URL) throws {
+        try self.init(folder: folder, workspace: SystemDesktopPictureWorkspace(), surfaces: {
+            guard let type = NSClassFromString("MWEWallpaperDesktopWindow") else { return [] }
+            return NSApp.windows.compactMap { window in
+                guard window.isKind(of: type), let layer = window.contentView?.layer as? CAMetalLayer,
+                      let screen = window.screen, let id = SystemDesktopPictureWorkspace.id(screen) else { return nil }
+                return DesktopPosterSurface(layer: layer, display: id)
+            }
+        }, frameCenter: .default, workspaceCenter: NSWorkspace.shared.notificationCenter)
+    }
+
+    init(folder: URL, workspace: any DesktopPictureWorkspace,
+         surfaces: @escaping @MainActor () -> [DesktopPosterSurface],
+         frameCenter: NotificationCenter, workspaceCenter: NotificationCenter? = nil,
+         encode: @escaping @Sendable (DesktopPosterFrame) async throws -> Data = { frame in
+             try await Task.detached(priority: .userInitiated) {
+                 try DesktopPosterEncoder.png(pixels: frame.pixels, width: frame.width, height: frame.height, bgra: frame.bgra)
+             }.value
+         }) throws {
+        ledger = try DesktopWallpaperLedger(folder: folder, workspace: workspace)
+        self.surfaces = surfaces
+        self.frameCenter = frameCenter
+        self.workspaceCenter = workspaceCenter
+        self.encode = encode
     }
 
     func start() {
-        frameObserver = NotificationCenter.default.addObserver(
+        guard frameObserver == nil, !stopped else { return }
+        frameObserver = frameCenter.addObserver(
             forName: Notification.Name("MacWallpaperEngine.desktopPosterReady"), object: nil, queue: .main
         ) { [weak self] notification in
             MainActor.assumeIsolated { self?.receive(notification) }
         }
         for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didWakeNotification] {
-            workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            guard let workspaceCenter else { break }
+            workspaceObservers.append(workspaceCenter.addObserver(
                 forName: name, object: nil, queue: .main
             ) { [weak self] _ in
                 MainActor.assumeIsolated { self?.refresh() }
@@ -94,47 +106,42 @@ final class DesktopWallpaperSync {
 
     func refresh() {
         guard !stopped else { return }
-        synchronizeCurrentSpace()
-        pendingRefresh?.cancel()
-        // Let bridge mutations, layer swaps and Space transitions settle.
-        pendingRefresh = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
-            guard let self, !self.stopped else { return }
-            self.synchronizeCurrentSpace()
-            for window in self.wallpaperWindows {
-                if let layer = window.contentView?.layer {
-                    NotificationCenter.default.post(name: Notification.Name("MacWallpaperEngine.requestDesktopPoster"), object: layer)
-                }
-            }
+        // Request GPU pixels before potentially slow native Space enumeration
+        // and journal I/O, so readback can overlap synchronization.
+        // No debounce: an Apply must not wait for a 400 ms timer, another
+        // snapshot, or an activeSpaceDidChange notification to request pixels.
+        for surface in surfaces() {
+            frameCenter.post(name: Notification.Name("MacWallpaperEngine.requestDesktopPoster"), object: surface.layer)
         }
+        synchronizeAllSpaces()
     }
 
     func stop() {
-        guard !stopped else { return }
+        do { try stopAndRestore() } catch { report(error) }
+    }
+
+    /// Stop poster writes without restoring through the legacy image API. The
+    /// native provider journals the current poster; keep its file and ledger
+    /// alive until that provider releases ownership.
+    func suspendForNativeProvider() {
         stopped = true
-        pendingRefresh?.cancel()
-        if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
+        retry?.cancel()
+        if let frameObserver { frameCenter.removeObserver(frameObserver) }
         frameObserver = nil
-        for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        for observer in workspaceObservers { workspaceCenter?.removeObserver(observer) }
         workspaceObservers.removeAll()
-        for screen in NSScreen.screens {
-            guard let id = SystemDesktopPictureWorkspace.id(screen) else { continue }
-            do { try ledger.restore(display: id) } catch { report(error) }
-        }
-        // Inactive Spaces retain their poster until next visited while the app
-        // is running. The persistent ledger preserves their original settings.
         posters.removeAll()
         revisions.removeAll()
     }
 
-    private var wallpaperWindows: [NSWindow] {
-        guard let type = NSClassFromString("MWEWallpaperDesktopWindow") else { return [] }
-        return NSApp.windows.filter { $0.isKind(of: type) && $0.contentView?.layer is CAMetalLayer }
+    func stopAndRestore() throws {
+        suspendForNativeProvider()
+        try ledger.restoreAll()
     }
 
     private func receive(_ notification: Notification) {
         guard !stopped, let layer = notification.object as? CAMetalLayer,
-              wallpaperWindows.contains(where: { $0.contentView?.layer === layer }),
+              surfaces().contains(where: { $0.layer === layer }),
               let values = notification.userInfo,
               let pixels = values["pixels"] as? Data,
               let width = values["width"] as? Int, let height = values["height"] as? Int,
@@ -142,35 +149,39 @@ final class DesktopWallpaperSync {
         let key = ObjectIdentifier(layer)
         let revision = (revisions[key] ?? 0) &+ 1
         revisions[key] = revision
-        Task { [weak self, weak layer] in
+        let encode = self.encode
+        Task(priority: .userInitiated) { [weak self, weak layer] in
             do {
-                let png = try await Task.detached(priority: .utility) {
-                    try DesktopPosterEncoder.png(pixels: pixels, width: width, height: height, bgra: bgra)
-                }.value
+                let png = try await encode(DesktopPosterFrame(pixels: pixels, width: width, height: height, bgra: bgra))
                 guard let self, !self.stopped, let layer,
                       self.revisions[key] == revision,
-                      self.wallpaperWindows.contains(where: { $0.contentView?.layer === layer }) else { return }
+                      self.surfaces().contains(where: { $0.layer === layer }) else { return }
                 self.posters[key] = png
-                self.synchronizeCurrentSpace()
+                self.synchronizeAllSpaces()
             } catch { self?.report(error) }
         }
     }
 
-    private func synchronizeCurrentSpace() {
-        let windows = wallpaperWindows
-        let keys = Set(windows.compactMap { $0.contentView?.layer.map(ObjectIdentifier.init) })
+    private func synchronizeAllSpaces(attempt: Int = 0) {
+        let surfaces = surfaces()
+        let keys = Set(surfaces.map { ObjectIdentifier($0.layer) })
         posters = posters.filter { keys.contains($0.key) }
         revisions = revisions.filter { keys.contains($0.key) }
-        for screen in NSScreen.screens {
-            guard let id = SystemDesktopPictureWorkspace.id(screen) else { continue }
-            do {
-                if let window = windows.first(where: { $0.screen.flatMap(SystemDesktopPictureWorkspace.id) == id }),
-                   let layer = window.contentView?.layer {
-                    if let png = posters[ObjectIdentifier(layer)] { try ledger.apply(png: png, display: id) }
-                } else {
-                    try ledger.restore(display: id)
-                }
-            } catch { report(error) }
+        var byDisplay: [String: Data] = [:]
+        for surface in surfaces { byDisplay[surface.display] = posters[ObjectIdentifier(surface.layer)] }
+        retry?.cancel()
+        do {
+            try ledger.synchronize(posters: byDisplay, liveDisplays: Set(surfaces.map(\.display)))
+        } catch {
+            report(error)
+            // Retry native asynchronous acknowledgement/Space creation races,
+            // not the initial update. Never require the user to visit a Space.
+            guard attempt < 3, !stopped else { return }
+            retry = Task { [weak self] in
+                do { try await Task.sleep(for: .milliseconds(100 * (attempt + 1))) } catch { return }
+                guard let self, !self.stopped else { return }
+                self.synchronizeAllSpaces(attempt: attempt + 1)
+            }
         }
     }
 

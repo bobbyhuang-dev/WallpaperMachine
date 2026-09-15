@@ -25,6 +25,21 @@ pub enum BridgeScalingMode {
     Fill,
 }
 
+/// Committed renderer inputs for a native lock-screen wallpaper display.
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
+pub struct BridgeLockScreenScene {
+    pub display_id: u32,
+    pub title: String,
+    pub project_path: String,
+    pub assets_path: String,
+    pub fps: u32,
+    pub scaling_mode: BridgeScalingMode,
+    pub scaling_factor: f64,
+    /// Renderer-ready property overrides with nested keys flattened.
+    pub properties_json: Option<String>,
+    pub paused: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum BridgeDisplayMode {
     Standalone,

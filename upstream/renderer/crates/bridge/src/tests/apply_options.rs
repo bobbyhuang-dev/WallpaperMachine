@@ -371,26 +371,6 @@ async fn scaling_factor_edit_does_not_update_another_wallpapers_active_scene() {
 }
 
 #[tokio::test]
-async fn audio_response_option_is_editable() {
-    let bridge = WallpaperBridge::new_for_test();
-    bridge
-        .inject_scene_wallpaper_config_for_test("100", "Scene")
-        .await;
-
-    bridge
-        .set_audio_response_enabled("100".to_string(), true)
-        .await
-        .unwrap();
-
-    let options = bridge
-        .wallpaper_options_snapshot("100".to_string())
-        .await
-        .unwrap();
-    assert!(options.audio_response_enabled);
-    assert!(!options.dirty);
-}
-
-#[tokio::test]
 async fn audio_option_edits_apply_to_active_scene_without_reconcile() {
     let engine = FakeEngineFacade::default();
     engine.set_snapshot(vec![display_snapshot(7, 75)]);
@@ -632,7 +612,7 @@ async fn applying_audio_response_enabled_scene_starts_audio_capture() {
 }
 
 #[tokio::test]
-async fn live_audio_response_toggle_returns_before_audio_capture_finishes() {
+async fn live_audio_response_toggle_keeps_selection_responsive_while_capture_starts() {
     let engine = FakeEngineFacade::default();
     engine.set_snapshot(vec![display_snapshot(7, 75)]);
     let bridge = Arc::new(
@@ -676,16 +656,10 @@ async fn live_audio_response_toggle_returns_before_audio_capture_finishes() {
         "audio response toggle did not reach audio capture"
     );
 
-    match toggle_rx.recv_timeout(Duration::from_secs(2)) {
-        Ok(result) => {
-            result.unwrap();
-        }
-        Err(error) => {
-            block.release();
-            toggle.join().unwrap();
-            panic!("audio response toggle should return before capture finishes: {error}");
-        }
-    }
+    assert!(
+        matches!(toggle_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "audio activation must not report success before capture starts"
+    );
 
     bridge
         .select_wallpaper("200".to_string())
@@ -702,7 +676,60 @@ async fn live_audio_response_toggle_returns_before_audio_capture_finishes() {
     );
 
     block.release();
+    toggle_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
     toggle.join().unwrap();
+}
+
+#[tokio::test]
+async fn failed_audio_activation_is_reported_and_rolls_back_without_losing_other_options() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = FakeEngineFacade::default();
+    engine.set_snapshot(vec![display_snapshot(7, 75)]);
+    let bridge = BridgeBuilder::new(engine.clone())
+        .with_config_store(ConfigStore::open(root.path().to_path_buf()))
+        .build()
+        .unwrap();
+    bridge
+        .inject_scene_wallpaper_config_for_test("100", "Scene")
+        .await;
+    bridge
+        .set_display_config_enabled("100".into(), "7".into(), true)
+        .await
+        .unwrap();
+    bridge.apply_wallpaper_options("100".into()).await.unwrap();
+    engine.set_snapshot(vec![active_display_snapshot(7, 75, 1)]);
+    bridge.set_volume("100".into(), 0.25).await.unwrap();
+    engine.fail_audio_capture_with(Some("System audio recording denied".into()));
+    let error = bridge
+        .set_audio_response_enabled("100".into(), true)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), BridgeErrorKind::Engine);
+    let options = bridge
+        .wallpaper_options_snapshot("100".into())
+        .await
+        .unwrap();
+    assert!(!options.audio_response_enabled);
+    assert_f32_close(options.volume, 0.25);
+    let stored = ConfigStore::open(root.path().to_path_buf())
+        .load_wallpaper("100")
+        .unwrap();
+    assert!(!stored.audio.response_enabled);
+    assert_f32_close(stored.audio.volume, 0.25);
+    engine.fail_audio_capture_with(None);
+    let enabled = bridge
+        .set_audio_response_enabled("100".into(), true)
+        .await
+        .unwrap();
+    assert!(enabled.wallpaper_options.audio_response_enabled);
+    let disabled = bridge
+        .set_audio_response_enabled("100".into(), false)
+        .await
+        .unwrap();
+    assert!(!disabled.wallpaper_options.audio_response_enabled);
 }
 
 #[tokio::test]
@@ -1061,6 +1088,55 @@ fn wait_for_audio_response_calls(engine: &FakeEngineFacade, expected: &[(SceneHa
         );
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+#[tokio::test]
+async fn lock_screen_export_ignores_drafts_and_tracks_pause_and_ejection() {
+    let engine = FakeEngineFacade::default();
+    engine.set_snapshot(vec![display_snapshot(7, 75)]);
+    let bridge = BridgeBuilder::new(engine)
+        .with_state(crate::actor::state::BridgeActorState::default())
+        .build()
+        .unwrap();
+    bridge
+        .inject_scene_wallpaper_config_for_test("100", "Scene")
+        .await;
+    bridge
+        .set_display_config_enabled("100".into(), "7".into(), true)
+        .await
+        .unwrap();
+    bridge
+        .set_scaling_mode("100".into(), "7".into(), BridgeScalingMode::Fill)
+        .await
+        .unwrap();
+    bridge.apply_wallpaper_options("100".into()).await.unwrap();
+    let applied = bridge.lock_screen_scenes().await.unwrap();
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].scaling_mode, BridgeScalingMode::Fill);
+    assert!(std::path::Path::new(&applied[0].project_path).is_absolute());
+
+    bridge
+        .edit_scaling_factor("100".into(), "7".into(), 1.25)
+        .await
+        .unwrap();
+    assert_eq!(
+        bridge.lock_screen_scenes().await.unwrap()[0].scaling_factor,
+        1.0
+    );
+    bridge.apply_wallpaper_options("100".into()).await.unwrap();
+    assert_eq!(
+        bridge.lock_screen_scenes().await.unwrap()[0].scaling_factor,
+        1.25
+    );
+    bridge.pause_all().await.unwrap();
+    assert!(bridge.lock_screen_scenes().await.unwrap()[0].paused);
+    bridge.play_all().await.unwrap();
+    assert!(!bridge.lock_screen_scenes().await.unwrap()[0].paused);
+    bridge
+        .eject_wallpaper_from_display("7".into(), "100".into())
+        .await
+        .unwrap();
+    assert!(bridge.lock_screen_scenes().await.unwrap().is_empty());
 }
 
 fn display_snapshot(display_id: u32, refresh_rate_hz: u32) -> DisplaySnapshotEntry {

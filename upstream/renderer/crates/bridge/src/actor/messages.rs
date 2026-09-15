@@ -4,7 +4,7 @@ use crate::{
     actor::state::ApplyCandidates,
     api::{
         BridgeAppSnapshot, BridgeDisplayMode, BridgeDisplayMutationBundle,
-        BridgeDisplaySettingsRow, BridgeError, BridgeLibrarySnapshot,
+        BridgeDisplaySettingsRow, BridgeError, BridgeLibrarySnapshot, BridgeLockScreenScene,
         BridgeMonitorInformationSnapshot, BridgePlaybackState, BridgePropertyValue,
         BridgeScalingMode, BridgeSettingsSnapshot, BridgeSnapshotBundle, BridgeWallpaperEntry,
         BridgeWallpaperKind, BridgeWallpaperMutationBundle, BridgeWallpaperOptionsSnapshot,
@@ -20,6 +20,8 @@ pub struct GetAllSnapshots;
 pub struct GetAppSnapshot;
 
 pub struct GetLibrarySnapshot;
+
+pub struct GetLockScreenScenes;
 
 pub struct GetMonitorInformationSnapshot;
 
@@ -227,10 +229,17 @@ pub struct ReconcileFailed {
     pub generation: u64,
 }
 
+pub struct CompleteAudioResponse {
+    pub wallpaper_id: String,
+    pub previous_enabled: bool,
+    pub result: Result<(), BridgeError>,
+}
+
 pub type AllSnapshotsReply = Result<BridgeSnapshotBundle, BridgeError>;
 pub type BootstrapReply = AllSnapshotsReply;
 pub type AppSnapshotReply = Result<BridgeAppSnapshot, BridgeError>;
 pub type LibrarySnapshotReply = Result<BridgeLibrarySnapshot, BridgeError>;
+pub type LockScreenScenesReply = Result<Vec<BridgeLockScreenScene>, BridgeError>;
 pub type MonitorInformationSnapshotReply = Result<BridgeMonitorInformationSnapshot, BridgeError>;
 pub type SettingsSnapshotReply = Result<BridgeSettingsSnapshot, BridgeError>;
 pub type ClearShaderCacheReply = Result<BridgeSettingsSnapshot, BridgeError>;

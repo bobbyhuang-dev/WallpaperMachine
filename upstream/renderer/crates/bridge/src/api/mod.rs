@@ -13,12 +13,12 @@ pub use error::{BridgeError, BridgeErrorKind};
 use futures_util::Future;
 pub use types::{
     BridgeAppSnapshot, BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplayMutationBundle,
-    BridgeDisplaySettingsRow, BridgeLibraryScanStatus, BridgeLibrarySnapshot, BridgeLogLevel,
-    BridgeLogStatus, BridgeMonitorInfoRow, BridgeMonitorInformationSnapshot, BridgePlaybackState,
-    BridgePropertyDescriptor, BridgePropertyKind, BridgePropertyValue, BridgeScalingMode,
-    BridgeSettingsSnapshot, BridgeSliderMetadata, BridgeSnapshotBundle, BridgeStorageStatus,
-    BridgeWallpaperEntry, BridgeWallpaperKind, BridgeWallpaperMutationBundle,
-    BridgeWallpaperOptionsSnapshot,
+    BridgeDisplaySettingsRow, BridgeLibraryScanStatus, BridgeLibrarySnapshot,
+    BridgeLockScreenScene, BridgeLogLevel, BridgeLogStatus, BridgeMonitorInfoRow,
+    BridgeMonitorInformationSnapshot, BridgePlaybackState, BridgePropertyDescriptor,
+    BridgePropertyKind, BridgePropertyValue, BridgeScalingMode, BridgeSettingsSnapshot,
+    BridgeSliderMetadata, BridgeSnapshotBundle, BridgeStorageStatus, BridgeWallpaperEntry,
+    BridgeWallpaperKind, BridgeWallpaperMutationBundle, BridgeWallpaperOptionsSnapshot,
 };
 use wallpaper_core::{
     DisplaySelector, FirstFrameCallback, WallpaperAssignment, WallpaperEngine,
@@ -41,11 +41,11 @@ use crate::{
         messages::{
             ApplyWallpaperOptions, Bootstrap, CancelWallpaperOptions, ClearShaderCache,
             EditProperty, EjectWallpaperFromDisplay, GetAllSnapshots, GetAppSnapshot,
-            GetLibrarySnapshot, GetMonitorInformationSnapshot, GetSettingsSnapshot,
-            GetWallpaperOptionsSnapshot, InitialFrameReady, PollMousePosition, RefreshDisplays,
-            RefreshLibrary, RestorePropertyDefault, SelectWallpaper, SetAudioResponseEnabled,
-            SetDisplayConfigEnabled, SetDisplayEnabled, SetDisplayMode, SetFilter,
-            SetGlobalPlayback, SetLaunchAtLogin, SetMirrorMuted, SetMirrorScalingFactor,
+            GetLibrarySnapshot, GetLockScreenScenes, GetMonitorInformationSnapshot,
+            GetSettingsSnapshot, GetWallpaperOptionsSnapshot, InitialFrameReady, PollMousePosition,
+            RefreshDisplays, RefreshLibrary, RestorePropertyDefault, SelectWallpaper,
+            SetAudioResponseEnabled, SetDisplayConfigEnabled, SetDisplayEnabled, SetDisplayMode,
+            SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMirrorMuted, SetMirrorScalingFactor,
             SetMirrorScalingMode, SetMirrorTarget, SetMirrorTargetFps, SetMirrorVolume, SetMuted,
             SetPauseOnBatteryPower, SetScalingFactor, SetScalingMode, SetTargetFps, SetVolume,
             Shutdown,
@@ -451,6 +451,16 @@ impl WallpaperBridge {
     /// snapshot.
     pub async fn library_snapshot(&self) -> Result<BridgeLibrarySnapshot, BridgeError> {
         self.actor.ask(GetLibrarySnapshot).await
+    }
+
+    /// Returns committed active scenes for the currently connected displays.
+    /// Draft options and the library selection do not affect these inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when scene resolution or renderer-input conversion fails.
+    pub async fn lock_screen_scenes(&self) -> Result<Vec<BridgeLockScreenScene>, BridgeError> {
+        self.actor.ask(GetLockScreenScenes).await
     }
 
     /// # Errors

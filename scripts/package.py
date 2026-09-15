@@ -28,6 +28,8 @@ def main():
     args = parser.parse_args()
     app = ROOT / "build/Build/Products" / args.configuration / "MacWallpaperEngine.app"
     binary = app / "Contents/MacOS/MacWallpaperEngine"
+    extensions = list((app / "Contents/Extensions").glob("*.appex"))
+    extension_binaries = [extension / "Contents/MacOS" / extension.stem for extension in extensions]
     if not binary.is_file():
         raise SystemExit("Build the application first using scripts/build.py")
     frameworks = app / "Contents/Frameworks"
@@ -35,7 +37,7 @@ def main():
     frameworks.mkdir(exist_ok=True)
     prefix = Path(output(["brew", "--prefix"]).strip())
     molten = prefix / "opt/molten-vk/lib/libMoltenVK.dylib"
-    queue = [binary]
+    queue = [binary, *extension_binaries]
     seen = set()
 
     def add_library(source):
@@ -71,18 +73,24 @@ def main():
         for path in set(paths):
             if path.startswith(str(prefix)) or path.startswith(str(ROOT)):
                 run(["install_name_tool", "-delete_rpath", path, file])
-        desired = "@executable_path/../Frameworks"
+        desired = "@executable_path/../../../../Frameworks" if file in extension_binaries else "@executable_path/../Frameworks"
         if desired not in paths:
             run(["install_name_tool", "-add_rpath", desired, file])
 
     (resources / "MoltenVK_icd.json").write_text(json.dumps({"file_format_version": "1.0.0", "ICD": {"library_path": "../Frameworks/libMoltenVK.dylib", "api_version": "1.3.0", "is_portability_driver": True}}, indent=2))
+    for extension in extensions:
+        extension_resources = extension / "Contents/Resources"
+        extension_resources.mkdir(exist_ok=True)
+        (extension_resources / "MoltenVK_icd.json").write_text(json.dumps({"file_format_version": "1.0.0", "ICD": {"library_path": "../../../../Frameworks/libMoltenVK.dylib", "api_version": "1.3.0", "is_portability_driver": True}}, indent=2))
     shutil.copy2(ROOT / "upstream/renderer/LICENSE", resources / "Renderer-LICENSE.txt")
     shutil.copy2(ROOT / "upstream/provenance.json", resources / "provenance.json")
     for file in frameworks.glob("*.dylib"):
         run(["codesign", "--force", "--sign", "-", file])
+    for extension in extensions:
+        run(["codesign", "--force", "--sign", "-", "--preserve-metadata=entitlements", extension])
     run(["codesign", "--force", "--sign", "-", "--options", "0", app])
     run(["codesign", "--verify", "--deep", "--strict", app])
-    for file in [binary, *frameworks.glob("*.dylib")]:
+    for file in [binary, *extension_binaries, *frameworks.glob("*.dylib")]:
         for dependency in dependencies(file):
             if dependency.startswith(str(prefix)):
                 raise RuntimeError(f"Unbundled dependency: {file}: {dependency}")

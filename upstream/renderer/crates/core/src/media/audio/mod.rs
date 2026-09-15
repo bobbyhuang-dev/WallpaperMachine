@@ -160,6 +160,7 @@ pub struct AudioResponseResampler {
     pending_mono: Vec<f32>,
     source_position: f64,
     previous_mono: Option<f32>,
+    source_sample_rate: Option<u32>,
 }
 
 impl Default for AudioResponseResampler {
@@ -168,6 +169,7 @@ impl Default for AudioResponseResampler {
             pending_mono: Vec::new(),
             source_position: 0.0,
             previous_mono: None,
+            source_sample_rate: None,
         }
     }
 }
@@ -190,6 +192,11 @@ impl AudioResponseResampler {
     /// invariant.
     #[must_use]
     pub fn push(&mut self, frames: &MonoPcmF32<'_>) -> Vec<MonoPcmF32<'static>> {
+        if self.source_sample_rate != Some(frames.sample_rate()) {
+            self.source_sample_rate = Some(frames.sample_rate());
+            self.previous_mono = None;
+            self.source_position = 0.0;
+        }
         if frames.sample_rate() == Self::TARGET_SAMPLE_RATE {
             self.pending_mono.extend_from_slice(frames.samples());
         } else {
@@ -346,13 +353,16 @@ pub trait AudioResponseEngine: AudioFrameConsumer {
 }
 
 pub trait AudioCaptureBackend {
-    /// Returns whether system audio capture permission is currently available.
+    /// Returns the backend's current permission status or capture-start hint.
     ///
     /// # Errors
     ///
     /// Returns [`AudioCaptureError`] when the platform permission check fails.
     fn has_permission(&self) -> Result<bool, AudioCaptureError>;
-    /// Requests system audio capture permission.
+    /// Requests permission or allows a subsequent capture startup to request it.
+    ///
+    /// The macOS CoreAudio backend only records a hint here; OS authorization
+    /// happens when tap recording starts. A `true` result is not an OS grant.
     ///
     /// # Errors
     ///
@@ -391,7 +401,7 @@ impl<B: AudioCaptureBackend> AudioCaptureController<B> {
         }
     }
 
-    /// Returns whether the backend currently has capture permission.
+    /// Returns the backend's current permission status or capture-start hint.
     ///
     /// # Errors
     ///
@@ -400,8 +410,8 @@ impl<B: AudioCaptureBackend> AudioCaptureController<B> {
         self.backend.has_permission()
     }
 
-    /// Requests capture permission and starts capture if scenes are already
-    /// enabled.
+    /// Requests permission (or enables the backend's startup authorization path)
+    /// and starts capture if scenes are already enabled.
     ///
     /// # Errors
     ///
@@ -415,6 +425,9 @@ impl<B: AudioCaptureBackend> AudioCaptureController<B> {
     }
 
     /// Enables or disables capture for one scene.
+    /// Scenes remain pending when permission is unavailable. A failed new
+    /// activation is rolled back; removals remain committed even if stopping
+    /// fails, so departed scenes never retain capture ownership.
     ///
     /// # Errors
     ///
@@ -425,11 +438,32 @@ impl<B: AudioCaptureBackend> AudioCaptureController<B> {
         handle: SceneHandle,
         enabled: bool,
     ) -> Result<(), AudioCaptureError> {
-        if enabled {
-            self.enabled_handles.insert(handle);
+        let inserted = if enabled {
+            self.enabled_handles.insert(handle)
         } else {
             self.enabled_handles.remove(&handle);
+            false
+        };
+        if let Err(error) = self.sync_capture_state() {
+            if inserted {
+                self.enabled_handles.remove(&handle);
+            }
+            return Err(error);
         }
+        Ok(())
+    }
+
+    /// Releases capture ownership for scenes absent from `handles`.
+    ///
+    /// Removals are committed even if backend synchronization fails. Calling
+    /// this again retries synchronization without resurrecting departed scenes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioCaptureError`] when starting or stopping capture fails.
+    pub fn retain_scenes(&mut self, handles: &[SceneHandle]) -> Result<(), AudioCaptureError> {
+        self.enabled_handles
+            .retain(|handle| handles.contains(handle));
         self.sync_capture_state()
     }
 
@@ -590,14 +624,18 @@ mod capture_controller_tests {
     #[derive(Default)]
     struct TestBackend {
         running: bool,
+        permission_pending: bool,
+        fail_start: bool,
+        fail_stop: bool,
     }
 
     impl AudioCaptureBackend for TestBackend {
         fn has_permission(&self) -> Result<bool, AudioCaptureError> {
-            Ok(true)
+            Ok(!self.permission_pending)
         }
 
         fn request_permission(&mut self) -> Result<bool, AudioCaptureError> {
+            self.permission_pending = false;
             Ok(true)
         }
 
@@ -605,11 +643,17 @@ mod capture_controller_tests {
             &mut self,
             _consumer: Arc<dyn AudioFrameConsumer>,
         ) -> Result<(), AudioCaptureError> {
+            if std::mem::take(&mut self.fail_start) {
+                return Err(AudioCaptureError::Platform("start failed".into()));
+            }
             self.running = true;
             Ok(())
         }
 
         fn stop(&mut self) -> Result<(), AudioCaptureError> {
+            if std::mem::take(&mut self.fail_stop) {
+                return Err(AudioCaptureError::Platform("stop failed".into()));
+            }
             self.running = false;
             Ok(())
         }
@@ -620,15 +664,85 @@ mod capture_controller_tests {
     }
 
     #[test]
-    fn capture_controller_tracks_enabled_handles_without_renderer_mutation() {
+    fn retaining_scenes_stops_capture_only_after_final_owner_departs() {
         let consumer = Arc::new(TestConsumer);
         let backend = TestBackend::default();
         let mut controller = AudioCaptureController::new(consumer, backend);
         let handle = SceneHandle::new(7);
 
         controller.set_scene_capturing(handle, true).unwrap();
+        let other = SceneHandle::new(8);
+        controller.set_scene_capturing(other, true).unwrap();
+        controller.retain_scenes(&[other]).unwrap();
 
         assert!(controller.is_capturing());
         assert_eq!(controller.active_scene_count(), 1);
+        controller.retain_scenes(&[]).unwrap();
+        assert!(!controller.is_capturing());
+        assert_eq!(controller.active_scene_count(), 0);
+    }
+
+    #[test]
+    fn failed_new_activation_does_not_leave_capture_ownership() {
+        let backend = TestBackend {
+            fail_start: true,
+            ..TestBackend::default()
+        };
+        let mut controller = AudioCaptureController::new(Arc::new(TestConsumer), backend);
+        assert!(
+            controller
+                .set_scene_capturing(SceneHandle::new(7), true)
+                .is_err()
+        );
+        assert_eq!(controller.active_scene_count(), 0);
+        controller.request_permission().unwrap();
+        assert!(!controller.is_capturing());
+        controller
+            .set_scene_capturing(SceneHandle::new(8), true)
+            .unwrap();
+        assert!(controller.is_capturing());
+    }
+
+    #[test]
+    fn pending_scene_survives_failed_permission_start_and_repeated_enable() {
+        let backend = TestBackend {
+            permission_pending: true,
+            fail_start: true,
+            ..TestBackend::default()
+        };
+        let mut controller = AudioCaptureController::new(Arc::new(TestConsumer), backend);
+        let handle = SceneHandle::new(7);
+        controller.set_scene_capturing(handle, true).unwrap();
+        assert!(!controller.is_capturing());
+        assert!(controller.request_permission().is_err());
+        assert_eq!(controller.active_scene_count(), 1);
+        controller.backend.fail_start = true;
+        assert!(controller.set_scene_capturing(handle, true).is_err());
+        assert_eq!(controller.active_scene_count(), 1);
+        controller.request_permission().unwrap();
+        assert!(controller.is_capturing());
+    }
+
+    #[test]
+    fn removals_stay_committed_when_stop_fails_and_allow_teardown_retry() {
+        for retain in [false, true] {
+            let backend = TestBackend {
+                fail_stop: true,
+                ..TestBackend::default()
+            };
+            let mut controller = AudioCaptureController::new(Arc::new(TestConsumer), backend);
+            let handle = SceneHandle::new(7);
+            controller.set_scene_capturing(handle, true).unwrap();
+            let result = if retain {
+                controller.retain_scenes(&[])
+            } else {
+                controller.set_scene_capturing(handle, false)
+            };
+            assert!(result.is_err());
+            assert_eq!(controller.active_scene_count(), 0);
+            assert!(controller.is_capturing());
+            controller.retain_scenes(&[]).unwrap();
+            assert!(!controller.is_capturing());
+        }
     }
 }

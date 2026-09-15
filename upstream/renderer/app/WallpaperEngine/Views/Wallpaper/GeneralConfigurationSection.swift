@@ -33,6 +33,15 @@ struct GeneralConfigurationSection: View {
             .toggleStyle(.switch)
             .disabled(bridgeActionInProgress)
             .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text("Reacts to sound playing in other apps, not the microphone. macOS asks for system audio recording access when an enabled wallpaper starts. Wallpaper volume and mute do not affect this input.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if bridgeActionInProgress {
+                ProgressView("Updating audio response…")
+                    .controlSize(.small)
+            }
         }
         .padding(.top, 8)
         .frame(maxWidth: .infinity, alignment: .leading)

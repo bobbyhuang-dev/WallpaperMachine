@@ -269,7 +269,7 @@ impl IoProcResources {
     ) -> Result<Self, AudioCaptureError> {
         let callback_state = Box::new(CallbackState {
             consumer,
-            mono: Mutex::new(Vec::new()),
+            mono: Mutex::new([0.0; 1024]),
             sample_rate: AtomicU32::new(sample_rate),
         });
         let client_data = (&raw const *callback_state).cast_mut().cast::<c_void>();
@@ -357,7 +357,7 @@ impl Drop for CaptureState {
 
 struct CallbackState {
     consumer: Arc<dyn AudioFrameConsumer>,
-    mono: Mutex<Vec<f32>>,
+    mono: Mutex<[f32; 1024]>,
     sample_rate: AtomicU32,
 }
 
@@ -380,44 +380,24 @@ impl CallbackState {
         }
 
         let state = unsafe { &*client_data.cast::<CallbackState>() };
-        let frame_count = {
-            let input_data = unsafe { input_data.as_ref() };
-            if input_data.mNumberBuffers == 0 {
-                return NO_ERR;
-            }
-
-            debug_assert!(input_data.mNumberBuffers > 0);
-            let first = unsafe { &*input_data.mBuffers.as_ptr() };
-            if first.mData.is_null() {
-                return NO_ERR;
-            }
-            let channels = first.mNumberChannels.max(1);
-            let bytes_per_frame = usize::try_from(channels)
-                .ok()
-                .and_then(|channels| std::mem::size_of::<f32>().checked_mul(channels));
-            let Some(bytes_per_frame) = bytes_per_frame else {
-                return NO_ERR;
-            };
-            usize::try_from(first.mDataByteSize).unwrap_or(usize::MAX) / bytes_per_frame
-        };
-
-        if frame_count == 0 || frame_count > usize::try_from(u32::MAX).expect("u32::MAX fits usize")
-        {
+        let input_data = unsafe { input_data.as_ref() };
+        let Ok(frame_count) = input_data.frame_count() else {
             return NO_ERR;
-        }
-
+        };
         let Ok(mut mono) = state.mono.lock() else {
             return NO_ERR;
         };
-
-        mono.resize(frame_count, 0.0);
-        if unsafe { input_data.as_ref().copy_to_mono_f32(frame_count, &mut mono) }.is_err() {
-            return NO_ERR;
-        }
-
         let sample_rate = state.sample_rate.load(Ordering::Relaxed);
-        if let Ok(frames) = MonoPcmF32::borrowed(sample_rate, &mono) {
-            let _ = state.consumer.submit_mono_audio_frames(frames);
+        // Fixed scratch storage keeps even larger device buffers allocation-free.
+        for frame_offset in (0..frame_count).step_by(mono.len()) {
+            let chunk_frames = (frame_count - frame_offset).min(mono.len());
+            let chunk = &mut mono[..chunk_frames];
+            if input_data.copy_to_mono_f32(frame_offset, chunk).is_err() {
+                return NO_ERR;
+            }
+            if let Ok(frames) = MonoPcmF32::borrowed(sample_rate, chunk) {
+                let _ = state.consumer.submit_mono_audio_frames(frames);
+            }
         }
 
         NO_ERR
@@ -448,10 +428,13 @@ impl PlatformAudioCaptureBackend {
 }
 
 impl AudioCaptureBackend for PlatformAudioCaptureBackend {
+    /// Reports a local capture-start hint, not the OS authorization status.
     fn has_permission(&self) -> Result<bool, AudioCaptureError> {
         Ok(self.permission_granted_hint)
     }
 
+    /// Enables a recording attempt. CoreAudio performs OS authorization when
+    /// tap recording starts; no permission prompt or TCC preflight runs here.
     fn request_permission(&mut self) -> Result<bool, AudioCaptureError> {
         self.permission_granted_hint = true;
         Ok(true)
@@ -514,11 +497,12 @@ const fn fourcc(bytes: [u8; 4]) -> u32 {
 trait AudioBufferListExt {
     fn buffer_at(&self, index: usize) -> Option<&AudioBuffer>;
     fn buffer_count(&self) -> usize;
-    fn copy_to_mono_f32(&self, frame_count: usize, mono: &mut [f32]) -> Result<(), ()>;
+    fn frame_count(&self) -> Result<usize, ()>;
+    fn copy_to_mono_f32(&self, frame_offset: usize, mono: &mut [f32]) -> Result<(), ()>;
 }
 
 trait AudioBufferExt {
-    fn has_f32_samples(&self, sample_count: usize) -> bool;
+    fn f32_frame_count(&self) -> Result<usize, ()>;
 }
 
 impl AudioBufferListExt for AudioBufferList {
@@ -534,69 +518,186 @@ impl AudioBufferListExt for AudioBufferList {
         usize::try_from(self.mNumberBuffers).unwrap_or(usize::MAX)
     }
 
-    fn copy_to_mono_f32(&self, frame_count: usize, mono: &mut [f32]) -> Result<(), ()> {
-        if frame_count == 0 || mono.len() < frame_count || self.buffer_count() == 0 {
+    fn frame_count(&self) -> Result<usize, ()> {
+        let frame_count = self.buffer_at(0).ok_or(())?.f32_frame_count()?;
+        for index in 1..self.buffer_count() {
+            if self.buffer_at(index).ok_or(())?.f32_frame_count()? != frame_count {
+                return Err(());
+            }
+        }
+        Ok(frame_count)
+    }
+
+    fn copy_to_mono_f32(&self, frame_offset: usize, mono: &mut [f32]) -> Result<(), ()> {
+        let frame_end = frame_offset.checked_add(mono.len()).ok_or(())?;
+        if mono.is_empty() || frame_end > self.frame_count()? {
             return Err(());
         }
 
-        if self.buffer_count() == 1 {
-            let buffer = self.buffer_at(0).unwrap();
-            if buffer.mData.is_null() {
-                return Err(());
-            }
-
-            let channels = usize::try_from(buffer.mNumberChannels.max(1)).unwrap_or(usize::MAX);
-            let sample_count = frame_count.checked_mul(channels).ok_or(())?;
-            if !buffer.has_f32_samples(sample_count) {
-                return Err(());
-            }
-            let source =
-                unsafe { std::slice::from_raw_parts(buffer.mData.cast::<f32>(), sample_count) };
-            for (frame, sample) in mono.iter_mut().enumerate().take(frame_count) {
-                let base = frame * channels;
-                let sum = (0..channels)
-                    .map(|channel| source[base + channel])
-                    .sum::<f32>();
-                #[allow(clippy::cast_precision_loss)]
-                let channels = channels as f32;
-                *sample = sum / channels;
-            }
+        let first = self.buffer_at(0).ok_or(())?;
+        if self.buffer_count() == 1 && first.mNumberChannels == 1 {
+            let source = unsafe {
+                std::slice::from_raw_parts(first.mData.cast::<f32>().add(frame_offset), mono.len())
+            };
+            mono.copy_from_slice(source);
             return Ok(());
         }
 
-        let mut active_buffers = 0usize;
-        mono[..frame_count].fill(0.0);
+        let mut total_channels = 0usize;
+        mono.fill(0.0);
         for index in 0..self.buffer_count() {
-            let Some(buffer) = self.buffer_at(index) else {
-                continue;
+            let buffer = self.buffer_at(index).ok_or(())?;
+            let channels = usize::try_from(buffer.mNumberChannels).map_err(|_| ())?;
+            total_channels = total_channels.checked_add(channels).ok_or(())?;
+            let source = unsafe {
+                std::slice::from_raw_parts(
+                    buffer.mData.cast::<f32>().add(frame_offset * channels),
+                    mono.len() * channels,
+                )
             };
-            if buffer.mData.is_null() || !buffer.has_f32_samples(frame_count) {
-                return Err(());
+            for (sample, frame) in mono.iter_mut().zip(source.chunks_exact(channels)) {
+                *sample += frame.iter().sum::<f32>();
             }
-            let source =
-                unsafe { std::slice::from_raw_parts(buffer.mData.cast::<f32>(), frame_count) };
-            for frame in 0..frame_count {
-                mono[frame] += source[frame];
-            }
-            active_buffers += 1;
         }
-        if active_buffers == 0 {
-            return Err(());
-        }
-        for sample in &mut mono[..frame_count] {
-            #[allow(clippy::cast_precision_loss)]
-            let active_buffer_count = active_buffers as f32;
-            *sample /= active_buffer_count;
+        #[allow(clippy::cast_precision_loss)]
+        let total_channels = total_channels as f32;
+        for sample in mono {
+            *sample /= total_channels;
         }
         Ok(())
     }
 }
 
 impl AudioBufferExt for AudioBuffer {
-    fn has_f32_samples(&self, sample_count: usize) -> bool {
-        let required_bytes = sample_count.checked_mul(std::mem::size_of::<f32>());
-        required_bytes.is_some()
-            && !self.mData.is_null()
-            && usize::try_from(self.mDataByteSize).unwrap_or(usize::MAX) >= required_bytes.unwrap()
+    fn f32_frame_count(&self) -> Result<usize, ()> {
+        let channels = usize::try_from(self.mNumberChannels).map_err(|_| ())?;
+        let byte_count = usize::try_from(self.mDataByteSize).map_err(|_| ())?;
+        let bytes_per_frame = channels.checked_mul(std::mem::size_of::<f32>()).ok_or(())?;
+        if bytes_per_frame == 0
+            || byte_count == 0
+            || !byte_count.is_multiple_of(bytes_per_frame)
+            || self.mData.is_null()
+            || !self.mData.cast::<f32>().is_aligned()
+        {
+            return Err(());
+        }
+        Ok(byte_count / bytes_per_frame)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // CoreAudio's trailing AudioBuffer array is variable-length at the ABI.
+    #[repr(C)]
+    struct TestBufferList<const N: usize> {
+        count: u32,
+        buffers: [AudioBuffer; N],
+    }
+
+    impl<const N: usize> TestBufferList<N> {
+        fn new(buffers: [AudioBuffer; N]) -> Self {
+            Self {
+                count: u32::try_from(N).unwrap(),
+                buffers,
+            }
+        }
+
+        fn as_list(&self) -> &AudioBufferList {
+            assert!(N > 0);
+            // repr(C) preserves AudioBufferList's header, alignment and first
+            // buffer, with storage for every buffer advertised by the count.
+            unsafe { &*std::ptr::from_ref(self).cast::<AudioBufferList>() }
+        }
+    }
+
+    fn buffer(channels: u32, samples: &mut [f32]) -> AudioBuffer {
+        AudioBuffer {
+            mNumberChannels: channels,
+            mDataByteSize: u32::try_from(std::mem::size_of_val(samples)).unwrap(),
+            mData: samples.as_mut_ptr().cast(),
+        }
+    }
+
+    #[test]
+    fn mixed_interleaved_buffers_preserve_frames_and_all_channels() {
+        let mut first = [1.0, 0.0, 0.25, 0.75];
+        let mut second = [0.5, 0.5, 1.0, 1.0];
+        let buffers = TestBufferList::new([buffer(2, &mut first), buffer(2, &mut second)]);
+        let mut mono = [0.0; 2];
+        buffers.as_list().copy_to_mono_f32(0, &mut mono).unwrap();
+        assert_eq!(mono, [0.5, 0.75]);
+    }
+
+    #[test]
+    fn mixed_channel_counts_weight_channels_instead_of_buffers() {
+        let mut stereo = [1.0, 1.0, 0.0, 0.0];
+        let mut single = [0.0, 1.0];
+        let buffers = TestBufferList::new([buffer(2, &mut stereo), buffer(1, &mut single)]);
+        let mut mono = [0.0; 2];
+        buffers.as_list().copy_to_mono_f32(0, &mut mono).unwrap();
+        assert_eq!(mono, [2.0 / 3.0, 1.0 / 3.0]);
+        let mut chunk = [0.0];
+        buffers.as_list().copy_to_mono_f32(1, &mut chunk).unwrap();
+        assert_eq!(chunk, [1.0 / 3.0]);
+    }
+
+    #[test]
+    fn mono_fast_path_copies_only_requested_frame_range() {
+        let mut samples = [0.25, 0.5, 0.75];
+        let buffers = TestBufferList::new([buffer(1, &mut samples)]);
+        let mut mono = [0.0; 2];
+        buffers.as_list().copy_to_mono_f32(1, &mut mono).unwrap();
+        assert_eq!(mono, [0.5, 0.75]);
+        assert!(buffers.as_list().copy_to_mono_f32(2, &mut mono).is_err());
+    }
+
+    #[test]
+    fn short_interleaved_buffer_rejects_entire_conversion_before_output() {
+        let mut first = [1.0, 0.0, 0.25, 0.75];
+        let mut short = [0.5, 0.5];
+        let buffers = TestBufferList::new([buffer(2, &mut first), buffer(2, &mut short)]);
+        let mut mono = [-1.0; 2];
+        assert!(buffers.as_list().copy_to_mono_f32(0, &mut mono).is_err());
+        assert_eq!(mono, [-1.0; 2]);
+    }
+
+    #[test]
+    fn malformed_buffers_are_rejected_before_reading_pcm() {
+        let mut samples = [1.0; 4];
+        let valid = buffer(2, &mut samples);
+        let malformed = [
+            AudioBuffer {
+                mNumberChannels: 0,
+                ..valid
+            },
+            AudioBuffer {
+                mDataByteSize: 0,
+                ..valid
+            },
+            AudioBuffer {
+                mDataByteSize: 15,
+                ..valid
+            },
+            AudioBuffer {
+                mDataByteSize: 12,
+                ..valid
+            },
+            AudioBuffer {
+                mData: ptr::null_mut(),
+                ..valid
+            },
+            AudioBuffer {
+                mData: valid.mData.wrapping_byte_add(1),
+                ..valid
+            },
+        ];
+        for invalid in malformed {
+            let buffers = TestBufferList::new([valid, invalid]);
+            let mut mono = [-1.0; 2];
+            assert!(buffers.as_list().copy_to_mono_f32(0, &mut mono).is_err());
+            assert_eq!(mono, [-1.0; 2]);
+        }
     }
 }

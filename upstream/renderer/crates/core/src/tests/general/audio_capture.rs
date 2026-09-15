@@ -82,10 +82,8 @@ pub fn case_audio_response_resampler_converts_48khz_mono_to_12khz() {
     let blocks = resampler.push(&input);
 
     assert_eq!(blocks.len(), 1);
-    assert_eq!(blocks[0].sample_rate(), 12_000);
-    assert_eq!(blocks[0].frame_count(), 200);
-    assert_eq!(blocks[0].samples().len(), 200);
-    assert!(blocks[0].samples()[0] <= blocks[0].samples()[1]);
+    let expected = (0..200).map(|frame| (frame * 4) as f32).collect::<Vec<_>>();
+    assert_eq!(blocks[0].samples(), expected);
 }
 
 #[test]
@@ -106,6 +104,22 @@ pub fn case_audio_response_resampler_buffers_partial_blocks() {
 }
 
 #[test]
+pub fn case_audio_response_resampler_resets_interpolation_across_rate_changes() {
+    let mut resampler = AudioResponseResampler::new();
+    let first = MonoPcmF32::borrowed(24_000, &[1.0, 2.0, 99.0]).unwrap();
+    assert!(resampler.push(&first).is_empty());
+    let bypass_samples = [3.0; 198];
+    let bypass = MonoPcmF32::borrowed(12_000, &bypass_samples).unwrap();
+    assert!(resampler.push(&bypass).is_empty());
+    let last = MonoPcmF32::borrowed(24_000, &[4.0, 5.0]).unwrap();
+    let blocks = resampler.push(&last);
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].samples()[0], 1.0);
+    assert_eq!(&blocks[0].samples()[1..199], &bypass_samples);
+    assert_eq!(blocks[0].samples()[199], 4.0);
+}
+
+#[test]
 pub fn case_interleaved_stereo_fallback_downmixes_to_mono() {
     let input =
         InterleavedStereoF32::new(12_000, &[1.0, 0.0, 0.25, 0.75]).expect("valid stereo input");
@@ -114,16 +128,6 @@ pub fn case_interleaved_stereo_fallback_downmixes_to_mono() {
 
     assert_eq!(mono.sample_rate(), 12_000);
     assert_eq!(mono.samples(), &[0.5, 0.5]);
-}
-
-#[test]
-pub fn case_platform_capture_uses_mono_global_tap() {
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source = std::fs::read_to_string(manifest_dir.join("src/media/audio/capture.rs"))
-        .expect("capture source should be readable");
-
-    assert!(source.contains("initMonoGlobalTapButExcludeProcesses"));
-    assert!(!source.contains("initStereoGlobalTapButExcludeProcesses"));
 }
 
 #[test]

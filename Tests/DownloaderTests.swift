@@ -15,48 +15,62 @@ final class DownloaderTests: XCTestCase {
         XCTAssertNil(downloader.downloadedID)
     }
 
-    func testAbandonedStagingIsReclaimedWhileLiveStagingSurvives() throws {
+    func testStagingSweepOnlyReclaimsDirectoriesNothingIsWorkingIn() throws {
         let files = FileManager.default
         let root = files.temporaryDirectory.appendingPathComponent("mwe-staging-sweep-\(UUID().uuidString)")
         defer { try? files.removeItem(at: root) }
         try files.createDirectory(at: root, withIntermediateDirectories: true)
-        func staging(_ name: String, owner: String? = nil, ageInSeconds: TimeInterval = 0) throws -> URL {
+        // SteamCMD writes deep inside staging, which never moves the directory's own timestamp.
+        func age(_ url: URL, to date: Date) throws {
+            var paths = [url.path]
+            if let walker = files.enumerator(at: url, includingPropertiesForKeys: nil) {
+                for case let child as URL in walker { paths.append(child.path) }
+            }
+            for path in paths {
+                try files.setAttributes([.modificationDate: date], ofItemAtPath: path)
+            }
+        }
+        func staging(_ name: String, stillWriting: Bool) throws -> URL {
             let url = root.appendingPathComponent(WorkshopDownloader.stagingPrefix + name, isDirectory: true)
-            try files.createDirectory(at: url, withIntermediateDirectories: false)
-            try Data("payload".utf8).write(to: url.appendingPathComponent("item"))
-            if let owner { try Data(owner.utf8).write(to: url.appendingPathComponent("owner")) }
-            if ageInSeconds > 0 {
-                try files.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -ageInSeconds)], ofItemAtPath: url.path)
+            let content = url.appendingPathComponent("steamapps/workshop/content/431960", isDirectory: true)
+            try files.createDirectory(at: content, withIntermediateDirectories: true)
+            let item = content.appendingPathComponent("item")
+            try Data("payload".utf8).write(to: item)
+            try age(url, to: Date(timeIntervalSinceNow: -3600))
+            if stillWriting {
+                try files.setAttributes([.modificationDate: Date()], ofItemAtPath: item.path)
             }
             return url
         }
-        // This process owns "live"; "recycled" names the same identifier with a different start
-        // time, which is what a reused process identifier looks like.
-        let started = try XCTUnwrap(Self.processStart())
-        let live = try staging("live", owner: "workshop staging owner v1\n\(getpid()) \(started.tv_sec) \(started.tv_usec)\n")
-        let recycled = try staging("recycled", owner: "workshop staging owner v1\n\(getpid()) \(started.tv_sec + 1) \(started.tv_usec)\n")
-        let malformed = try staging("malformed", owner: "not an owner record\n")
-        let writing = try staging("writing")
-        let stale = try staging("stale", ageInSeconds: 3600)
+
+        let abandoned = try staging("abandoned", stillWriting: false)
+        let claimed = try staging("claimed", stillWriting: false)
+        let occupied = try staging("occupied", stillWriting: false)
+        let writing = try staging("writing", stillWriting: true)
         let unrelated = root.appendingPathComponent("SteamSession", isDirectory: true)
         try files.createDirectory(at: unrelated, withIntermediateDirectories: false)
 
-        WorkshopDownloader.removeAbandonedStaging(in: root)
+        // A live app holds its claim open for the whole download.
+        let claim = open(claimed.appendingPathComponent("owner").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        XCTAssertGreaterThanOrEqual(claim, 0)
+        defer { close(claim) }
+        XCTAssertEqual(flock(claim, LOCK_EX | LOCK_NB), 0)
 
-        for survivor in [live, writing, unrelated] {
-            XCTAssertTrue(files.fileExists(atPath: survivor.path), "\(survivor.lastPathComponent) must be kept")
-        }
-        for reclaimed in [recycled, malformed, stale] {
-            XCTAssertFalse(files.fileExists(atPath: reclaimed.path), "\(reclaimed.lastPathComponent) must be reclaimed")
-        }
-    }
+        // A crash leaves SteamCMD running inside staging with no claim and no parent left.
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sh")
+        child.arguments = ["-c", "sleep 30"]
+        child.currentDirectoryURL = occupied
+        try child.run()
+        defer { child.terminate() }
 
-    private static func processStart() -> timeval? {
-        var info = kinfo_proc()
-        var size = MemoryLayout<kinfo_proc>.stride
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
-        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size >= MemoryLayout<kinfo_proc>.stride else { return nil }
-        return info.kp_proc.p_starttime
+        WorkshopDownloader.removeAbandonedStaging(in: root, quietFor: 60)
+
+        XCTAssertFalse(files.fileExists(atPath: abandoned.path), "Nothing holds or writes here; it must be reclaimed")
+        XCTAssertTrue(files.fileExists(atPath: claimed.path), "A held claim must survive")
+        XCTAssertTrue(files.fileExists(atPath: occupied.path), "A surviving SteamCMD child must keep its download")
+        XCTAssertTrue(files.fileExists(atPath: writing.path), "A stale directory timestamp must not condemn a live download")
+        XCTAssertTrue(files.fileExists(atPath: unrelated.path), "Only staging directories are swept")
     }
 
     func testImmediateShutdownWaitsForStagingCleanup() async throws {

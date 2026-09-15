@@ -114,7 +114,10 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         status = "Preparing a private SteamCMD download…"
         task = Task {
             let staging = root.appendingPathComponent(Self.stagingPrefix + UUID().uuidString, isDirectory: true)
+            var claim: Int32 = -1
             defer {
+                // Releasing the claim is what lets a later launch reclaim this directory.
+                if claim >= 0 { close(claim) }
                 try? terminal?.close()
                 terminal = nil
                 process = nil
@@ -127,7 +130,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             var restoredSessionRevision: UInt64?
             do {
                 let prepared = try await runtimeProvider.prepare(executable: executable, staging: staging)
-                Self.markOwner(of: staging)
+                claim = Self.claimStaging(staging)
                 if rememberSession {
                     let directory = sessionDirectory
                     restoredSessionRevision = try await Task.detached(priority: .utility) {
@@ -436,45 +439,85 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
     }
 
     /// Staging is removed when a download ends, so a leftover means the owning process died with a
-    /// download inside it. Record who owns it; a later launch can then tell an abandoned copy from
-    /// one another running copy is still writing to.
-    nonisolated private static func markOwner(of staging: URL) {
-        guard let started = processStart(getpid()) else { return }
-        let record = "workshop staging owner v1\n\(getpid()) \(started.tv_sec) \(started.tv_usec)\n"
-        try? Data(record.utf8).write(to: staging.appendingPathComponent(ownerName), options: .atomic)
+    /// download inside it. Hold the claim open for the download's lifetime: a process identifier
+    /// can be recycled and a record can go stale, but a held lock cannot.
+    nonisolated private static func claimStaging(_ staging: URL) -> Int32 {
+        let descriptor = open(staging.appendingPathComponent(ownerName).path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { return -1 }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { close(descriptor); return -1 }
+        return descriptor
     }
 
-    /// Reclaims downloads stranded by a crash. Never touches staging whose owner is still alive.
-    nonisolated static func removeAbandonedStaging(in root: URL) {
+    /// Reclaims downloads stranded by a crash. A SteamCMD child keeps writing after the app that
+    /// started it dies, so a released claim is never enough on its own: deletion needs positive
+    /// evidence that nothing is still writing here.
+    nonisolated static func removeAbandonedStaging(in root: URL, quietFor quiet: TimeInterval = 600) {
         let files = FileManager.default
-        guard let entries = try? files.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return }
-        for entry in entries where entry.lastPathComponent.hasPrefix(stagingPrefix) {
+        let candidates = ((try? files.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.lastPathComponent.hasPrefix(stagingPrefix) }
+        guard !candidates.isEmpty else { return }
+        let occupied = workingDirectories()
+        let deadline = Date().addingTimeInterval(-quiet)
+        for entry in candidates {
             var metadata = stat()
             guard lstat(entry.path, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFDIR,
-                  !isOwnerAlive(of: entry, directory: metadata) else { continue }
+                  isUnclaimed(entry), !occupied.contains(where: { contained($0, in: entry) }),
+                  isQuiet(entry, since: deadline) else { continue }
             try? files.removeItem(at: entry)
         }
     }
 
-    nonisolated private static func isOwnerAlive(of staging: URL, directory: stat) -> Bool {
-        guard let text = try? String(contentsOf: staging.appendingPathComponent(ownerName), encoding: .utf8) else {
-            // Written before owners were recorded, or the process died between creating the
-            // directory and claiming it. Leave anything still being written to for a later launch.
-            return Date().timeIntervalSince1970 - Double(directory.st_mtimespec.tv_sec) < 300
-        }
-        let fields = text.split(separator: "\n").last?.split(separator: " ") ?? []
-        guard fields.count == 3, let pid = pid_t(fields[0]), let seconds = time_t(fields[1]),
-              let microseconds = suseconds_t(fields[2]), let started = processStart(pid) else { return false }
-        // A recycled process identifier is a different process, so the start time has to match too.
-        return started.tv_sec == seconds && started.tv_usec == microseconds
+    nonisolated private static func isUnclaimed(_ staging: URL) -> Bool {
+        let descriptor = open(staging.appendingPathComponent(ownerName).path, O_RDWR | O_CLOEXEC)
+        // No claim was ever written; the other two checks still have to clear it.
+        guard descriptor >= 0 else { return errno == ENOENT }
+        defer { close(descriptor) }
+        return flock(descriptor, LOCK_EX | LOCK_NB) == 0
     }
 
-    nonisolated private static func processStart(_ pid: pid_t) -> timeval? {
-        var info = kinfo_proc()
-        var size = MemoryLayout<kinfo_proc>.stride
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
-        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size >= MemoryLayout<kinfo_proc>.stride else { return nil }
-        return info.kp_proc.p_starttime
+    /// Working directory of every process this user can see. SteamCMD runs inside the staging it
+    /// downloads into, so a surviving child shows up here even once its parent is gone.
+    nonisolated private static func workingDirectories() -> [String] {
+        var identifiers = [pid_t](repeating: 0, count: 8192)
+        let bytes = proc_listpids(UInt32(PROC_ALL_PIDS), 0, &identifiers,
+                                  Int32(identifiers.count * MemoryLayout<pid_t>.size))
+        guard bytes > 0 else { return [] }
+        var paths: [String] = []
+        for identifier in identifiers.prefix(Int(bytes) / MemoryLayout<pid_t>.size) where identifier > 0 {
+            var info = proc_vnodepathinfo()
+            guard proc_pidinfo(identifier, PROC_PIDVNODEPATHINFO, 0, &info,
+                               Int32(MemoryLayout<proc_vnodepathinfo>.size)) > 0 else { continue }
+            let path = withUnsafeBytes(of: &info.pvi_cdir.vip_path) {
+                String(cString: $0.baseAddress!.assumingMemoryBound(to: CChar.self))
+            }
+            if !path.isEmpty { paths.append(path) }
+        }
+        return paths
+    }
+
+    nonisolated private static func contained(_ path: String, in directory: URL) -> Bool {
+        let root = directory.resolvingSymlinksInPath().standardizedFileURL.path
+        let candidate = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        return candidate == root || candidate.hasPrefix(root + "/")
+    }
+
+    /// A directory's own timestamp does not move when a download writes deeper in the tree, so the
+    /// whole tree decides. An unreadable or implausibly large tree counts as busy.
+    nonisolated private static func isQuiet(_ staging: URL, since deadline: Date) -> Bool {
+        var metadata = stat()
+        guard lstat(staging.path, &metadata) == 0,
+              Double(metadata.st_mtimespec.tv_sec) <= deadline.timeIntervalSince1970,
+              let walker = FileManager.default.enumerator(at: staging, includingPropertiesForKeys: nil,
+                                                          options: [.producesRelativePathURLs]) else { return false }
+        var visited = 0
+        for case let url as URL in walker {
+            visited += 1
+            guard visited <= 200_000 else { return false }
+            var entry = stat()
+            guard lstat(staging.appendingPathComponent(url.relativePath).path, &entry) == 0 else { continue }
+            guard Double(entry.st_mtimespec.tv_sec) <= deadline.timeIntervalSince1970 else { return false }
+        }
+        return true
     }
 
     nonisolated static func readSavedAccount(at directory: URL) -> String? {

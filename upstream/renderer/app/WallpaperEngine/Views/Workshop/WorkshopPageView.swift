@@ -24,7 +24,9 @@ struct WorkshopPageView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle("Workshop")
         .task { if !workshop.hasLoaded && !workshop.isLoading { workshop.search() } }
-        .sheet(isPresented: $showSetup) { WorkshopSetupView(workshop: workshop) }
+        // SteamCMDSetupView reads WorkshopStore from the environment; sheet content does not
+        // inherit it, so omitting this traps when Connect to Steam Workshop opens.
+        .sheet(isPresented: $showSetup) { WorkshopSetupView(workshop: workshop).environment(workshop) }
     }
 
     private var header: some View {

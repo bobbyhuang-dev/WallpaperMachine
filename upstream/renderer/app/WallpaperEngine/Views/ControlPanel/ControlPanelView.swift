@@ -294,8 +294,13 @@ struct ControlPanelView: View {
                 presentedError = ControlPanelError(error: error)
             }
         }
+        // Sheet content does not pick up the environment applied above, and Download Details is
+        // where Steam Guard is completed: without these it traps on the first @Environment read.
         .sheet(isPresented: $workshop.showsDownloadDetails) {
             DownloadActivityDetails(workshop: workshop)
+                .environment(store)
+                .environment(workshop)
+                .environmentObject(navigation)
         }
         .alert(item: $presentedError) { error in
             Alert(

@@ -114,7 +114,21 @@ std::string ResolveSystemFontPath(std::string_view system_font_key) {
     if (family.empty()) return {};
 
 #ifdef __APPLE__
-    return ResolveAppleSystemFontPath(family);
+    if (const auto path = ResolveAppleSystemFontPath(family); !path.empty()) return path;
+
+    // Windows workshop fonts (notably Consolas) are often absent on macOS.
+    // Use a real, metrically suitable installed face rather than letting the
+    // text rasterizer draw its emergency placeholder rectangles.
+    std::string normalized = family;
+    std::ranges::transform(normalized, normalized.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    const bool monospaced = normalized == "consolas" || normalized == "courier new" ||
+                            normalized == "lucida console";
+    for (const auto fallback : {monospaced ? "Menlo" : "Helvetica", "Arial", "Times"}) {
+        if (const auto path = ResolveAppleSystemFontPath(fallback); !path.empty()) return path;
+    }
+    return {};
 #else
     return {};
 #endif

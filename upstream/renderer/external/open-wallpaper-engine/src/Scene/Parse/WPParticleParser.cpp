@@ -21,6 +21,44 @@ namespace PM = ParticleModify;
 namespace
 {
 
+std::function<float()>
+MakeEmitterAudioResponse(const wpscene::Emitter&                       emitter,
+                         std::function<audio::AudioSpectrumSnapshot()> spectrum) {
+    const auto mode = emitter.audioprocessingmode;
+    if (mode == 0 || mode > 3) return {};
+
+    const int   first    = std::clamp(emitter.audioprocessingfrequencystart, 0, 15);
+    const int   last     = std::max(first, std::clamp(emitter.audioprocessingfrequencyend, 0, 15));
+    const auto  bounds   = emitter.audioprocessingbounds;
+    const float exponent = emitter.audioprocessingexponent;
+    return [mode, first, last, bounds, exponent, spectrum = std::move(spectrum)]() {
+        if (! spectrum || ! std::isfinite(bounds[0]) || ! std::isfinite(bounds[1]) ||
+            ! std::isfinite(exponent))
+            return 0.0f;
+        const auto snapshot = spectrum();
+        // Stock effects/pulse/shaders/effects/pulse.vert AUDIOPROCESSING options:
+        // 1=left, 2=right, 3=center (also authored by workshop 2562725207 emitters).
+        const auto& bands  = mode == 1   ? snapshot.left16
+                             : mode == 2 ? snapshot.right16
+                                         : snapshot.average16;
+        float       volume = 0.0f;
+        for (int band = first; band <= last; ++band) {
+            if (std::isfinite(bands[band])) volume += std::max(0.0f, bands[band]);
+        }
+        volume /= static_cast<float>(last - first + 1);
+        // Silence remains inactive even for exponent zero or negative bounds.
+        if (volume <= 0.0f) return 0.0f;
+        float response =
+            bounds[1] > bounds[0]
+                ? std::clamp((volume - bounds[0]) / (bounds[1] - bounds[0]), 0.0f, 1.0f)
+                : (volume > bounds[0] ? 1.0f : 0.0f);
+        if (response <= 0.0f) return 0.0f;
+        // Match the stock audio response shaders: smooth bounds, then exponent.
+        response = response * response * (3.0f - 2.0f * response);
+        return std::pow(response, std::max(0.0f, exponent));
+    };
+}
+
 inline i32 NormalizeControlpointIndex(i32 value) {
     if (value < 0) return 0;
     if (value >= 8) {
@@ -618,43 +656,45 @@ WPParticleParser::genParticleOperatorOp(
 }
 
 ParticleEmittOp WPParticleParser::genParticleEmittOp(
-    const wpscene::Emitter& wpe,
-    bool sort,
-    std::shared_ptr<const wpscene::ParticleInstanceoverride> override) {
+    const wpscene::Emitter& wpe, bool sort,
+    std::shared_ptr<const wpscene::ParticleInstanceoverride> override,
+    std::function<audio::AudioSpectrumSnapshot()>            audio_spectrum) {
     std::shared_ptr<const float> count_multiplier;
     if (override != nullptr && override->enabled) {
         count_multiplier = std::shared_ptr<const float>(override, &override->count);
     }
     if (wpe.name == "boxrandom") {
         ParticleBoxEmitterArgs box;
-        box.emitSpeed     = wpe.rate;
-        box.minDistance   = wpe.distancemin;
-        box.maxDistance   = wpe.distancemax;
-        box.directions    = wpe.directions;
-        box.orgin         = wpe.origin;
-        box.one_per_frame = wpe.flags[wpscene::Emitter::FlagEnum::one_per_frame];
-        box.instantaneous = wpe.instantaneous;
-        box.minSpeed      = wpe.speedmin;
-        box.maxSpeed      = wpe.speedmax;
-        box.controlpoint  = wpe.controlpoint;
-        box.sort          = sort;
+        box.emitSpeed       = wpe.rate;
+        box.minDistance     = wpe.distancemin;
+        box.maxDistance     = wpe.distancemax;
+        box.directions      = wpe.directions;
+        box.orgin           = wpe.origin;
+        box.one_per_frame   = wpe.flags[wpscene::Emitter::FlagEnum::one_per_frame];
+        box.instantaneous   = wpe.instantaneous;
+        box.minSpeed        = wpe.speedmin;
+        box.maxSpeed        = wpe.speedmax;
+        box.controlpoint    = wpe.controlpoint;
+        box.sort            = sort;
         box.countMultiplier = count_multiplier;
+        box.audioResponse   = MakeEmitterAudioResponse(wpe, std::move(audio_spectrum));
         return ParticleBoxEmitterArgs::MakeEmittOp(box);
     } else if (wpe.name == "sphererandom") {
         ParticleSphereEmitterArgs sphere;
-        sphere.emitSpeed     = wpe.rate;
-        sphere.minDistance   = wpe.distancemin[0];
-        sphere.maxDistance   = wpe.distancemax[0];
-        sphere.directions    = wpe.directions;
-        sphere.orgin         = wpe.origin;
-        sphere.sign          = wpe.sign;
-        sphere.one_per_frame = wpe.flags[wpscene::Emitter::FlagEnum::one_per_frame];
-        sphere.instantaneous = wpe.instantaneous;
-        sphere.minSpeed      = wpe.speedmin;
-        sphere.maxSpeed      = wpe.speedmax;
-        sphere.controlpoint  = wpe.controlpoint;
-        sphere.sort          = sort;
+        sphere.emitSpeed       = wpe.rate;
+        sphere.minDistance     = wpe.distancemin[0];
+        sphere.maxDistance     = wpe.distancemax[0];
+        sphere.directions      = wpe.directions;
+        sphere.orgin           = wpe.origin;
+        sphere.sign            = wpe.sign;
+        sphere.one_per_frame   = wpe.flags[wpscene::Emitter::FlagEnum::one_per_frame];
+        sphere.instantaneous   = wpe.instantaneous;
+        sphere.minSpeed        = wpe.speedmin;
+        sphere.maxSpeed        = wpe.speedmax;
+        sphere.controlpoint    = wpe.controlpoint;
+        sphere.sort            = sort;
         sphere.countMultiplier = count_multiplier;
+        sphere.audioResponse   = MakeEmitterAudioResponse(wpe, std::move(audio_spectrum));
         return ParticleSphereEmitterArgs::MakeEmittOp(sphere);
     } else
         return [](std::vector<Particle>&,

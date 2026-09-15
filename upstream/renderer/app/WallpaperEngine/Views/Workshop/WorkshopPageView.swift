@@ -185,6 +185,7 @@ struct WorkshopPageView: View {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 164, maximum: 240), spacing: 12)], spacing: 12) {
                             ForEach(workshop.items) { item in
                                 WorkshopCard(item: item, installed: isInstalled(item.id),
+                                             download: workshop.downloader.download(for: item.id),
                                              isSelected: workshop.selectedItem?.id == item.id,
                                              focusedItemID: $focusedItemID) {
                                     workshop.selectedItem = item
@@ -207,6 +208,7 @@ struct WorkshopPageView: View {
             }
         }
     }
+
 
     private var footer: some View {
         HStack(spacing: 8) {
@@ -260,6 +262,7 @@ struct WorkshopPageView: View {
 private struct WorkshopCard: View {
     let item: WorkshopItem
     let installed: Bool
+    let download: WorkshopDownload?
     let isSelected: Bool
     let focusedItemID: FocusState<String?>.Binding
     let action: () -> Void
@@ -270,7 +273,14 @@ private struct WorkshopCard: View {
                 WorkshopPreview(url: item.previewURL)
                     .aspectRatio(16.0 / 10.0, contentMode: .fit)
                     .overlay(alignment: .topTrailing) {
-                        if installed {
+                        if let download, download.isPending {
+                            Label(download.isQueued ? "Queued" : "Downloading", systemImage: download.isQueued ? "clock" : "arrow.down.circle")
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(.regularMaterial, in: Capsule())
+                                .padding(8)
+                        } else if installed {
                             Label("In Library", systemImage: "checkmark.circle")
                                 .font(.caption.weight(.medium))
                                 .padding(.horizontal, 8)
@@ -307,7 +317,7 @@ private struct WorkshopCard: View {
             return .handled
         }
         .accessibilityLabel(Text(verbatim: item.title))
-        .accessibilityValue(installed ? Text("In Library") : Text(""))
+        .accessibilityValue(download?.isPending == true ? Text(download?.status ?? "") : installed ? Text("In Library") : Text(""))
         .accessibilityHint(Text(LocalizedStringKey(item.kind.compatibility)))
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .accessibilityIdentifier("workshop.item.\(item.id)")

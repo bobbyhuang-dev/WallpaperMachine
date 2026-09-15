@@ -106,17 +106,47 @@ inline float ResolveMultiplier(const std::shared_ptr<const float>& multiplier) {
     if (multiplier == nullptr) return 1.0f;
     return std::max(0.0f, *multiplier);
 }
+
+template<typename Args>
+u32 EmitterCount(const Args& args, double timepass, bool empty, double& timer,
+                 bool& instantaneous_emitted) {
+    const float count_multiplier = ResolveMultiplier(args.countMultiplier);
+    if (! args.audioResponse) {
+        timer += timepass;
+        u32 count = GetEmitNum(timer, args.emitSpeed * count_multiplier);
+        count     = args.one_per_frame ? 1 : count;
+        return args.instantaneous > 0 && empty
+                   ? static_cast<u32>(
+                         std::ceil(static_cast<float>(args.instantaneous) * count_multiplier))
+                   : count;
+    }
+
+    const float response = args.audioResponse();
+    if (! std::isfinite(response) || response <= 0.0f || count_multiplier <= 0.0f) {
+        timer = 0.0;
+        return 0;
+    }
+    const float multiplier = std::min(response, 1.0f) * count_multiplier;
+    // Accumulate fractional particles, not elapsed silent time or time at an old rate.
+    timer += std::max(0.0, timepass) * std::max(0.0f, args.emitSpeed) * multiplier;
+    u32 count = GetEmitNum(timer, 1.0);
+    if (args.instantaneous > 0 && ! instantaneous_emitted) {
+        count = static_cast<u32>(std::ceil(static_cast<float>(args.instantaneous) * multiplier));
+        instantaneous_emitted = true;
+    }
+    return args.one_per_frame ? std::min(count, 1u) : count;
+}
 } // namespace
 
 ParticleEmittOp ParticleBoxEmitterArgs::MakeEmittOp(ParticleBoxEmitterArgs a) {
     double timer { 0.0f };
-    return [a, timer](std::vector<Particle>&       ps,
-                      std::vector<ParticleInitOp>& inis,
-                      u32                          maxcount,
-                      double                       timepass,
-                      std::span<const ParticleControlpoint>
-                          controlpoints) mutable {
-        timer += timepass;
+    bool   instantaneous_emitted { false };
+    return [a, timer, instantaneous_emitted](std::vector<Particle>&       ps,
+                                             std::vector<ParticleInitOp>& inis,
+                                             u32                          maxcount,
+                                             double                       timepass,
+                                             std::span<const ParticleControlpoint>
+                                                 controlpoints) mutable {
         const Eigen::Vector3d origin = ResolveEmitterOrigin(controlpoints, a.controlpoint, a.orgin);
         auto                  GenBox = [&]() {
             Eigen::Vector3d pos;
@@ -131,13 +161,7 @@ ParticleEmittOp ParticleBoxEmitterArgs::MakeEmittOp(ParticleBoxEmitterArgs a) {
             ParticleModify::Move(p, origin);
             return p;
         };
-        const float count_multiplier = ResolveMultiplier(a.countMultiplier);
-        u32 emit_num = GetEmitNum(timer, a.emitSpeed * count_multiplier);
-        emit_num     = a.one_per_frame ? 1 : emit_num;
-        emit_num     = a.instantaneous > 0 && ps.empty()
-                       ? static_cast<u32>(std::ceil(static_cast<float>(a.instantaneous) *
-                                                    count_multiplier))
-                       : emit_num;
+        const u32 emit_num = EmitterCount(a, timepass, ps.empty(), timer, instantaneous_emitted);
         Emitt(ps, emit_num, maxcount, a.sort, [&]() {
             return Spwan(GenBox, inis, a.emitSpeed > 0.0f ? 1.0f / a.emitSpeed : 0.0f);
         });
@@ -147,13 +171,13 @@ ParticleEmittOp ParticleBoxEmitterArgs::MakeEmittOp(ParticleBoxEmitterArgs a) {
 ParticleEmittOp ParticleSphereEmitterArgs::MakeEmittOp(ParticleSphereEmitterArgs a) {
     using namespace Eigen;
     double timer { 0.0f };
-    return [a, timer](std::vector<Particle>&       ps,
-                      std::vector<ParticleInitOp>& inis,
-                      u32                          maxcount,
-                      double                       timepass,
-                      std::span<const ParticleControlpoint>
-                          controlpoints) mutable {
-        timer += timepass;
+    bool   instantaneous_emitted { false };
+    return [a, timer, instantaneous_emitted](std::vector<Particle>&       ps,
+                                             std::vector<ParticleInitOp>& inis,
+                                             u32                          maxcount,
+                                             double                       timepass,
+                                             std::span<const ParticleControlpoint>
+                                                 controlpoints) mutable {
         const Eigen::Vector3d origin = ResolveEmitterOrigin(controlpoints, a.controlpoint, a.orgin);
         auto                  GenSphere = [&]() {
             auto   p = Particle();
@@ -173,13 +197,7 @@ ParticleEmittOp ParticleSphereEmitterArgs::MakeEmittOp(ParticleSphereEmitterArgs
             ParticleModify::Move(p, origin);
             return p;
         };
-        const float count_multiplier = ResolveMultiplier(a.countMultiplier);
-        u32 emit_num = GetEmitNum(timer, a.emitSpeed * count_multiplier);
-        emit_num     = a.one_per_frame ? 1 : emit_num;
-        emit_num     = a.instantaneous > 0 && ps.empty()
-                       ? static_cast<u32>(std::ceil(static_cast<float>(a.instantaneous) *
-                                                    count_multiplier))
-                       : emit_num;
+        const u32 emit_num = EmitterCount(a, timepass, ps.empty(), timer, instantaneous_emitted);
         Emitt(ps, emit_num, maxcount, a.sort, [&]() {
             return Spwan(GenSphere, inis, a.emitSpeed > 0.0f ? 1.0f / a.emitSpeed : 0.0f);
         });

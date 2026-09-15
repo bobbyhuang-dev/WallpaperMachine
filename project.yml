@@ -24,9 +24,13 @@ targets:
           - Resources/Info.plist
           - Bridge/Generated/WallpaperBridgeFFI.h
           - Bridge/Generated/WallpaperBridgeFFI.modulemap
+      - path: Shared
       - path: Resources/StarterWallpaper
         type: folder
         buildPhase: resources
+    dependencies:
+      - target: MacWallpaperExtension
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.mac-wallpaper-engine
@@ -38,7 +42,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_INCLUDE_PATHS: "$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated"
         HEADER_SEARCH_PATHS: "$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated"
-        LIBRARY_SEARCH_PATHS:
+        LIBRARY_SEARCH_PATHS: &rendererLibraryPaths
           - "$(SRCROOT)/upstream/renderer/target/release"
           - /opt/homebrew/opt/ffmpeg@8/lib
           - /opt/homebrew/lib
@@ -50,7 +54,7 @@ targets:
           - /opt/homebrew/opt/ffmpeg@8/lib
           - /opt/homebrew/lib
           - /opt/homebrew/opt/quickjs-ng/lib
-        OTHER_LDFLAGS:
+        OTHER_LDFLAGS: &rendererLinkerFlags
           - -lwallpaper_bridge
           - -lc++
           - -lvulkan
@@ -84,6 +88,40 @@ targets:
           - -framework OpenGL
           - -framework QuartzCore
           - -framework VideoToolbox
+  MacWallpaperExtension:
+    type: extensionkit-extension
+    platform: macOS
+    sources:
+      - path: WallpaperExtension
+        excludes:
+          - Info.plist
+          - WallpaperExtension.entitlements
+      - path: Shared
+      - path: Resources/StarterWallpaper/preview.jpg
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.mac-wallpaper-engine.wallpaper-extension
+        PRODUCT_NAME: MacWallpaperExtension
+        INFOPLIST_FILE: WallpaperExtension/Info.plist
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: MacWallpaperEngine Lock Screen
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ENABLE_APP_SANDBOX: YES
+        CODE_SIGN_ENTITLEMENTS: WallpaperExtension/WallpaperExtension.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SWIFT_OBJC_BRIDGING_HEADER: WallpaperExtension/WallpaperExtensionBridge.h
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/upstream/renderer/external/open-wallpaper-engine/src/Platform/Apple"
+        LIBRARY_SEARCH_PATHS: *rendererLibraryPaths
+        OTHER_LDFLAGS: *rendererLinkerFlags
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+          - "@executable_path/../../../../Frameworks"
+          - /opt/homebrew/opt/ffmpeg@8/lib
+          - /opt/homebrew/lib
+          - /opt/homebrew/opt/quickjs-ng/lib
+        SKIP_INSTALL: YES
   MacWallpaperEngineTests:
     type: bundle.unit-test
     platform: macOS

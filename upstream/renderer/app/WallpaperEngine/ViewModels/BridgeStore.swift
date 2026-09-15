@@ -23,6 +23,7 @@ final class BridgeStore {
     var snapshotRevision: UInt64
     var latestBridgeErrorMessage: String?
     var latestBridgeErrorRevision: UInt64
+    var lockScreenWallpaper: LockScreenWallpaperService?
     @ObservationIgnored var onSnapshotApplied: (() -> Void)?
     let editorState = WallpaperEditorState()
     private(set) var activatingWallpaperID: String?
@@ -262,8 +263,14 @@ final class BridgeStore {
     func setAudioResponseEnabledAsync(wallpaperId: String, enabled: Bool) async throws {
         beginWallpaperEdit(wallpaperId)
         defer { endWallpaperEdit(wallpaperId) }
-        let bundle = try await bridge.setAudioResponseEnabled(wallpaperId: wallpaperId, enabled: enabled)
-        apply(bundle)
+        do {
+            let bundle = try await bridge.setAudioResponseEnabled(wallpaperId: wallpaperId, enabled: enabled)
+            apply(bundle)
+        } catch {
+            // Capture failures roll the saved option back; discard any in-flight snapshot.
+            try? await refreshAllAsync()
+            throw error
+        }
     }
 
     func setDisplayConfigEnabledAsync(

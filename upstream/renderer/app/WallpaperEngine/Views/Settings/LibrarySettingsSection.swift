@@ -21,8 +21,8 @@ struct LibrarySettingsSection: View {
             HStack {
                 Button("Locate assets…") {
                     if ClientPaths.selectAssetsFolder() { workshop.refreshSceneAssetsReadiness() }
-                }.disabled(workshop.downloader.isRunning || workshop.steamCMDSetup.isBusy)
-                Button("Install scene assets…") { showAssetsSetup = true }
+                }.disabled(workshop.downloader.download(for: nil)?.isPending == true || workshop.steamCMDSetup.isBusy)
+                Button(workshop.downloader.download(for: nil)?.isPending == true ? "View scene assets download…" : "Install scene assets…") { showAssetsSetup = true }
                     .disabled(workshop.steamCMDSetup.isBusy)
             }
             Text(ClientPaths.assetsURL.path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)

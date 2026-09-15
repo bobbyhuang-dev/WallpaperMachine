@@ -4,7 +4,7 @@ import Observation
 
 @MainActor
 @Observable
-final class WorkshopDownloader {
+final class WorkshopDownloader: SteamCMDDownloadActivity {
     enum Prompt: String { case password = "Steam password", guardCode = "Steam Guard code" }
     enum SteamGuardChallenge { case mobileApproval, authenticatorCode, emailCode }
     private(set) var isRunning = false
@@ -17,7 +17,6 @@ final class WorkshopDownloader {
     private var authenticationFailed = false
     private(set) var errorMessage: String?
     private(set) var downloadedID: String?
-    private(set) var currentItemID: String?
     private(set) var isInstallingAssets = false
     private(set) var savedAccount: String?
     private(set) var sessionWarning: String?
@@ -25,9 +24,11 @@ final class WorkshopDownloader {
     @ObservationIgnored private let runtimeProvider: any SteamCMDRuntimeProviding
     @ObservationIgnored private var cachedCredentialsRejected = false
     @ObservationIgnored private var assetsDownloadCompleted = false
+    @ObservationIgnored private var workshopDownloadCompleted = false
     @ObservationIgnored private var process: SteamCMDTerminalProcess?
     @ObservationIgnored private var terminal: FileHandle?
     @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored var onFinished: (@MainActor () -> Void)?
     @ObservationIgnored private var recentOutput = ""
     @ObservationIgnored private var outputBuffer = [UInt8](repeating: 0, count: 8192)
     @ObservationIgnored private var lastActivity = Date()
@@ -35,6 +36,7 @@ final class WorkshopDownloader {
     @ObservationIgnored private var isAuthenticating = true
     private static let failurePattern = try! NSRegularExpression(pattern: #"(?:failed|error!?)\s*\(([^)\r\n]+)\)"#)
     private static let progressPattern = try! NSRegularExpression(pattern: #"(\d{1,3}(?:\.\d+)?)\s*%"#)
+    nonisolated private static let sessionLock = NSLock()
 
     init(sessionDirectory: URL = ClientPaths.supportURL.appendingPathComponent("SteamSession", isDirectory: true),
          runtimeProvider: any SteamCMDRuntimeProviding = SteamCMDRuntimeService()) {
@@ -57,20 +59,13 @@ final class WorkshopDownloader {
 
     func start(item: WorkshopItem, username: String, executable: URL, library: URL, rememberSession: Bool = true, onImported: @escaping @MainActor () async throws -> Void) {
         guard !isRunning else { return }
-        guard UInt64(item.id) != nil, item.kind != .application else {
+        guard let id = UInt64(item.id), id > 0, item.id.allSatisfy({ $0.isASCII && $0.isNumber }), item.kind != .application else {
             errorMessage = "Choose a valid Workshop wallpaper. Application wallpapers execute Windows programs and cannot be used on macOS."
             return
         }
         download(itemID: item.id, username: username, executable: executable, root: library.deletingLastPathComponent(), rememberSession: rememberSession) { staging in
             self.status = "Validating and adding to your library…"
-            let source = staging.appendingPathComponent("steamapps/workshop/content/431960/\(item.id)", isDirectory: true)
-            let report = try await WallpaperImportService().importItems([source], into: library, duplicates: .skip) { _ in }
-            if report.cancelled { throw CancellationError() }
-            guard report.importedIDs.contains(item.id) || report.skipped.contains(item.id) else {
-                throw WorkshopFailure(message: report.failures.isEmpty
-                    ? "Steam did not produce a valid wallpaper folder. Confirm ownership and retry."
-                    : report.failures.joined(separator: "\n"))
-            }
+            try await WallpaperImportService().importDownloadedItem(item.id, from: staging, into: library)
             self.downloadedID = item.id
             self.status = "Downloaded to your library"
             do { try await onImported() }
@@ -105,6 +100,7 @@ final class WorkshopDownloader {
         cachedCredentialsRejected = false
         isAuthenticating = true
         assetsDownloadCompleted = false
+        workshopDownloadCompleted = false
         authenticationFailed = false
         steamGuardChallenge = nil
         if itemID != nil { downloadedID = nil }
@@ -112,7 +108,6 @@ final class WorkshopDownloader {
         prompt = nil
         recentOutput = ""
         isRunning = true
-        currentItemID = itemID
         isInstallingAssets = itemID == nil
         status = "Preparing a private SteamCMD download…"
         task = Task {
@@ -125,15 +120,15 @@ final class WorkshopDownloader {
                 recentOutput = ""
                 isRunning = false
                 task = nil
-                try? FileManager.default.removeItem(at: staging)
+                onFinished?()
             }
-            var restoredSession = false
+            var restoredSessionRevision: UInt64?
             do {
                 let prepared = try await runtimeProvider.prepare(executable: executable, staging: staging)
-                if rememberSession, Self.readSavedAccount(at: sessionDirectory) == account {
+                if rememberSession {
                     let directory = sessionDirectory
-                    restoredSession = try await Task.detached(priority: .utility) {
-                        try Self.copySessionFiles(from: directory, to: staging)
+                    restoredSessionRevision = try await Task.detached(priority: .utility) {
+                        try Self.restoreSession(from: directory, account: account, to: staging)
                     }.value
                 }
                 try Task.checkCancellation()
@@ -175,6 +170,9 @@ final class WorkshopDownloader {
                 if isInstallingAssets && !assetsDownloadCompleted {
                     throw WorkshopFailure(message: "Steam exited without confirming a complete Wallpaper Engine installation. Retry installing scene assets; existing assets have not been changed.")
                 }
+                if !isInstallingAssets && !workshopDownloadCompleted {
+                    throw WorkshopFailure(message: "Steam exited without confirming a complete Workshop download. Retry; no partial wallpaper has been added to your library.")
+                }
                 try await onDownloaded(staging)
             } catch is CancellationError {
                 wasCancelled = true
@@ -201,14 +199,18 @@ final class WorkshopDownloader {
                         } else {
                             sessionWarning = String(localized: "Steam did not provide reusable sign-in files. You may need to sign in again next time.")
                         }
-                    } else if restoredSession && cachedCredentialsRejected {
-                        try Self.removeSession(at: sessionDirectory)
-                        savedAccount = nil
+                    } else if let revision = restoredSessionRevision, cachedCredentialsRejected {
+                        try Self.invalidateSession(at: sessionDirectory, account: account, revision: revision)
                     }
                 } catch {
                     sessionWarning = String(localized: "Could not update the saved Steam sign-in: \(error.localizedDescription). You may need to sign in again next time.")
                 }
             }
+            savedAccount = Self.readSavedAccount(at: sessionDirectory)
+            // Large runtimes and partial downloads are removed off the UI actor.
+            await Task.detached(priority: .utility) {
+                try? FileManager.default.removeItem(at: staging)
+            }.value
         }
     }
 
@@ -261,7 +263,7 @@ final class WorkshopDownloader {
         terminal = input
         let installDirectory = itemID == nil ? staging.appendingPathComponent("wallpaper-engine") : staging
         let platform = itemID == nil ? ["+@sSteamCmdForcePlatformType", "windows"] : []
-        let command = itemID.map { ["+workshop_download_item", "431960", $0, "validate"] } ?? ["+app_update", "431960", "validate"]
+        let command = itemID.map { ["+workshop_download_item", "431960", $0] } ?? ["+app_update", "431960", "validate"]
         let arguments = ["-inhibitbootstrap", "+@ShutdownOnFailedCommand", "1"] + platform
             + ["+force_install_dir", installDirectory.path, "+login", account] + command + ["+quit"]
         let temporary = staging.appendingPathComponent("tmp", isDirectory: true)
@@ -375,6 +377,7 @@ final class WorkshopDownloader {
             status = output.contains("success! app") ? "Download finished; validating scene assets…" : "Downloading and validating Wallpaper Engine files…"
             if output.contains("success! app '431960' fully installed") { assetsDownloadCompleted = true }
         } else if output.contains("success. downloaded item") {
+            workshopDownloadCompleted = true
             prompt = nil
             steamGuardChallenge = nil
             isAuthenticating = false
@@ -422,14 +425,20 @@ final class WorkshopDownloader {
         await process?.stop()
     }
 
-    nonisolated private static func normalizedAccount(_ username: String) -> String? {
+    nonisolated static func normalizedAccount(_ username: String) -> String? {
         let account = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !account.isEmpty, account != "anonymous",
               account.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }) else { return nil }
         return account
     }
 
-    nonisolated private static func readSavedAccount(at directory: URL) -> String? {
+    nonisolated static func readSavedAccount(at directory: URL) -> String? {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        return readSavedAccountUnlocked(at: directory)
+    }
+
+    nonisolated private static func readSavedAccountUnlocked(at directory: URL) -> String? {
         let files = FileManager.default
         let identity = directory.appendingPathComponent("account")
         guard (try? files.attributesOfItem(atPath: directory.path)[.type]) as? FileAttributeType == .typeDirectory,
@@ -438,9 +447,29 @@ final class WorkshopDownloader {
         return normalizedAccount(account)
     }
 
-    nonisolated private static func removeSession(at directory: URL) throws {
+    nonisolated static func removeSession(at directory: URL) throws {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
         do { try FileManager.default.removeItem(at: directory) }
         catch let error as CocoaError where error.code == .fileNoSuchFile { }
+    }
+
+    nonisolated private static func restoreSession(from directory: URL, account: String, to staging: URL) throws -> UInt64? {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        guard readSavedAccountUnlocked(at: directory) == account else { return nil }
+        let revision = try FileManager.default.attributesOfItem(atPath: directory.path)[.systemFileNumber] as? NSNumber
+        return try copySessionFiles(from: directory, to: staging) ? revision?.uint64Value : nil
+    }
+
+    nonisolated private static func invalidateSession(at directory: URL, account: String, revision: UInt64) throws {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        guard readSavedAccountUnlocked(at: directory) == account,
+              let current = try FileManager.default.attributesOfItem(atPath: directory.path)[.systemFileNumber] as? NSNumber,
+              current.uint64Value == revision else { return }
+        // A late rejection must not delete a newer sign-in saved by another download.
+        try FileManager.default.removeItem(at: directory)
     }
 
     nonisolated private static func privateDirectory(_ directory: URL) throws {
@@ -499,6 +528,8 @@ final class WorkshopDownloader {
     }
 
     nonisolated private static func saveSession(from staging: URL, account: String, to directory: URL) throws -> Bool {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
         let files = FileManager.default
         let pending = directory.deletingLastPathComponent().appendingPathComponent(".steam-session-\(UUID().uuidString)", isDirectory: true)
         defer { try? files.removeItem(at: pending) }

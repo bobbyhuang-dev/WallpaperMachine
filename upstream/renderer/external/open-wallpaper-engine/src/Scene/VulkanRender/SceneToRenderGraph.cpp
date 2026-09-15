@@ -8,6 +8,7 @@
 
 #include "Vulkan/SampleCount.hpp"
 #include "VulkanRender/AllPasses.hpp"
+#include "PrePass.hpp"
 
 #include <cstdlib>
 #include <sstream>
@@ -198,6 +199,7 @@ struct ExtraInfo {
     Map<size_t, rg::TexNode*>  id_base_output_link_map {};
     Set<size_t>                ids_with_effect_graph {};
     std::vector<DelayLinkInfo> link_info {};
+    Set<SceneNode*> cleared_effect_inputs {};
     rg::RenderGraph*           rgraph { nullptr };
     Scene*                     scene { nullptr };
     bool                       use_mipmap_framebuffer { false };
@@ -340,6 +342,22 @@ static void ToGraphPass(
         }
     }
 
+    // copybackground=false means an empty transparent input, not an
+    // uninitialized pooled texture left behind by an unrelated effect.
+    // Clear before compose children too, so they can draw over the empty input.
+    if (imgeff != nullptr && node->SkipRenderPass() &&
+        extra.cleared_effect_inputs.insert(node).second) {
+        // Aliases and concrete names must denote one graph resource. Otherwise
+        // the clear can be scheduled after a reader of the concrete target.
+        const auto target = scene.ResolveRenderTargetName(imgeff->FirstTarget());
+        rgraph.addPass<vulkan::PrePass>("clear effect input", rg::PassNode::Type::Clear,
+            [target](rg::RenderGraphBuilder& builder, vulkan::PrePass::Desc& desc) {
+                desc.result = target;
+                desc.transparent = true;
+                builder.write(builder.createTexNode(rg::createTexDesc(target), true));
+            });
+    }
+
     std::string camera_override;
     if (mode == GraphPassMode::BaseOnly && IsComposeEffectNode(scene, node)) {
         camera_override = ActiveCameraName(scene);
@@ -414,15 +432,13 @@ std::unique_ptr<rg::RenderGraph> wallpaper::sceneToRenderGraph(Scene& scene) {
         const bool is_compose_effect_node = IsComposeEffectNode(*extra.scene, node);
 
         if (is_compose_effect_node) {
-            if (!node->SkipRenderPass()) {
-                ToGraphPass(
-                    node,
-                    std::string(SpecTex_Default),
-                    node->ID(),
-                    extra,
-                    nullptr,
-                    GraphPassMode::BaseOnly);
-            }
+            ToGraphPass(
+                node,
+                std::string(SpecTex_Default),
+                node->ID(),
+                extra,
+                nullptr,
+                GraphPassMode::BaseOnly);
         } else if (!node->SkipRenderPass()) {
             ToGraphPass(node, std::string(SpecTex_Default), node->ID(), extra);
         }
@@ -520,6 +536,11 @@ std::unique_ptr<rg::RenderGraph> wallpaper::sceneToRenderGraph(Scene& scene) {
             continue;
         }
 
+        if (auto* clear = dynamic_cast<vulkan::PrePass*>(rgraph->getPass(node_id))) {
+            written_targets.insert(clear->desc().result);
+            transfer_written_targets.insert(clear->desc().result);
+            continue;
+        }
         auto* custom_pass = dynamic_cast<vulkan::CustomShaderPass*>(rgraph->getPass(node_id));
         if (custom_pass == nullptr) continue;
 

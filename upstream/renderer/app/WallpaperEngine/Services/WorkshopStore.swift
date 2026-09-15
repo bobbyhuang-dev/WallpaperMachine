@@ -31,31 +31,42 @@ final class WorkshopStore {
     private(set) var isLoading = false
     private(set) var hasLoaded = false
     var errorMessage: String?
-    let downloader: WorkshopDownloader
+    let downloader: WorkshopDownloadManager
     let steamCMDSetup: SteamCMDSetupStore
     @ObservationIgnored private let service: WorkshopService
     var username = ""
     var ownsWallpaperEngine = false
-    private(set) var downloadItem: WorkshopItem?
-    private(set) var downloadUsername = ""
-    private(set) var hasDownloadActivity = false
+    var selectedDownloadID: String?
     var showsDownloadDetails = false
     private(set) var downloadErrorMessage: String?
 
-    convenience init(service: WorkshopService = WorkshopService()) {
-        self.init(service: service, downloader: WorkshopDownloader())
+    var hasDownloadActivity: Bool { !downloader.downloads.isEmpty }
+    var selectedDownload: WorkshopDownload? {
+        downloader.downloads.first { $0.id == selectedDownloadID }
+            ?? downloader.downloads.first { $0.isPending }
+            ?? downloader.downloads.last
     }
 
-    init(service: WorkshopService = WorkshopService(), downloader: WorkshopDownloader) {
+    convenience init(service: WorkshopService = WorkshopService()) {
+        self.init(service: service, downloader: WorkshopDownloadManager())
+    }
+
+    init(service: WorkshopService = WorkshopService(), downloader: WorkshopDownloadManager,
+         supportDirectory: URL = ClientPaths.supportURL, defaults: UserDefaults = .standard) {
         self.service = service
         self.downloader = downloader
-        self.steamCMDSetup = SteamCMDSetupStore(downloader: downloader)
+        self.steamCMDSetup = SteamCMDSetupStore(downloader: downloader, supportDirectory: supportDirectory, defaults: defaults)
+    }
+
+    func showDownload(_ job: WorkshopDownload) {
+        guard downloader.downloads.contains(where: { $0 === job }) else { return }
+        selectedDownloadID = job.id
+        showsDownloadDetails = true
     }
 
     func startDownload(item: WorkshopItem?, username: String, rememberSession: Bool, bridge: BridgeStore) {
-        if downloader.isRunning {
-            if downloader.currentItemID == item?.id { showsDownloadDetails = true }
-            else { downloadErrorMessage = String(localized: "Another download is running.") }
+        if let job = downloader.download(for: item?.id), job.isPending {
+            showDownload(job)
             return
         }
         guard !steamCMDSetup.isBusy else {
@@ -72,9 +83,6 @@ final class WorkshopStore {
             downloadErrorMessage = String(localized: "Enter your Steam account login name and confirm that it owns Wallpaper Engine.")
             return
         }
-        downloadItem = item
-        downloadUsername = username
-        hasDownloadActivity = true
         downloadErrorMessage = nil
         if let item {
             downloader.start(item: item, username: username, executable: runtime.executableURL,
@@ -89,15 +97,16 @@ final class WorkshopStore {
                 self.refreshSceneAssetsReadiness()
             }
         }
+        if downloader.errorMessage == nil, let job = downloader.download(for: item?.id) {
+            selectedDownloadID = job.id
+        }
     }
 
     func clearDownloadActivity() {
-        guard !downloader.isRunning else { return }
-        hasDownloadActivity = false
-        downloadItem = nil
-        downloadUsername = ""
+        downloader.clearCompleted()
+        if !downloader.downloads.contains(where: { $0.id == selectedDownloadID }) { selectedDownloadID = nil }
         downloadErrorMessage = nil
-        showsDownloadDetails = false
+        if !hasDownloadActivity { showsDownloadDetails = false }
     }
 
     static func normalizedAccount(_ account: String) -> String {

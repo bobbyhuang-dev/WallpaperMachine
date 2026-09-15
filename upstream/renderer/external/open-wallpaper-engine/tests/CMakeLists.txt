@@ -242,6 +242,17 @@ gtest_discover_tests(
     PROPERTIES TIMEOUT 30
     DISCOVERY_TIMEOUT 60
 )
+# Explicit CLI diagnostic, not registered with ctest. Never creates a surface.
+add_executable(render_target_lifetime_test render_target_lifetime_test.cpp)
+target_link_libraries(render_target_lifetime_test PRIVATE ${PROJECT_NAME} wpScene wpVulkanRender wpVulkan wpRGraph nlohmann_json::nlohmann_json GTest::gtest_main)
+target_include_directories(render_target_lifetime_test PRIVATE . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender)
+gtest_discover_tests(render_target_lifetime_test PROPERTIES TIMEOUT 30)
+
+add_executable(offscreen_scene_probe offscreen_scene_probe.cpp)
+target_link_libraries(offscreen_scene_probe PRIVATE ${PROJECT_NAME} wpAudio wpScene wpParticle wpFs wpVulkan wpVulkanRender wpRGraph nlohmann_json::nlohmann_json)
+target_include_directories(offscreen_scene_probe PRIVATE . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender)
+target_compile_features(offscreen_scene_probe PRIVATE cxx_std_20)
+
 add_executable(text_object_runtime_test text_object_runtime_test.cpp)
 target_link_libraries(text_object_runtime_test PRIVATE ${PROJECT_NAME} wpAudio wpScene wpFs wpVulkan wpVulkanRender wpRGraph nlohmann_json::nlohmann_json GTest::gtest_main)
 target_include_directories(text_object_runtime_test PRIVATE . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender)
@@ -262,7 +273,7 @@ gtest_discover_tests(
     DISCOVERY_TIMEOUT 60
 )
 add_executable(particle_mouse_controlpoint_test particle_mouse_controlpoint_test.cpp)
-target_link_libraries(particle_mouse_controlpoint_test PRIVATE ${PROJECT_NAME} wpScene wpParticle GTest::gtest_main)
+target_link_libraries(particle_mouse_controlpoint_test PRIVATE ${PROJECT_NAME} wpScene wpParticle wpAudio nlohmann_json::nlohmann_json GTest::gtest_main)
 target_include_directories(particle_mouse_controlpoint_test PRIVATE .)
 target_compile_features(particle_mouse_controlpoint_test PRIVATE cxx_std_20)
 gtest_discover_tests(

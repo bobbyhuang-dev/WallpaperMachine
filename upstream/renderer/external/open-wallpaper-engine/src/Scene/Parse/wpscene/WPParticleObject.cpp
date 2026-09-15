@@ -129,6 +129,11 @@ bool Emitter::FromJson(const nlohmann::json& json) {
     GET_JSON_NAME_VALUE_NOWARN(json, "origin", origin);
     GET_JSON_NAME_VALUE_NOWARN(json, "sign", sign);
     GET_JSON_NAME_VALUE_NOWARN(json, "audioprocessingmode", audioprocessingmode);
+    GET_JSON_NAME_VALUE_NOWARN(json, "audioprocessingbounds", audioprocessingbounds);
+    GET_JSON_NAME_VALUE_NOWARN(json, "audioprocessingexponent", audioprocessingexponent);
+    GET_JSON_NAME_VALUE_NOWARN(
+        json, "audioprocessingfrequencystart", audioprocessingfrequencystart);
+    GET_JSON_NAME_VALUE_NOWARN(json, "audioprocessingfrequencyend", audioprocessingfrequencyend);
     GET_JSON_NAME_VALUE_NOWARN(json, "controlpoint", controlpoint);
 
     if (controlpoint >= 8) LOG_ERROR("wrong controlpoint %d", controlpoint);

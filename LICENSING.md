@@ -83,6 +83,7 @@ The native application is named **MacWallpaperEngine**; the project slug is `mac
 - Exact source provenance is recorded in `upstream/provenance.json`.
 - Current Homebrew FFmpeg binaries include GPLv3-enabled components. The private bundle is not cleared for distribution; a GPLv2-compatible media build or appropriate permissions must be selected and audited before release.
 - Valve SteamCMD is installed separately, not bundled with the application. Its copied runtime is used for authenticated downloads; the app does not distribute Workshop content or proprietary shared assets.
+- Native lock-screen extension ABI research used the MIT-licensed [Phosphene](https://github.com/kageroumado/phosphene/tree/8b5bd57c1450eda74cf2ec6ceaae2e586cfdfcd6) protocol/Codable layout as a reference. The app-specific asset publication, restoration and existing renderer integration are implemented here. Private `WallpaperExtensionKit` is not an Apple-supported public wallpaper API; this does not resolve the distribution issues above.
 
 ## Local build and use
 

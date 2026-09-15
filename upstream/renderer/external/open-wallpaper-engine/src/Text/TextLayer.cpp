@@ -142,12 +142,27 @@ CreateFreeTypeFaceFromBytes(const std::vector<uint8_t>& data, float point_size) 
 
 std::unique_ptr<std::remove_pointer_t<FT_Face>, FtFaceDeleter>
 CreateFreeTypeFace(const TextLayerState& state, std::vector<uint8_t>& owned_data) {
+    // Keep an authored, usable font first. A package can also contain a broken
+    // font, or a previously resolved file can disappear before rasterization.
+    // Recover at the decoder boundary so measurement and rasterization choose
+    // the same real face in all of these cases, not placeholder rectangles.
     if (! state.resolved_font_data.empty()) {
-        return CreateFreeTypeFaceFromBytes(state.resolved_font_data.bytes(), state.point_size);
+        if (auto face = CreateFreeTypeFaceFromBytes(state.resolved_font_data.bytes(), state.point_size)) {
+            return face;
+        }
     } else if (! state.resolved_font_path.empty()) {
         owned_data = ReadFileBytes(state.resolved_font_path);
+        if (auto face = CreateFreeTypeFaceFromBytes(owned_data, state.point_size)) return face;
     }
-    return CreateFreeTypeFaceFromBytes(owned_data, state.point_size);
+#ifdef __APPLE__
+    for (const auto& key : {state.font_key, std::string("systemfont_sansserif")}) {
+        const auto path = ResolveSystemFontPath(key);
+        if (path.empty()) continue;
+        owned_data = ReadFileBytes(path);
+        if (auto face = CreateFreeTypeFaceFromBytes(owned_data, state.point_size)) return face;
+    }
+#endif
+    return nullptr;
 }
 
 struct FallbackFace {

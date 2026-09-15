@@ -15,10 +15,11 @@ final class ControlPanelLayoutTests: XCTestCase {
         try await fixture.store.refreshAllAsync()
         let session = FileManager.default.temporaryDirectory.appendingPathComponent("layout-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: session) }
-        let workshop = WorkshopStore(downloader: WorkshopDownloader(sessionDirectory: session))
         let defaultsName = "ControlPanelLayoutTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
         defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let workshop = WorkshopStore(downloader: WorkshopDownloadManager(sessionDirectory: session),
+                                     supportDirectory: session, defaults: defaults)
 
         for language in ["en", "zh-Hans"] {
             let controller = NSHostingController(rootView:

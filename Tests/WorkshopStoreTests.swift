@@ -268,6 +268,7 @@ final class WorkshopStoreTests: XCTestCase {
         let inbox = WorkshopRequestInbox()
         let delegate = WorkshopSessionDelegate()
         let session: URLSession
+        let defaults: UserDefaults
         let store: WorkshopStore
 
         init() throws {
@@ -281,9 +282,11 @@ final class WorkshopStoreTests: XCTestCase {
             configuration.timeoutIntervalForResource = 5
             session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
             WorkshopFixtureProtocol.register(identifier, inbox: inbox)
-            // Search never starts setup discovery or downloads; the only session read is isolated here.
+            defaults = try XCTUnwrap(UserDefaults(suiteName: "WorkshopStoreTests.\(identifier)"))
+            // Search and setup metadata use only this fixture's isolated storage.
             store = WorkshopStore(service: WorkshopService(session: session),
-                                  downloader: WorkshopDownloader(sessionDirectory: root.appendingPathComponent("SteamSession")))
+                                  downloader: WorkshopDownloadManager(sessionDirectory: root.appendingPathComponent("SteamSession")),
+                                  supportDirectory: root, defaults: defaults)
         }
 
         func request(text: String, kind: WorkshopKind, sort: WorkshopSort, page: Int) async throws -> WorkshopFixtureProtocol {
@@ -315,6 +318,7 @@ final class WorkshopStoreTests: XCTestCase {
             store.cancelSearch()
             session.invalidateAndCancel()
             WorkshopFixtureProtocol.remove(identifier)
+            defaults.removePersistentDomain(forName: "WorkshopStoreTests.\(identifier)")
             try? FileManager.default.removeItem(at: root)
         }
     }

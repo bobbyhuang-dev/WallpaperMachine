@@ -1406,11 +1406,8 @@ JSValue CreateCursorPositionObject(JSContext* context, const ScriptHostContext& 
 SceneScriptBridgeState* GetBridgeState(JSContext* context);
 
 JSValue CreateAudioArray(JSContext* context, uint32_t resolution) {
-    JSValue array = JS_NewArray(context);
-    for (uint32_t index = 0; index < resolution; ++index) {
-        JS_SetPropertyUint32(context, array, index, JS_NewFloat64(context, 0.0));
-    }
-    return array;
+    JSValue length = JS_NewUint32(context, resolution);
+    return JS_NewTypedArray(context, 1, &length, JS_TYPED_ARRAY_FLOAT32);
 }
 
 JSValue CreateAudioBufferObject(JSContext* context, uint32_t resolution) {
@@ -1454,6 +1451,7 @@ JSValue JsRegisterAudioBuffers(JSContext* context, JSValueConst, int argc, JSVal
     JS_FreeValue(context, length_value);
 
     JS_SetPropertyUint32(context, registry, length, JS_DupValue(context, buffer));
+    GetContextScriptCache(context).has_last_audio_generation = false;
 
     JS_FreeValue(context, registry);
     JS_FreeValue(context, global_object);

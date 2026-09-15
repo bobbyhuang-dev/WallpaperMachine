@@ -5,7 +5,7 @@
 
 using namespace wallpaper::vulkan;
 
-PrePass::PrePass(const Desc&) {}
+PrePass::PrePass(const Desc& desc): m_desc(desc) {}
 PrePass::~PrePass() {}
 
 void PrePass::prepare(Scene& scene, const Device& device, RenderingResources&) {
@@ -21,8 +21,10 @@ void PrePass::prepare(Scene& scene, const Device& device, RenderingResources&) {
     }
     {
         auto& sc           = scene.clearColor;
-        m_desc.clear_value = VkClearValue { sc[0], sc[1], sc[2], 1.0f };
+        m_desc.clear_value = m_desc.transparent ? VkClearValue { 0.0f, 0.0f, 0.0f, 0.0f }
+                                                : VkClearValue { sc[0], sc[1], sc[2], 1.0f };
     }
+    for (auto& tex : releaseTexs()) device.tex_cache().MarkShareReady(tex);
     setPrepared();
 }
 

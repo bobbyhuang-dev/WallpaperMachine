@@ -620,6 +620,16 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func librarySnapshot() async throws  -> BridgeLibrarySnapshot
     
     /**
+     * Returns committed active scenes for the currently connected displays.
+     * Draft options and the library selection do not affect these inputs.
+     *
+     * # Errors
+     *
+     * Returns an error when scene resolution or renderer-input conversion fails.
+     */
+    func lockScreenScenes() async throws  -> [BridgeLockScreenScene]
+    
+    /**
      * # Errors
      *
      * Returns an error when the logger has not been installed.
@@ -1159,6 +1169,31 @@ open func librarySnapshot()async throws  -> BridgeLibrarySnapshot {
             completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
             freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeBridgeLibrarySnapshot.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Returns committed active scenes for the currently connected displays.
+     * Draft options and the library selection do not affect these inputs.
+     *
+     * # Errors
+     *
+     * Returns an error when scene resolution or renderer-input conversion fails.
+     */
+open func lockScreenScenes()async throws  -> [BridgeLockScreenScene] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_lock_screen_scenes(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeBridgeLockScreenScene.lift,
             errorHandler: FfiConverterTypeBridgeError.lift
         )
 }
@@ -2502,6 +2537,137 @@ public func FfiConverterTypeBridgeLibrarySnapshot_lift(_ buf: RustBuffer) throws
 #endif
 public func FfiConverterTypeBridgeLibrarySnapshot_lower(_ value: BridgeLibrarySnapshot) -> RustBuffer {
     return FfiConverterTypeBridgeLibrarySnapshot.lower(value)
+}
+
+
+/**
+ * Committed renderer inputs for a native lock-screen wallpaper display.
+ */
+public struct BridgeLockScreenScene {
+    public var displayId: UInt32
+    public var title: String
+    public var projectPath: String
+    public var assetsPath: String
+    public var fps: UInt32
+    public var scalingMode: BridgeScalingMode
+    public var scalingFactor: Double
+    /**
+     * Renderer-ready property overrides with nested keys flattened.
+     */
+    public var propertiesJson: String?
+    public var paused: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(displayId: UInt32, title: String, projectPath: String, assetsPath: String, fps: UInt32, scalingMode: BridgeScalingMode, scalingFactor: Double, 
+        /**
+         * Renderer-ready property overrides with nested keys flattened.
+         */propertiesJson: String?, paused: Bool) {
+        self.displayId = displayId
+        self.title = title
+        self.projectPath = projectPath
+        self.assetsPath = assetsPath
+        self.fps = fps
+        self.scalingMode = scalingMode
+        self.scalingFactor = scalingFactor
+        self.propertiesJson = propertiesJson
+        self.paused = paused
+    }
+}
+
+
+
+extension BridgeLockScreenScene: Equatable, Hashable {
+    public static func ==(lhs: BridgeLockScreenScene, rhs: BridgeLockScreenScene) -> Bool {
+        if lhs.displayId != rhs.displayId {
+            return false
+        }
+        if lhs.title != rhs.title {
+            return false
+        }
+        if lhs.projectPath != rhs.projectPath {
+            return false
+        }
+        if lhs.assetsPath != rhs.assetsPath {
+            return false
+        }
+        if lhs.fps != rhs.fps {
+            return false
+        }
+        if lhs.scalingMode != rhs.scalingMode {
+            return false
+        }
+        if lhs.scalingFactor != rhs.scalingFactor {
+            return false
+        }
+        if lhs.propertiesJson != rhs.propertiesJson {
+            return false
+        }
+        if lhs.paused != rhs.paused {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(displayId)
+        hasher.combine(title)
+        hasher.combine(projectPath)
+        hasher.combine(assetsPath)
+        hasher.combine(fps)
+        hasher.combine(scalingMode)
+        hasher.combine(scalingFactor)
+        hasher.combine(propertiesJson)
+        hasher.combine(paused)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeLockScreenScene: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeLockScreenScene {
+        return
+            try BridgeLockScreenScene(
+                displayId: FfiConverterUInt32.read(from: &buf), 
+                title: FfiConverterString.read(from: &buf), 
+                projectPath: FfiConverterString.read(from: &buf), 
+                assetsPath: FfiConverterString.read(from: &buf), 
+                fps: FfiConverterUInt32.read(from: &buf), 
+                scalingMode: FfiConverterTypeBridgeScalingMode.read(from: &buf), 
+                scalingFactor: FfiConverterDouble.read(from: &buf), 
+                propertiesJson: FfiConverterOptionString.read(from: &buf), 
+                paused: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BridgeLockScreenScene, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.displayId, into: &buf)
+        FfiConverterString.write(value.title, into: &buf)
+        FfiConverterString.write(value.projectPath, into: &buf)
+        FfiConverterString.write(value.assetsPath, into: &buf)
+        FfiConverterUInt32.write(value.fps, into: &buf)
+        FfiConverterTypeBridgeScalingMode.write(value.scalingMode, into: &buf)
+        FfiConverterDouble.write(value.scalingFactor, into: &buf)
+        FfiConverterOptionString.write(value.propertiesJson, into: &buf)
+        FfiConverterBool.write(value.paused, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeLockScreenScene_lift(_ buf: RustBuffer) throws -> BridgeLockScreenScene {
+    return try FfiConverterTypeBridgeLockScreenScene.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeLockScreenScene_lower(_ value: BridgeLockScreenScene) -> RustBuffer {
+    return FfiConverterTypeBridgeLockScreenScene.lower(value)
 }
 
 
@@ -4468,6 +4634,31 @@ fileprivate struct FfiConverterSequenceTypeBridgeDisplaySettingsRow: FfiConverte
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeBridgeLockScreenScene: FfiConverterRustBuffer {
+    typealias SwiftType = [BridgeLockScreenScene]
+
+    public static func write(_ value: [BridgeLockScreenScene], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBridgeLockScreenScene.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BridgeLockScreenScene] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BridgeLockScreenScene]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBridgeLockScreenScene.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeBridgeMonitorInfoRow: FfiConverterRustBuffer {
     typealias SwiftType = [BridgeMonitorInfoRow]
 
@@ -4635,6 +4826,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_library_snapshot() != 36547) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_lock_screen_scenes() != 61131) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_log_folder_path() != 6045) {

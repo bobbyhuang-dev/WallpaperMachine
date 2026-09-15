@@ -25,12 +25,12 @@ mod tests;
 pub use api::{
     BridgeAppSnapshot, BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplayMutationBundle,
     BridgeDisplaySettingsRow, BridgeError, BridgeErrorKind, BridgeLibraryScanStatus,
-    BridgeLibrarySnapshot, BridgeLogLevel, BridgeLogStatus, BridgeMonitorInfoRow,
-    BridgeMonitorInformationSnapshot, BridgePlaybackState, BridgePropertyDescriptor,
-    BridgePropertyKind, BridgePropertyValue, BridgeScalingMode, BridgeSettingsSnapshot,
-    BridgeSliderMetadata, BridgeSnapshotBundle, BridgeStorageStatus, BridgeWallpaperEntry,
-    BridgeWallpaperKind, BridgeWallpaperMutationBundle, BridgeWallpaperOptionsSnapshot,
-    WallpaperBridge,
+    BridgeLibrarySnapshot, BridgeLockScreenScene, BridgeLogLevel, BridgeLogStatus,
+    BridgeMonitorInfoRow, BridgeMonitorInformationSnapshot, BridgePlaybackState,
+    BridgePropertyDescriptor, BridgePropertyKind, BridgePropertyValue, BridgeScalingMode,
+    BridgeSettingsSnapshot, BridgeSliderMetadata, BridgeSnapshotBundle, BridgeStorageStatus,
+    BridgeWallpaperEntry, BridgeWallpaperKind, BridgeWallpaperMutationBundle,
+    BridgeWallpaperOptionsSnapshot, WallpaperBridge,
 };
 
 mod build {

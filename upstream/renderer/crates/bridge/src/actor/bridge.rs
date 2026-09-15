@@ -13,33 +13,35 @@ use kameo::{
 use wallpaper_core::{
     DisplayIdentity, DisplaySelector, DisplaySnapshotEntry, WallpaperAssignment,
     media::audio::AudioVolume,
-    project::{ScalingMode, SceneDesc, SceneHandle},
+    project::{ScalingMode, SceneDesc, SceneHandle, SerdeValudeExt},
 };
 
 use crate::{
     actor::{
         messages::{
             self, ApplyWallpaperOptions, Bootstrap, CancelWallpaperOptions, ClearShaderCache,
-            CommitApplyAfterReconcile, CommitDisplayAfterReconcile, CompleteRestoreAfterReconcile,
-            EditProperty, EjectWallpaperFromDisplay, GetAllSnapshots, GetAppSnapshot,
-            GetLibrarySnapshot, GetMonitorInformationSnapshot, GetSettingsSnapshot,
-            GetWallpaperOptionsSnapshot, InitialFrameReady, InjectDisplayForTest,
-            InjectSceneProjectForTest, InjectSceneWallpaperConfigForTest, InjectWallpaperForTest,
-            PollMousePosition, ReconcileFailed, RefreshDisplays, RefreshLibrary,
-            ReplaceLibraryForTest, ReplaceWallpaperConfigForTest, RestorePropertyDefault,
-            SelectWallpaper, SetAudioResponseEnabled, SetDisplayConfigEnabled, SetDisplayEnabled,
-            SetDisplayMode, SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMirrorMuted,
-            SetMirrorScalingFactor, SetMirrorScalingMode, SetMirrorTarget, SetMirrorTargetFps,
-            SetMirrorVolume, SetMuted, SetPauseOnBatteryPower, SetPowerSource, SetScalingFactor,
-            SetScalingMode, SetTargetFps, SetVolume, Shutdown,
+            CommitApplyAfterReconcile, CommitDisplayAfterReconcile, CompleteAudioResponse,
+            CompleteRestoreAfterReconcile, EditProperty, EjectWallpaperFromDisplay,
+            GetAllSnapshots, GetAppSnapshot, GetLibrarySnapshot, GetLockScreenScenes,
+            GetMonitorInformationSnapshot, GetSettingsSnapshot, GetWallpaperOptionsSnapshot,
+            InitialFrameReady, InjectDisplayForTest, InjectSceneProjectForTest,
+            InjectSceneWallpaperConfigForTest, InjectWallpaperForTest, PollMousePosition,
+            ReconcileFailed, RefreshDisplays, RefreshLibrary, ReplaceLibraryForTest,
+            ReplaceWallpaperConfigForTest, RestorePropertyDefault, SelectWallpaper,
+            SetAudioResponseEnabled, SetDisplayConfigEnabled, SetDisplayEnabled, SetDisplayMode,
+            SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMirrorMuted, SetMirrorScalingFactor,
+            SetMirrorScalingMode, SetMirrorTarget, SetMirrorTargetFps, SetMirrorVolume, SetMuted,
+            SetPauseOnBatteryPower, SetPowerSource, SetScalingFactor, SetScalingMode, SetTargetFps,
+            SetVolume, Shutdown,
         },
         state::BridgeActorState,
     },
     api::{
         BridgeAppSnapshot, BridgeDisplayMode, BridgeDisplayMutationBundle,
         BridgeDisplaySettingsRow, BridgeError, BridgeLibraryScanStatus, BridgeLibrarySnapshot,
-        BridgePlaybackState, BridgePropertyValue, BridgeScalingMode, BridgeSnapshotBundle,
-        BridgeWallpaperEntry, BridgeWallpaperKind, BridgeWallpaperMutationBundle,
+        BridgeLockScreenScene, BridgePlaybackState, BridgePropertyValue, BridgeScalingMode,
+        BridgeSnapshotBundle, BridgeWallpaperEntry, BridgeWallpaperKind,
+        BridgeWallpaperMutationBundle,
     },
     config::{AppConfig, ConfigStore, SerializedSelector, WallpaperConfig},
     display::{DisplaySelectorExt, DisplaySnapshotExt},
@@ -71,6 +73,7 @@ pub struct BridgeActor<E: EngineFacade> {
     repair_after_reconcile_generation: Option<u64>,
     active_restore_generation: Option<u64>,
     restore_requested_after_active: bool,
+    pending_audio_changes: HashSet<String>,
     #[allow(dead_code)]
     pub engine: E,
     #[allow(dead_code)]
@@ -122,6 +125,7 @@ impl<E: EngineFacade> BridgeActorHandle<E> {
             repair_after_reconcile_generation: None,
             active_restore_generation: None,
             restore_requested_after_active: false,
+            pending_audio_changes: HashSet::new(),
             engine,
             config_store,
             launch_at_login,
@@ -627,6 +631,85 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             .await?;
         self.state.set_active_ids_from_scenes(&scenes);
         Ok(())
+    }
+
+    fn lock_screen_scenes(&self) -> Result<Vec<BridgeLockScreenScene>, BridgeError> {
+        let displays = self.engine.display_snapshot();
+        let scenes = ActivationInputs {
+            app_config: &self.state.app_config,
+            wallpapers: &self.state.wallpaper_configs,
+            displays: &displays,
+            paused: self.playback_paused(),
+            paths: &self.paths,
+            force_shader_refresh: false,
+        }
+        .build()?;
+
+        scenes
+            .into_iter()
+            .map(|mut scene| {
+                let wallpaper_id = std::path::Path::new(&scene.scene_path)
+                    .parent()
+                    .and_then(std::path::Path::file_name)
+                    .and_then(std::ffi::OsStr::to_str)
+                    .ok_or_else(|| {
+                        BridgeError::engine(format!(
+                            "cannot identify lock-screen wallpaper from {}",
+                            scene.scene_path
+                        ))
+                    })?;
+                let title = self
+                    .state
+                    .library
+                    .iter()
+                    .find(|entry| entry.id == wallpaper_id)
+                    .ok_or_else(|| BridgeError::Error {
+                        kind: crate::api::BridgeErrorKind::Library,
+                        message: format!(
+                            "lock-screen wallpaper {wallpaper_id} is not in the library"
+                        ),
+                    })?
+                    .title
+                    .clone();
+                for path in [&mut scene.scene_path, &mut scene.assets_path] {
+                    if !std::path::Path::new(path.as_str()).is_absolute() {
+                        *path = std::path::absolute(&*path)
+                            .map_err(|error| BridgeError::Error {
+                                kind: crate::api::BridgeErrorKind::Io,
+                                message: error.to_string(),
+                            })?
+                            .into_os_string()
+                            .into_string()
+                            .map_err(|_| {
+                                BridgeError::invalid_input("lock-screen source path is not UTF-8")
+                            })?;
+                    }
+                }
+                let properties_json = scene
+                    .property_override_json
+                    .as_deref()
+                    .map(|json| {
+                        let flat = serde_json::from_str::<serde_json::Value>(json)
+                            .map_err(|error| BridgeError::engine(error.to_string()))?
+                            .flatten()
+                            .map_err(|error| BridgeError::engine(error.to_string()))?;
+                        serde_json::to_string(&flat)
+                            .map_err(|error| BridgeError::engine(error.to_string()))
+                    })
+                    .transpose()?;
+                Ok(BridgeLockScreenScene {
+                    display_id: scene.display.display_id,
+                    title,
+                    project_path: scene.scene_path,
+                    assets_path: scene.assets_path,
+                    fps: scene.fps,
+                    scaling_mode: scene.scaling_mode.into(),
+                    scaling_factor: scene.scaling_factor,
+                    properties_json,
+                    paused: scene.paused,
+                })
+            })
+            .collect()
     }
 
     fn unchanged_configured_scenes(
@@ -1203,6 +1286,18 @@ impl<E: EngineFacade + Clone> Message<GetLibrarySnapshot> for BridgeActor<E> {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         Ok(self.library_snapshot())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<GetLockScreenScenes> for BridgeActor<E> {
+    type Reply = messages::LockScreenScenesReply;
+
+    async fn handle(
+        &mut self,
+        _msg: GetLockScreenScenes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.lock_screen_scenes()
     }
 }
 
@@ -2188,26 +2283,91 @@ impl<E: EngineFacade + Clone> Message<SetMuted> for BridgeActor<E> {
 }
 
 impl<E: EngineFacade + Clone> Message<SetAudioResponseEnabled> for BridgeActor<E> {
-    type Reply = messages::WallpaperMutationReply;
+    type Reply = DelegatedReply<messages::WallpaperMutationReply>;
 
     async fn handle(
         &mut self,
         msg: SetAudioResponseEnabled,
-        _ctx: &mut Context<Self, Self::Reply>,
+        ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        if self.pending_audio_changes.contains(&msg.wallpaper_id) {
+            return ctx.reply(Err(BridgeError::invalid_input(
+                "An audio response change is still in progress.",
+            )));
+        }
+        let previous_enabled = match self.state.wallpaper_draft_mut(&msg.wallpaper_id) {
+            Ok(draft) => draft.current().audio.response_enabled,
+            Err(error) => return ctx.reply(Err(error)),
+        };
         let wallpaper_config = self
             .state
-            .wallpaper_draft_mut(&msg.wallpaper_id)?
+            .wallpaper_draft_mut(&msg.wallpaper_id)
+            .expect("wallpaper draft was validated")
             .set_audio_response_enabled_immediate(msg.enabled);
-        self.save_wallpaper(msg.wallpaper_id.clone(), wallpaper_config)?;
-        for handle in self.wallpaper_handles(&msg.wallpaper_id, true) {
-            let engine = self.engine.clone();
-            let enabled = msg.enabled;
-            tokio::spawn(async move {
-                let _ = engine.set_audio_capture_enabled(handle, enabled).await;
-            });
+        if let Err(error) = self.save_wallpaper(msg.wallpaper_id.clone(), wallpaper_config) {
+            let _ = self
+                .state
+                .wallpaper_draft_mut(&msg.wallpaper_id)
+                .expect("wallpaper draft was validated")
+                .set_audio_response_enabled_immediate(previous_enabled);
+            return ctx.reply(Err(error));
         }
         self.bump_generation();
+        let handles = self.wallpaper_handles(&msg.wallpaper_id, true);
+        if handles.is_empty() {
+            return ctx.reply(self.wallpaper_bundle(msg.wallpaper_id));
+        }
+        self.pending_audio_changes.insert(msg.wallpaper_id.clone());
+        let actor = ctx.actor_ref().clone();
+        let engine = self.engine.clone();
+        ctx.spawn(async move {
+            let mut result = Ok(());
+            for &handle in &handles {
+                if let Err(error) = engine.set_audio_capture_enabled(handle, msg.enabled).await {
+                    result = Err(BridgeError::engine(error.to_string()));
+                    break;
+                }
+            }
+            if result.is_err() {
+                for handle in handles {
+                    if let Err(error) = engine
+                        .set_audio_capture_enabled(handle, previous_enabled)
+                        .await
+                    {
+                        log::warn!("could not restore audio response after failed change: {error}");
+                    }
+                }
+            }
+            actor
+                .ask(CompleteAudioResponse {
+                    wallpaper_id: msg.wallpaper_id,
+                    previous_enabled,
+                    result,
+                })
+                .await
+                .map_err(map_send_error)
+        })
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<CompleteAudioResponse> for BridgeActor<E> {
+    type Reply = messages::WallpaperMutationReply;
+
+    async fn handle(
+        &mut self,
+        msg: CompleteAudioResponse,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.pending_audio_changes.remove(&msg.wallpaper_id);
+        if let Err(error) = msg.result {
+            let config = self
+                .state
+                .wallpaper_draft_mut(&msg.wallpaper_id)?
+                .set_audio_response_enabled_immediate(msg.previous_enabled);
+            self.save_wallpaper(msg.wallpaper_id, config)?;
+            self.bump_generation();
+            return Err(error);
+        }
         self.wallpaper_bundle(msg.wallpaper_id)
     }
 }

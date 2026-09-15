@@ -42,6 +42,16 @@ struct GeneralConfigurationSection: View {
             .accessibilityValue(audioResponseEnabled ? Text("On") : Text("Off"))
             .frame(maxWidth: .infinity, alignment: .leading)
 
+            Text("Reacts to sound playing in other apps, not the microphone. macOS asks for system audio recording access when an enabled wallpaper starts. Wallpaper volume and mute do not affect this input.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if bridgeActionInProgress {
+                ProgressView("Updating audio response…")
+                    .controlSize(.small)
+            }
+
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("Volume")

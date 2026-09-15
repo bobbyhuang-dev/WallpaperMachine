@@ -10,13 +10,14 @@ struct WorkshopDetailView: View {
     @State private var activationItemID: String?
     @State private var activationFailed = false
     @State private var showAssetsSetup = false
-    private var downloader: WorkshopDownloader { workshop.downloader }
+    private var download: WorkshopDownload? { workshop.downloader.download(for: item.id) }
     private var isInstalled: Bool {
         bridge.librarySnapshot.wallpapers.contains { $0.id == item.id }
     }
 
     var body: some View {
         VStack(spacing: 0) {
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     WorkshopPreview(url: item.previewURL)
@@ -48,10 +49,16 @@ struct WorkshopDetailView: View {
                     Link("View full description, creator, and requirements on Steam", destination: item.pageURL)
                         .fixedSize(horizontal: false, vertical: true)
                     Divider()
-                    if isInstalled {
+                    if download?.isPending == true {
+                        SteamDownloadControls(item: item, workshop: workshop)
+                    } else if isInstalled {
                         Label("Available in your local library", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                        if let warning = downloader.sessionWarning {
+                        if let warning = download?.worker.sessionWarning {
                             Label(warning, systemImage: "exclamationmark.shield")
+                                .font(.caption).foregroundStyle(.orange).textSelection(.enabled)
+                        }
+                        if let error = download?.worker.errorMessage {
+                            Label(error, systemImage: "exclamationmark.triangle")
                                 .font(.caption).foregroundStyle(.orange).textSelection(.enabled)
                         }
                         if item.kind == .scene && !workshop.sceneAssetsReady {
@@ -63,7 +70,10 @@ struct WorkshopDetailView: View {
                             let id = item.id
                             let revision = bridge.latestBridgeErrorRevision
                             Task {
-                                do { try await navigation.revealWallpaper(id: id, store: bridge) }
+                                do {
+                                    try await navigation.revealWallpaper(id: id, store: bridge)
+                                    workshop.showsDownloadDetails = false
+                                }
                                 catch {
                                     if revision == bridge.latestBridgeErrorRevision {
                                         activationItemID = id
@@ -131,9 +141,11 @@ struct WorkshopDetailView: View {
 }
 
 
+
 struct SceneAssetsSetupView: View {
     @Bindable var workshop: WorkshopStore
     @Environment(\.dismiss) private var dismiss
+    private var download: WorkshopDownload? { workshop.downloader.download(for: nil) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -153,9 +165,18 @@ struct SceneAssetsSetupView: View {
                         Text("Workshop downloads do not include Wallpaper Engine’s shared shaders and materials. Install them with a Steam account that owns Wallpaper Engine, or use an existing installation.")
                         Button("Locate assets…") {
                             if ClientPaths.selectAssetsFolder() { workshop.refreshSceneAssetsReadiness() }
-                        }.disabled(workshop.downloader.isRunning || workshop.steamCMDSetup.isBusy)
+                        }.disabled(download?.isPending == true || workshop.steamCMDSetup.isBusy)
+                    }
+                    if download?.isPending == true || !workshop.sceneAssetsReady {
                         Divider()
                         SteamDownloadControls(item: nil, workshop: workshop)
+                    } else {
+                        if let warning = download?.worker.sessionWarning {
+                            Label(warning, systemImage: "exclamationmark.shield").foregroundStyle(.orange)
+                        }
+                        if let error = download?.worker.errorMessage {
+                            Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                        }
                     }
                 }
                 .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
@@ -164,6 +185,9 @@ struct SceneAssetsSetupView: View {
         }.padding(24)
             .frame(minWidth: 440, idealWidth: 590, maxWidth: 640, minHeight: 360, idealHeight: 500, maxHeight: 640)
             .onAppear { workshop.refreshSceneAssetsReadiness() }
+            .onChange(of: download?.isPending) {
+                if download?.isPending != true { workshop.refreshSceneAssetsReadiness() }
+            }
     }
 }
 
@@ -216,7 +240,8 @@ struct WorkshopSetupInstructions: View {
             Text("Browsing is public and needs no API key. Downloads require Valve’s SteamCMD and a Steam account that legitimately owns Wallpaper Engine.")
             Text("Install SteamCMD here, or locate a complete existing macOS installation. Installation does not require a Steam login. On Apple silicon, follow Apple’s Rosetta instructions if setup reports that it is needed.")
             Text("Choose a wallpaper, enter your Steam account login name, and confirm ownership on first use or when switching accounts. Enter your password or Steam Guard code only when prompted; mobile approval is supported.")
-            Text("MacWallpaperEngine runs a private copy of SteamCMD and removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Turn it off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates.")
+            Text("Up to three downloads run at once, each in its own private SteamCMD session. Extra requests wait in the order added. Close details, search, or switch pages while downloads continue; Download Details keeps every item available for progress, Steam Guard, retry, and cancellation. Quit stops active and queued downloads.")
+            Text("MacWallpaperEngine runs private copies of SteamCMD and removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Sign-in settings and Forget are locked while any downloads are active or queued. Once they finish, turn the setting off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates.")
             Text("Scene wallpapers need shared resources in addition to the Workshop download. Use Install scene assets… in Settings or the wallpaper details, or locate the assets folder from your purchased installation. Setup downloads the Windows installation but keeps only assets and never runs Windows programs. Application wallpapers are unsupported; Web wallpapers cannot be applied by this renderer.")
             VStack(alignment: .leading, spacing: 8) {
                 Link("Wallpaper Engine on Steam", destination: URL(string: "https://store.steampowered.com/app/431960/Wallpaper_Engine/")!)

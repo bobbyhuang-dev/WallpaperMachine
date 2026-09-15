@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -177,6 +178,32 @@ std::array<float, 64> SmoothInSteps(const std::array<float, 64>& target, uint32_
         SmoothAudioResponseBinsForTesting(target, steps_per_call, &output);
     }
     return output;
+}
+
+TEST(AudioResponseMonoTest, TonesKeepTheirFrequencyAcrossBassMidrangeAndTreble) {
+    // Physical FFT frequencies, not an equality comparison between two analyzers.
+    // Include treble above the old 1.5 kHz cutoff and the real-FFT Nyquist slot.
+    for (unsigned bin : { 0u, 20u, 132u, 300u, 484u, 512u }) {
+        SCOPED_TRACE(bin * 12000.0 / 1024.0);
+        std::array<float, 1024> pcm {};
+        for (unsigned sample = 0; sample < pcm.size(); ++sample) {
+            pcm[sample] = 0.025f * std::cos(2.0 * 3.141592653589793 * bin * sample / pcm.size());
+        }
+        AudioSpectrumSnapshot spectrum {};
+        for (int step = 0; step < 10; ++step) {
+            AnalyzeAudioResponseMonoBlock(pcm.data(), pcm.size(), &spectrum);
+        }
+        const auto peak = std::max_element(spectrum.average64.begin(), spectrum.average64.end());
+        const auto band = std::distance(spectrum.average64.begin(), peak);
+        EXPECT_GT(*peak, 0.1f);
+        EXPECT_EQ(band, std::min(bin / 8u, 63u));
+        if (bin >= 300u) EXPECT_LT(spectrum.average64.front(), 0.001f);
+        for (float value : spectrum.average64) {
+            EXPECT_TRUE(std::isfinite(value));
+            EXPECT_GE(value, 0.0f);
+            EXPECT_LE(value, 1.0f);
+        }
+    }
 }
 
 TEST(AudioResponseMonoTest, MonoSubmitUpdatesSnapshotAt12Khz) {

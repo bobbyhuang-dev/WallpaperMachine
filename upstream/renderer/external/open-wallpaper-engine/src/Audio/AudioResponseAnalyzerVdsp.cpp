@@ -92,13 +92,10 @@ float WeightedMagnitude(float magnitude_squared, float band, float denominator)
     return std::clamp(log_magnitude * weight, 0.0f, 1.0f);
 }
 
-float AggregateBandMagnitude(
-    const std::array<float, kFftSize / 2u>& magnitudes,
-    size_t band)
-{
-    const size_t center = band * 2u;
-    const size_t begin = center > 1u ? center - 1u : 0u;
-    const size_t end = std::min(magnitudes.size(), center + 4u);
+float AggregateBandMagnitude(const std::array<float, kFftSize / 2u + 1u>& magnitudes, size_t band) {
+    constexpr size_t bins_per_band = (kFftSize / 2u) / kBandCount64;
+    const size_t     begin         = band * bins_per_band;
+    const size_t     end = band + 1u == kBandCount64 ? magnitudes.size() : begin + bins_per_band;
 
     float value = 0.0f;
     for (size_t index = begin; index < end; ++index) {
@@ -121,39 +118,41 @@ void DeriveBands(const std::array<float, 64>& source, std::array<float, 32>& tar
     }
 }
 
-void AnalyzeMono(const float* mono_pcm, std::array<float, 64>& output)
-{
+void AnalyzeMono(const float* mono_pcm, std::array<float, 64>& output) {
     const auto& resources = Resources();
 
-    std::array<float, kFftSize> windowed {};
-    std::array<DSPComplex, kFftSize / 2u> complex_input {};
-    std::array<float, kFftSize / 2u> realp {};
-    std::array<float, kFftSize / 2u> imagp {};
-    std::array<float, kFftSize / 2u> magnitudes {};
+    std::array<float, kFftSize>           windowed {};
+    std::array<float, kFftSize / 2u>      realp {};
+    std::array<float, kFftSize / 2u>      imagp {};
+    std::array<float, kFftSize / 2u + 1u> magnitudes {};
 
-    vDSP_vmul(
-        mono_pcm,
-        1,
-        resources.window.data(),
-        1,
-        windowed.data(),
-        1,
-        static_cast<vDSP_Length>(kFftSize));
+    vDSP_vmul(mono_pcm,
+              1,
+              resources.window.data(),
+              1,
+              windowed.data(),
+              1,
+              static_cast<vDSP_Length>(kFftSize));
     for (auto& sample : windowed) {
         if (! std::isfinite(sample)) {
             sample = 0.0f;
         }
     }
 
-    for (size_t index = 0; index < complex_input.size(); ++index) {
-        complex_input[index].real = windowed[index * 2u];
-        complex_input[index].imag = windowed[(index * 2u) + 1u];
+    // Real FFT input is packed as even samples in realp and odd samples in imagp.
+    // Filling the split buffers directly avoids a second copy and vDSP_ctoz's
+    // unusual interleaved stride (two floats, not one DSPComplex).
+    for (size_t index = 0; index < realp.size(); ++index) {
+        realp[index] = windowed[index * 2u];
+        imagp[index] = windowed[(index * 2u) + 1u];
     }
 
     DSPSplitComplex split { .realp = realp.data(), .imagp = imagp.data() };
-    vDSP_ctoz(complex_input.data(), 1, &split, 1, static_cast<vDSP_Length>(complex_input.size()));
     vDSP_fft_zrip(resources.fft_setup, &split, 1, kFftLog2, FFT_FORWARD);
-    vDSP_zvmags(&split, 1, magnitudes.data(), 1, static_cast<vDSP_Length>(magnitudes.size()));
+    vDSP_zvmags(&split, 1, magnitudes.data(), 1, static_cast<vDSP_Length>(realp.size()));
+    // The packed real FFT stores Nyquist in imagp[0], not the imaginary DC term.
+    magnitudes[0]     = realp[0] * realp[0];
+    magnitudes.back() = imagp[0] * imagp[0];
 
     std::array<float, kBandCount64> weighted_bands {};
     for (size_t band = 0; band < weighted_bands.size(); ++band) {

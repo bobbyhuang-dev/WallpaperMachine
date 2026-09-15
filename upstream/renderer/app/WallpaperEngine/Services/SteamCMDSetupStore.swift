@@ -17,6 +17,11 @@ enum SteamCMDSetupState: Equatable {
     case validating, committing, ready, cancelled, failed(SteamCMDSetupIssue)
 }
 
+@MainActor
+protocol SteamCMDDownloadActivity: AnyObject {
+    var isRunning: Bool { get }
+}
+
 protocol SteamCMDProcessRunning: Sendable {
     func run(executable: URL, arguments: [String], workingDirectory: URL,
              environment: [String: String], onOutput: @escaping @Sendable (Data) -> Void) async throws -> Int32
@@ -141,7 +146,7 @@ final class SteamCMDSetupStore {
         case .idle, .ready, .cancelled, .failed: false
         }
     }
-    @ObservationIgnored private let downloader: WorkshopDownloader
+    @ObservationIgnored private let downloader: any SteamCMDDownloadActivity
     @ObservationIgnored private let supportDirectory: URL
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let sessionConfiguration: URLSessionConfiguration
@@ -166,7 +171,7 @@ final class SteamCMDSetupStore {
     private static let preferenceKey = "MacWallpaperEngineSteamCMDPath"
     private var managedURL: URL { supportDirectory.appendingPathComponent("SteamCMD", isDirectory: true) }
 
-    init(downloader: WorkshopDownloader, supportDirectory: URL = ClientPaths.supportURL,
+    init(downloader: any SteamCMDDownloadActivity, supportDirectory: URL = ClientPaths.supportURL,
          defaults: UserDefaults = .standard, sessionConfiguration: URLSessionConfiguration = .ephemeral,
          runtimeProvider: any SteamCMDRuntimeProviding = SteamCMDRuntimeService(),
          processRunner: any SteamCMDProcessRunning = SteamCMDProcessRunner()) {

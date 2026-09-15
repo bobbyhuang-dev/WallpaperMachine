@@ -18,10 +18,7 @@ use wallpaper_core::project::SceneTemplate;
 use wallpaper_core::{
     DisplaySelector, DisplaySnapshotEntry, EngineError, FirstFrameCallback, WallpaperAssignment,
     WallpaperEngine,
-    media::audio::{
-        AudioCaptureError, AudioFrameConsumer, AudioResponseController, AudioResponseEngine,
-        AudioVolume, InterleavedStereoF32, PlatformAudioCaptureBackend,
-    },
+    media::audio::{AudioCaptureController, AudioVolume, PlatformAudioCaptureBackend},
     project::{ScalingMode, SceneDesc, SceneHandle, SceneResult},
 };
 
@@ -61,6 +58,7 @@ pub trait EngineFacade: Send + Sync + 'static {
 pub struct RealEngineFacade {
     engine: WallpaperEngine,
     audio_capture: AudioCaptureWorker,
+    audio_mutation: Arc<tokio::sync::Mutex<()>>,
     ready_frames: Arc<std::sync::Mutex<std::collections::HashMap<SceneHandle, u64>>>,
     rendered_scenes: Arc<tokio::sync::Mutex<Vec<SceneDesc>>>,
 }
@@ -70,6 +68,7 @@ impl RealEngineFacade {
     pub fn new(engine: WallpaperEngine) -> Self {
         Self {
             audio_capture: AudioCaptureWorker::spawn(engine.clone()),
+            audio_mutation: Arc::default(),
             ready_frames: Arc::default(),
             rendered_scenes: Arc::default(),
             engine,
@@ -82,6 +81,8 @@ impl EngineFacade for RealEngineFacade {
         let engine = self.engine.clone();
         let ready_frames = self.ready_frames.clone();
         let rendered_scenes = self.rendered_scenes.clone();
+        let audio_capture = self.audio_capture.clone();
+        let audio_mutation = self.audio_mutation.clone();
         async move {
             let mut previous = rendered_scenes.lock().await;
             let before = ready_frames.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -89,7 +90,12 @@ impl EngineFacade for RealEngineFacade {
                 !previous.iter().any(|old| old.display.display_id == scene.display.display_id
                     && old.same_wallpaper(scene) && old.display == scene.display)
             }).map(|scene| scene.display.display_id).collect();
-            let results = engine.reconcile_scenes(scenes.clone()).await?;
+            let results = {
+                let _audio_guard = audio_mutation.lock().await;
+                let results = engine.reconcile_scenes(scenes.clone()).await;
+                audio_capture.retain_scenes().await.map_err(EngineError::Platform)?;
+                results?
+            };
             *previous = scenes;
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
             loop {
@@ -111,7 +117,18 @@ impl EngineFacade for RealEngineFacade {
 
     fn refresh_displays(&self) -> EngineFuture<()> {
         let engine = self.engine.clone();
-        async move { engine.refresh_displays().await }.boxed()
+        let audio_capture = self.audio_capture.clone();
+        let audio_mutation = self.audio_mutation.clone();
+        async move {
+            let _audio_guard = audio_mutation.lock().await;
+            let result = engine.refresh_displays().await;
+            audio_capture
+                .retain_scenes()
+                .await
+                .map_err(EngineError::Platform)?;
+            result
+        }
+        .boxed()
     }
 
     fn display_snapshot(&self) -> Vec<DisplaySnapshotEntry> {
@@ -120,7 +137,18 @@ impl EngineFacade for RealEngineFacade {
 
     fn close_all_scenes(&self) -> EngineFuture<()> {
         let engine = self.engine.clone();
-        async move { engine.close_all_scenes().await }.boxed()
+        let audio_capture = self.audio_capture.clone();
+        let audio_mutation = self.audio_mutation.clone();
+        async move {
+            let _audio_guard = audio_mutation.lock().await;
+            let result = engine.close_all_scenes().await;
+            audio_capture
+                .retain_scenes()
+                .await
+                .map_err(EngineError::Platform)?;
+            result
+        }
+        .boxed()
     }
 
     fn set_all_paused(&self, paused: bool) -> EngineFuture<()> {
@@ -145,10 +173,34 @@ impl EngineFacade for RealEngineFacade {
 
     fn set_audio_capture_enabled(&self, handle: SceneHandle, enabled: bool) -> EngineFuture<()> {
         let audio_capture = self.audio_capture.clone();
+        let audio_mutation = self.audio_mutation.clone();
+        let engine = self.engine.clone();
         async move {
+            let _audio_guard = audio_mutation.lock().await;
+            // Capture ownership must be released even if its renderer has disappeared.
+            if !enabled {
+                audio_capture
+                    .set_enabled(handle, false)
+                    .await
+                    .map_err(EngineError::Platform)?;
+                if engine
+                    .display_snapshot()
+                    .iter()
+                    .any(|display| display.handle == Some(handle))
+                {
+                    engine.set_audio_response_enabled(handle, false).await?;
+                }
+                return Ok(());
+            }
             audio_capture
-                .set_enabled(handle, enabled)
-                .map_err(EngineError::Platform)
+                .set_enabled(handle, true)
+                .await
+                .map_err(EngineError::Platform)?;
+            if let Err(error) = engine.set_audio_response_enabled(handle, true).await {
+                let _ = audio_capture.set_enabled(handle, false).await;
+                return Err(error);
+            }
+            Ok(())
         }
         .boxed()
     }
@@ -207,15 +259,31 @@ impl EngineFacade for RealEngineFacade {
         assignment: WallpaperAssignment,
     ) -> EngineFuture<Option<SceneHandle>> {
         let engine = self.engine.clone();
-        async move { engine.set_wallpaper_for_display(selector, assignment).await }.boxed()
+        let audio_capture = self.audio_capture.clone();
+        let audio_mutation = self.audio_mutation.clone();
+        async move {
+            let _audio_guard = audio_mutation.lock().await;
+            let result = engine.set_wallpaper_for_display(selector, assignment).await;
+            audio_capture
+                .retain_scenes()
+                .await
+                .map_err(EngineError::Platform)?;
+            result
+        }
+        .boxed()
     }
 
     fn set_first_frame_callback(&self, callback: FirstFrameCallback) {
         let frames = self.ready_frames.clone();
-        self.engine.set_first_frame_callback(Arc::new(move |handle| {
-            *frames.lock().unwrap_or_else(|e| e.into_inner()).entry(handle).or_default() += 1;
-            callback(handle);
-        }));
+        self.engine
+            .set_first_frame_callback(Arc::new(move |handle| {
+                *frames
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .entry(handle)
+                    .or_default() += 1;
+                callback(handle);
+            }));
     }
 }
 
@@ -224,108 +292,82 @@ struct AudioCaptureWorker {
     sender: Sender<AudioCaptureCommand>,
 }
 
-struct AudioCaptureCommand {
-    handle: SceneHandle,
-    enabled: bool,
-    reply: Sender<Result<(), String>>,
+enum AudioCaptureCommand {
+    SetEnabled {
+        handle: SceneHandle,
+        enabled: bool,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    RetainScenes {
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
 }
 
 impl AudioCaptureWorker {
-    #[allow(clippy::single_call_fn)]
     fn spawn(engine: WallpaperEngine) -> Self {
         let (sender, receiver) = mpsc::channel::<AudioCaptureCommand>();
         thread::Builder::new()
             .name("wallpaper-bridge-audio-capture".to_string())
             .spawn(move || {
-                let mut controller = PlatformAudioCaptureBackend::new().ok().map(|backend| {
-                    AudioResponseController::new(
-                        Arc::new(BridgeAudioResponseEngine { engine }),
-                        backend,
-                    )
-                });
-
+                let mut controller = PlatformAudioCaptureBackend::new()
+                    .map(|backend| AudioCaptureController::new(Arc::new(engine.clone()), backend))
+                    .map_err(|error| error.to_string());
                 while let Ok(command) = receiver.recv() {
-                    let result = match controller.as_mut() {
-                        Some(controller) => {
-                            if command.enabled {
-                                match controller
-                                    .has_permission()
-                                    .map_err(|error| error.to_string())
-                                {
-                                    Ok(true) => controller
-                                        .set_scene_enabled(command.handle, true)
-                                        .map_err(|error| error.to_string()),
-                                    Ok(false) => match controller
-                                        .request_permission()
-                                        .map_err(|error| error.to_string())
-                                    {
-                                        Ok(true) => controller
-                                            .set_scene_enabled(command.handle, true)
-                                            .map_err(|error| error.to_string()),
-                                        Ok(false) => Err("system audio capture permission was \
-                                                          not granted"
-                                            .to_string()),
-                                        Err(error) => Err(error),
-                                    },
-                                    Err(error) => Err(error),
-                                }
-                            } else {
-                                controller
-                                    .set_scene_enabled(command.handle, false)
-                                    .map_err(|error| error.to_string())
-                            }
-                        }
-                        None => Ok(()),
+                    let (request, reply) = match command {
+                        AudioCaptureCommand::SetEnabled { handle, enabled, reply } =>
+                            (Some((handle, enabled)), reply),
+                        AudioCaptureCommand::RetainScenes { reply } => (None, reply),
                     };
-                    let _ = command.reply.send(result);
+                    let result = (|| {
+                        let controller = controller.as_mut().map_err(|error| error.clone())?;
+                        let handles: Vec<_> = engine.display_snapshot().iter()
+                            .filter_map(|display| display.handle).collect();
+                        controller.retain_scenes(&handles).map_err(|error| error.to_string())?;
+                        if let Some((handle, enabled)) = request {
+                            if enabled {
+                                if !handles.contains(&handle) {
+                                    return Err("The wallpaper is no longer active.".to_string());
+                                }
+                                // Core Audio performs the system authorization at capture startup.
+                                if !controller.has_permission().map_err(|error| error.to_string())?
+                                    && !controller.request_permission().map_err(|error| error.to_string())? {
+                                    return Err("System audio capture permission was not granted.".to_string());
+                                }
+                            }
+                            controller.set_scene_capturing(handle, enabled)
+                                .map_err(|error| format!("Audio response could not {}: {error}. Check MacWallpaperEngine in System Settings > Privacy & Security > Screen & System Audio Recording.", if enabled { "start" } else { "stop" }))?;
+                        }
+                        Ok(())
+                    })();
+                    let _ = reply.send(result);
                 }
-                Ok::<(), String>(())
             })
             .expect("audio capture worker thread should start");
-
         Self { sender }
     }
 
-    fn set_enabled(&self, handle: SceneHandle, enabled: bool) -> Result<(), String> {
-        let (reply, response) = mpsc::channel();
+    async fn set_enabled(&self, handle: SceneHandle, enabled: bool) -> Result<(), String> {
+        let (reply, response) = tokio::sync::oneshot::channel();
         self.sender
-            .send(AudioCaptureCommand {
+            .send(AudioCaptureCommand::SetEnabled {
                 handle,
                 enabled,
                 reply,
             })
             .map_err(|error| format!("audio capture worker stopped: {error}"))?;
         response
-            .recv()
+            .await
             .map_err(|error| format!("audio capture worker did not reply: {error}"))?
     }
-}
 
-struct BridgeAudioResponseEngine {
-    engine: WallpaperEngine,
-}
-
-impl AudioFrameConsumer for BridgeAudioResponseEngine {
-    fn submit_audio_frames(
-        &self,
-        frames: InterleavedStereoF32<'_>,
-    ) -> Result<(), AudioCaptureError> {
-        self.engine.submit_audio_frames(frames)
-    }
-}
-
-impl AudioResponseEngine for BridgeAudioResponseEngine {
-    fn set_audio_response_enabled(
-        &self,
-        handle: SceneHandle,
-        enabled: bool,
-    ) -> Result<(), AudioCaptureError> {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("audio response runtime should start")
-            .block_on(self.engine.set_audio_response_enabled(handle, enabled))
-            .map_err(|error| AudioCaptureError::Engine(error.to_string()))
+    async fn retain_scenes(&self) -> Result<(), String> {
+        let (reply, response) = tokio::sync::oneshot::channel();
+        self.sender
+            .send(AudioCaptureCommand::RetainScenes { reply })
+            .map_err(|error| format!("audio capture worker stopped: {error}"))?;
+        response
+            .await
+            .map_err(|error| format!("audio capture worker did not reply: {error}"))?
     }
 }
 
@@ -341,6 +383,7 @@ pub struct FakeEngineFacade {
     audio_response_calls: Arc<ArcSwap<Vec<(SceneHandle, bool)>>>,
     audio_capture_calls: Arc<ArcSwap<Vec<(SceneHandle, bool)>>>,
     audio_capture_block: Arc<SegQueue<ReconcileBlockGate>>,
+    audio_capture_failure: Arc<ArcSwap<Option<String>>>,
     scaling_mode_calls: Arc<ArcSwap<Vec<(SceneHandle, ScalingMode)>>>,
     scaling_factor_calls: Arc<ArcSwap<Vec<(SceneHandle, f64)>>>,
     fps_calls: Arc<ArcSwap<Vec<(SceneHandle, u32)>>>,
@@ -502,6 +545,10 @@ impl FakeEngineFacade {
 
     pub fn fail_reconcile_with(&self, message: impl Into<String>) {
         self.reconcile_failure.store(Arc::new(Some(message.into())));
+    }
+
+    pub fn fail_audio_capture_with(&self, message: Option<String>) {
+        self.audio_capture_failure.store(Arc::new(message));
     }
 
     #[must_use]
@@ -714,6 +761,11 @@ impl EngineFacade for FakeEngineFacade {
             if let Some(block) = fake.audio_capture_block.pop() {
                 let _ = block.blocked_tx.send(());
                 let _ = block.release_rx.recv();
+            }
+            if enabled {
+                if let Some(message) = fake.audio_capture_failure.load_full().as_ref() {
+                    return Err(EngineError::Platform(message.clone()));
+                }
             }
             push_log(&fake.audio_capture_calls, (handle, enabled));
             push_log(&fake.audio_response_calls, (handle, enabled));

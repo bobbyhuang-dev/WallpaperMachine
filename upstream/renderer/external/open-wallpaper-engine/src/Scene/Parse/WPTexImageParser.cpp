@@ -1,4 +1,5 @@
 #include "WPTexImageParser.hpp"
+#include "ImageOrientation.hpp"
 
 #include "Type.hpp"
 #include "Utils/Sha.hpp"
@@ -513,6 +514,8 @@ std::shared_ptr<Image> WPTexImageParser::Parse(const std::string& name) {
                     delete[] result;
                     return nullptr;
                 }
+                OrientRGBA(data, w, h, JpegOrientation(std::span(
+                    reinterpret_cast<const uint8_t*>(result), static_cast<size_t>(src_size))));
                 mipmap.data = ImageDataPtr((uint8_t*)data, [](uint8_t* data) {
                     stbi_image_free((unsigned char*)data);
                 });
@@ -775,6 +778,8 @@ std::shared_ptr<Image> WPTexImageParser::ParseLooseAsset(const std::string& name
         return nullptr;
     }
 
+    OrientRGBA(decoded, width, height, JpegOrientation(std::span(
+        reinterpret_cast<const uint8_t*>(payload->data()), payload->size())));
     image->header = BuildLooseAssetHeader(
         width,
         height,
@@ -833,5 +838,7 @@ ImageHeader WPTexImageParser::ParseLooseAssetHeader(const std::string& name)
         return {};
     }
 
+    if (JpegOrientation(std::span(reinterpret_cast<const uint8_t*>(payload->data()),
+                                  payload->size())) >= 5) std::swap(width, height);
     return BuildLooseAssetHeader(width, height, false, candidate->imageType);
 }

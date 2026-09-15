@@ -31,6 +31,8 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
     @ObservationIgnored var onFinished: (@MainActor () -> Void)?
     @ObservationIgnored private var recentOutput = ""
     @ObservationIgnored private var outputBuffer = [UInt8](repeating: 0, count: 8192)
+    nonisolated static let stagingPrefix = ".mac-wallpaper-engine-workshop-"
+    nonisolated private static let ownerName = "owner"
     @ObservationIgnored private var lastActivity = Date()
     @ObservationIgnored private var failure: String?
     @ObservationIgnored private var isAuthenticating = true
@@ -111,7 +113,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         isInstallingAssets = itemID == nil
         status = "Preparing a private SteamCMD download…"
         task = Task {
-            let staging = root.appendingPathComponent(".mac-wallpaper-engine-workshop-\(UUID().uuidString)", isDirectory: true)
+            let staging = root.appendingPathComponent(Self.stagingPrefix + UUID().uuidString, isDirectory: true)
             defer {
                 try? terminal?.close()
                 terminal = nil
@@ -125,6 +127,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             var restoredSessionRevision: UInt64?
             do {
                 let prepared = try await runtimeProvider.prepare(executable: executable, staging: staging)
+                Self.markOwner(of: staging)
                 if rememberSession {
                     let directory = sessionDirectory
                     restoredSessionRevision = try await Task.detached(priority: .utility) {
@@ -430,6 +433,48 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         guard !account.isEmpty, account != "anonymous",
               account.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }) else { return nil }
         return account
+    }
+
+    /// Staging is removed when a download ends, so a leftover means the owning process died with a
+    /// download inside it. Record who owns it; a later launch can then tell an abandoned copy from
+    /// one another running copy is still writing to.
+    nonisolated private static func markOwner(of staging: URL) {
+        guard let started = processStart(getpid()) else { return }
+        let record = "workshop staging owner v1\n\(getpid()) \(started.tv_sec) \(started.tv_usec)\n"
+        try? Data(record.utf8).write(to: staging.appendingPathComponent(ownerName), options: .atomic)
+    }
+
+    /// Reclaims downloads stranded by a crash. Never touches staging whose owner is still alive.
+    nonisolated static func removeAbandonedStaging(in root: URL) {
+        let files = FileManager.default
+        guard let entries = try? files.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return }
+        for entry in entries where entry.lastPathComponent.hasPrefix(stagingPrefix) {
+            var metadata = stat()
+            guard lstat(entry.path, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFDIR,
+                  !isOwnerAlive(of: entry, directory: metadata) else { continue }
+            try? files.removeItem(at: entry)
+        }
+    }
+
+    nonisolated private static func isOwnerAlive(of staging: URL, directory: stat) -> Bool {
+        guard let text = try? String(contentsOf: staging.appendingPathComponent(ownerName), encoding: .utf8) else {
+            // Written before owners were recorded, or the process died between creating the
+            // directory and claiming it. Leave anything still being written to for a later launch.
+            return Date().timeIntervalSince1970 - Double(directory.st_mtimespec.tv_sec) < 300
+        }
+        let fields = text.split(separator: "\n").last?.split(separator: " ") ?? []
+        guard fields.count == 3, let pid = pid_t(fields[0]), let seconds = time_t(fields[1]),
+              let microseconds = suseconds_t(fields[2]), let started = processStart(pid) else { return false }
+        // A recycled process identifier is a different process, so the start time has to match too.
+        return started.tv_sec == seconds && started.tv_usec == microseconds
+    }
+
+    nonisolated private static func processStart(_ pid: pid_t) -> timeval? {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size >= MemoryLayout<kinfo_proc>.stride else { return nil }
+        return info.kp_proc.p_starttime
     }
 
     nonisolated static func readSavedAccount(at directory: URL) -> String? {

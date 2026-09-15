@@ -39,6 +39,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             startupError = error
             playbackSnapshotCurrent = false
         }
+        // A crash during a download leaves its staging behind, holding the whole downloaded item.
+        let stagingRoot = ClientPaths.supportURL
+        Task.detached(priority: .utility) {
+            WorkshopDownloader.removeAbandonedStaging(in: stagingRoot)
+        }
 
         NSApp.setActivationPolicy(.accessory)
         logStartup("activation policy set to accessory")

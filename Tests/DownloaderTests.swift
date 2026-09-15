@@ -15,6 +15,50 @@ final class DownloaderTests: XCTestCase {
         XCTAssertNil(downloader.downloadedID)
     }
 
+    func testAbandonedStagingIsReclaimedWhileLiveStagingSurvives() throws {
+        let files = FileManager.default
+        let root = files.temporaryDirectory.appendingPathComponent("mwe-staging-sweep-\(UUID().uuidString)")
+        defer { try? files.removeItem(at: root) }
+        try files.createDirectory(at: root, withIntermediateDirectories: true)
+        func staging(_ name: String, owner: String? = nil, ageInSeconds: TimeInterval = 0) throws -> URL {
+            let url = root.appendingPathComponent(WorkshopDownloader.stagingPrefix + name, isDirectory: true)
+            try files.createDirectory(at: url, withIntermediateDirectories: false)
+            try Data("payload".utf8).write(to: url.appendingPathComponent("item"))
+            if let owner { try Data(owner.utf8).write(to: url.appendingPathComponent("owner")) }
+            if ageInSeconds > 0 {
+                try files.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -ageInSeconds)], ofItemAtPath: url.path)
+            }
+            return url
+        }
+        // This process owns "live"; "recycled" names the same identifier with a different start
+        // time, which is what a reused process identifier looks like.
+        let started = try XCTUnwrap(Self.processStart())
+        let live = try staging("live", owner: "workshop staging owner v1\n\(getpid()) \(started.tv_sec) \(started.tv_usec)\n")
+        let recycled = try staging("recycled", owner: "workshop staging owner v1\n\(getpid()) \(started.tv_sec + 1) \(started.tv_usec)\n")
+        let malformed = try staging("malformed", owner: "not an owner record\n")
+        let writing = try staging("writing")
+        let stale = try staging("stale", ageInSeconds: 3600)
+        let unrelated = root.appendingPathComponent("SteamSession", isDirectory: true)
+        try files.createDirectory(at: unrelated, withIntermediateDirectories: false)
+
+        WorkshopDownloader.removeAbandonedStaging(in: root)
+
+        for survivor in [live, writing, unrelated] {
+            XCTAssertTrue(files.fileExists(atPath: survivor.path), "\(survivor.lastPathComponent) must be kept")
+        }
+        for reclaimed in [recycled, malformed, stale] {
+            XCTAssertFalse(files.fileExists(atPath: reclaimed.path), "\(reclaimed.lastPathComponent) must be reclaimed")
+        }
+    }
+
+    private static func processStart() -> timeval? {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size >= MemoryLayout<kinfo_proc>.stride else { return nil }
+        return info.kp_proc.p_starttime
+    }
+
     func testImmediateShutdownWaitsForStagingCleanup() async throws {
         let root = try makeRuntime("IFS= read -r finish")
         defer { try? FileManager.default.removeItem(at: root) }

@@ -67,6 +67,40 @@ final class ControlPanelLayoutTests: XCTestCase {
         }
     }
 
+    func testDownloadDetailsSheetCarriesTheEnvironmentItsContentReads() async throws {
+        // The activity bar sends people here to finish Steam Guard. Sheet content does not inherit
+        // the environment applied inside ControlPanelView, and WorkshopDetailView resolves
+        // BridgeStore and ControlPanelNavigation before its body runs, so an uninjected copy traps.
+        let fixture = makeStore()
+        let session = FileManager.default.temporaryDirectory.appendingPathComponent("details-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: session) }
+        let defaultsName = "ControlPanelLayoutTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let manager = WorkshopDownloadManager(sessionDirectory: session, runtimeProvider: UnavailableRuntime())
+        let workshop = WorkshopStore(downloader: manager, supportDirectory: session, defaults: defaults)
+        let item = WorkshopItem(id: "3770867059", title: "Steam Guard", creator: "Test", summary: "",
+                                previewURL: nil, tags: ["Video"], size: 0, subscriptions: 0)
+        manager.start(item: item, username: "tester", executable: session.appendingPathComponent("steamcmd"),
+                      library: session, rememberSession: false, onImported: {})
+        let download = try XCTUnwrap(manager.downloads.first)
+        workshop.showDownload(download)
+        XCTAssertTrue(workshop.showsDownloadDetails, "The activity bar opens this sheet for Steam Guard")
+        XCTAssertNotNil(workshop.selectedDownload?.item, "The sheet must reach the per-item detail view")
+
+        let controller = NSHostingController(rootView:
+            ControlPanelView.downloadDetails(store: fixture.store, workshop: workshop,
+                                             navigation: ControlPanelNavigation())
+                .defaultAppStorage(defaults)
+        )
+        controller.sizingOptions = []
+        controller.view.setFrameSize(NSSize(width: 700, height: 560))
+        controller.view.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(controller.view.subviews.count, 0, "The sheet content must render")
+        XCTAssertNil(controller.view.window, "Rendering the sheet content must stay offscreen")
+        manager.cancel(download)
+    }
+
     private func makeStore() -> (store: BridgeStore, bridge: LayoutSnapshotBridge) {
         let bridge = LayoutSnapshotBridge(noPointer: .init())
         let store = BridgeStore(bridge: bridge)
@@ -87,4 +121,11 @@ private final class LayoutSnapshotBridge: WallpaperBridge {
         guard let snapshot else { throw CancellationError() }
         return snapshot
     }
+}
+
+private struct UnavailableRuntime: SteamCMDRuntimeProviding {
+    func resolve(executable: URL) throws -> SteamCMDRuntime { throw WorkshopFailure(message: "fixture") }
+    func validateBootstrap(at root: URL) async throws { throw WorkshopFailure(message: "fixture") }
+    func prepare(executable: URL, staging: URL) async throws -> URL { throw WorkshopFailure(message: "fixture") }
+    func validate(at root: URL) async throws { throw WorkshopFailure(message: "fixture") }
 }

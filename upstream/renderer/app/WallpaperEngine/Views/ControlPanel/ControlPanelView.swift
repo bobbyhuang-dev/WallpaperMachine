@@ -134,6 +134,17 @@ struct ControlPanelView: View {
         self.updater = updater
     }
 
+    /// Sheet content does not pick up the environment applied inside this view's chain, so the
+    /// presented copy has to carry what it reads. Shared with the test that renders it offscreen.
+    @ViewBuilder
+    static func downloadDetails(store: BridgeStore, workshop: WorkshopStore,
+                                navigation: ControlPanelNavigation) -> some View {
+        DownloadActivityDetails(workshop: workshop)
+            .environment(store)
+            .environment(workshop)
+            .environmentObject(navigation)
+    }
+
     private var sidebarSelection: Binding<ControlPanelSidebarItem?> {
         Binding {
             switch navigation.selection {
@@ -294,13 +305,10 @@ struct ControlPanelView: View {
                 presentedError = ControlPanelError(error: error)
             }
         }
-        // Sheet content does not pick up the environment applied above, and Download Details is
-        // where Steam Guard is completed: without these it traps on the first @Environment read.
+        // Download Details is where the activity bar sends you to complete Steam Guard; without
+        // its own environment it traps while the sheet is created.
         .sheet(isPresented: $workshop.showsDownloadDetails) {
-            DownloadActivityDetails(workshop: workshop)
-                .environment(store)
-                .environment(workshop)
-                .environmentObject(navigation)
+            Self.downloadDetails(store: store, workshop: workshop, navigation: navigation)
         }
         .alert(item: $presentedError) { error in
             Alert(

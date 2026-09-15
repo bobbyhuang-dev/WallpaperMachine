@@ -368,23 +368,28 @@ struct SteamCMDRuntimeService: SteamCMDRuntimeProviding, SteamCMDRuntimeApprovin
         let verifiedFingerprint = try fingerprint(at: canonical)
         // Verify resource seals as well as every Mach-O image. No repair/sign operation exists here.
         for target in [framework] + binaries.keys.sorted(by: { $0.path < $1.path }) {
-            let status = try await runSystem("/usr/bin/codesign", ["--verify", "--deep", "--strict", target.path], root: canonical)
+            let status = try await runSystem("/usr/bin/codesign", ["--verify", "--deep", "--strict", target.path], root: canonical).status
             guard status == 0 else { throw issue(.invalidSignature, "SteamCMD signature validation failed for \(target.path). Select a valid installation or reinstall; no signatures were changed.") }
         }
         let assessment = try await runSystem("/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose=2", descriptor.executableURL.path], root: canonical)
         // spctl(8): only exit 3 is policy denial; 1/2/4 are operational failures.
-        guard assessment == 0 || assessment == 3 else {
+        guard assessment.status == 0 || assessment.status == 3 else {
             throw issue(.securityApprovalRequired, "macOS could not complete its SteamCMD security assessment. Retry after resolving the system security error; an explicit approval cannot bypass an assessment failure.")
         }
-        if assessment != 0, !preparingApproval {
-            guard try fingerprint(at: canonical) == verifiedFingerprint,
-                  try hasApproval(for: verifiedFingerprint) else {
-                throw issue(.securityApprovalRequired, "macOS has not approved SteamCMD at \(descriptor.executableURL.path). Review and approve this SteamCMD copy, or follow Apple’s app security guidance, then Retry. System security settings have not been changed.")
+        if assessment.status != 0, !preparingApproval {
+            // --type execute is for app bundles. Valve's steamcmd is a signed CLI tool, so
+            // assessment exits 3 with this diagnostic even when codesign --strict succeeded.
+            let commandLineTool = assessment.output.contains("the code is valid but does not seem to be an app")
+            if !commandLineTool {
+                guard try fingerprint(at: canonical) == verifiedFingerprint,
+                      try hasApproval(for: verifiedFingerprint) else {
+                    throw issue(.securityApprovalRequired, "macOS has not approved SteamCMD at \(descriptor.executableURL.path). Review and approve this SteamCMD copy, or follow Apple’s app security guidance, then Retry. System security settings have not been changed.")
+                }
             }
         }
         #if arch(arm64)
         if !preparingApproval, !executableImages.contains(where: { $0.cpu == 0x0100000c }), executableImages.contains(where: { $0.cpu == 0x01000007 }) {
-            let status = try await runSystem("/usr/bin/arch", ["-x86_64", "/usr/bin/true"], root: canonical)
+            let status = try await runSystem("/usr/bin/arch", ["-x86_64", "/usr/bin/true"], root: canonical).status
             guard status == 0 else { throw issue(.rosettaRequired, "This SteamCMD installation requires Rosetta. Follow Apple’s Rosetta installation guidance, then Retry.") }
         }
         #endif
@@ -470,22 +475,24 @@ struct SteamCMDRuntimeService: SteamCMDRuntimeProviding, SteamCMDRuntimeApprovin
         }
     }
 
-    private func runSystem(_ path: String, _ arguments: [String], root: URL) async throws -> Int32 {
+    private func runSystem(_ path: String, _ arguments: [String], root: URL) async throws -> (status: Int32, output: String) {
         try Task.checkCancellation()
-        return try await withThrowingTaskGroup(of: Int32.self) { group in
+        return try await withThrowingTaskGroup(of: (Int32, String).self) { group in
             group.addTask {
-                try await processRunner.run(executable: URL(fileURLWithPath: path), arguments: arguments,
-                                            workingDirectory: root,
-                                            environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"],
-                                            onOutput: { _ in })
+                let collected = SystemCommandOutput()
+                let status = try await processRunner.run(executable: URL(fileURLWithPath: path), arguments: arguments,
+                                                         workingDirectory: root,
+                                                         environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"],
+                                                         onOutput: { collected.append($0) })
+                return (status, collected.text)
             }
             group.addTask {
                 try await Task.sleep(for: .seconds(30))
                 throw issue(.timedOut, "SteamCMD system validation timed out while running \(path). Retry after checking system security prompts.")
             }
             defer { group.cancelAll() }
-            guard let status = try await group.next() else { throw CancellationError() }
-            return status
+            guard let result = try await group.next() else { throw CancellationError() }
+            return (result.0, result.1)
         }
     }
 
@@ -592,6 +599,18 @@ struct SteamCMDRuntimeService: SteamCMDRuntimeProviding, SteamCMDRuntimeApprovin
     private func issue(_ kind: SteamCMDSetupIssue.Kind, _ detail: String.LocalizationValue) -> SteamCMDSetupIssue {
         SteamCMDSetupIssue(kind: kind, detail: String(localized: detail))
     }
+}
+
+private final class SystemCommandOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = Data()
+    func append(_ data: Data) {
+        lock.withLock {
+            let remaining = max(0, 16 * 1024 - storage.count)
+            if remaining > 0 { storage.append(data.prefix(remaining)) }
+        }
+    }
+    var text: String { lock.withLock { String(decoding: storage, as: UTF8.self) } }
 }
 
 /// Bounds-checked Mach-O load-command reader; no subprocess or executable probing.

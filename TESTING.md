@@ -40,9 +40,11 @@ and independent wallpaper/field drafts.
 
 SteamCMD setup tests use isolated preferences/directories, URLProtocol archives,
 real system tar, and owned child processes. They cover publication/replacement,
-invalid discovery, traversal/link/archive-size boundaries, network failures,
-signature-policy blocking, cancellation, and no late writes. Runtime fixtures
-exercise canonical macOS path aliases and nested Mach-O executable dependencies.
+invalid discovery, traversal/link/archive-size boundaries, the updater's
+contained sibling Frameworks link, network failures, signature-policy blocking,
+cancellation, and no late writes. Runtime fixtures exercise canonical macOS path
+aliases and nested Mach-O executable dependencies. Approval fixtures also cover
+signed command-line assessment output that must not require Allow This SteamCMD.
 Fixtures do not prove that Valve's current distribution passes this Mac's policy.
 An official no-login installation smoke must use a disposable support root and
 the production providers, stop on any Gatekeeper/Rosetta/signature block, and never
@@ -280,9 +282,11 @@ where needed. Note any checks skipped for unavailable hardware or assets.
   Check immediate audio/FPS/scaling-mode semantics versus pending Apply/Revert.
 - Install or locate SteamCMD in Settings and use the same runtime in Workshop
   without restarting. Installation itself must not log in or start a download.
-  A blocked download remains present across relaunch/retry. Only explicitly confirm
-  Allow This SteamCMD after checking the shown path/fingerprint and understanding
-  the risk. Global Gatekeeper/signature checks remain enabled; updated bytes need
+  A blocked download remains present across relaunch/retry. Official signed CLI
+  SteamCMD should finish from Install without an extra Allow step. Only explicitly
+  confirm Allow This SteamCMD after checking the shown path/fingerprint and
+  understanding the risk, when Gatekeeper actually rejects a copy. Global
+  Gatekeeper/signature checks remain enabled; updated bytes that fail policy need
   another approval. Verify category-sidebar filters never activate wallpapers.
 - Queue at least four Workshop items. Confirm three active transfers and one
   waiting item, then cancel one active item and check the queued item starts while

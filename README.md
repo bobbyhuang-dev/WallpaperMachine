@@ -76,10 +76,13 @@ Renderer and scene-engine sources are included directly in this snapshot, rather
   setup, or locate a complete existing macOS runtime. Installation is a separate,
   no-login operation. Signature, dependency, and Rosetta checks remain required.
   Policy-blocked downloads stay at the same path across restarts and retries.
-  You can follow Apple's guidance or explicitly confirm **Allow This SteamCMD**:
-  the app then removes quarantine only from that verified copy and records its
-  content fingerprint. Global Gatekeeper stays enabled; changed files require
-  another approval. The app never re-signs SteamCMD or silently grants an exception.
+  Official signed SteamCMD is a command-line tool, so one-click Install does not
+  wait for an extra Allow step after Valve's signature checks pass. Copies that
+  Gatekeeper actually rejects still stay at the same path across restarts and
+  retries. You can follow Apple's guidance or explicitly confirm **Allow This
+  SteamCMD**: the app then removes quarantine only from that verified copy and
+  records its content fingerprint. Global Gatekeeper stays enabled; changed
+  files require another approval. The app never re-signs SteamCMD.
 - Downloads use a bounded queue with up to three concurrent transfers by default,
   each using a private SteamCMD session and an account that owns Wallpaper Engine.
   Additional requests wait in order. Keep browsing and reopen each item's Download

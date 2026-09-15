@@ -23,6 +23,7 @@ final class SteamCMDSetupTests: XCTestCase {
         XCTAssertEqual(second.selectedRuntime, store.selectedRuntime)
         XCTAssertEqual(second.state, .ready)
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: fixture.root.appendingPathComponent("SteamCMD/MacOS/Frameworks/Breakpad.framework/Versions/Current").path), "A")
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: fixture.root.appendingPathComponent("SteamCMD/Frameworks").path), "MacOS/Frameworks")
         XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path).contains { $0.hasPrefix(".steamcmd-") })
     }
 
@@ -881,6 +882,11 @@ private struct FixtureRunner: SteamCMDProcessRunning {
                     workingDirectory: root, environment: environment, onOutput: onOutput)
             }
             if mode != .omitConsole { try Data("updated-library".utf8).write(to: workingDirectory.appendingPathComponent("steamconsole.dylib")) }
+            // Valve's updater publishes a Contents-style sibling next to MacOS.
+            let sibling = workingDirectory.deletingLastPathComponent().appendingPathComponent("Frameworks")
+            if !FileManager.default.fileExists(atPath: sibling.path) {
+                try FileManager.default.createSymbolicLink(atPath: sibling.path, withDestinationPath: "MacOS/Frameworks")
+            }
             return 0
         }
         try Data().write(to: root.appendingPathComponent("smoke-started"))

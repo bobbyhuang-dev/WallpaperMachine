@@ -24,6 +24,17 @@ final class SteamCMDApprovalTests: XCTestCase {
         await expect(.securityApprovalRequired) { try await fixture.service().validate(at: fixture.runtime) }
     }
 
+    func testSignedCommandLineToolDoesNotRequireExplicitApproval() async throws {
+        let fixture = try ApprovalFixture()
+        defer { fixture.remove() }
+        try fixture.attribute("com.apple.quarantine", value: "0081;fixture", at: fixture.executable)
+        let runner = ApprovalSystemRunner(
+            assessmentOutput: "\(fixture.executable.path): rejected (the code is valid but does not seem to be an app)\n")
+        try await fixture.service(runner: runner).validate(at: fixture.runtime)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.receipts.path))
+        XCTAssertEqual(try fixture.attribute("com.apple.quarantine", at: fixture.executable), "0081;fixture")
+    }
+
     func testExplicitApprovalIsNarrowAndSurvivesRelaunchAndPrivateCopy() async throws {
         let fixture = try ApprovalFixture()
         defer { fixture.remove() }
@@ -244,10 +255,12 @@ private struct ApprovalFixture {
 private actor ApprovalSystemRunner: SteamCMDProcessRunning {
     let signatureStatus: Int32
     let assessmentStatus: Int32
+    let assessmentOutput: String
     private(set) var assessments = 0
-    init(signatureStatus: Int32 = 0, assessmentStatus: Int32 = 3) {
+    init(signatureStatus: Int32 = 0, assessmentStatus: Int32 = 3, assessmentOutput: String = "") {
         self.signatureStatus = signatureStatus
         self.assessmentStatus = assessmentStatus
+        self.assessmentOutput = assessmentOutput
     }
 
     func run(executable: URL, arguments: [String], workingDirectory: URL, environment: [String: String],
@@ -255,7 +268,10 @@ private actor ApprovalSystemRunner: SteamCMDProcessRunning {
         try Task.checkCancellation()
         switch executable.path {
         case "/usr/bin/codesign": return signatureStatus
-        case "/usr/sbin/spctl": assessments += 1; return assessmentStatus
+        case "/usr/sbin/spctl":
+            assessments += 1
+            if !assessmentOutput.isEmpty { onOutput(Data(assessmentOutput.utf8)) }
+            return assessmentStatus
         case "/usr/bin/arch": return 0
         default: throw WorkshopFailure(message: "Approval fixtures must never execute runtime code")
         }

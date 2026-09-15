@@ -709,7 +709,7 @@ final class SteamCMDSetupStore {
     private nonisolated static func inspectAndQuarantineFiles(_ root: URL, byteLimit: Int64?) throws {
         let fm = FileManager.default
         var total: Int64 = 0
-        let canonicalRoot = root.resolvingSymlinksInPath().path + "/"
+        let canonicalRoot = resolvedPath(root) + "/"
         let quarantine = "0083;\(String(Int(Date().timeIntervalSince1970), radix: 16));MacWallpaperEngine;\(UUID().uuidString)"
         func walk(_ directory: URL) throws {
             for file in try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
@@ -738,14 +738,17 @@ final class SteamCMDSetupStore {
                     }
                 case S_IFLNK:
                     let target = try fm.destinationOfSymbolicLink(atPath: file.path)
-                    let resolved = file.resolvingSymlinksInPath()
-                    guard !target.hasPrefix("/"), file.pathComponents.contains(where: { $0.hasSuffix(".framework") }),
-                          resolved.path.hasPrefix(canonicalRoot), fm.fileExists(atPath: resolved.path) else {
+                    // Valve's updater adds a Contents-style sibling: runtime/Frameworks -> MacOS/Frameworks.
+                    // Accept any relative link that resolves inside this tree; reject absolute, dangling, or escaping ones.
+                    let resolved = resolvedPath(file)
+                    guard !target.hasPrefix("/"), !target.isEmpty,
+                          !target.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+                          resolved.hasPrefix(canonicalRoot), fm.fileExists(atPath: resolved) else {
                         throw SteamCMDSetupIssue(kind: .invalidArchive, detail: String(localized: "The SteamCMD archive contains an external or unresolved symbolic link."))
                     }
                     // Foundation can leave a cyclic path unresolved; require a real final non-link object.
                     var targetInfo = stat()
-                    guard lstat(resolved.path, &targetInfo) == 0, targetInfo.st_mode & S_IFMT != S_IFLNK else {
+                    guard lstat(resolved, &targetInfo) == 0, targetInfo.st_mode & S_IFMT != S_IFLNK else {
                         throw SteamCMDSetupIssue(kind: .invalidArchive, detail: String(localized: "The SteamCMD archive contains a cyclic symbolic link."))
                     }
                 default:
@@ -754,6 +757,15 @@ final class SteamCMDSetupStore {
             }
         }
         try walk(root)
+    }
+
+    /// POSIX realpath keeps /var and /tmp identities stable when checking link containment.
+    private nonisolated static func resolvedPath(_ url: URL) -> String {
+        if let resolved = realpath(url.path, nil) {
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
+        return url.resolvingSymlinksInPath().path
     }
 
     private nonisolated static func issue(_ error: Error) -> SteamCMDSetupIssue {

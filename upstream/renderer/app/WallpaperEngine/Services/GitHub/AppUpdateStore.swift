@@ -173,14 +173,11 @@ final class AppUpdateStore {
                 }
             }
             if Task.isCancelled { return state }
-            if asset.isZip, installer.canInstallInPlace {
-                downloadedArchive = destination
-                state = .ready(currentVersion: currentVersion, availableVersion: release.version.display)
-            } else {
-                downloadedArchive = destination
+            downloadedArchive = destination
+            if !(asset.isZip && installer.canInstallInPlace) {
                 workspace.reveal(destination)
-                state = .ready(currentVersion: currentVersion, availableVersion: release.version.display)
             }
+            state = .ready(currentVersion: currentVersion, availableVersion: release.version.display)
             return state
         } catch is CancellationError {
             if case .downloading = state {

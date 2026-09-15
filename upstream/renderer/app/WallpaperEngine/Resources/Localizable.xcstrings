@@ -2807,23 +2807,6 @@
         }
       }
     },
-    "Update available" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Update available"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "检测到新版本"
-          }
-        }
-      }
-    },
     "Updates" : {
       "extractionState" : "manual",
       "localizations" : {

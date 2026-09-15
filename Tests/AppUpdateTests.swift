@@ -186,7 +186,6 @@ private final class Fixture {
     let client = FakeAppUpdateClient()
     let installer = FakeInstaller()
     let store: AppUpdateStore
-    var states: [AppUpdateState] = []
     let recorder = Recorder()
     var scheduled: [() -> Void] { recorder.scheduled }
     var revealed: [URL] { recorder.revealed }
@@ -210,7 +209,6 @@ private final class Fixture {
             terminate: { recorder.terminateCalls += 1 },
             installTimeout: installTimeout
         )
-        observe()
     }
 
     func release(version: String, assets: [GitHubReleaseAsset]? = nil) -> GitHubRelease {
@@ -228,18 +226,6 @@ private final class Fixture {
             prerelease: false,
             assets: assets ?? defaultAssets
         )
-    }
-
-    private func observe() {
-        withObservationTracking {
-            _ = store.state
-        } onChange: { [weak self] in
-            Task { @MainActor in
-                guard let self else { return }
-                self.states.append(self.store.state)
-                self.observe()
-            }
-        }
     }
 }
 

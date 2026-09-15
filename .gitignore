@@ -1,6 +1,14 @@
 build/
+DerivedData/
 .DS_Store
 *.xcuserstate
 **/xcuserdata/
 __pycache__/
 *.pyc
+.env
+.env.*
+*.xcresult
+*.trace
+MacWallpaperEngine-*.zip
+wallpaper-corpus/
+docs/wallpaper-corpus.local.md

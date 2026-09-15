@@ -62,7 +62,7 @@ impl WallpaperConfig {
 pub struct AudioCfg {
     #[serde(default = "default_audio_volume")]
     pub volume: f32,
-    #[serde(default)]
+    #[serde(default = "default_audio_response_enabled")]
     pub response_enabled: bool,
     #[serde(default)]
     pub muted: bool,
@@ -72,7 +72,7 @@ impl Default for AudioCfg {
     fn default() -> Self {
         Self {
             volume: default_audio_volume(),
-            response_enabled: false,
+            response_enabled: default_audio_response_enabled(),
             muted: false,
         }
     }
@@ -120,6 +120,10 @@ fn default_schema_version() -> u32 {
 
 fn default_audio_volume() -> f32 {
     1.0
+}
+
+fn default_audio_response_enabled() -> bool {
+    true
 }
 
 fn default_scaling_mode() -> String {

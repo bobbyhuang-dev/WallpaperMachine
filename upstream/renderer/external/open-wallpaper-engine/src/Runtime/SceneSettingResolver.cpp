@@ -201,7 +201,7 @@ DynamicValueUniquePtr resolve_auto_setting(
 
 float ScalarAnimation::Evaluate(double seconds) const
 {
-    if (!(fps > 0.0) || keyframes.empty() || !std::isfinite(seconds) || seconds <= 0.0) {
+    if (!(fps > 0.0) || keyframes.empty() || !std::isfinite(seconds) || seconds < 0.0) {
         return initial_value;
     }
 
@@ -230,11 +230,76 @@ float ScalarAnimation::Evaluate(double seconds) const
 
     const auto& left  = *(upper - 1);
     const auto& right = *upper;
+    if (frame == left.frame) return left.value;
     const double span = right.frame - left.frame;
     if (span <= 0.0) return right.value;
 
     const double factor = std::clamp((frame - left.frame) / span, 0.0, 1.0);
+    if (left.front.enabled || right.back.enabled) {
+        const double x1 = left.front.enabled ? std::clamp(left.front.x / span, 0.0, 1.0) : 1.0 / 3.0;
+        const double x2 = right.back.enabled ? std::clamp(1.0 + right.back.x / span, x1, 1.0) : 2.0 / 3.0;
+        const double y1 = left.front.enabled ? left.value + left.front.y
+                                             : left.value + (right.value - left.value) / 3.0;
+        const double y2 = right.back.enabled ? right.value + right.back.y
+                                             : right.value - (right.value - left.value) / 3.0;
+        const auto cubic = [](double a, double b, double c, double d, double t) {
+            const double u = 1.0 - t;
+            return u * u * u * a + 3.0 * u * u * t * b + 3.0 * u * t * t * c + t * t * t * d;
+        };
+        double low = 0.0;
+        double high = 1.0;
+        for (int iteration = 0; iteration < 24; ++iteration) {
+            const double t = (low + high) * 0.5;
+            if (cubic(0.0, x1, x2, 1.0, t) < factor) low = t;
+            else high = t;
+        }
+        return static_cast<float>(cubic(left.value, y1, y2, right.value, (low + high) * 0.5));
+    }
     return static_cast<float>(left.value + (right.value - left.value) * factor);
+}
+
+double ScalarAnimation::FrameCount() const
+{
+    return length_frames > 0.0 ? length_frames : (keyframes.empty() ? 0.0 : keyframes.back().frame);
+}
+
+void ScalarAnimationPlayback::Advance(double seconds)
+{
+    if (!playing || !std::isfinite(seconds) || seconds <= 0.0) return;
+    const double length = animation.FrameCount();
+    const double next = frame + seconds * animation.fps * rate;
+    if (animation.mode == ScalarAnimationMode::Loop && length > 0.0) {
+        frame = std::fmod(next, length);
+        if (frame < 0.0) frame += length;
+    } else {
+        frame = std::clamp(next, 0.0, std::max(0.0, length));
+        if ((rate > 0.0 && next >= length) || (rate < 0.0 && next <= 0.0)) playing = false;
+    }
+}
+
+void ScalarAnimationPlayback::Play()
+{
+    if (!playing && animation.mode == ScalarAnimationMode::Single) {
+        if (rate >= 0.0 && frame >= animation.FrameCount()) frame = 0.0;
+        else if (rate < 0.0 && frame <= 0.0) frame = animation.FrameCount();
+    }
+    playing = true;
+}
+
+void ScalarAnimationPlayback::Stop()
+{
+    playing = false;
+    frame = 0.0;
+}
+
+void ScalarAnimationPlayback::SetFrame(double value)
+{
+    if (std::isfinite(value)) frame = std::clamp(value, 0.0, std::max(0.0, animation.FrameCount()));
+}
+
+float ScalarAnimationPlayback::Value() const
+{
+    return animation.Evaluate(animation.fps > 0.0 ? frame / animation.fps : 0.0);
 }
 
 std::unique_ptr<DynamicValue> ResolveBoolSetting(
@@ -327,6 +392,10 @@ std::optional<ScalarAnimation> ResolveScalarAnimation(const nlohmann::json& sett
                           ? ScalarAnimationMode::Loop
                           : ScalarAnimationMode::Single;
     }
+    if (options.contains("name") && options.at("name").is_string()) {
+        result.name = options.at("name").get<std::string>();
+    }
+    if (options.contains("startpaused")) result.start_paused = parse_bool(options.at("startpaused"));
 
     for (const auto& keyframe : *curve_iterator) {
         if (!keyframe.is_object() || !keyframe.contains("frame") || !keyframe.contains("value")) {
@@ -336,6 +405,17 @@ std::optional<ScalarAnimation> ResolveScalarAnimation(const nlohmann::json& sett
         ScalarAnimationKeyframe parsed;
         parsed.frame = static_cast<double>(parse_float(keyframe.at("frame")));
         parsed.value = parse_float(keyframe.at("value"));
+        const auto parse_handle = [](const nlohmann::json& source, const char* key) {
+            ScalarAnimationHandle handle;
+            const auto iterator = source.find(key);
+            if (iterator == source.end() || !iterator->is_object()) return handle;
+            if (iterator->contains("enabled")) handle.enabled = parse_bool(iterator->at("enabled"));
+            if (iterator->contains("x")) handle.x = parse_float(iterator->at("x"));
+            if (iterator->contains("y")) handle.y = parse_float(iterator->at("y"));
+            return handle;
+        };
+        parsed.back = parse_handle(keyframe, "back");
+        parsed.front = parse_handle(keyframe, "front");
         result.keyframes.push_back(parsed);
     }
 

@@ -8,9 +8,11 @@
 #include <array>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string_view>
@@ -88,11 +90,6 @@ struct ScriptFrontEndResult {
     std::vector<std::string> imported_globals;
 };
 
-struct SerializedScriptTemplate {
-    std::string          factory_source;
-    std::vector<uint8_t> bytecode;
-};
-
 struct ContextScriptCacheState {
     bool                                     shared_bindings_installed { false };
     bool                                     shared_bootstrap_installed { false };
@@ -105,9 +102,11 @@ struct ContextScriptCacheState {
 
 constexpr uint32_t kScriptPipelineRevision = 1;
 
-ScriptStartupMetrics                                      g_script_startup_metrics;
-std::unordered_map<std::string, SerializedScriptTemplate> g_serialized_script_templates;
-std::unordered_map<JSContext*, ContextScriptCacheState>   g_context_script_caches;
+// Metrics are per parse thread: a wallpaper switch tears down the outgoing
+// scene's JS context while the incoming scene compiles its scripts.
+thread_local ScriptStartupMetrics                       g_script_startup_metrics;
+std::mutex                                              g_context_script_caches_mutex;
+std::unordered_map<JSContext*, ContextScriptCacheState> g_context_script_caches;
 
 double MeasureElapsedMs(const std::chrono::steady_clock::time_point started) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started)
@@ -126,20 +125,28 @@ std::string MakeScriptCacheKey(std::string_view source, ScriptProgramMode mode) 
     return utils::genSha1(key_material);
 }
 
+// The map is shared by every scene's script thread; only the owning thread
+// touches the state it points at, so the lock only needs to cover lookup,
+// insertion and erasure of the node itself.
 ContextScriptCacheState& GetContextScriptCache(JSContext* context) {
+    const std::lock_guard<std::mutex> guard(g_context_script_caches_mutex);
     return g_context_script_caches[context];
 }
 
 void ReleaseContextScriptCache(JSContext* context) {
-    const auto iterator = g_context_script_caches.find(context);
-    if (iterator == g_context_script_caches.end()) return;
+    ContextScriptCacheState state;
+    {
+        const std::lock_guard<std::mutex> guard(g_context_script_caches_mutex);
+        const auto                        iterator = g_context_script_caches.find(context);
+        if (iterator == g_context_script_caches.end()) return;
+        state = std::move(iterator->second);
+        g_context_script_caches.erase(iterator);
+    }
 
-    for (auto& [key, value] : iterator->second.factories) {
+    for (auto& [key, value] : state.factories) {
         (void)key;
         JS_FreeValue(context, value);
     }
-
-    g_context_script_caches.erase(iterator);
 }
 
 constexpr char kVectorBootstrap[] = R"JS(
@@ -1177,7 +1184,7 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
         << "    if (layerOrName && typeof layerOrName.name === 'string') return layerOrName.name;\n"
         << "    return '';\n"
         << "  }\n"
-        << "  function __makeAnimation(name) {\n"
+        << "  function __makePuppetAnimation(name) {\n"
         << "    return {\n"
         << "      name: name || '',\n"
         << "      frameCount: 1,\n"
@@ -1195,6 +1202,22 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
            "this._endedCallbacks.push(callback); },\n"
         << "      removeEndedCallback: function(callback) { this._endedCallbacks = "
            "this._endedCallbacks.filter(function(item) { return item !== callback; }); }\n"
+        << "    };\n"
+        << "  }\n"
+        << "  function __makeAnimation(layer, name) {\n"
+        << "    return {\n"
+        << "      name: name,\n"
+        << "      get fps() { return __animationControl(layer, name, 'fps'); },\n"
+        << "      get frameCount() { return __animationControl(layer, name, 'frameCount'); },\n"
+        << "      get duration() { return this.fps > 0 ? this.frameCount / this.fps : 0; },\n"
+        << "      get rate() { return __animationControl(layer, name, 'rate'); },\n"
+        << "      set rate(value) { __animationControl(layer, name, 'setRate', Number(value)); },\n"
+        << "      play: function() { __animationControl(layer, name, 'play'); },\n"
+        << "      pause: function() { __animationControl(layer, name, 'pause'); },\n"
+        << "      stop: function() { __animationControl(layer, name, 'stop'); },\n"
+        << "      isPlaying: function() { return !!__animationControl(layer, name, 'isPlaying'); },\n"
+        << "      getFrame: function() { return __animationControl(layer, name, 'frame'); },\n"
+        << "      setFrame: function(value) { __animationControl(layer, name, 'setFrame', Number(value)); }\n"
         << "    };\n"
         << "  }\n"
         << "  function __makeVideoTexture(name) {\n"
@@ -1292,14 +1315,14 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
         << "        }\n"
         << "      },\n"
         << "      getAnimation: function(animationName) {\n"
-        << "        var key = animationName || '__default';\n"
-        << "        if (!state.animations[key]) state.animations[key] = __makeAnimation(key);\n"
+        << "        var key = String(animationName || '');\n"
+        << "        if (!state.animations[key]) state.animations[key] = __makeAnimation(name, key);\n"
         << "        return state.animations[key];\n"
         << "      },\n"
         << "      getAnimationLayer: function(layerName) {\n"
         << "        var key = String(layerName);\n"
         << "        if (!state.animationLayers[key]) state.animationLayers[key] = "
-           "__makeAnimation(key);\n"
+           "__makePuppetAnimation(key);\n"
         << "        return state.animationLayers[key];\n"
         << "      },\n"
         << "      getAnimationLayerCount: function() { return "
@@ -2089,6 +2112,36 @@ JSValue JsSoundSetMuted(JSContext* context, JSValueConst, int argc, JSValueConst
     return JS_NewBool(context, updated);
 }
 
+JSValue JsAnimationControl(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
+    auto* bridge = GetBridgeState(context);
+    if (bridge == nullptr || bridge->runtime == nullptr || argc < 3) return JS_UNDEFINED;
+    const char* layer = JS_ToCString(context, argv[0]);
+    const char* name = JS_ToCString(context, argv[1]);
+    const char* operation = JS_ToCString(context, argv[2]);
+    auto* playback = layer != nullptr && name != nullptr
+        ? bridge->runtime->FindScalarAnimation(layer, name) : nullptr;
+    double result = 0.0;
+    if (playback != nullptr && operation != nullptr) {
+        const std::string_view command(operation);
+        double value = 0.0;
+        const bool has_value = argc > 3 && JS_ToFloat64(context, &value, argv[3]) == 0 && std::isfinite(value);
+        if (command == "play") playback->Play();
+        else if (command == "pause") playback->playing = false;
+        else if (command == "stop") playback->Stop();
+        else if (command == "setFrame" && has_value) playback->SetFrame(value);
+        else if (command == "setRate" && has_value) playback->rate = value;
+        else if (command == "fps") result = playback->animation.fps;
+        else if (command == "frameCount") result = playback->animation.FrameCount();
+        else if (command == "rate") result = playback->rate;
+        else if (command == "frame") result = playback->frame;
+        else if (command == "isPlaying") result = playback->playing ? 1.0 : 0.0;
+    }
+    if (operation != nullptr) JS_FreeCString(context, operation);
+    if (name != nullptr) JS_FreeCString(context, name);
+    if (layer != nullptr) JS_FreeCString(context, layer);
+    return JS_NewFloat64(context, result);
+}
+
 JSValue JsTextureSetFrame(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
     auto* bridge = GetBridgeState(context);
     if (argc < 2 || bridge == nullptr || bridge->runtime == nullptr) return JS_UNDEFINED;
@@ -2519,6 +2572,8 @@ bool EnsureSharedHostBindings(JSContext* context, SceneRuntimeContext* runtime,
                           global_object,
                           "__soundSetMuted",
                           JS_NewCFunction(context, JsSoundSetMuted, "__soundSetMuted", 2));
+        JS_SetPropertyStr(context, global_object, "__animationControl",
+                          JS_NewCFunction(context, JsAnimationControl, "__animationControl", 4));
         JS_SetPropertyStr(context,
                           global_object,
                           "__textureSetFrame",
@@ -2616,72 +2671,43 @@ JSValue AcquireScriptFactory(JSContext* context, const std::string& script_sourc
         return JS_DupValue(context, iterator->second);
     }
 
-    JSValue factory = JS_UNDEFINED;
-    if (const auto iterator = g_serialized_script_templates.find(cache_key);
-        iterator != g_serialized_script_templates.end() && ! iterator->second.bytecode.empty()) {
-        JSValue compiled = JS_ReadObject(context,
-                                         iterator->second.bytecode.data(),
-                                         iterator->second.bytecode.size(),
-                                         JS_READ_OBJ_BYTECODE);
-        if (! JS_IsException(compiled)) {
-            const auto eval_started = std::chrono::steady_clock::now();
-            factory                 = JS_EvalFunction(context, compiled);
-            g_script_startup_metrics.eval_ms += MeasureElapsedMs(eval_started);
-        } else {
-            LogJsException(context, "JS_ReadObject");
-        }
+    // Factories are only ever cached per JSContext. A process-wide
+    // `JS_WriteObject`/`JS_ReadObject` bytecode cache was tried and reverted:
+    // bytecode serialized with `JS_WRITE_OBJ_STRIP_DEBUG` deserializes into a
+    // function that misbehaves (observed: an endless `lre_exec` inside the
+    // restored factory), so the second load of a scene in one process never
+    // produced a first frame. Compiling from source is also not measurably
+    // slower than restoring bytecode.
+    ScriptFrontEndResult front_end      = RunScriptFrontEnd(script_source);
+    const std::string    factory_source = mode == ScriptProgramMode::Property
+                                              ? BuildPropertyScriptFactorySource(front_end)
+                                              : BuildSceneScriptFactorySource(front_end);
+
+    const auto compile_started = std::chrono::steady_clock::now();
+    JSValue    compiled        = JS_Eval(context,
+                               factory_source.c_str(),
+                               factory_source.size(),
+                               mode == ScriptProgramMode::Property ? "<property-script-factory>"
+                                                                   : "<scene-script-factory>",
+                               JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+    g_script_startup_metrics.eval_ms += MeasureElapsedMs(compile_started);
+    if (JS_IsException(compiled)) {
+        LogJsException(context,
+                       mode == ScriptProgramMode::Property ? "PropertyScriptFactoryCompile"
+                                                           : "SceneScriptFactoryCompile");
+        return JS_EXCEPTION;
     }
 
-    if (JS_IsUndefined(factory) || JS_IsException(factory)) {
-        if (JS_IsException(factory)) {
-            LogJsException(context, "JS_EvalFunction");
-            JS_FreeValue(context, factory);
-        }
-
-        ScriptFrontEndResult front_end      = RunScriptFrontEnd(script_source);
-        const std::string    factory_source = mode == ScriptProgramMode::Property
-                                                  ? BuildPropertyScriptFactorySource(front_end)
-                                                  : BuildSceneScriptFactorySource(front_end);
-
-        const auto compile_started = std::chrono::steady_clock::now();
-        JSValue    compiled        = JS_Eval(context,
-                                   factory_source.c_str(),
-                                   factory_source.size(),
-                                   mode == ScriptProgramMode::Property ? "<property-script-factory>"
-                                                                                 : "<scene-script-factory>",
-                                   JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
-        g_script_startup_metrics.eval_ms += MeasureElapsedMs(compile_started);
-        if (JS_IsException(compiled)) {
-            LogJsException(context,
-                           mode == ScriptProgramMode::Property ? "PropertyScriptFactoryCompile"
-                                                               : "SceneScriptFactoryCompile");
-            return JS_EXCEPTION;
-        }
-
-        size_t   bytecode_size = 0;
-        uint8_t* bytecode      = JS_WriteObject(context,
-                                           &bytecode_size,
-                                           compiled,
-                                           JS_WRITE_OBJ_BYTECODE | JS_WRITE_OBJ_STRIP_SOURCE |
-                                               JS_WRITE_OBJ_STRIP_DEBUG);
-        if (bytecode != nullptr && bytecode_size > 0) {
-            auto& serialized          = g_serialized_script_templates[cache_key];
-            serialized.factory_source = factory_source;
-            serialized.bytecode.assign(bytecode, bytecode + bytecode_size);
-            js_free(context, bytecode);
-        }
-
-        const auto eval_started = std::chrono::steady_clock::now();
-        factory                 = JS_EvalFunction(context, compiled);
-        g_script_startup_metrics.eval_ms += MeasureElapsedMs(eval_started);
-        if (JS_IsException(factory)) {
-            LogJsException(context,
-                           mode == ScriptProgramMode::Property ? "PropertyScriptFactoryEval"
-                                                               : "SceneScriptFactoryEval");
-            return JS_EXCEPTION;
-        }
-        g_script_startup_metrics.script_compiles++;
+    const auto eval_started = std::chrono::steady_clock::now();
+    JSValue    factory      = JS_EvalFunction(context, compiled);
+    g_script_startup_metrics.eval_ms += MeasureElapsedMs(eval_started);
+    if (JS_IsException(factory)) {
+        LogJsException(context,
+                       mode == ScriptProgramMode::Property ? "PropertyScriptFactoryEval"
+                                                           : "SceneScriptFactoryEval");
+        return JS_EXCEPTION;
     }
+    g_script_startup_metrics.script_compiles++;
 
     context_cache.factories.emplace(cache_key, JS_DupValue(context, factory));
     return factory;

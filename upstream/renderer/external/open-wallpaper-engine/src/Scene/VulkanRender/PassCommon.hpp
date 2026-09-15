@@ -35,7 +35,9 @@ inline void SetBlend(BlendMode bm, VkPipelineColorBlendAttachmentState& state) {
     case BlendMode::Translucent:
         state.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
         state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        state.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        // Source-over coverage is As + Ad * (1 - As), not As squared.
+        // Squaring it exposes the background along otherwise opaque overlaps.
+        state.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
         state.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         break;
     case BlendMode::Additive:

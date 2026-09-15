@@ -1,0 +1,19 @@
+{
+  "skills": {
+    "impeccable": {
+      "repository": "https://github.com/pbakaus/impeccable",
+      "commit": "0a4e72a254f3b175c95b36b82e5f2e60fa63f116",
+      "sourcePath": ".agents/skills/impeccable"
+    },
+    "swiftui-webkit": {
+      "repository": "https://github.com/dpearson2699/swift-ios-skills",
+      "commit": "8d90fd121a263355a4fb44fd082af1416a5c1c2a",
+      "sourcePath": "skills/swiftui-webkit"
+    },
+    "webkit-integration": {
+      "repository": "https://github.com/rshankras/claude-code-apple-skills",
+      "commit": "9ffb83138209057875698dd11c1720c657c47a92",
+      "sourcePath": "skills/swiftui/webkit"
+    }
+  }
+}

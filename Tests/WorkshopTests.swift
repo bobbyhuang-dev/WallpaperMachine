@@ -30,4 +30,21 @@ final class WorkshopTests: XCTestCase {
         XCTAssertEqual(components?.queryItems?.first { $0.name == "appid" }?.value, "431960")
         XCTAssertNil(components?.fragment)
     }
+
+    func testRequiredTagsDeduplicateTypeAndPreserveQueryBoundaries() {
+        let specialTag = "rain & snow #winter + 日本語"
+        let url = WorkshopService.browseURL(search: "", kind: .scene, sort: .popular, page: 2,
+                                             tags: ["Scene", "1920 x 1080", specialTag, "1920 x 1080", specialTag])
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let values = components?.queryItems ?? []
+        XCTAssertEqual(values.filter { $0.name == "requiredtags[]" }.compactMap(\.value),
+                       ["Scene", "1920 x 1080", specialTag])
+        XCTAssertEqual(values.first { $0.name == "p" }?.value, "2")
+        XCTAssertNil(components?.fragment)
+
+        let allTypesURL = WorkshopService.browseURL(search: "", kind: .all, sort: .popular, page: 1,
+                                                     tags: ["Everyone", "Everyone"])
+        let allTypesValues = URLComponents(url: allTypesURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertEqual(allTypesValues.filter { $0.name == "requiredtags[]" }.compactMap(\.value), ["Everyone"])
+    }
 }

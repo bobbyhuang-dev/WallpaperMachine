@@ -41,6 +41,18 @@ void WPPuppet::prepared() {
         }
 
         b.inv_bind = b.world_bind.inverse();
+        const auto& reference = b.has_local_reference ? b.local_reference : b.local_bind;
+        b.reference_position = reference.translation();
+        b.reference_scale = reference.linear().colwise().norm();
+        Eigen::Matrix3f rotation = reference.linear();
+        for (int axis = 0; axis < 3; ++axis) {
+            if (b.reference_scale[axis] != 0.0f) rotation.col(axis) /= b.reference_scale[axis];
+        }
+        if (rotation.determinant() < 0.0f) {
+            b.reference_scale.x() = -b.reference_scale.x();
+            rotation.col(0) = -rotation.col(0);
+        }
+        b.reference_rotation = Eigen::Quaterniond(rotation.cast<double>()).normalized();
     }
     for (auto& anim : anims) {
         anim.frame_time = 1.0f / anim.fps;
@@ -80,9 +92,9 @@ std::span<const Eigen::Affine3f> WPPuppet::genFrame(WPPuppetLayer& puppet_layer,
 
         // Bind state. vco is a fixed render-time pivot offset for root sprite
         // bones and is added to trans after layer blending below.
-        Vector3f    trans { bone.local_bind.translation() * global_blend };
-        Vector3f    scale { Vector3f::Ones() * global_blend };
-        Quaterniond quat { bone.local_bind.linear().cast<double>() };
+        Vector3f    trans { bone.reference_position * global_blend };
+        Vector3f    scale { bone.reference_scale * global_blend };
+        Quaterniond quat { bone.reference_rotation };
         const Quaterniond ident { Quaterniond::Identity() };
 
         for (auto& layer : puppet_layer.m_layers) {
@@ -98,22 +110,23 @@ std::span<const Eigen::Affine3f> WPPuppet::genFrame(WPPuppetLayer& puppet_layer,
                 continue;
             }
 
-            const auto base_frame = (alayer.additive && layer.anim->mode == WPPuppet::PlayMode::Single)
-                ? layer.anim->bone_tracks[i].frames.size() - 1
-                : 0u;
-            auto& frame_base = layer.anim->bone_tracks[i].frames[base_frame];
             auto& frame_a    = layer.anim->bone_tracks[i].frames[(usize)info.frame_a];
             auto& frame_b    = layer.anim->bone_tracks[i].frames[(usize)info.frame_b];
 
             double t = info.t;
             double one_t   = 1.0f - info.t;
 
-            auto frame_a_quat_delta = frame_a.quaternion * frame_base.quaternion.conjugate();
-            auto frame_b_quat_delta = frame_b.quaternion * frame_base.quaternion.conjugate();
-            auto pos_a_delta   = frame_a.position - frame_base.position;
-            auto pos_b_delta   = frame_b.position - frame_base.position;
-            auto scale_a_delta = frame_a.scale - frame_base.scale;
-            auto scale_b_delta = frame_b.scale - frame_base.scale;
+            // Keyframes are local poses, not offsets from the first sample.
+            // The first sample may already collapse an eyelid or rotate a bone.
+            const auto& base_rotation = bone.reference_rotation;
+            const auto& base_position = bone.reference_position;
+            const auto& base_scale = bone.reference_scale;
+            auto frame_a_quat_delta = base_rotation.conjugate() * frame_a.quaternion;
+            auto frame_b_quat_delta = base_rotation.conjugate() * frame_b.quaternion;
+            auto pos_a_delta   = frame_a.position - base_position;
+            auto pos_b_delta   = frame_b.position - base_position;
+            auto scale_a_delta = frame_a.scale - base_scale;
+            auto scale_b_delta = frame_b.scale - base_scale;
 
             quat *= frame_a_quat_delta.slerp(t, frame_b_quat_delta)
                         .slerp(1.0 - alayer.blend, ident);
@@ -121,9 +134,9 @@ std::span<const Eigen::Affine3f> WPPuppet::genFrame(WPPuppetLayer& puppet_layer,
                 trans += alayer.blend * (pos_a_delta * one_t + pos_b_delta * t);
                 scale += alayer.blend * (scale_a_delta * one_t + scale_b_delta * t);
             } else {
-                trans += (layer.blend * frame_base.position) +
+                trans += (layer.blend * base_position) +
                          (alayer.blend * (pos_a_delta * one_t + pos_b_delta * t));
-                scale += (layer.blend * frame_base.scale) +
+                scale += (layer.blend * base_scale) +
                          (alayer.blend * (scale_a_delta * one_t + scale_b_delta * t));
             }
         }

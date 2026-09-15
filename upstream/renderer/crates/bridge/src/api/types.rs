@@ -135,6 +135,12 @@ pub struct BridgeSliderMetadata {
 }
 
 #[derive(Clone, Debug, PartialEq, uniffi::Record)]
+pub struct BridgeComboOption {
+    pub label: String,
+    pub value: BridgePropertyValue,
+}
+
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct BridgePropertyDescriptor {
     pub id: String,
     pub kind: BridgePropertyKind,
@@ -142,6 +148,7 @@ pub struct BridgePropertyDescriptor {
     pub value: BridgePropertyValue,
     pub default_value: BridgePropertyValue,
     pub slider: Option<BridgeSliderMetadata>,
+    pub combo_options: Vec<BridgeComboOption>,
     pub dirty: bool,
     pub can_restore_defaults: bool,
     pub enabled: bool,

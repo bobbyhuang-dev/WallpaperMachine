@@ -23,7 +23,7 @@ pub use power::handle_power_change;
 mod tests;
 
 pub use api::{
-    BridgeAppSnapshot, BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplayMutationBundle,
+    BridgeAppSnapshot, BridgeComboOption, BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplayMutationBundle,
     BridgeDisplaySettingsRow, BridgeError, BridgeErrorKind, BridgeLibraryScanStatus,
     BridgeLibrarySnapshot, BridgeLockScreenScene, BridgeLogLevel, BridgeLogStatus,
     BridgeMonitorInfoRow, BridgeMonitorInformationSnapshot, BridgePlaybackState,

@@ -220,6 +220,32 @@ final class SteamCMDApprovalTests: XCTestCase {
         await expect(.securityApprovalRequired) { try await failing.approve(candidate) }
     }
 
+    func testUniversalLibraryRequiresEverySliceBeforeApproval() async throws {
+        let fixture = try ApprovalFixture()
+        defer { fixture.remove() }
+        let library = try await fixture.makeUniversalLibrary()
+        let original = try Data(contentsOf: library)
+        let service = SteamCMDRuntimeService(processRunner: UniversalSignatureRunner(library: library), approvalDirectory: fixture.receipts)
+        let candidate = try await service.approvalCandidate(at: fixture.runtime, bootstrap: false)
+        try await service.approve(candidate)
+        try await service.validate(at: fixture.runtime)
+
+        // Damage each architecture independently, including the non-native slice.
+        // An existing approval must never permit either damaged signature.
+        for index in 0..<2 {
+            let cursor = 8 + index * 20 + 8
+            let offset = original[cursor..<(cursor + 4)].reduce(0) { ($0 << 8) | Int($1) }
+            let size = original[(cursor + 4)..<(cursor + 8)].reduce(0) { ($0 << 8) | Int($1) }
+            let marker = try XCTUnwrap(original.range(of: Data("STEAMCMD_SIGNATURE_FIXTURE".utf8), in: offset..<(offset + size)))
+            var damaged = original
+            damaged[marker.lowerBound] ^= 1
+            try damaged.write(to: library)
+            await expect(.invalidSignature) { try await service.validate(at: fixture.runtime) }
+            await expect(.invalidSignature) { _ = try await service.approvalCandidate(at: fixture.runtime, bootstrap: false) }
+            try original.write(to: library)
+        }
+    }
+
     private func expect(_ kind: SteamCMDSetupIssue.Kind, operation: () async throws -> Void,
                         file: StaticString = #filePath, line: UInt = #line) async {
         do {
@@ -264,6 +290,29 @@ private struct ApprovalFixture {
 
     func service(runner: ApprovalSystemRunner = ApprovalSystemRunner()) -> SteamCMDRuntimeService {
         SteamCMDRuntimeService(processRunner: runner, approvalDirectory: receipts)
+    }
+
+    func makeUniversalLibrary() async throws -> URL {
+        let source = directory.appendingPathComponent("library.c")
+        try Data("const char fixture_marker[] = \"STEAMCMD_SIGNATURE_FIXTURE\"; int fixture_answer(void) { return fixture_marker[0]; }\n".utf8).write(to: source)
+        let runner = SteamCMDProcessRunner()
+        func run(_ command: String, _ arguments: [String]) async throws {
+            let status = try await runner.run(executable: URL(fileURLWithPath: command), arguments: arguments,
+                workingDirectory: directory, environment: ["PATH": "/usr/bin:/bin", "LC_ALL": "C"], onOutput: { _ in })
+            guard status == 0 else { throw WorkshopFailure(message: "Signed fixture construction failed: \(command) (\(status))") }
+        }
+        var slices: [String] = []
+        for architecture in ["x86_64", "arm64"] {
+            let slice = directory.appendingPathComponent(architecture + ".dylib").path
+            try await run("/usr/bin/xcrun", ["clang", "-arch", architecture, "-dynamiclib",
+                "-Wl,-install_name,@loader_path/libaudio.dylib", source.path, "-o", slice])
+            // Only disposable synthetic fixtures are ad-hoc signed, never downloaded code.
+            try await run("/usr/bin/codesign", ["--force", "--sign", "-", slice])
+            slices.append(slice)
+        }
+        let library = runtime.appendingPathComponent("libaudio.dylib")
+        try await run("/usr/bin/lipo", ["-create"] + slices + ["-output", library.path])
+        return library
     }
 
     func remove() { try? FileManager.default.removeItem(at: directory) }
@@ -317,6 +366,27 @@ private actor ApprovalSystemRunner: SteamCMDProcessRunning {
             return assessmentStatus
         case "/usr/bin/arch": return 0
         default: throw WorkshopFailure(message: "Approval fixtures must never execute runtime code")
+        }
+    }
+}
+
+private struct UniversalSignatureRunner: SteamCMDProcessRunning {
+    let library: URL
+
+    func run(executable: URL, arguments: [String], workingDirectory: URL, environment: [String: String],
+             onOutput: @escaping @Sendable (Data) -> Void) async throws -> Int32 {
+        switch executable.path {
+        case "/usr/bin/codesign":
+            guard let target = arguments.last,
+                  URL(fileURLWithPath: target).resolvingSymlinksInPath() == library.resolvingSymlinksInPath() else { return 0 }
+            // Model macOS's combined-verification internal error; per-slice checks
+            // still go through the real verifier, including deliberate corruption.
+            guard arguments.contains("--arch") else { return 1 }
+            return try await SteamCMDProcessRunner().run(executable: executable, arguments: arguments,
+                workingDirectory: workingDirectory, environment: environment, onOutput: onOutput)
+        case "/usr/sbin/spctl": return 3
+        case "/usr/bin/arch": return 0
+        default: throw WorkshopFailure(message: "Signature fixtures must never execute runtime code")
         }
     }
 }

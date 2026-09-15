@@ -800,14 +800,17 @@ bool ParseMDLS(fs::MemBinaryStream& f, WPMdl& mdl, std::string_view path) {
             if (! HasRemaining(f, 1) || (end_offset_u != 0 && f.Tell() + 1 > end_offset)) {
                 return false;
             }
-            const uint8_t has_world_binds = f.ReadUint8();
-            if (has_world_binds) {
+            const uint8_t has_reference_pose = f.ReadUint8();
+            if (has_reference_pose) {
                 const uint64_t bytes = static_cast<uint64_t>(bones_num) * 16u * 4u;
                 if (! HasRemaining(f, bytes) || (end_offset_u != 0 && f.Tell() + bytes > end_offset)) {
                     return false;
                 }
-                for (uint32_t i = 0; i < bones_num; ++i) {
-                    for (uint32_t j = 0; j < 16; ++j) (void)f.ReadFloat();
+                for (auto& bone : bones) {
+                    for (auto col : bone.local_reference.matrix().colwise()) {
+                        for (auto& value : col) value = f.ReadFloat();
+                    }
+                    bone.has_local_reference = true;
                 }
             }
             if (HasRemaining(f, 8) && (end_offset_u == 0 || f.Tell() + 8 <= end_offset)) {

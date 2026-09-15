@@ -9,7 +9,7 @@ use crate::{
         expressions::analysis::{SwizzleField, VectorExpressionAnalyzer, VectorWidth},
     },
     syntax::CallArgument,
-    tokenizer::{TokenCursor, TokenIndexRange, TypedTokenFacts},
+    tokenizer::{AssignmentOperator, OperatorType, TokenCursor, TokenIndexRange, TypedTokenFacts},
 };
 
 /// Assignments whose right-hand side must match a narrowed vector target.
@@ -29,7 +29,16 @@ impl NarrowVectorAssignments {
         let state = context.context();
         let tokens = state.module.token_stream().cursor();
         for (index, token) in tokens.iter().enumerate() {
-            if !token.kind().is_simple_assignment_operator() {
+            let compound = matches!(
+                token.kind(),
+                TypedToken::Operator(OperatorType::Assignment(
+                    AssignmentOperator::AddAssign
+                        | AssignmentOperator::SubtractAssign
+                        | AssignmentOperator::MultiplyAssign
+                        | AssignmentOperator::DivideAssign
+                ))
+            );
+            if !compound && !token.kind().is_simple_assignment_operator() {
                 continue;
             }
 
@@ -79,7 +88,14 @@ impl NarrowVectorAssignments {
             let Some(rhs_end) = rhs.last() else {
                 continue;
             };
-            let rhs_width = if let Some(width) =
+            let rhs_width = if compound {
+                CallArgument::trim_from_bounds(tokens, rhs.start(), rhs.end()).and_then(
+                    |argument| {
+                        VectorExpressionAnalyzer { facts, token_facts }
+                            .argument_vector_width(tokens, argument)
+                    },
+                )
+            } else if let Some(width) =
                 VectorExpressionAnalyzer::<VectorTypeBindings<'_>>::terminal_swizzle(tokens, rhs)
                     .map(|swizzle| swizzle.width)
             {
@@ -101,6 +117,7 @@ impl NarrowVectorAssignments {
             };
             self.items.push(NarrowVectorAssignment {
                 insertion: tokens[rhs_end].span().end_point(),
+                opening: compound.then(|| tokens[rhs_start].span().start_point()),
                 swizzle,
             });
         }
@@ -112,6 +129,8 @@ impl NarrowVectorAssignments {
 pub(super) struct NarrowVectorAssignment {
     /// Source span immediately after the RHS expression.
     pub insertion: SourceSpan,
+    /// Start of a compound RHS that must be parenthesized before swizzling.
+    pub opening: Option<SourceSpan>,
     /// Swizzle text to insert.
     pub swizzle: &'static str,
 }
@@ -119,10 +138,19 @@ pub(super) struct NarrowVectorAssignment {
 impl NarrowVectorAssignment {
     /// Emits the RHS narrowing swizzle insertion.
     pub(super) fn emit(self, context: &mut StrategyContext<'_, '_, '_>) {
+        let suffix = if let Some(opening) = self.opening {
+            context
+                .context()
+                .fixups
+                .push(Fixup::insert(opening, "(".to_owned()));
+            format!("){}", self.swizzle)
+        } else {
+            self.swizzle.to_owned()
+        };
         context
             .context()
             .fixups
-            .push(Fixup::insert(self.insertion, self.swizzle.to_owned()));
+            .push(Fixup::insert(self.insertion, suffix));
     }
 }
 

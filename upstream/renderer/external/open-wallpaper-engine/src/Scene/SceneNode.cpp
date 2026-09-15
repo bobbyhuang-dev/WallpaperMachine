@@ -15,6 +15,7 @@ Matrix4d SceneNode::GetLocalTrans() const {
 
     trans.pretranslate(m_translate.cast<double>());
 
+    if (m_attachmentTransform) return *m_attachmentTransform * trans.matrix();
     return trans.matrix();
 }
 

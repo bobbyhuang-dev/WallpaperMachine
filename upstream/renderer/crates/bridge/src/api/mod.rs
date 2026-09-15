@@ -12,7 +12,7 @@ use std::{
 pub use error::{BridgeError, BridgeErrorKind};
 use futures_util::Future;
 pub use types::{
-    BridgeAppSnapshot, BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplayMutationBundle,
+    BridgeAppSnapshot, BridgeComboOption, BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplayMutationBundle,
     BridgeDisplaySettingsRow, BridgeLibraryScanStatus, BridgeLibrarySnapshot,
     BridgeLockScreenScene, BridgeLogLevel, BridgeLogStatus, BridgeMonitorInfoRow,
     BridgeMonitorInformationSnapshot, BridgePlaybackState, BridgePropertyDescriptor,

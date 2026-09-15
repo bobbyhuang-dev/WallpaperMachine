@@ -63,19 +63,18 @@ impl LegacyBuiltinsStrategy {
             return Ok(());
         }
 
-        match call.name() {
-            "lerp" => LegacyBuiltinCall::Rename { call, name: "mix" }.emit(context, tokens)?,
+        let builtin = match call.name() {
+            "lerp" => LegacyBuiltinCall::Rename { call, name: "mix" },
             "frac" => LegacyBuiltinCall::Rename {
                 call,
                 name: "fract",
-            }
-            .emit(context, tokens)?,
-            "atan2" => LegacyBuiltinCall::Rename { call, name: "atan" }.emit(context, tokens)?,
-            "ddx" => LegacyBuiltinCall::Rename { call, name: "dFdx" }.emit(context, tokens)?,
-            "CAST2" => LegacyBuiltinCall::Rename { call, name: "vec2" }.emit(context, tokens)?,
-            "CAST3" => LegacyBuiltinCall::Rename { call, name: "vec3" }.emit(context, tokens)?,
-            "CAST4" => LegacyBuiltinCall::Rename { call, name: "vec4" }.emit(context, tokens)?,
-            "CAST3X3" => LegacyBuiltinCall::Rename { call, name: "mat3" }.emit(context, tokens)?,
+            },
+            "atan2" => LegacyBuiltinCall::Rename { call, name: "atan" },
+            "ddx" => LegacyBuiltinCall::Rename { call, name: "dFdx" },
+            "CAST2" => LegacyBuiltinCall::Rename { call, name: "vec2" },
+            "CAST3" => LegacyBuiltinCall::Rename { call, name: "vec3" },
+            "CAST4" => LegacyBuiltinCall::Rename { call, name: "vec4" },
+            "CAST3X3" => LegacyBuiltinCall::Rename { call, name: "mat3" },
             "tex2D" | "texSample2D" | "texture2D" | "texSample2DLod" | "textureLod" => {
                 let name = TextureSamplingFunction::classify_name(call.name()).map_or(
                     "texture",
@@ -84,15 +83,15 @@ impl LegacyBuiltinsStrategy {
                         TextureSamplingFunction::ExplicitLod => "textureLod",
                     },
                 );
-                LegacyBuiltinCall::Rename { call, name }.emit(context, tokens)?;
+                LegacyBuiltinCall::Rename { call, name }
             }
-            "saturate" => LegacyBuiltinCall::Saturate { call }.emit(context, tokens)?,
-            "log10" => LegacyBuiltinCall::Log10 { call }.emit(context, tokens)?,
-            "fmod" => LegacyBuiltinCall::Fmod { call }.emit(context, tokens)?,
-            "ddy" => LegacyBuiltinCall::Ddy { call }.emit(context, tokens)?,
-            _ => {}
-        }
-        Ok(())
+            "saturate" => LegacyBuiltinCall::Saturate { call },
+            "log10" => LegacyBuiltinCall::Log10 { call },
+            "fmod" => LegacyBuiltinCall::Fmod { call },
+            "ddy" => LegacyBuiltinCall::Ddy { call },
+            _ => return Ok(()),
+        };
+        builtin.emit(context, tokens)
     }
 }
 
@@ -135,6 +134,26 @@ impl LegacyBuiltinCall {
         context: &mut StrategyContext<'_, '_, '_>,
         tokens: TokenCursor<'_>,
     ) -> ShaderResult<()> {
+        let call = match &self {
+            Self::Rename { call, .. }
+            | Self::Saturate { call }
+            | Self::Log10 { call }
+            | Self::Fmod { call }
+            | Self::Ddy { call } => call,
+        };
+        // Source-defined overloads take precedence over compatibility builtins.
+        // Call-like token facts also include their signatures and prototypes.
+        if context
+            .context()
+            .module
+            .token_facts()
+            .function_signatures()
+            .iter()
+            .any(|function| function.name().as_str() == call.name())
+        {
+            return Ok(());
+        }
+
         match self {
             Self::Rename { call, name } => {
                 context

@@ -148,6 +148,93 @@ impl FunctionCoercion<'_> {
     }
 }
 
+/// Applies legacy vector-to-scalar conversion to unambiguous user inputs.
+pub(super) fn narrow_user_scalar_arguments(
+    context: &mut StrategyContext<'_, '_, '_>,
+    tokens: TokenCursor<'_>,
+    call: &FunctionCall,
+    vector_facts: &VectorTypeBindings<'_>,
+    token_facts: &TypedTokenFacts,
+) {
+    // Source signatures are not the full overload set for GLSL builtins.
+    // Keep their vector overloads instead of selecting a scalar user helper.
+    if crate::codegen::expressions::analysis::VectorReturningFunction::classify(call.name()).is_ok()
+    {
+        return;
+    }
+    let module = context.context().module;
+    let functions = module.functions();
+    if functions
+        .iter()
+        .any(|function| function.name_span() == call.name_span())
+    {
+        return;
+    }
+    let analyzer = VectorExpressionAnalyzer {
+        facts: vector_facts,
+        token_facts,
+    };
+    for (index, argument) in call.arguments.iter().enumerate() {
+        if analyzer.argument_vector_width(tokens, argument).is_none() {
+            continue;
+        }
+        let mut candidates = token_facts
+            .function_signatures()
+            .iter()
+            .filter(|function| {
+                function.name().as_str() == call.name()
+                    && function.parameters().len() == call.arguments.len()
+            })
+            .peekable();
+        // Do not resolve overloads by guessing: every candidate must consume
+        // a float here. A vector overload must keep its original argument.
+        if candidates.peek().is_none()
+            || !candidates.all(|function| {
+                matches!(
+                    function.parameters()[index].ty().as_str(),
+                    "float" | "float1"
+                )
+            })
+        {
+            continue;
+        }
+        let mut definitions = functions
+            .iter()
+            .filter(|function| {
+                function.name() == call.name()
+                    && function.parameters().len() == call.arguments.len()
+            })
+            .peekable();
+        if definitions.peek().is_none()
+            || !definitions.all(|function| {
+                let parameter = &function.parameters()[index];
+                parameter.array_name().is_none()
+                    && tokens
+                        .contained_byte_range(parameter.span().start(), parameter.span().end())
+                        .is_some_and(|range| {
+                            !tokens
+                                .iter()
+                                .skip(range.start())
+                                .take(range.end() - range.start())
+                                .any(|token| {
+                                    matches!(token.kind().source_text(), Some("out" | "inout"))
+                                })
+                        })
+            })
+        {
+            continue;
+        }
+        context
+            .context()
+            .fixups
+            .push(Fixup::insert(argument.span().start_point(), "(".to_owned()));
+        context
+            .context()
+            .fixups
+            .push(Fixup::insert(argument.span().end_point(), ").x".to_owned()));
+    }
+}
+
 impl FunctionCall {
     /// Returns whether the call is not immediately followed by member or index
     /// access that should own the assignment context instead.

@@ -4,6 +4,7 @@ use super::ScopedDeclarationFacts;
 use crate::{
     codegen::{
         DeclarationPlan,
+        declarations::PlannedDeclaration,
         expressions::analysis::{
             FunctionCallRange, VectorExpressionAnalyzer, VectorExpressionFacts,
             VectorExpressionType, VectorWidth,
@@ -34,6 +35,7 @@ impl VectorTypeBindings<'_> {
     pub(super) fn new(
         scoped_facts: &ScopedDeclarationFacts,
         declarations: &DeclarationPlan<'_>,
+        tokens: TokenCursor<'_>,
     ) -> Self {
         let mut bindings = declarations
             .type_bindings()
@@ -44,7 +46,19 @@ impl VectorTypeBindings<'_> {
                 scope_end: usize::MAX,
             })
             .collect::<Vec<_>>();
-        bindings.extend(Vec::from(scoped_facts));
+        // Rewritten globals already have their emitted types above. Their
+        // original source types must not shadow interface width overrides,
+        // while function parameters and local declarations still must.
+        bindings.extend(Vec::from(scoped_facts).into_iter().filter(|binding| {
+            let name_span = tokens[binding.visible_start - 1].span();
+            !declarations.entries.iter().any(|entry| {
+                matches!(
+                    &entry.kind,
+                    PlannedDeclaration::Interface(_) | PlannedDeclaration::UniformMember(_)
+                ) && entry.span.start() <= name_span.start()
+                    && name_span.end() <= entry.span.end()
+            })
+        }));
         Self {
             bindings,
             functions: Vec::new(),

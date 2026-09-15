@@ -28,6 +28,9 @@ targets:
       - path: Resources/StarterWallpaper
         type: folder
         buildPhase: resources
+      - path: Resources/WebUI
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: MacWallpaperExtension
         embed: true

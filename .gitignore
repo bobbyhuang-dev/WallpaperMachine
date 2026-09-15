@@ -12,3 +12,14 @@ __pycache__/
 MacWallpaperEngine-*.zip
 wallpaper-corpus/
 docs/wallpaper-corpus.local.md
+
+# Local agent harness settings
+.pi/
+
+# Vendored agent skills: third-party copies stay local. Restore them from the
+# upstream commits pinned in .agents/skills/sources.json.
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/README.md
+!.agents/skills/sources.json

@@ -6,6 +6,15 @@ renderer matrix and three locally installed scene packages were tested with
 are in `build/verification/adaptive-20260915-021127/report.json`; private assets
 remain outside Git. The matrix contains no workshop-specific rendering rules.
 See [../TESTING.md](../TESTING.md) for the exact checks and known shader limitations.
+The animation repair was additionally verified against Sparkle and the generated
+matrix in `build/verification/adaptive-20260915-215052/report.json`, with no shader
+diagnostics. Private seven-second before/after animation evidence is under
+`build/verification/render-animation-fix/`; desktop presentation remains unverified.
+The translucent-coverage fix (source-over alpha accumulation) was verified against
+the generated matrix, its new synthetic coverage scene, Sparkle and four other
+locally installed scenes in
+`build/verification/adaptive-20260915-235447/report.json`, with no new diagnostics.
+Private before/after crops are under `build/verification/eye-outline/`.
 
 Select additional assets you own or have permission to use. Record local paths
 and hashes in a local inventory under `build/verification/`, not this public
@@ -15,7 +24,7 @@ document. Do not reuse real imports for destructive/invalid-input tests; use cop
 | --- | --- | --- | --- |
 | video-basic | Short ordinary video, known dimensions and colors | Playback, fill/match/stretch, orientation, pause/resume | Needs asset |
 | scene-basic | Acheron Black Hole | Pooled/isolated allocation pixel equality | Passed offscreen; desktop/animation unverified |
-| scene-effects | Sparkle multi-character scene | Pooled/isolated allocation pixel equality; preserve shader errors | Equality passed; three effect shaders remain unsupported |
+| scene-effects | Sparkle multi-character scene | Pooled/isolated equality; paused effect timeline; blink geometry | Passed offscreen; sampled blink cycle inspected; desktop unverified |
 | scene-text-script | Lonely Cat | Fonts, clock/date, pooled/isolated allocation pixel equality | Passed offscreen; live audio/desktop unverified |
 | generated-composites | Eight original synthetic scenes | Transparent input, nested children, hidden parents, transforms, order, pixel assertions | Passed offscreen; no private assets needed |
 | scene-audio | Audio-responsive scene | Response to authorized test audio, quiet-input behavior | Needs asset |

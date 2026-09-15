@@ -82,6 +82,49 @@ final class LockScreenWallpaperTests: XCTestCase {
   }
 
   @MainActor
+  func testWallpaperRevisionInvalidatesEverySpaceAndKeepsRestorationOriginals() throws {
+    var original = fixture()
+    var spaces = try XCTUnwrap(original["Spaces"] as? [String: Any])
+    spaces["space-b"] = ["Default": node("default-b"), "Displays": ["one": node("other-space")]]
+    original["Spaces"] = spaces
+    try write(original)
+    var reloads = 0
+    let selection = LockScreenWallpaperSelection(
+      storeURL: store, journalURL: journal, reload: { reloads += 1 })
+    try selection.synchronize(displays: ["one"], revision: "wallpaper-a")
+    let first = try readStore()
+    try selection.synchronize(displays: ["one"], revision: "wallpaper-b")
+    let second = try readStore()
+    func configurations(_ root: [String: Any]) throws -> [Data] {
+      let displays = try XCTUnwrap(root["Displays"] as? [String: [String: Any]])
+      let spaces = try XCTUnwrap(root["Spaces"] as? [String: [String: Any]])
+      var nodes = [try XCTUnwrap(displays["one"])]
+      for key in spaces.keys.sorted() {
+        let perDisplay = try XCTUnwrap(spaces[key]?["Displays"] as? [String: [String: Any]])
+        nodes.append(try XCTUnwrap(perDisplay["one"]))
+      }
+      return try nodes.flatMap { node in
+        try ["Desktop", "Idle"].map { key in
+          let value = try XCTUnwrap(node[key] as? [String: Any])
+          let content = try XCTUnwrap(value["Content"] as? [String: Any])
+          let choices = try XCTUnwrap(content["Choices"] as? [[String: Any]])
+          return try XCTUnwrap(choices.first?["Configuration"] as? Data)
+        }
+      }
+    }
+    let before = try configurations(first)
+    let after = try configurations(second)
+    for (old, new) in zip(before, after) { XCTAssertNotEqual(old, new) }
+    XCTAssertEqual(reloads, 2)
+    try selection.synchronize(displays: ["one"], revision: "wallpaper-b")
+    XCTAssertEqual(reloads, 2, "Unchanged publication must not reload WallpaperAgent")
+    XCTAssertEqual(try readStore() as NSDictionary, second as NSDictionary)
+    let recovered = LockScreenWallpaperSelection(storeURL: store, journalURL: journal, reload: {})
+    try recovered.recover()
+    XCTAssertEqual(try readStore() as NSDictionary, original as NSDictionary)
+  }
+
+  @MainActor
   func testExternalDesktopEditSurvivesWhileOwnedIdleSelectionRestores() throws {
     try write(fixture())
     let selection = LockScreenWallpaperSelection(storeURL: store, journalURL: journal, reload: {})

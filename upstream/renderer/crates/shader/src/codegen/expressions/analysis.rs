@@ -250,6 +250,27 @@ where
                 _ => None,
             },
             ScalarExpressionFlavor::IntInitializer
+                if matches!(name, "min" | "max" | "clamp" | "step" | "smoothstep") =>
+            {
+                let call = self.token_facts.call_at_name(start)?;
+                let mut result = None;
+                for argument in call.arguments() {
+                    let ty = self.range_type(tokens, argument.start(), argument.last()?)?;
+                    if !matches!(ty, ScalarType::Int | ScalarType::Uint | ScalarType::Float) {
+                        return None;
+                    }
+                    result = match result {
+                        Some(previous) => self.arithmetic_result(Some(previous), Some(ty)),
+                        None => Some(ty),
+                    };
+                }
+                if matches!(name, "step" | "smoothstep") {
+                    result.map(|_| ScalarType::Float)
+                } else {
+                    result
+                }
+            }
+            ScalarExpressionFlavor::IntInitializer
                 if matches!(
                     name,
                     "acos"
@@ -1294,7 +1315,7 @@ where
 
 /// Builtin whose result keeps the width of one or more vector arguments.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum VectorReturningFunction {
+pub(crate) enum VectorReturningFunction {
     /// One-argument component-wise numeric builtin.
     Unary,
     /// Two-argument component-wise numeric builtin.
@@ -1311,12 +1332,12 @@ enum VectorReturningFunction {
 
 impl VectorReturningFunction {
     /// Classifies a builtin name by vector return behavior.
-    fn classify(name: &str) -> Result<Self, ()> {
+    pub(crate) fn classify(name: &str) -> Result<Self, ()> {
         let function = match name.as_bytes() {
             b"abs" | b"acos" | b"asin" | b"atan" | b"ceil" | b"cos" | b"exp" | b"exp2"
             | b"floor" | b"fract" | b"frac" | b"inversesqrt" | b"log" | b"log2" | b"normalize"
             | b"round" | b"sign" | b"sin" | b"sqrt" | b"tan" | b"trunc" => Self::Unary,
-            b"max" | b"min" | b"pow" => Self::ComponentWise,
+            b"max" | b"min" | b"mod" | b"pow" => Self::ComponentWise,
             b"mix" => Self::Mix,
             b"step" => Self::Step,
             b"smoothstep" => Self::Smoothstep,

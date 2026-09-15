@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' mwe-ui: https: data:; connect-src 'none'; font-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta name="color-scheme" content="dark">
+  <title>MacWallpaperEngine</title>
+  <link rel="stylesheet" href="./panel.css">
+  <link rel="stylesheet" href="./settings.css">
+  <script type="module" src="./panel.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <nav class="tabs" aria-label="Main navigation">
+        <button type="button" data-page="discover">Discover</button>
+        <button type="button" data-page="installed">Installed</button>
+        <button type="button" data-page="settings">Settings</button>
+      </nav>
+      <div id="app-identity" class="app-identity"></div>
+      <div id="top-actions" class="top-actions"></div>
+    </header>
+    <div id="error-banner" class="error-banner" role="alert" hidden></div>
+    <main id="main">
+      <section id="library-page" class="library-page" aria-label="Wallpapers">
+        <aside id="workshop-filters" class="workshop-filters" aria-label="Workshop filters" hidden></aside>
+        <section class="browser-column" aria-label="Wallpaper browser">
+          <div id="browser-toolbar" class="browser-toolbar"></div>
+          <div id="browser-summary" class="browser-summary" aria-live="polite"></div>
+          <div id="wallpaper-grid" class="wallpaper-grid" aria-label="Wallpapers"></div>
+          <div id="browser-empty" class="empty-state" role="status"><h1>Connecting to MacWallpaperEngine</h1><p>Waiting for the native application.</p></div>
+          <div id="pagination" class="pagination"></div>
+        </section>
+        <aside id="inspector" class="inspector" aria-label="Wallpaper details"></aside>
+      </section>
+      <section id="settings-content" aria-label="Settings" hidden></section>
+    </main>
+    <div id="queue-popover" class="popover queue-popover" role="dialog" aria-labelledby="queue-popover-title" tabindex="-1" hidden></div>
+    <div id="import-popover" class="popover import-popover" role="dialog" aria-labelledby="import-popover-title" tabindex="-1" hidden></div>
+    <dialog id="download-dialog" class="download-dialog" aria-labelledby="download-dialog-title"></dialog>
+    <footer id="activity-bar" class="activity-bar" aria-label="Playback and download activity"></footer>
+  </div>
+  <div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
+</body>
+</html>

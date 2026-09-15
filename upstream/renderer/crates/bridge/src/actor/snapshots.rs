@@ -5,18 +5,18 @@ use wallpaper_core::{DisplaySnapshotEntry, WallpaperAssignment, project::Scaling
 use crate::{
     actor::state::BridgeActorState,
     api::{
-        BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplaySettingsRow, BridgeError,
-        BridgeMonitorInfoRow, BridgeMonitorInformationSnapshot, BridgePropertyDescriptor,
-        BridgePropertyKind, BridgePropertyValue, BridgeScalingMode, BridgeSettingsSnapshot,
-        BridgeSliderMetadata, BridgeStorageStatus, BridgeWallpaperOptionsSnapshot,
-        bridge_log_status,
+        BridgeComboOption, BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplaySettingsRow,
+        BridgeError, BridgeMonitorInfoRow, BridgeMonitorInformationSnapshot,
+        BridgePropertyDescriptor, BridgePropertyKind, BridgePropertyValue, BridgeScalingMode,
+        BridgeSettingsSnapshot, BridgeSliderMetadata, BridgeStorageStatus,
+        BridgeWallpaperOptionsSnapshot, bridge_log_status,
     },
     config::SerializedSelector,
     display::{DisplayLabelExt, DisplaySelectorExt, DisplaySnapshotExt},
     logging::{ApplicationLogger, LogStatus},
     login::LaunchAtLoginStatus,
     paths::BridgePaths,
-    project::PropertyMetadata,
+    project::{Condition, PropertyMetadata, PropertyValue},
 };
 
 const MIRROR_DISPLAY_MODE: &str = "mirror";
@@ -64,9 +64,25 @@ impl BridgeActorState {
             .get(&wallpaper_id)
             .map(|model| {
                 let overrides = model.override_values(&config.property_overrides);
+                let lookup = |id: &str| {
+                    overrides.get(id).cloned().or_else(|| {
+                        model
+                            .properties
+                            .iter()
+                            .find(|property| property.id == id)
+                            .map(crate::project::ProjectProperty::default_value)
+                    })
+                };
                 model
                     .properties
                     .iter()
+                    .filter(|property| {
+                        property
+                            .condition
+                            .as_deref()
+                            .and_then(|condition| Condition::parse(condition).ok())
+                            .is_none_or(|condition| condition.eval(&lookup))
+                    })
                     .map(|property| {
                         let value = property.effective_value(&overrides);
                         let default_value = property.default_value();
@@ -86,6 +102,18 @@ impl BridgeActorState {
                             }),
                             _ => None,
                         };
+                        let combo_options = match &property.metadata {
+                            PropertyMetadata::Combo { options } => options
+                                .iter()
+                                .map(|option| BridgeComboOption {
+                                    label: option.label.clone(),
+                                    value: BridgePropertyValue::from(PropertyValue::String(
+                                        option.value.clone(),
+                                    )),
+                                })
+                                .collect(),
+                            _ => Vec::new(),
+                        };
 
                         BridgePropertyDescriptor {
                             id: property.id.clone(),
@@ -94,6 +122,7 @@ impl BridgeActorState {
                             value: BridgePropertyValue::from(value),
                             default_value: BridgePropertyValue::from(default_value),
                             slider,
+                            combo_options,
                             dirty,
                             can_restore_defaults: dirty,
                             enabled: true,
@@ -249,10 +278,10 @@ impl BridgeActorState {
                         .fps
                         .min(display.desc.refresh_rate_hz.max(1))
                         .to_string(),
-                    audio_response: self
-                        .wallpaper_configs
-                        .get(wallpaper_id)
-                        .is_some_and(|config| config.audio.response_enabled),
+                    audio_response: self.wallpaper_configs.get(wallpaper_id).map_or_else(
+                        || crate::config::AudioCfg::default().response_enabled,
+                        |config| config.audio.response_enabled,
+                    ),
                 })
             })
             .collect();

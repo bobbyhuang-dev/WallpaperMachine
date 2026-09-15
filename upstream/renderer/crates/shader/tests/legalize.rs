@@ -534,6 +534,80 @@ fn log10_rewrite_preserves_nested_cast_codegen() {
 }
 
 #[test]
+fn source_defined_log10_is_not_rewritten_as_a_builtin() {
+    let source = concat!(
+        "#define logOf10 2.302585092994\n",
+        "float log10(float x);\n",
+        "float log10(float x) { return log(x) / logOf10; }\n",
+        "float log10(float x, float base) { return log(x) / log(base); }\n",
+        "#define LOG_VALUE(x) log10(x)\n",
+        "void main() {\n",
+        "    gl_FragColor = vec4(LOG_VALUE(10.0) + log10(8.0, 2.0));\n",
+        "}\n",
+    );
+
+    let legalized = legalize(ShaderStageKind::Fragment, source);
+    let _artifact = NagaCompiler
+        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .expect("source-defined log10 declarations and calls should compile");
+}
+
+#[test]
+fn compound_vector_assignments_narrow_wider_expression_results() {
+    let source = concat!(
+        "uniform vec4 g_Texture0Resolution;\n",
+        "vec2 displacement(vec2 strength) {\n",
+        "    strength *= 500 / g_Texture0Resolution;\n",
+        "    strength += g_Texture0Resolution;\n",
+        "    strength -= g_Texture0Resolution;\n",
+        "    strength /= g_Texture0Resolution;\n",
+        "    return strength;\n",
+        "}\n",
+        "void main() { gl_FragColor = vec4(displacement(vec2(0.5)), 0.0, 1.0); }\n",
+    );
+
+    let legalized = legalize(ShaderStageKind::Fragment, source);
+    let _artifact = NagaCompiler
+        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .expect("compound vector assignment RHS should narrow to the target width");
+}
+
+#[test]
+fn integer_initializers_cast_nested_float_builtin_results() {
+    let source = concat!(
+        "uniform vec2 g_Position;\n",
+        "float mask(int overflowable, vec2 pos, float bound) {\n",
+        "    int unfeathered = max(overflowable, step(pos.x, bound) * step(-bound, pos.y));\n",
+        "    int softened = clamp(min(unfeathered, smoothstep(0.0, bound, pos.x)), 0.0, 1.0);\n",
+        "    return float(softened);\n",
+        "}\n",
+        "void main() { gl_FragColor = vec4(mask(0, g_Position, 1.0)); }\n",
+    );
+
+    let legalized = legalize(ShaderStageKind::Fragment, source);
+    let _artifact = NagaCompiler
+        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .expect("nested float-valued builtins should convert to declared integer storage");
+}
+
+#[test]
+fn vector_initializers_broadcast_scalar_expressions_and_preserve_nested_rewrites() {
+    let source = concat!(
+        "uniform float g_Strength;\n",
+        "void main() {\n",
+        "    vec2 strength = g_Strength * g_Strength;\n",
+        "    vec3 gain = length(CAST2(g_Strength)) + 1.0;\n",
+        "    gl_FragColor = vec4(strength, gain.x, 1.0);\n",
+        "}\n",
+    );
+
+    let legalized = legalize(ShaderStageKind::Fragment, source);
+    let _artifact = NagaCompiler
+        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .expect("scalar expressions should broadcast without losing nested builtin rewrites");
+}
+
+#[test]
 fn ddy_rewrite_preserves_nested_reserved_identifier_codegen() {
     let source = concat!(
         "void main() {\n",
@@ -1154,17 +1228,15 @@ fn renames_user_defined_two_arg_mod_calls_with_scalar_variables() {
         "    float x = 5.5;\n",
         "    float y = 2.0;\n",
         "    float wrapped = mod(x, y);\n",
-        "    vec2 vector_wrapped = mod(vec2(x), vec2(y));\n",
+        "    vec2 vector_wrapped = mod(vec2(x), vec2(y)).yx;\n",
         "    gl_FragColor = vec4(vector_wrapped, wrapped, 1.0);\n",
         "}\n",
     );
 
     let legalized = legalize(ShaderStageKind::Fragment, source);
-    let source = legalized.source();
-
-    assert!(source.contains("float _we_user_mod(float x, float y)"));
-    assert!(source.contains("float wrapped = _we_user_mod(x, y);"));
-    assert!(source.contains("vec2 vector_wrapped = mod(vec2(x), vec2(y));"));
+    NagaCompiler
+        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .expect("scalar user call and swizzled vector builtin call must both compile");
 }
 
 #[test]
@@ -1197,20 +1269,16 @@ fn user_mod_classification_uses_nearest_scalar_or_vector_binding() {
         "    {\n",
         "        vec2 x = vec2(5.5);\n",
         "        vec2 y = vec2(2.0);\n",
-        "        vec2 vector = mod(x, y);\n",
+        "        vec2 vector = mod(x, y).yx;\n",
         "        gl_FragColor = vec4(vector, scalar, 1.0);\n",
         "    }\n",
         "}\n",
     );
 
     let legalized = legalize(ShaderStageKind::Fragment, source);
-    let source = legalized.source();
-
-    assert!(source.contains("float _we_user_mod(float x, float y)"));
-    assert!(source.contains("float scalar = _we_user_mod(x, y);"));
-    assert!(source.contains("vec2 vector = mod(x_local, y_local);"));
-    assert!(!source.contains("vec2 vector = _we_user_mod(x, y);"));
-    assert!(!source.contains("vec2 vector = _we_user_mod(x_local, y_local);"));
+    NagaCompiler
+        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .expect("inner vector bindings must select a vector modulo result");
 }
 
 #[test]
@@ -1223,20 +1291,16 @@ fn user_mod_classification_ignores_function_prototype_parameters() {
         "void helper(float x, float y);\n",
         "void other(float y, float z) { }\n",
         "void main() {\n",
-        "    vec2 wrapped = mod(x, y);\n",
-        "    vec2 header_wrapped = mod(y, z);\n",
+        "    vec2 wrapped = mod(x, y).yx;\n",
+        "    vec2 header_wrapped = mod(y, z).yx;\n",
         "    gl_FragColor = vec4(wrapped + header_wrapped, 0.0, 1.0);\n",
         "}\n",
     );
 
     let legalized = legalize(ShaderStageKind::Fragment, source);
-    let source = legalized.source();
-
-    assert!(source.contains("float _we_user_mod(float x, float y)"));
-    assert!(source.contains("vec2 wrapped = mod(x, y);"));
-    assert!(source.contains("vec2 header_wrapped = mod(y, z);"));
-    assert!(!source.contains("vec2 wrapped = _we_user_mod(x, y);"));
-    assert!(!source.contains("vec2 header_wrapped = _we_user_mod(y, z);"));
+    NagaCompiler
+        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .expect("prototype parameter names must not change global vector overloads");
 }
 
 #[test]
@@ -1335,17 +1399,15 @@ fn user_mod_classification_keeps_float_alias_vector_builtin_calls() {
         "void main() {\n",
         "    float2 x = float2(5.5);\n",
         "    float2 y = float2(2.0);\n",
-        "    float2 wrapped = mod(x, y);\n",
+        "    float2 wrapped = mod(x, y).yx;\n",
         "    gl_FragColor = float4(wrapped, 0.0, 1.0);\n",
         "}\n",
     );
 
     let legalized = legalize(ShaderStageKind::Fragment, source);
-    let source = legalized.source();
-
-    assert!(source.contains("float _we_user_mod(float x, float y)"));
-    assert!(source.contains("vec2 wrapped = mod(x, y);"));
-    assert!(!source.contains("vec2 wrapped = _we_user_mod(x, y);"));
+    NagaCompiler
+        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .expect("float2 aliases must preserve the vector builtin result");
 }
 
 #[test]
@@ -1498,7 +1560,7 @@ fn user_mod_classification_lets_inner_locals_shadow_function_parameters() {
         "    {\n",
         "        vec2 x = vec2(5.5);\n",
         "        vec2 y = vec2(2.0);\n",
-        "        return mod(x, y).x;\n",
+        "        return mod(x, y).y;\n",
         "    }\n",
         "}\n",
         "void main() {\n",
@@ -1507,10 +1569,9 @@ fn user_mod_classification_lets_inner_locals_shadow_function_parameters() {
     );
 
     let legalized = legalize(ShaderStageKind::Fragment, source);
-    let source = legalized.source();
-
-    assert!(source.contains("return mod(x, y).x;"));
-    assert!(!source.contains("return _we_user_mod(x, y).x;"));
+    NagaCompiler
+        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .expect("local vectors must shadow scalar parameters when selecting modulo");
 }
 
 #[test]
@@ -2244,12 +2305,10 @@ fn legalizes_hlsl_mul_vector_weighted_matrix_sum_transform_like_ww_mul_operand_s
         ),
         "{source}"
     );
-    assert!(
-        !source.contains(
-            "gl_Position = ((vec4(localPos, 1.0)) * (g_Bones[a_BlendIndices.x] * a_BlendWeights.x \
+    assert!(!source.contains(
+        "gl_Position = ((vec4(localPos, 1.0)) * (g_Bones[a_BlendIndices.x] * a_BlendWeights.x \
              +\n                    g_Bones[a_BlendIndices.y] * a_BlendWeights.y));"
-        )
-    );
+    ));
 }
 
 #[test]
@@ -3149,18 +3208,17 @@ fn type_coercion_strategy_uses_nearest_binding_for_narrow_vector_identifier_init
         "    {\n",
         "        float packed = 0.5;\n",
         "        vec2 inner = packed;\n",
-        "        uv += vec2(packed);\n",
+        "        uv += inner;\n",
         "    }\n",
         "    gl_FragColor = vec4(uv, packed.zw);\n",
         "}\n",
     );
 
     let legalized = legalize(ShaderStageKind::Fragment, source);
-    let source = legalized.source();
 
-    assert!(source.contains("float packed_local = 0.5;"));
-    assert!(source.contains("vec2 inner = packed_local;"));
-    assert!(!source.contains("vec2 inner = packed_local.xy;"));
+    let _artifact = NagaCompiler
+        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .expect("inner scalar binding should broadcast while the outer vector retains its width");
 }
 
 #[test]

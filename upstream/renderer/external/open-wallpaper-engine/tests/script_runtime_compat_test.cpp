@@ -621,6 +621,74 @@ export function update(value) {
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 
+TEST(ScriptRuntimeCompat, PausedMaterialTimelinePlaysOnlyWhenScriptRequestsIt) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    ASSERT_NE(runtime, nullptr);
+    auto material = std::make_shared<SceneMaterial>();
+    auto node = std::make_shared<SceneNode>();
+    runtime->RegisterNode("subject", node.get());
+    const auto setting = nlohmann::json::parse(R"({
+        "value":1.5,
+        "animation":{
+            "options":{"fps":30,"length":9,"mode":"single","startpaused":true,"name":"transition"},
+            "c0":[{"frame":0,"value":0},{"frame":5,"value":1.5},{"frame":9,"value":0}]
+        }
+    })");
+    const auto animation = ResolveScalarAnimation(setting);
+    ASSERT_TRUE(animation.has_value());
+    runtime->RegisterMaterialConstant(material, "u_Opacity", std::make_unique<DynamicValue>(1.5f),
+        runtime->RegisterScalarAnimation("subject", *animation));
+    const auto command = [&](std::string source) {
+        auto program = runtime->scriptEngine().CreatePropertyScriptProgram(
+            runtime.get(), "export function update(value) { " + source + "; return value; }",
+            "subject", {}, DynamicValue(0.0f), runtime->hostContext());
+        EXPECT_TRUE(program->Valid());
+        program->Evaluate(runtime->hostContext(), DynamicValue(0.0f));
+    };
+
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Opacity")[0], 0.0f);
+    runtime->Tick(2.0);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Opacity")[0], 0.0f);
+    command("thisLayer.getAnimation('transition').play()");
+    runtime->Tick(5.0 / 30.0);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Opacity")[0], 1.5f);
+    command("thisLayer.getAnimation('transition').pause()");
+    runtime->Tick(1.0);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Opacity")[0], 1.5f);
+    command("thisLayer.getAnimation('transition').play()");
+    runtime->Tick(4.0 / 30.0);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Opacity")[0], 0.0f);
+    runtime->Tick(1.0);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Opacity")[0], 0.0f);
+    command("thisLayer.getAnimation('transition').play(); thisLayer.getAnimation('transition').rate = 2");
+    runtime->Tick(2.5 / 30.0);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Opacity")[0], 1.5f);
+    command("thisLayer.getAnimation('transition').stop()");
+    runtime->Tick(1.0);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Opacity")[0], 0.0f);
+    command("thisLayer.getAnimation('transition').setFrame(5)");
+    runtime->Tick(0.0);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Opacity")[0], 1.5f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, ScalarTimelineUsesBezierTimeHandlesAndExactInitialKey) {
+    const auto animation = ResolveScalarAnimation(nlohmann::json::parse(R"({
+        "value":9,"animation":{
+            "options":{"fps":10,"length":10,"mode":"single"},
+            "c0":[
+                {"frame":0,"value":0,"front":{"enabled":true,"x":1,"y":0}},
+                {"frame":10,"value":1,"back":{"enabled":true,"x":-1,"y":0}}
+            ]
+        }
+    })"));
+    ASSERT_TRUE(animation.has_value());
+    EXPECT_FLOAT_EQ(animation->Evaluate(0.0), 0.0f);
+    // At Bezier parameter 1/4, time is .184375 and value is .15625, not linear.
+    EXPECT_NEAR(animation->Evaluate(0.184375), 0.15625f, 1e-6f);
+    EXPECT_FLOAT_EQ(animation->Evaluate(1.0), 1.0f);
+}
+
 TEST(ScriptRuntimeCompat, MaterialConstantUserBindingUpdatesThroughRuntimeProperties) {
     auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {
         .project_properties = {

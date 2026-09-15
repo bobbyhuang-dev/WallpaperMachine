@@ -4,11 +4,12 @@ use super::{
     types::{BindingType, VectorTypeBindings},
 };
 use crate::{
-    codegen::expressions::analysis::{VectorExpressionAnalyzer, VectorWidth},
-    syntax::{CallArgument, FunctionCall},
-    tokenizer::{
-        ArithmeticOperator, LiteralValue, OperatorType::Arithmetic, TokenCursor, TypedTokenFacts,
+    codegen::{
+        ExpressionReplacement,
+        expressions::analysis::{VectorExpressionAnalyzer, VectorWidth},
     },
+    syntax::{CallArgument, FunctionCall},
+    tokenizer::{ArithmeticOperator, OperatorType::Arithmetic, TokenCursor, TypedTokenFacts},
 };
 
 /// Local vector declarations initialized from wider visible vector bindings.
@@ -398,7 +399,7 @@ impl DeclaratorInitializer {
     }
 }
 
-/// Vector declarations whose scalar literal initializers need broadcasting.
+/// Vector declarations whose scalar initializers need broadcasting.
 #[derive(Default)]
 pub(super) struct VectorScalarInitializers {
     /// Scalar initializer replacements in source order.
@@ -407,7 +408,12 @@ pub(super) struct VectorScalarInitializers {
 
 impl VectorScalarInitializers {
     /// Scans module tokens for vector declarations with scalar initializers.
-    pub(super) fn collect(&mut self, tokens: TokenCursor<'_>, token_facts: &TypedTokenFacts) {
+    pub(super) fn collect(
+        &mut self,
+        tokens: TokenCursor<'_>,
+        token_facts: &TypedTokenFacts,
+        facts: &VectorTypeBindings<'_>,
+    ) {
         for fact in token_facts.declarations() {
             let Some(width) = VectorWidth::classify_constructor(fact.ty().as_str()) else {
                 continue;
@@ -415,40 +421,17 @@ impl VectorScalarInitializers {
             let Some(range) = fact.initializer() else {
                 continue;
             };
-            let Some((start, end)) = tokens.non_comment_range(range.start(), range.end()) else {
-                continue;
-            };
-            let (start, end) = match (start, end) {
-                (start, end)
-                    if start == end
-                        && matches!(
-                            tokens[start].kind(),
-                            TypedToken::Literal(LiteralValue::Number(_))
-                        ) =>
-                {
-                    (start, end)
-                }
-                (start, end)
-                    if start + 1 == end
-                        && matches!(
-                            tokens[start].kind(),
-                            TypedToken::Operator(Arithmetic(
-                                ArithmeticOperator::Add | ArithmeticOperator::Subtract,
-                            ))
-                        )
-                        && matches!(
-                            tokens[end].kind(),
-                            TypedToken::Literal(LiteralValue::Number(_))
-                        ) =>
-                {
-                    (start, end)
-                }
-                _ => continue,
-            };
-            let Ok(span) = SourceSpan::new(tokens[start].span().start(), tokens[end].span().end())
+            let Some(argument) = CallArgument::trim_from_bounds(tokens, range.start(), range.end())
             else {
                 continue;
             };
+            let analyzer = VectorExpressionAnalyzer { facts, token_facts };
+            if analyzer.argument_vector_width(tokens, argument).is_some()
+                || !analyzer.argument_is_scalar_like(tokens, argument)
+            {
+                continue;
+            }
+            let span = argument.span();
             self.items.push(VectorScalarInitializer { span, width });
         }
     }
@@ -456,7 +439,7 @@ impl VectorScalarInitializers {
 /// Vector scalar initializer that needs constructor broadcasting.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct VectorScalarInitializer {
-    /// Scalar literal span to replace.
+    /// Scalar expression span to replace.
     pub span: SourceSpan,
     /// Constructor width to emit.
     pub width: VectorWidth,
@@ -465,12 +448,14 @@ pub(super) struct VectorScalarInitializer {
 impl VectorScalarInitializer {
     /// Emits the scalar-to-vector constructor replacement.
     pub(super) fn emit(self, context: &mut StrategyContext<'_, '_, '_>) {
-        let source = context.context().module.source();
-        let literal = source.slice(self.span);
-        context.context().fixups.push(Fixup::replace(
-            self.span,
-            format!("{}({literal})", self.width.constructor()),
-        ));
+        let replacement = ExpressionReplacement::new()
+            .with_text(format!("{}(", self.width.constructor()))
+            .with_source(self.span)
+            .with_text(")");
+        context
+            .context()
+            .fixups
+            .push(Fixup::replace(self.span, replacement));
     }
 }
 /// Integer literal converted to GLSL float literal spelling.

@@ -18,6 +18,23 @@ https://github.com/openclaw/Peekaboo. The upstream README currently recommends
 tap. Do not reinstall or upgrade a working installation just to run this check.
 Instruments and Accessibility Inspector come with full Xcode.
 
+## Status markers
+
+`scripts/check-dev-tools.py` and `scripts/build.py` print their `OK` / `WARN` /
+`MISSING` / `+` markers through `scripts/glyphs.py`. In an interactive Warp
+session with a Nerd Font installed under `~/Library/Fonts` or `/Library/Fonts`,
+those markers become Nerd Font glyphs; Warp resolves them through its font
+fallback, so the terminal's configured font does not have to be the patched one.
+Everywhere else, including pipes, redirects, and CI logs, the output stays the
+same ASCII text, because the glyphs are private use code points that render as
+tofu without a patched font.
+
+Set `MWE_GLYPHS=nerd` to force glyphs (another terminal already configured with
+a Nerd Font) or `MWE_GLYPHS=ascii` to force plain markers. `python3
+scripts/glyphs.py` prints the detected style and one line per marker;
+`python3 scripts/test_glyphs.py` covers the detection rules and runs as part of
+`python3 scripts/test.py`.
+
 ## Authorization boundary
 
 Installing tools is not permission to test the desktop. Only run screenshots,

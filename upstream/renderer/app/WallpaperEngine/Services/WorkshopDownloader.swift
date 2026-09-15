@@ -35,7 +35,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
     nonisolated private static let ownerName = "owner"
     @ObservationIgnored private var lastActivity = Date()
     @ObservationIgnored private var failure: String?
-    @ObservationIgnored private var isAuthenticating = true
+    private(set) var isAuthenticating = true
     private static let failurePattern = try! NSRegularExpression(pattern: #"(?:failed|error!?)\s*\(([^)\r\n]+)\)"#)
     private static let progressPattern = try! NSRegularExpression(pattern: #"(\d{1,3}(?:\.\d+)?)\s*%"#)
     nonisolated private static let sessionLock = NSLock()

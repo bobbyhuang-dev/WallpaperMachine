@@ -1,8 +1,19 @@
+# Skill routing and conflicts
+
+- Skills are task guidance, not independent authorization. Follow system/developer instructions, the user's explicit task and authorization, and this project's rules over conflicting skill workflows. Continue unaffected work; do not stop implementation solely because an optional skill step is unavailable or disallowed.
+- Use `impeccable` for visual design and UX; use `swiftui-webkit` as the primary WebKit implementation skill. For work spanning both, apply each to its own concern rather than running two competing end-to-end workflows.
+- `webkit-integration` is a supplemental, explicitly invoked reference, not a second automatic WebKit workflow. Its upstream examples contain API differences; the selected Xcode SDK and deployment target are authoritative. Never combine conflicting API signatures or raise the deployment target merely to satisfy a skill.
+- Skills do not impose a read-only mode on implementation requests. Use the tools available in this harness within the task's authorization; respect actual harness restrictions and explicit review-only requests.
+- Skill instructions to launch browsers/apps, capture screenshots, run desktop automation, or rebuild Release remain subject to the verification and delivery rules below. Without the required authorization, use source inspection and non-desktop checks, report visual behavior as unverified, and continue. Do not open a skill's browser-based question UI automatically; ask any necessary question in chat instead.
+- Keep local skill adaptations documented in `.agents/skills/README.md` and preserve them when updating the pinned upstream sources in `.agents/skills/sources.json`.
+
 # Build delivery
 
-- The user runs `build/Build/Products/Release/MacWallpaperEngine.app`. After app changes, update that Release build before reporting completion; a Debug test build alone does not deliver the change to the app they use.
-- For Swift-only changes, run `python3 scripts/build.py --swift-only --configuration Release`. If renderer changes are included, run `python3 scripts/build.py --configuration Release` instead.
-- Confirm the Release build succeeds and report its path. Remind the user to quit and reopen the app to load the updated build; do not launch or quit it automatically as part of routine verification.
+- Release builds are an explicit integration step, not a per-session requirement. Multiple agents may be editing this workspace concurrently; do not build Release automatically after app changes. Build it only when the user explicitly requests a build or delivery.
+- Perform targeted verification where practical. Report exactly what was verified and whether shared-workspace changes blocked verification. Distinguish changes implemented and verified from an updated app delivered.
+- The user runs `build/Build/Products/Release/MacWallpaperEngine.app`. Never claim that this Release app contains your changes unless a successful Release build was performed after those changes.
+- When a Release build is requested, for Swift-only changes run `python3 scripts/build.py --swift-only --configuration Release`. If renderer changes are included, run `python3 scripts/build.py --configuration Release` instead.
+- After a successful Release build, report its path and remind the user to quit and reopen the app to load the updated build. If the build fails, report the failure without claiming delivery. Do not launch or quit the app automatically as part of routine verification.
 
 # Available development tools
 

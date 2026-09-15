@@ -253,6 +253,12 @@ target_link_libraries(offscreen_scene_probe PRIVATE ${PROJECT_NAME} wpAudio wpSc
 target_include_directories(offscreen_scene_probe PRIVATE . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender)
 target_compile_features(offscreen_scene_probe PRIVATE cxx_std_20)
 
+# Explicit CLI diagnostic for cross-load state leaks, not registered with ctest.
+add_executable(scene_reload_cycle_probe scene_reload_cycle_probe.cpp)
+target_link_libraries(scene_reload_cycle_probe PRIVATE ${PROJECT_NAME} wpAudio wpScene wpParticle wpFs wpVulkan wpVulkanRender wpRGraph nlohmann_json::nlohmann_json)
+target_include_directories(scene_reload_cycle_probe PRIVATE . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender)
+target_compile_features(scene_reload_cycle_probe PRIVATE cxx_std_20)
+
 add_executable(text_object_runtime_test text_object_runtime_test.cpp)
 target_link_libraries(text_object_runtime_test PRIVATE ${PROJECT_NAME} wpAudio wpScene wpFs wpVulkan wpVulkanRender wpRGraph nlohmann_json::nlohmann_json GTest::gtest_main)
 target_include_directories(text_object_runtime_test PRIVATE . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender)

@@ -59,7 +59,7 @@ final class LockScreenWallpaperSelection {
     }
   }
 
-  func synchronize(displays: Set<String>) throws {
+  func synchronize(displays: Set<String>, revision: String? = nil) throws {
     if displays.isEmpty && entries.isEmpty && !restartPending { return }
     let bytes = try Data(contentsOf: storeURL)
     guard
@@ -83,6 +83,7 @@ final class LockScreenWallpaperSelection {
     let desired = Set(paths)
     var retained: [Entry] = []
     var changed = false
+    let selection = try Self.selection(revision: revision)
     for entry in entries {
       if entry.observeOnly == true && !displays.isEmpty {
         retained.append(entry)
@@ -106,6 +107,28 @@ final class LockScreenWallpaperSelection {
               "The system wallpaper was changed outside MacWallpaperEngine. Disable Animate Lock Screen before enabling it again; external choices will be preserved."
           )
         }
+        // Reloading the extension's manifest does not invalidate WallpaperAgent's
+        // cached snapshots for inactive Spaces. Change the native choice identity
+        // on publication, while retaining the first restoration journal entry.
+        if revision != nil {
+          var updated = false
+          for key in ["Desktop", "Idle"] {
+            let current = node[key] as? [String: Any]
+            let content = current?["Content"] as? [String: Any]
+            let choices = content?["Choices"] as? [[String: Any]]
+            let expected = (selection["Content"] as? [String: Any])?["Choices"] as? [[String: Any]]
+            if choices?.first?["Configuration"] as? Data != expected?.first?["Configuration"]
+              as? Data
+            {
+              node[key] = selection
+              updated = true
+            }
+          }
+          if updated {
+            Self.setNode(&root, path: entry.path, value: node)
+            changed = true
+          }
+        }
         retained.append(entry)
         continue
       }
@@ -128,18 +151,20 @@ final class LockScreenWallpaperSelection {
     }
     // macOS may copy explicit selections into fallback nodes on reload. Observe
     // every fallback before activation so those copies can be restored as well.
-    let fallbackPaths = [["SystemDefault"]] +
-      (root["Spaces"] as? [String: Any] ?? [:]).keys.sorted().map { ["Spaces", $0, "Default"] }
-    for path in fallbackPaths where !displays.isEmpty && !retained.contains(where: { $0.path == path }) {
+    let fallbackPaths =
+      [["SystemDefault"]]
+      + (root["Spaces"] as? [String: Any] ?? [:]).keys.sorted().map { ["Spaces", $0, "Default"] }
+    for path in fallbackPaths
+    where !displays.isEmpty && !retained.contains(where: { $0.path == path }) {
       let original = Self.node(root, path: path)
       retained.append(
         Entry(
           path: path,
-          original: try Self.encode(Self.restorationOriginal(original ?? [:], path: path, root: root)),
+          original: try Self.encode(
+            Self.restorationOriginal(original ?? [:], path: path, root: root)),
           created: original == nil, observeOnly: true))
     }
     let restorationRoot = root
-    let selection = try Self.selection()
     for path in paths where !retained.contains(where: { $0.path == path }) {
       let existing = Self.node(root, path: path)
       var node = existing ?? [:]
@@ -197,35 +222,38 @@ final class LockScreenWallpaperSelection {
     }
     fallbackPaths += [["SystemDefault"], ["AllSpacesAndDisplays"]]
     for key in ["Desktop", "Idle"] where owns(node[key]) {
-      guard let replacement = fallbackPaths.lazy
-        .filter({ $0 != path })
-        .compactMap({ Self.node(root, path: $0)?[key] as? [String: Any] })
-        .first(where: { value in
-          guard !owns(value), let content = value["Content"] as? [String: Any],
-            let choices = content["Choices"] as? [[String: Any]], !choices.isEmpty
-          else { return false }
-          return choices.allSatisfy {
-            guard let provider = $0["Provider"] as? String else { return false }
-            return !provider.isEmpty && provider != LockScreenConfiguration.extensionIdentifier
-          }
-        })
+      guard
+        let replacement = fallbackPaths.lazy
+          .filter({ $0 != path })
+          .compactMap({ Self.node(root, path: $0)?[key] as? [String: Any] })
+          .first(where: { value in
+            guard !owns(value), let content = value["Content"] as? [String: Any],
+              let choices = content["Choices"] as? [[String: Any]], !choices.isEmpty
+            else { return false }
+            return choices.allSatisfy {
+              guard let provider = $0["Provider"] as? String else { return false }
+              return !provider.isEmpty && provider != LockScreenConfiguration.extensionIdentifier
+            }
+          })
       else {
         throw LockScreenWallpaperFailure(
           message:
-            "A native wallpaper selection has no restoration journal or surviving system fallback. Choose a system wallpaper for this display before enabling Animate Lock Screen.")
+            "A native wallpaper selection has no restoration journal or surviving system fallback. Choose a system wallpaper for this display before enabling Animate Lock Screen."
+        )
       }
       original[key] = replacement
     }
     return original
   }
 
-  private static func selection() throws -> [String: Any] {
+  private static func selection(revision: String?) throws -> [String: Any] {
     [
       "Content": [
         "Choices": [
           [
             "Provider": LockScreenConfiguration.extensionIdentifier,
-            "Configuration": Data("current".utf8), "Files": [String](),
+            "Configuration": Data((revision.map { "current:" + $0 } ?? "current").utf8),
+            "Files": [String](),
           ]
         ],
         "Shuffle": "$null", "EncodedOptionValues": try encode(["values": [String: Any]()]),

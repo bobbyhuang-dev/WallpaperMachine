@@ -6,12 +6,15 @@ from pathlib import Path
 import subprocess
 import sys
 
+from glyphs import markers
+
 ROOT = Path(__file__).resolve().parents[1]
 RENDERER = ROOT / "upstream/renderer"
+MARK = markers()
 
 
 def run(args, cwd=ROOT, env=None):
-    print("+", " ".join(map(str, args)), flush=True)
+    print(MARK.step, " ".join(map(str, args)), flush=True)
     subprocess.run(list(map(str, args)), cwd=cwd, env=env, check=True)
 
 

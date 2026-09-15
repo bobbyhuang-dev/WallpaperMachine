@@ -32,6 +32,7 @@ constexpr std::string_view G_AUDIO_SPECTRUM64_RIGHT = "g_AudioSpectrum64Right";
 } // namespace
 
 void WPShaderValueUpdater::FrameBegin() {
+    for (auto& group : m_puppetAttachments) UpdatePuppetAttachments(group);
     /*
         using namespace std::chrono;
         auto nowTime = system_clock::to_time_t(system_clock::now());
@@ -49,6 +50,22 @@ void WPShaderValueUpdater::FrameBegin() {
 }
 
 void WPShaderValueUpdater::FrameEnd() {}
+
+void WPShaderValueUpdater::RegisterPuppetAttachments(
+    WPPuppetLayer layer, std::vector<PuppetAttachment> attachments) {
+    auto& group = m_puppetAttachments.emplace_back(
+        PuppetAttachmentGroup { std::move(layer), std::move(attachments) });
+    UpdatePuppetAttachments(group);
+}
+
+void WPShaderValueUpdater::UpdatePuppetAttachments(PuppetAttachmentGroup& group) {
+    const auto bones = group.layer.genFrame(m_scene->elapsingTime);
+    for (const auto& attachment : group.attachments) {
+        if (attachment.node == nullptr || attachment.bone_index >= bones.size()) continue;
+        attachment.node->SetAttachmentTransform(
+            (bones[attachment.bone_index] * attachment.bind_transform).matrix().cast<double>());
+    }
+}
 
 void WPShaderValueUpdater::MouseInput(double x, double y) {
     using namespace std::chrono;

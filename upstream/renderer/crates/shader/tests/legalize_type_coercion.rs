@@ -11,6 +11,23 @@ fn legalize(stage: ShaderStageKind, source: &str) -> CodegenStageSource {
 }
 
 #[test]
+fn user_scalar_argument_conversion_preserves_vector_overloads() {
+    let source = concat!(
+        "float blendAmount(float amount) { return amount; }\n",
+        "vec3 blendAmount(vec3 amount) { return amount; }\n",
+        "void main() {\n",
+        "    vec3 color = vec3(0.25, 0.5, 0.75);\n",
+        "    gl_FragColor = vec4(blendAmount(color).yz, 0.0, 1.0);\n",
+        "}\n",
+    );
+    let legalized = legalize(ShaderStageKind::Fragment, source);
+    let artifact = NagaCompiler
+        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .expect("vector overload must remain selected for vector arguments");
+    assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
+}
+
+#[test]
 fn type_coercion_strategy_widens_vec2_constructor_in_vec3_binary_expression() {
     let source = concat!(
         "void main() {\n",

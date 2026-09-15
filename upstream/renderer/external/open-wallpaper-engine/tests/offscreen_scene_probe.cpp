@@ -135,12 +135,35 @@ void ReadImage(Device& device, vvk::CommandBuffer& command, const ImageParameter
 }
 int main() {
     try {
+        const auto started = std::chrono::steady_clock::now();
+        const auto milestone = [&](const char* name) {
+            std::cout << "startup " << name << " ms="
+                      << std::chrono::duration<double, std::milli>(
+                             std::chrono::steady_clock::now() - started).count()
+                      << std::endl;
+        };
         const char* project = std::getenv("WE_TEST_PROJECT");
         const char* assets = std::getenv("WE_TEST_ASSETS");
         const char* output = std::getenv("WE_TEST_OUTPUT");
         Check(project && assets && output, "Set WE_TEST_PROJECT, WE_TEST_ASSETS, WE_TEST_OUTPUT");
         const std::filesystem::path out(output);
         std::filesystem::create_directories(out);
+        int frame_count = 3;
+        if (const char* value = std::getenv("WE_TEST_FRAMES")) {
+            const std::string_view text(value);
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), frame_count);
+            Check(parsed.ec == std::errc {} && parsed.ptr == text.data() + text.size() &&
+                      frame_count >= 1 && frame_count <= 3600,
+                  "WE_TEST_FRAMES must be 1..3600");
+        }
+        double frame_step = 0.0;
+        if (const char* value = std::getenv("WE_TEST_FRAME_STEP")) {
+            char* end = nullptr;
+            frame_step = std::strtod(value, &end);
+            Check(end != value && *end == '\0' && std::isfinite(frame_step) &&
+                      frame_step > 0.0 && frame_step <= 1.0,
+                  "WE_TEST_FRAME_STEP must be >0 and <=1 seconds");
+        }
         const char* audio_hz_env = std::getenv("WE_TEST_AUDIO_HZ");
         double      audio_hz     = 0.0;
         if (audio_hz_env) {
@@ -174,6 +197,7 @@ int main() {
             .project_properties = &properties, .pkg_version = PackageVersion(paths.pkg_path),
         }, source->ReadAllStr(), vfs, sound);
         Check(scene != nullptr, "parse scene");
+        milestone("parsed");
         if (audio_hz_env) {
             const char* enabled = std::getenv("WE_TEST_AUDIO_ENABLED");
             scene->runtime->SetAudioResponseEnabled(! enabled || std::string_view(enabled) != "0");
@@ -265,9 +289,11 @@ int main() {
                 }
             }
         }
+        milestone("prepared");
         auto result = device.tex_cache().Query(std::string(SpecTex_Default), ToTexKey(*scene->FindRenderTarget(SpecTex_Default)), true);
         Check(result.has_value(), "result target");
-        for (int frame = 0; frame < 3; ++frame) {
+        for (int frame = 0; frame < frame_count; ++frame) {
+            scene->shaderValueUpdater->FrameBegin();
             if (audio_hz_env) {
                 // Synthetic PCM only. Submit after GPU setup so the live-input
                 // timeout cannot expire while shaders/pipelines are compiling.
@@ -287,23 +313,33 @@ int main() {
                       "synthetic PCM was not analyzed");
                 scene->paritileSys->Emitt();
             }
-            scene->runtime->Tick(1.0 / 60.0);
+            scene->runtime->Tick(frame_step > 0.0 ? frame_step : 1.0 / 60.0);
             // Same update/upload ordering as the production renderer initially.
             Begin(rr.command);
             vertices.recordUpload(rr.command);
             dynamic.recordUpload(rr.command);
             if (!std::getenv("WE_TEST_DUMP_PASSES")) ExecuteBatched(device, rr, passes);
-            else for (auto* pass : passes) {
-                pass->execute(device, rr);
-                if (auto* custom = dynamic_cast<CustomShaderPass*>(pass)) {
-                    Submit(device, rr.command);
-                    ReadImage(device, rr.command, custom->desc().vk_output, out / ("pass-" + std::to_string(custom->desc().node->ID()) + ".ppm"));
-                    Begin(rr.command);
+            else {
+                int pass_index = 0;
+                for (auto* pass : passes) {
+                    pass->execute(device, rr);
+                    if (auto* custom = dynamic_cast<CustomShaderPass*>(pass)) {
+                        Submit(device, rr.command);
+                        // Sequence-indexed so every pass survives; node ids repeat.
+                        ReadImage(device, rr.command, custom->desc().vk_output,
+                                  out / ("pass-" + std::to_string(pass_index) + "-node" +
+                                         std::to_string(custom->desc().node->ID()) + ".ppm"));
+                        Begin(rr.command);
+                    }
+                    ++pass_index;
                 }
             }
             Submit(device, rr.command);
             ReadImage(device, rr.command, *result, out / ("frame-" + std::to_string(frame) + ".ppm"));
-            if (audio_hz_env) scene->PassFrameTime(1.0 / 60.0);
+            if (frame == 0) milestone("first-frame");
+            if (frame_step > 0.0 || audio_hz_env)
+                scene->PassFrameTime(frame_step > 0.0 ? frame_step : 1.0 / 60.0);
+            scene->shaderValueUpdater->FrameEnd();
         }
         for (auto* pass : passes) pass->destory(device, rr);
         device.handle().WaitIdle();

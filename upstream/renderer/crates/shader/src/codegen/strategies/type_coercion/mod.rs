@@ -4,7 +4,7 @@
 mod assignment;
 /// Binary expression vector width coercions.
 mod binary;
-/// Builtin function call argument coercions.
+/// Builtin and user function call argument coercions.
 mod calls;
 /// Declaration initializer vector coercions.
 mod initializer;
@@ -70,7 +70,7 @@ impl Emitable for TypeCoercionStrategy {
         let mut functions = types::FunctionTypeBindings::default();
         functions.collect(token_facts.function_signatures());
         let mut vector_facts =
-            VectorTypeBindings::new(&scoped_facts, &context.context().declarations);
+            VectorTypeBindings::new(&scoped_facts, &context.context().declarations, tokens);
         vector_facts.functions = functions.items;
         let function_calls = context
             .context()
@@ -99,6 +99,10 @@ impl Emitable for TypeCoercionStrategy {
             .emit(context, tokens);
         }
 
+        for call in &function_calls {
+            calls::narrow_user_scalar_arguments(context, tokens, call, &vector_facts, &token_facts);
+        }
+
         let mut declarations = NarrowVectorInitializers {
             facts: &vector_facts,
             items: Vec::new(),
@@ -121,7 +125,7 @@ impl Emitable for TypeCoercionStrategy {
         }
 
         let mut scalar_initializers = VectorScalarInitializers::default();
-        scalar_initializers.collect(tokens, &token_facts);
+        scalar_initializers.collect(tokens, &token_facts, &vector_facts);
         for initializer in scalar_initializers.items {
             initializer.emit(context);
         }

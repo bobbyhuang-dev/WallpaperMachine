@@ -69,6 +69,12 @@ public:
     void        SetVisible(bool visible) { m_visible = visible; }
     void        SetSkipRenderPass(bool skip) { m_skipRenderPass = skip; }
 
+    void SetAttachmentTransform(const Eigen::Matrix4d& transform) {
+        if (m_attachmentTransform && m_attachmentTransform->isApprox(transform, 1.0e-10)) return;
+        m_attachmentTransform = transform;
+        MarkTransDirty();
+    }
+
     void CopyTrans(const SceneNode& node) {
         m_translate = node.m_translate;
         m_scale     = node.m_scale;
@@ -116,6 +122,7 @@ private:
     Eigen::Vector3f m_scale { 1.0f, 1.0f, 1.0f };
     Eigen::Vector3f m_rotation { 0.0f, 0.0f, 0.0f };
     std::optional<Eigen::Matrix4d> m_renderTransformOverride {};
+    std::optional<Eigen::Matrix4d> m_attachmentTransform;
 
     std::shared_ptr<SceneMesh> m_mesh;
 

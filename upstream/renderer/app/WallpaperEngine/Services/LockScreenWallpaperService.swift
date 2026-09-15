@@ -153,10 +153,11 @@ final class LockScreenWallpaperService {
         errorMessage = nil
         return
       }
-      if inputs == lastInputs, isEnabled {
-        // Still reconcile new Spaces and detect external native selections,
-        // but neither recopy assets nor rewrite/restart for ordinary snapshots.
-        try selection.synchronize(displays: Set(inputs.map(\.displayUUID)))
+      if inputs == lastInputs, isEnabled, let published {
+        // Reconcile new Spaces using the same native choice identity. Ordinary
+        // snapshots must not invalidate thumbnails or reload WallpaperAgent.
+        try selection.synchronize(
+          displays: Set(inputs.map(\.displayUUID)), revision: published.revision)
         status = "Enabled for \(inputs.count) display(s)"
         errorMessage = nil
         return
@@ -184,7 +185,8 @@ final class LockScreenWallpaperService {
         ownsDesktopProvider = true
       }
       try publish(configuration)
-      try selection.synchronize(displays: Set(inputs.map(\.displayUUID)))
+      try selection.synchronize(
+        displays: Set(inputs.map(\.displayUUID)), revision: configuration.revision)
       status = "Waiting for the system wallpaper renderer…"
       try await awaitReadiness(configuration)
       lastInputs = inputs

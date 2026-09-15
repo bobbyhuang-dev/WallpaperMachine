@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <map>
@@ -1233,7 +1234,7 @@ float RootTranslationY(WPPuppetLayer& layer, double time) {
 
 } // namespace
 
-TEST(MdlSchema, AdditiveSingleAnimationUsesFinalFrameAsNeutralAndHolds) {
+TEST(MdlSchema, AdditiveSingleAnimationPreservesAuthoredPoseAndHolds) {
     auto puppet = BuildOneBonePuppet(WPPuppet::PlayMode::Single, 440.0f, 0.0f);
     auto layer = BuildAdditiveLayer(puppet);
 
@@ -1243,15 +1244,99 @@ TEST(MdlSchema, AdditiveSingleAnimationUsesFinalFrameAsNeutralAndHolds) {
     EXPECT_FLOAT_EQ(RootTranslationY(layer, 10.0), 0.0f);
 }
 
-TEST(MdlSchema, AdditiveLoopAnimationUsesFirstFrameAsNeutralAndWraps) {
-    auto puppet = BuildOneBonePuppet(WPPuppet::PlayMode::Loop, 440.0f, 0.0f);
+TEST(MdlSchema, AdditiveLoopPreservesInitialCollapsedPoseAndWraps) {
+    auto puppet = BuildOneBonePuppet(WPPuppet::PlayMode::Loop, 12.0f, 16.0f);
+    auto& frames = puppet->anims[0].bone_tracks[0].frames;
+    for (auto& frame : frames) frame.angle.z() = std::acos(-1.0f) / 2.0f;
+    frames[0].scale.y() = 0.0f;
+    puppet->prepared();
     auto layer = BuildAdditiveLayer(puppet);
+    const Eigen::Vector3f vertex(2, 3, 0);
 
-    EXPECT_FLOAT_EQ(RootTranslationY(layer, 0.0), 0.0f);
-    EXPECT_FLOAT_EQ(RootTranslationY(layer, 0.5), -220.0f);
-    EXPECT_FLOAT_EQ(RootTranslationY(layer, 1.0), 0.0f);
-    EXPECT_FLOAT_EQ(RootTranslationY(layer, 1.5), -220.0f);
-    EXPECT_FLOAT_EQ(RootTranslationY(layer, 10.0), 0.0f);
+    const Eigen::Vector3f initial = layer.genFrame(0)[0] * vertex;
+    EXPECT_NEAR(initial.x(), 0, 1e-5);
+    EXPECT_NEAR(initial.y(), 14, 1e-5);
+    const Eigen::Vector3f halfway = layer.genFrame(0.5)[0] * vertex;
+    EXPECT_NEAR(halfway.x(), -1.5, 1e-5);
+    EXPECT_NEAR(halfway.y(), 16, 1e-5);
+    EXPECT_TRUE((layer.genFrame(1)[0] * vertex).isApprox(initial, 1e-5));
+}
+
+TEST(MdlSchema, CharacterSheetReferencePoseSurvivesAdditiveMixingAndLoopWrap) {
+    auto puppet = BuildOneBonePuppet(WPPuppet::PlayMode::Loop, 12.0f, 16.0f);
+    auto& bone = puppet->bones[0];
+    bone.local_bind.translate(Eigen::Vector3f(0, 100, 0));
+    bone.local_reference.translate(Eigen::Vector3f(0, 10, 0));
+    bone.has_local_reference = true;
+    puppet->prepared();
+    WPPuppetLayer still(puppet);
+    still.prepared({});
+    const Eigen::Vector3f vertex(0, 103, 0);
+    EXPECT_NEAR((still.genFrame(0)[0] * vertex).y(), 13, 1e-5);
+    auto layer = BuildAdditiveLayer(puppet);
+    EXPECT_NEAR((layer.genFrame(0)[0] * vertex).y(), 15, 1e-5);
+    EXPECT_NEAR((layer.genFrame(0.5)[0] * vertex).y(), 17, 1e-5);
+    EXPECT_NEAR((layer.genFrame(1)[0] * vertex).y(), 15, 1e-5);
+    EXPECT_NEAR((layer.genFrame(1)[0] * vertex).y(), 15, 1e-5);
+    WPPuppetLayer::AnimationLayer a;
+    a.id = 1;
+    a.additive = true;
+    a.blend = 0.5;
+    std::array layers { a, a };
+    WPPuppetLayer mixed(puppet);
+    mixed.prepared(layers);
+    EXPECT_NEAR((mixed.genFrame(0)[0] * vertex).y(), 15, 1e-5);
+}
+
+TEST(MdlSchema, FullWeightAnimationReplacesRotatedReferencePose) {
+    auto puppet = BuildOneBonePuppet(WPPuppet::PlayMode::Loop, 0.0f, 0.0f);
+    auto& bone = puppet->bones[0];
+    const float quarter_turn = std::acos(-1.0f) / 2.0f;
+    bone.local_bind.rotate(Eigen::AngleAxisf(quarter_turn, Eigen::Vector3f::UnitX()));
+    for (auto& frame : puppet->anims[0].bone_tracks[0].frames) {
+        frame.angle.z() = quarter_turn;
+    }
+    puppet->prepared();
+    auto layer = BuildAdditiveLayer(puppet);
+    const Eigen::Vector3f bind_vertex = bone.local_bind * Eigen::Vector3f(1, 2, 3);
+    const Eigen::Vector3f result = layer.genFrame(0)[0] * bind_vertex;
+    EXPECT_TRUE(result.isApprox(Eigen::Vector3f(-2, 1, 3), 1e-5));
+}
+
+TEST(MdlSchema, Mdls2ReferencePoseReassemblesBindVerticesWithoutAnimation) {
+    Bytes b;
+    b.Stamp("MDL", 21);
+    b.U32(kSkinUvFlag);
+    b.U32(1);
+    b.U32(1);
+    WriteMesh(b, "mat/body.json", 10);
+    b.Stamp("MDLS", 2);
+    const auto end = b.Size();
+    b.U32(0);
+    b.U16(1);
+    b.U16(0);
+    b.Str("root");
+    b.I32(0);
+    b.U32(WPPuppet::NO_PARENT);
+    b.U32(64);
+    WriteTranslate3x4(b, 100, 200, 0);
+    b.Str("{}");
+    b.U16(0);
+    b.U8(1);
+    WriteTranslate3x4(b, 10, 20, 0);
+    for (int i = 0; i < 10; ++i) b.U8(0);
+    b.PatchU32(end, static_cast<uint32_t>(b.Size()));
+    b.Stamp("MDLA", 0);
+    b.U8(0);
+    fs::VFS vfs;
+    MountMdlFixture(vfs, b.Take());
+    WPMdl mdl;
+    ASSERT_TRUE(WPMdlParser::Parse("sample.mdl", vfs, mdl));
+    WPPuppetLayer layer(mdl.puppet);
+    layer.prepared({});
+    const Eigen::Vector3f result = layer.genFrame(0)[0] * Eigen::Vector3f(103, 204, 0);
+    EXPECT_NEAR(result.x(), 13, 1e-5);
+    EXPECT_NEAR(result.y(), 24, 1e-5);
 }
 
 TEST(MdlSchema, ParsesMdlv21PartsBeforeMdlsAndMultipleMeshes) {

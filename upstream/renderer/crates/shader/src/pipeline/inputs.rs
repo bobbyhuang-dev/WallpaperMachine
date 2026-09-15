@@ -42,7 +42,11 @@ impl<'src> ProgramStageInputs<'src> {
                 Ok(ProgramStageInput {
                     stage,
                     module: ProgramStageInput::parse(stage)?,
-                    metadata_module: ProgramStageInput::parse(metadata_stage)?,
+                    metadata_module: ParsingContext::new(
+                        metadata_stage.kind(),
+                        ShaderSourceText::new(metadata_stage.source()),
+                    )?
+                    .parse_metadata()?,
                 })
             })
             .collect::<ShaderResult<Vec<_>>>()?;
@@ -119,6 +123,62 @@ mod tests {
             err.to_string()
                 .contains("preprocessed stage kind does not match metadata stage kind")
         );
+    }
+
+    #[test]
+    fn metadata_preserves_uniforms_around_conditional_function_headers() {
+        let source = concat!(
+            "// [COMBO] {\"combo\":\"ROTATION\",\"default\":0}\n",
+            "#if ROTATION\n",
+            "uniform float g_Rotated; // {\"default\":2}\n",
+            "#else\n",
+            "uniform float g_Plain; // {\"default\":1}\n",
+            "#endif\n",
+            "#if ROTATION\n",
+            "vec2 direction(vec4 value) {\n",
+            "    vec2 result = value.xy;\n",
+            "#else\n",
+            "vec2 direction(vec2 value) {\n",
+            "    vec2 result = value;\n",
+            "#endif\n",
+            "#if ROTATION\n",
+            "    if (result.x > 0.0) {\n",
+            "#else\n",
+            "    if (result.y > 0.0) {\n",
+            "#endif\n",
+            "        result *= 2.0;\n",
+            "    }\n",
+            "    return result;\n",
+            "}\n",
+            "uniform float g_After; // {\"default\":3}\n",
+            "void main() { gl_FragColor = vec4(1.0); }\n",
+            "uniform float g_Ignored; // {\"default\":4}\n",
+        );
+        let metadata_sources = [PreprocessedStage::new(
+            ShaderStageKind::Fragment,
+            source.to_owned(),
+        )];
+        let stages = [stage(ShaderStageKind::Fragment)];
+        let inputs = ProgramStageInputs::new(&stages, &metadata_sources)
+            .expect("alternative function headers share their body in metadata sources");
+        let metadata = inputs.stages()[0]
+            .metadata_module
+            .extract_metadata(&[])
+            .expect("metadata extracts from every conditional branch");
+
+        assert_eq!(
+            metadata
+                .default_uniforms()
+                .iter()
+                .map(|uniform| uniform.uniform())
+                .collect::<Vec<_>>(),
+            ["g_Rotated", "g_Plain", "g_After"]
+        );
+        assert_eq!(metadata.combos()[0].name().as_str(), "ROTATION");
+        assert_eq!(metadata.combos()[0].value(), "0");
+
+        // Compiled sources still require ordinary balanced syntax.
+        assert!(ProgramStageInputs::new(&metadata_sources, &metadata_sources).is_err());
     }
 
     fn stage(kind: ShaderStageKind) -> PreprocessedStage {

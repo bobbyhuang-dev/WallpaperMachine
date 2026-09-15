@@ -69,6 +69,19 @@ impl InterfaceUseFacts {
         self.declaration_span
     }
 
+    /// Returns the minimum prefix width required by explicit component reads.
+    #[must_use]
+    pub fn required_swizzle_width(&self) -> u8 {
+        self.references
+            .iter()
+            .filter_map(|reference| match reference {
+                InterfaceReference::Swizzle { required_width } => Some(*required_width),
+                InterfaceReference::PlainAssignment | InterfaceReference::PlainRead => None,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Returns true when all stage references stay within `width`.
     #[must_use]
     pub fn is_prefix_compatible(&self, width: u8) -> bool {

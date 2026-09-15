@@ -76,7 +76,9 @@ StagingBuffer::VirtualBlock* StagingBuffer::newVirtualBlock(VkDeviceSize nsize) 
 
         m_virtual_blocks.push_back({});
         it         = m_virtual_blocks.end() - 1;
-        it->size   = nsize > m_size_step ? nsize : m_size_step;
+        // Geometric blocks keep scene preparation amortized linear rather than
+        // copying all previous vertices for every small allocation.
+        it->size   = std::max({nsize, m_size_step, offset});
         it->index  = (size_t)std::distance(m_virtual_blocks.begin(), it);
         it->offset = offset;
     }
@@ -94,22 +96,20 @@ bool StagingBuffer::increaseBuf(VkDeviceSize nsize) {
     if (m_stage_raw == nullptr) {
         VVK_CHECK_BOOL_RE(mapStageBuf());
     }
-    auto newsize = m_stage_buf.req_size + nsize;
-    // do double copy
-    std::vector<uint8_t> tmp;
-    tmp.resize(newsize);
-    memcpy(tmp.data(), m_stage_raw, m_stage_buf.req_size);
-
-    m_stage_raw = nullptr;
+    const auto oldsize = m_stage_buf.req_size;
+    const auto newsize = oldsize + nsize;
+    VmaBufferParameters replacement;
+    if (! CreateStagingBuffer(m_device.vma_allocator(), newsize, replacement)) return false;
+    void* replacement_raw = nullptr;
+    VVK_CHECK_BOOL_RE(replacement.handle.MapMemory(&replacement_raw));
+    // Keep the original allocation intact on failure; copy only its bytes,
+    // directly into the replacement instead of zeroing and copying a CPU vector.
+    memcpy(replacement_raw, m_stage_raw, oldsize);
     m_stage_buf.handle.UnMapMemory();
-    m_stage_buf.handle = nullptr;
-
-    if (! CreateStagingBuffer(m_device.vma_allocator(), newsize, m_stage_buf)) return false;
-    VVK_CHECK_BOOL_RE(mapStageBuf());
-    memcpy(m_stage_raw, tmp.data(), newsize);
-
+    m_stage_buf = std::move(replacement);
+    m_stage_raw = replacement_raw;
     m_gpu_buf.handle = nullptr;
-    m_dirty          = true;
+    m_dirty = true;
     return true;
 }
 

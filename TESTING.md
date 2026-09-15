@@ -25,9 +25,10 @@ fake client: they never contact GitHub, download a real archive, or replace the
 running app. They cover version comparison, asset selection, host allowlisting,
 progress clamping, classified errors, and install retry/timeout. Live GitHub
 checks, archive extraction, and Applications replacement remain a manual smoke. Download
-tests exercise three simultaneous private terminals, per-item secrets and
-cancellation, duplicate-click suppression, FIFO slot handoff after failure/cancel,
-shutdown without launching queued work, and protection against stale credential
+tests exercise serial private terminals, per-job secrets, saved-sign-in handoff to
+the next job, cancellation, duplicate-click suppression, FIFO handoff after
+failure/cancel, shutdown without launching queued work, staging reclaim limited to
+directories nothing is writing to, and protection against stale credential
 rejections erasing a newer session. Import tests cover complete atomic adoption,
 concurrent destinations, and rejection of linked, special, or incomplete content.
 Workshop service tests cover search and pagination beneath the UI (two tests use live Steam
@@ -37,6 +38,17 @@ Deterministic Workshop tests additionally cover committed-query pagination,
 superseded requests, cancellation, and exact failed-request retry through the real
 page parser. Editor-state tests cover locale-specific scaling, invalid raw text,
 and independent wallpaper/field drafts.
+
+Download-flow verification (2026-09-15): `python3 scripts/test.py` passed all
+162 native tests and 34 Python script tests. Evidence:
+`build/Tests-20260915-232543-966074.xcresult`. Retained-intent tests cover
+setup/account progression, explicit shared-resource consent (including reinstall),
+resource-job deduplication, account correction, and removal preventing resumption.
+The bundled WKWebView regression opens no window and checks setup dismissal,
+snapshot updates without reopening, resumption, and request removal. Queue tests
+exercise saved-session handoff through local PTY fixtures, not a real Steam account.
+JavaScript syntax checks passed. Desktop visual presentation and live Steam
+authentication/downloads remain unverified; no Release build was performed.
 
 SteamCMD setup tests use isolated preferences/directories, URLProtocol archives,
 real system tar, and owned child processes. They cover publication/replacement,
@@ -57,10 +69,52 @@ and explicit discard. The installation-to-downloader regression launches the
 published executable through the real PTY downloader and asserts imported manifest
 and media bytes; it does not use a separate prebuilt runtime folder.
 
+SteamCMD universal-signature regression (2026-09-15): macOS `codesign --verify
+--deep --strict` returned an internal error for the installed Valve-signed
+`steamclient.dylib`, while explicit Intel and ARM slice verification both passed.
+Runtime validation now checks every CPU/subtype independently, retains deep
+framework resource checks, and leaves Gatekeeper and content-bound approval intact.
+The read-only production-service smoke passed all installed-runtime signatures and
+stopped at the existing macOS approval gate; it did not execute or modify SteamCMD.
+Evidence: `build/verification/steamcmd-signatures/validation.log`.
+
+All 13 `SteamCMDApprovalTests` passed in an isolated XCTest bundle built from the
+production runtime/runner and the existing test file (`regressions.log` in that
+directory). The new universal-library regression uses disposable signed fixtures,
+rejects corruption in either architecture even with an existing approval, and fails
+with the old combined-verification loop (`before-regression.log`). The normal
+`scripts/test.py` run and Swift-only Release build were attempted but blocked by
+concurrent `WebControlPanel.swift` compilation errors at lines 107 and 126; the app
+was not updated. Native test bundle: `build/Tests-20260915-215713-080771.xcresult`.
+Desktop presentation and a real Workshop download were not exercised.
+
+WebKit interface migration (2026-09-15): `python3 scripts/test.py` passed all 152
+native tests in `build/Tests-20260915-223145-387538.xcresult`, and
+`python3 scripts/build.py --swift-only --configuration Release` succeeded,
+updating `build/Build/Products/Release/MacWallpaperEngine.app` (quit and reopen
+the app to load it). The bundled interface was additionally exercised outside the
+app against a synthetic state fixture in a local browser: tab routing, tag
+filtering re-querying the Workshop, property and display actions carrying their
+identifiers, and layout at 1240×800 and 760×560 without horizontal overflow. That
+fixture proves markup and script behavior only, with placeholder thumbnails; real
+previews, desktop presentation, downloads, and the XCUITest suite were not
+exercised.
+
 Control-panel layout tests measure offscreen NSHostingController proposals at
-760×560, 960×640, and 1240×800, long display menus, and English/Chinese empty-state
-reflow. They create no window, take no screenshot, and do not start the renderer.
-They establish layout bounds, not visual or desktop-integration correctness.
+760×560, 960×640, and 1240×800 in English and Chinese, asserting the root accepts
+each window width without forcing a taller window. A companion offscreen WKWebView
+regression loads the bundled interface under its custom scheme, waits for the
+native reply bridge, routes a `navigate` message to Settings (checking the returned
+page, the visible settings panel, the Discover/Installed/Settings tabs, and the
+native navigation selection), and asserts a non-allowlisted external URL is
+rejected. Both open no window, take no screenshot, and start no renderer.
+They establish layout and bridge bounds, not visual or desktop-integration
+correctness.
+
+A third regression drives the reply bridge's `dismissError` command directly: a
+library-refresh failure and a download failure raised through the real download
+path are reported once, stay suppressed in later snapshots after dismissal, and
+surface again when the same failure recurs after a successful refresh.
 
 Native desktop-poster tests use synthetic renderer pixels and an in-memory
 workspace. They cover lossless PNG dimensions/channel order/orientation, malformed
@@ -79,7 +133,44 @@ Coordinator tests use unattached
 CAMetalLayers and injected notification/encoding services; they never create a
 window, initialize a renderer, or call the real wallpaper setter.
 
+## Wallpaper properties
+
+The bridge exposes authored combo labels and editable values to native menu
+pickers. Property snapshots evaluate authored visibility conditions against all
+effective draft values, so language-specific rows follow the wallpaper's language
+selector. Hidden values remain in the draft; switching languages does not erase
+them. Informational text properties are displayed as labels.
+
+Bridge regressions in `tests::property_snapshot` cover combo selection, conditional
+rows after edits/default restoration/discard, hidden-value preservation, and
+malformed-condition fail-open behavior. From `upstream/renderer`, run
+`cargo test --release -p wallpaper-bridge --lib` with the Homebrew environment in
+`scripts/build.py`.
+
+A read-only Lonely Cat probe exercised all six authored language options through
+the headless bridge: each returned its matching 13 properties, and every visible
+combo contained its current selection. `build/verification/property-bridge.log`
+records 202 passing checks (201 permanent tests plus the removed local-asset probe).
+No desktop, wallpaper setter, or real UI was exercised. Manually check the Language,
+Clock Location, and Bar Style menus and language-row changes after reopening the app.
+
+Native verification passed all 86 tests in
+`build/Tests-20260915-161710-193905.xcresult`. The full
+`python3 scripts/build.py --configuration Release` build succeeded, regenerating
+Swift bindings and updating `build/Build/Products/Release/MacWallpaperEngine.app`.
+Quit and reopen the app to load this build.
+
 ## Audio responsiveness
+
+Audio Response defaults to enabled for new wallpaper configurations and missing
+saved fields; an explicitly saved `false` remains disabled. The application-level
+preference controls activation; low-level renderer and lock-screen extension
+defaults remain disabled so they do not independently opt into audio capture.
+A device-free configuration smoke run verified missing-field handling and saved
+opt-out round trips. The default-scene activation test verifies capture starts
+without a manual toggle. The bridge run passed 201 tests; the separate
+`local_lonely_cat_language_smoke` probe failed because its private project-path
+environment variable was absent, not because of audio behavior.
 
 Device-free evidence: `build/verification/audio-20260915-121238/report.json`.
 The synthetic 234.375 Hz tone changed a rendered tile's red channel from 26 to
@@ -119,7 +210,7 @@ expire its live-input timeout. These options never initialize audio hardware.
 
 Live system authorization, device switching, and desktop presentation were not
 tested. For an explicitly authorized manual smoke check, use an authored
-audio-reactive scene, enable Audio Response, grant system audio recording access,
+audio-reactive scene, leave Audio Response enabled, grant system audio recording access,
 play/pause music in another app, and check shader/script/particle response. Verify
 that mute affects wallpaper playback only, the final disabled/removed scene stops
 capture, and denied permission surfaces an error. Unimplemented non-audio scene
@@ -152,15 +243,78 @@ Coverage is based on rendering semantics, not workshop IDs:
 - The probe resolves each project's entry/package version and render dimensions;
   it discovers text nodes instead of using fixed layer IDs. It still tests scene
   rendering only, not video/web projects or AppKit presentation.
+- Puppet attachments use the animated bone affine each frame while preserving the
+  child layer's authored/script transform. Character-sheet reference poses are
+  decoded separately from cut-up bind geometry so additive and non-additive
+  animations reassemble correctly. Synthetic regressions cover declaration order,
+  animated translation/rotation/scale, repeated same-time samples and local edits.
+- Scalar material timelines preserve paused first keys and authored Bezier handles;
+  SceneScript named animation controls drive play/replay, pause, stop, seek and rate.
+  Puppet animation deltas use the skeleton reference pose, not the first animation
+  sample, preserving initially collapsed eyelids and authored rotations.
 
-Latest evidence: `build/verification/adaptive-20260915-021127/report.json`.
-All eight generated cases and three local scenes passed allocation pixel equality.
-Lonely Cat and Acheron Black Hole logged no renderer errors. The Sparkle scene
-still logs unrelated shader failures for Sine Wave Circle, Multistage Wave and
-Tone mapping. Its allocation check passed, **not** full wallpaper compatibility.
-The report records these diagnostics separately; optional real assets are not
-claimed fully correct without authored references. No live audio or desktop
-interaction was tested. The full native app suite and Release build also passed.
+Animation-fix evidence: `build/verification/render-animation-fix/` contains private
+before/after GPU frames. The corrected scene rendered 71 samples at 0.1-second
+intervals; inspected samples show no permanent chromatic distortion or triangular
+face artifact during blinking. Authored background shake remains enabled.
+All 44 model schema tests, two timeline runtime regressions and the parser-to-material
+timeline regression passed. The broader 133-case scene/script/text run had one
+known failure (`HostVectorUpdatesDoNotCallMutableGlobalVectorConstructors`) and two
+asset-dependent skips. No desktop automation was used.
+`build/verification/adaptive-20260915-215052/report.json` records eight generated
+scenes and Sparkle passing pooled/isolated pixel equality without diagnostics,
+plus repeated scene-load checks. The full Release application build succeeded.
+
+- `scene_reload_cycle_probe` parses every selected project twice in one process,
+  each parse on a fresh thread with fresh VFS mounts, the way a wallpaper switch
+  builds a new `SceneWallpaper`. It catches per-process state that survives a
+  scene teardown and stalls the next load; a stall is reported as a probe
+  timeout. It covers scene parsing and script compilation only, not presentation.
+
+Latest evidence: `build/verification/adaptive-20260915-214143/report.json`.
+All eight generated cases and two local scenes passed allocation pixel equality
+without renderer diagnostics. The Sparkle scene also rendered 150 60 FPS samples
+and a 240-frame 30 FPS cycle through `offscreen_scene_probe`; sampled output shows
+the attached mask/body and character-sheet pieces assembled, with no renderer
+errors. Reload cycles passed for both local scenes. This proves offscreen
+animation and reload state, not desktop presentation or audio.
+The Release application build succeeded at `build/Build/Products/Release/`.
+
+### Large-scene first-frame startup
+
+The surface-free `offscreen_scene_probe` reports `startup parsed`, `prepared`,
+and `first-frame` timings. Use a fresh `WE_TEST_OUTPUT` directory for a cold
+shader-cache run and repeat the same output directory for a warm run.
+No application windows, audio devices, or desktop wallpaper setters are used.
+
+The Sparkle apply-timeout investigation identified quadratic staging-buffer
+growth: each fixed-size extension zeroed a temporary CPU vector and copied the
+entire previous allocation twice. Geometric blocks and direct replacement-buffer
+copying preserve existing offsets/data without that repeated work. The 20-second
+Apply deadline and rollback behavior remain unchanged.
+
+Evidence in `build/verification/sparkle-fix/`: the original probe produced its
+first image at about 43.2 seconds; the allocator-only repair (without the discarded
+pipeline-cache experiment) reached its first frame at 4.31 seconds. Three rendered
+frames before/after the allocation change were byte-identical. These are private
+GPU results, not verification of desktop presentation.
+
+The final shader repair also handles undersized cross-stage varying declarations,
+conditional helper headers, source-defined `log10`, legacy scalar/vector argument
+conversion, compound assignment narrowing, and scalar initializer conversion.
+Shader pipeline revision 4 invalidates old compiled programs. The final Sparkle
+probe logs no shader/effect errors: cold first frame 5.00 seconds, warm 2.41 seconds
+(`scene-ready-cold.log`, `scene-ready-warm.log`). The portable Rust shader suite
+passes; the three existing asset-dependent pipeline cases for genericimage4 and
+Workshop 3414858021 were excluded because their referenced files are absent.
+Generated pooled/isolated renderer checks also passed all eight pixel cases.
+
+Delivery build: `python3 scripts/build.py --configuration Release` succeeded.
+Native verification (`build/Tests-20260915-162715-751354.xcresult`) ran 87 tests:
+86 passed; `LockScreenWallpaperTests.testWallpaperRevisionInvalidatesEverySpaceAndKeepsRestorationOriginals`
+failed its configuration-data inequality assertion. That test exercises native
+selection fixtures, not the shader or staging-buffer paths changed here; it was
+not altered as part of this renderer fix. Desktop presentation remains untested.
 
 ### Original Lonely Cat regression
 
@@ -240,6 +394,36 @@ or bottom band. Private before/after evidence is under
 `build/verification/firefly-{before,after}`; no private asset is checked in.
 This is an offscreen GPU check, not proof of desktop/AppKit behavior.
 
+## Translucent coverage regression (red contours around soft art edges)
+
+`SetBlend` used `VK_BLEND_FACTOR_SRC_ALPHA` for both the color and the alpha
+factor of `BlendMode::Translucent`, so every translucent draw wrote
+`As*As + Ad*(1-As)` instead of source-over's `As + Ad*(1-As)`. Partially covered
+texels therefore lost coverage each time a layer was composited, and nested
+compose layers multiplied the loss. Wherever the puppet's own parts overlap along
+a soft (anti-aliased) seam, the deficit let the layer's background show through as
+a thin saturated line: the reported red outline around the eyes, nose bridge and
+cheek patches of `3226487183`. The color factors are unchanged, so opaque and
+fully transparent texels render exactly as before; only alpha accumulation is
+corrected. This is a renderer-wide compositing fix, not a per-wallpaper rule.
+
+`scripts/test-renderer.py` grows a ninth generated GPU scene (`generated-alpha`)
+that composites a half-covered source over transparent, half-covered and opaque
+destinations inside a compose layer, then samples the composed alpha back as RGB.
+Expected readback is 128/191/255; the pre-fix binary produced 64/96/191 and fails
+the case. It uses only synthetic shaders and no workshop content.
+
+Private before/after evidence for the reported scene is
+`build/verification/eye-outline/{crop,frame}-{prefix,postfix}.png` with a
+red-excess contour metric of 10509 px before and 3395 px after (the remainder is
+authored eyeliner, not a contour). The full matrix plus that scene passed in
+`build/verification/adaptive-20260915-235447/report.json` (pooled/isolated pixel
+equality, no diagnostics, reload cycles clean), and local scenes `3799253558`,
+`2309704117`, `3219398263`, `3299228616` still render without new diagnostics
+(their MDLA, Rust `light_map` compile and shader-value alias errors are
+pre-existing and untouched by this change). Offscreen GPU only; desktop
+presentation remains unverified.
+
 ## Optional development tools
 
 See [docs/DEVELOPMENT-TOOLS.md](docs/DEVELOPMENT-TOOLS.md) for Peekaboo,
@@ -262,44 +446,56 @@ Perform these checks yourself when preparing a release, using disposable imports
 where needed. Note any checks skipped for unavailable hardware or assets.
 
 - Launch: one library window, starter wallpaper visible, no blank floating panels.
-- Navigate Library, Workshop, Display, and Settings. Command-comma should reuse
-  the existing window. Close and reopen the window without quitting or crashing.
+- Switch between the Discover, Installed, and Settings tabs, and through the five
+  Settings categories (General, Displays, Library & Steam, Storage, About).
+  Command-comma should reuse the existing window. Close and reopen the window
+  without quitting or crashing.
 - Open and cancel Import. Search for a nonexistent local title, clear the search,
-  and confirm the collection returns. Single-click a wallpaper and refresh:
-  selection should survive. Double-click must not close the window.
-- Check Library/Workshop at 1240×800, 960×640, and 760×560 in light/dark mode. Inspectors stay
-  present; panes resize without losing the target or primary actions. Command-F,
+  and confirm the collection returns. Select a wallpaper and refresh:
+  selection should survive. Selecting must not activate a wallpaper; Apply/Reapply
+  and double-click activate it, and double-click must not close the window.
+- Check Discover/Installed at 1240×800, 960×640, and 760×560 in light/dark mode.
+  The inspector stays present; panes resize without losing the target or primary
+  actions. Command-F,
   grid arrows, Return/Space, text editing, and VoiceOver names remain scoped correctly.
-- Search Workshop, edit an unsubmitted query, then advance a page: pagination must
+- Search Discover, edit an unsubmitted query, then advance a page: pagination must
   still use the displayed query. Submit to switch queries. Navigate away and back;
   query/page/selection should stay. A failed request's Retry repeats that request.
-  Open and dismiss download setup.
+  Open and dismiss the Downloads/Import pane.
+- Select tags in the Discover filter sidebar across the resolution, ultrawide/portrait,
+  genre, age-rating and category groups: results must only contain items matching every
+  selected tag, and Clear filters must restore the unfiltered query.
 - Select a target display and apply; other displays keep their assignments.
   Disconnected, disabled, or mirror targets are not silently redirected to primary.
   Pause/resume and relaunch; expected wallpaper/playback state should return.
 - Leave invalid scaling text, refresh or change routes, then return: preserve text
-  and disable Apply Changes. Return stages only that field, not unrelated properties.
+  and disable Apply changes. Return stages only that field, not unrelated properties.
   Check immediate audio/FPS/scaling-mode semantics versus pending Apply/Revert.
-- Install or locate SteamCMD in Settings and use the same runtime in Workshop
-  without restarting. Installation itself must not log in or start a download.
-  A blocked download remains present across relaunch/retry. Official signed CLI
-  SteamCMD should finish from Install without an extra Allow step. Only explicitly
+- Install or locate SteamCMD in Settings → Library & Steam or the download setup
+  dialog and use the same runtime without restarting. Installation itself must
+  not log in; a retained wallpaper request continues once its prerequisites are met.
+  Official signed CLI SteamCMD should finish from Install without an extra Allow
+  step. A blocked download remains present across relaunch/retry. Only explicitly
   confirm Allow This SteamCMD after checking the shown path/fingerprint and
   understanding the risk, when Gatekeeper actually rejects a copy. Global
-  Gatekeeper/signature checks remain enabled; updated bytes that fail policy need
-  another approval. Verify category-sidebar filters never activate wallpapers.
-- Queue at least four Workshop items. Confirm three active transfers and one
-  waiting item, then cancel one active item and check the queued item starts while
-  peers continue. Cancel queued work and confirm it never starts. Dismiss details,
-  change search/page, and reopen each transfer from Downloads for its own Steam
-  Guard prompt. Verify independent retry, completion, and scene-assets setup.
-  Saved sign-in settings stay locked until all pending work finishes; quitting
-  stops all transfers. Routine synthetic-process tests do not prove Steam CDN
-  throughput, simultaneous live-account authentication, or visual behavior.
-- Start a disposable download, close details and navigate elsewhere. The activity
-  bar restores its prompts; cancellation stops it without changing the old library.
-  Downloads do not auto-apply. Show in Library can reveal an item excluded by filters
-  and return to the original results; deleting it removes Workshop's installed badge.
+  Gatekeeper/signature checks remain enabled; updated bytes need
+  another approval. Verify filter changes never activate wallpapers.
+- Queue at least four Workshop items. Confirm one active transfer and the rest
+  waiting; cancel the active item and check the oldest queued item starts after
+  cleanup. Remove queued work and confirm it never starts. Complete one sign-in and
+  check that the next job attempts saved-session reuse. Steam may still ask again.
+  Close the Downloads popover, change search/page, and reopen the active transfer's
+  sign-in dialog. Verify independent retry, completion, and scene-resource consent.
+  Saved sign-in settings stay locked until pending transfers finish; quitting
+  stops all transfers. Synthetic-process tests do not prove Steam CDN throughput,
+  live-account session reuse, or visual behavior.
+- With setup missing, click Download, dismiss with Not now, and navigate elsewhere.
+  The request must remain in Downloads; Continue setup resumes it. Removing it
+  must prevent later automatic continuation. Completing setup/account/resource
+  consent continues without another Start download button. Downloads do not auto-apply.
+  Show in library can reveal an item
+  excluded by filters and return to the original results; deleting it removes
+  Discover's installed badge.
 - Try invalid media and missing scene assets: show actionable failures without
   blocking videos or losing an already downloaded scene. A valid wallpaper remains usable.
 - When relevant, check each connected display and sleep/wake behavior. Restore
@@ -347,6 +543,18 @@ restoration. A rejected legacy restore is still logged and its journal retained.
 Unlike the PNG-only path described above, enabling
 this feature edits explicit display/Space entries in the wallpaper store and
 reloads only the positively identified user-owned WallpaperAgent.
+
+Each published lock-screen revision also updates the native choice configuration
+for the selected display and every existing Space override. Keeping a constant
+`current` choice while replacing only the extension's renderer left inactive-Space
+thumbnails cached. Revision changes use the existing journaled store update and
+WallpaperAgent reload; unchanged reconciliation does not reload the service.
+The regression reproduces unchanged choices before the fix, then verifies all
+selected choices change, repeated reconciliation is inert, and relaunch restores
+the original selections. All 87 native tests passed in
+`build/Tests-20260915-162934-166821.xcresult`. Actual Mission Control cache refresh
+and visual timing remain unverified. With Animate Lock Screen enabled, manually
+apply A then B without visiting other Spaces and inspect every desktop thumbnail.
 
 Activation waits for a revision-matched, GPU-ready non-preview surface
 acknowledgement. Missing/failed native loading and global linked wallpaper

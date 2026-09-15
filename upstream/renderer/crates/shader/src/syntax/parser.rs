@@ -22,6 +22,8 @@ pub(super) struct Parser<'context, 'src> {
     pub tokens: TokenCursor<'context>,
     /// Current token offset within `tokens`.
     pub cursor: usize,
+    /// Whether mutually exclusive source branches remain in a metadata scan.
+    pub preserve_conditionals: bool,
 }
 
 impl<'src> Parser<'_, 'src> {
@@ -471,6 +473,44 @@ impl<'src> Parser<'_, 'src> {
 
     /// Finds the closing brace for an opening brace token.
     fn find_matching_brace(&self, open: usize) -> ShaderResult<usize> {
+        if self.preserve_conditionals {
+            let mut depth = 1usize;
+            let mut conditional_depths = Vec::new();
+            for index in open + 1..self.tokens.len() {
+                let token = &self.tokens[index];
+                match token.kind() {
+                    TypedToken::LeftBrace => depth += 1,
+                    TypedToken::RightBrace => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            return Ok(index);
+                        }
+                    }
+                    TypedToken::Directive(_) => {
+                        let directive = PreprocessorDirective::from_token_text(
+                            self.context.slice(token.span()),
+                            token.span(),
+                        );
+                        let Some(conditional) = directive.conditional() else {
+                            continue;
+                        };
+                        if conditional.is_if() || conditional.is_ifdef() || conditional.is_ifndef()
+                        {
+                            conditional_depths.push(depth);
+                        } else if conditional.is_else() || conditional.is_elif() {
+                            // A branch opened before this function header starts
+                            // at top level; branches inside its body restore the
+                            // scope depth from their own opening directive.
+                            depth = conditional_depths.last().copied().unwrap_or(0);
+                        } else if conditional.is_endif() {
+                            let _ = conditional_depths.pop();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            return self.find_balanced(open, None);
+        }
         self.find_balanced(open, self.tokens.matching_right_brace(open))
     }
 

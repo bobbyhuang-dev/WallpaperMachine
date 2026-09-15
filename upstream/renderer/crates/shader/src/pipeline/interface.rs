@@ -238,8 +238,11 @@ impl ProgramInterfaceLayout {
                 vertex_bindings.push(StageInterfaceLayoutBinding {
                     direction: InterfaceDirection::Output,
                     name: output.name.clone(),
-                    ty: output
-                        .vertex_output_ty_for(input, interface.vertex_uses(input.name.as_str())),
+                    ty: output.vertex_output_ty_for(
+                        input,
+                        interface.vertex_uses(input.name.as_str()),
+                        interface.fragment_uses(input.name.as_str()),
+                    ),
                     location,
                 });
             } else {
@@ -383,11 +386,12 @@ impl StageInterfaceBinding {
     ) -> bool {
         self.glsl_ty() == input.glsl_ty()
             || self
-                .safe_narrowed_output_width(input, vertex_uses)
+                .safe_narrowed_output_width(input, vertex_uses, fragment_uses)
                 .is_some()
             || self
                 .safe_narrowed_input_width(input, fragment_uses)
                 .is_some()
+            || self.widened_input_width(input, fragment_uses).is_some()
     }
 
     /// Returns the fragment width when a wider vertex output can be safely
@@ -396,6 +400,7 @@ impl StageInterfaceBinding {
         &self,
         input: &Self,
         vertex_uses: Option<&InterfaceUseFacts>,
+        fragment_uses: Option<&InterfaceUseFacts>,
     ) -> Option<u8> {
         LegacyTypeName::new(self.ty.as_str())
             .vector_width()
@@ -404,6 +409,8 @@ impl StageInterfaceBinding {
             .map(|(_output_width, input_width)| input_width)
             .filter(|input_width| {
                 vertex_uses.is_some_and(|uses| uses.is_prefix_compatible(*input_width))
+                    && !fragment_uses
+                        .is_some_and(|uses| uses.required_swizzle_width() > *input_width)
             })
     }
 
@@ -424,28 +431,48 @@ impl StageInterfaceBinding {
             })
     }
 
+    /// Recovers an undersized consumer declaration when its explicit swizzles
+    /// require components available in the producer's declared type.
+    fn widened_input_width(
+        &self,
+        input: &Self,
+        fragment_uses: Option<&InterfaceUseFacts>,
+    ) -> Option<u8> {
+        let output_width = LegacyTypeName::new(self.ty.as_str()).vector_width()?;
+        let input_width = LegacyTypeName::new(input.ty.as_str()).vector_width()?;
+        let required_width = fragment_uses?.required_swizzle_width();
+        (self.array_suffix.is_none()
+            && input.array_suffix.is_none()
+            && input_width < required_width
+            && required_width <= output_width)
+            .then_some(output_width)
+    }
+
     /// Returns a source type override for the vertex output declaration when
     /// the fragment input consumes a narrower prefix of that varying.
     fn vertex_output_ty_for(
         &self,
         input: &Self,
         vertex_uses: Option<&InterfaceUseFacts>,
+        fragment_uses: Option<&InterfaceUseFacts>,
     ) -> Option<SmolStr> {
-        self.safe_narrowed_output_width(input, vertex_uses)
+        self.safe_narrowed_output_width(input, vertex_uses, fragment_uses)
             .is_some()
             .then(|| input.ty.clone())
     }
 
-    /// Returns a source type override for the fragment input declaration when
-    /// it declares a wider type than the vertex output can provide.
+    /// Returns a source type override when the consumer can safely narrow to
+    /// the producer, or explicitly accesses components beyond its declaration.
     fn fragment_input_ty_for(
         &self,
         input: &Self,
         fragment_uses: Option<&InterfaceUseFacts>,
     ) -> Option<SmolStr> {
-        self.safe_narrowed_input_width(input, fragment_uses)
+        (self
+            .safe_narrowed_input_width(input, fragment_uses)
             .is_some()
-            .then(|| self.ty.clone())
+            || self.widened_input_width(input, fragment_uses).is_some())
+        .then(|| self.ty.clone())
     }
 
     /// Builds a structured pipeline-interface diagnostic at this declaration.

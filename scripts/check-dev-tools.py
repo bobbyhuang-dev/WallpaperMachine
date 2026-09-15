@@ -4,6 +4,8 @@ from pathlib import Path
 import shutil
 import subprocess
 
+from glyphs import markers
+
 
 def output(command):
     try:
@@ -14,15 +16,16 @@ def output(command):
 
 
 def main():
+    mark = markers()
     missing = []
     peekaboo = shutil.which("peekaboo")
     if peekaboo:
         code, version = output([peekaboo, "--version"])
-        print(f"{'OK' if code == 0 else 'WARN'} Peekaboo: {peekaboo}\n  {version}")
+        print(f"{mark.ok if code == 0 else mark.warn} Peekaboo: {peekaboo}\n  {version}")
         if code != 0:
             missing.append("working Peekaboo CLI")
     else:
-        print("MISSING Peekaboo: see docs/DEVELOPMENT-TOOLS.md")
+        print(f"{mark.missing} Peekaboo: see docs/DEVELOPMENT-TOOLS.md")
         missing.append("Peekaboo")
 
     code, developer = output(["xcode-select", "-p"])
@@ -33,15 +36,15 @@ def main():
             ("Accessibility Inspector", developer_path.parent / "Applications/Accessibility Inspector.app"),
         ]:
             present = path.is_dir()
-            print(f"{'OK' if present else 'MISSING'} {name}: {path}")
+            print(f"{(mark.ok if present else mark.missing)} {name}: {path}")
             if not present:
                 missing.append(name)
     else:
-        print(f"MISSING selected Xcode: {developer}")
+        print(f"{mark.missing} selected Xcode: {developer}")
         missing.append("Xcode")
 
     code, trace = output(["xcrun", "--find", "xctrace"])
-    print(f"{'OK' if code == 0 else 'MISSING'} xctrace: {trace}")
+    print(f"{mark.ok if code == 0 else mark.missing} xctrace: {trace}")
     if code != 0:
         missing.append("xctrace")
 

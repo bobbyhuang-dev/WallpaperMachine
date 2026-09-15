@@ -87,9 +87,23 @@ public:
     void SetNodeData(void*, uint32_t material_slot, const WPShaderValueData&);
     void SetCameraParallax(const WPCameraParallax& value) { m_parallax = value; }
 
+    struct PuppetAttachment {
+        SceneNode* node;
+        uint32_t bone_index;
+        Eigen::Affine3f bind_transform;
+    };
+    void RegisterPuppetAttachments(WPPuppetLayer layer, std::vector<PuppetAttachment> attachments);
+
     void SetScreenSize(i32 w, i32 h) override { m_screen_size = { (float)w, (float)h }; }
 
 private:
+    struct PuppetAttachmentGroup {
+        WPPuppetLayer layer;
+        std::vector<PuppetAttachment> attachments;
+    };
+    void UpdatePuppetAttachments(PuppetAttachmentGroup& group);
+    std::vector<PuppetAttachmentGroup> m_puppetAttachments;
+
     Scene*               m_scene;
     WPCameraParallax     m_parallax;
     double               m_dayTime { 0.0f };

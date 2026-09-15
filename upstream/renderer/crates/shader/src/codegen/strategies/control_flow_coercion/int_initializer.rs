@@ -69,6 +69,19 @@ impl IntFloatDeclarator<'_, '_> {
         tokens: TokenCursor<'_>,
     ) -> Option<crate::codegen::DeclaratorInitializer> {
         let initializer = self.declaration.initializer(tokens)?;
+        // Direct step initializers are handled by IntStepInitializer, which
+        // changes their declaration type; nested step calls still need casts.
+        if self
+            .token_facts
+            .call_at_name(initializer.start())
+            .is_some_and(|call| {
+                call.name() == "step"
+                    && call.close_index() == initializer.end()
+                    && call.arguments().len() == 2
+            })
+        {
+            return None;
+        }
         ScalarExpressionAnalyzer {
             facts: self.facts,
             token_facts: self.token_facts,

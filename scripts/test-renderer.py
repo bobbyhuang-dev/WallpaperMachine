@@ -13,6 +13,8 @@ import subprocess
 
 from build import ROOT, RENDERER, build_environment
 
+GENERATED_CASE_COUNT = 9
+
 
 def run(command, log, env, timeout=180):
     with log.open("w") as stream:
@@ -25,7 +27,7 @@ def fixtures(root):
     """Original synthetic assets, no workshop identifiers or copyrighted content."""
     for index in range(8):
         folder = root / f"generated-{index}"
-        folder.mkdir(parents=True)
+        folder.mkdir(parents=True, exist_ok=True)
         files = {
             "project.json": json.dumps({"title": f"Generated {index}", "type": "scene", "file": "layout.json", "general": {"properties": {}}}),
             "models/tile.json": json.dumps({"width": 64, "height": 48, "material": "materials/tile.json"}),
@@ -66,6 +68,61 @@ def fixtures(root):
         yield folder / "project.json"
 
 
+def alpha_composite_fixture(root):
+    """Expose composed coverage as RGB, independent of source artwork or effects."""
+    folder = root / "generated-alpha"
+    vertex = """uniform mat4 g_ModelViewProjectionMatrix;
+attribute vec3 a_Position;
+attribute vec2 a_TexCoord;
+varying vec2 v_TexCoord;
+void main() {
+    gl_Position = g_ModelViewProjectionMatrix * vec4(a_Position, 1.0);
+    v_TexCoord = a_TexCoord;
+}
+"""
+    fragments = {
+        "under": """varying vec2 v_TexCoord;
+void main() {
+    gl_FragColor = vec4(0.2, 0.4, 0.6, floor(v_TexCoord.x * 3.0) * 0.5);
+}
+""",
+        "over": """void main() {
+    gl_FragColor = vec4(0.8, 0.6, 0.4, 0.5);
+}
+""",
+        "coverage": """uniform sampler2D g_Texture0;
+varying vec2 v_TexCoord;
+void main() {
+    float coverage = texture(g_Texture0, v_TexCoord).a;
+    gl_FragColor = vec4(vec3(coverage), 1.0);
+}
+""",
+    }
+    files = {
+        "project.json": {"title": "Source-over coverage", "type": "scene", "file": "layout.json", "general": {"properties": {}}},
+        "effects/coverage.json": {"name": "coverage readback", "passes": [{"material": "materials/coverage.json"}]},
+    }
+    for name, fragment in fragments.items():
+        files[f"materials/{name}.json"] = {"passes": [{"shader": name, "blending": "translucent", "cullmode": "nocull", "depthtest": "disabled", "depthwrite": "disabled", "textures": [None]}]}
+        files[f"models/{name}.json"] = {"width": 288, "height": 144, "material": f"materials/{name}.json"}
+        files[f"shaders/{name}.vert"] = vertex
+        files[f"shaders/{name}.frag"] = fragment
+    files["layout.json"] = {
+        "camera": {"center": [0, 0, 0], "eye": [0, 0, 1], "up": [0, 1, 0]},
+        "general": {"clearcolor": [0.1, 0.2, 0.3], "cameraparallax": False, "orthogonalprojection": {"width": 384, "height": 256}},
+        "objects": [
+            {"id": 1, "name": "coverage container", "image": "models/util/composelayer.json", "size": [288, 144], "origin": [192, 128, 0], "copybackground": False, "effects": [{"file": "effects/coverage.json", "visible": True}]},
+            {"id": 2, "name": "destination", "parent": 1, "image": "models/under.json", "origin": [0, 0, 0]},
+            {"id": 3, "name": "source", "parent": 1, "image": "models/over.json", "origin": [0, 0, 0]},
+        ],
+    }
+    for name, contents in files.items():
+        path = folder / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents if isinstance(contents, str) else json.dumps(contents))
+    return folder / "project.json"
+
+
 def check_generated_pixels(data, index):
     """Independent assertions so two equally blank/corrupt outputs cannot pass."""
     magic, dimensions, maximum, pixels = data.split(b"\n", 3)
@@ -77,6 +134,12 @@ def check_generated_pixels(data, index):
     def pixel(x, y):
         offset = (y * width + x) * 3
         return pixels[offset:offset + 3]
+    if index == 8:
+        # A half-covered source over transparent, half-covered and opaque targets:
+        # Aout = As + Ad * (1 - As). RGB readback makes lost coverage observable.
+        return all(abs(channel - expected) <= 1
+                   for x, expected in [(96, 128), (192, 191), (288, 255)]
+                   for channel in pixel(x, 128))
     background = pixel(0, 0)
     # First effect must really draw; empty/hidden nested layers must not leak
     # that earlier effect's pixels. Visible children must survive their clears.
@@ -101,7 +164,7 @@ def main():
         steps = [
             (["cargo", "build", "--manifest-path", RENDERER / "Cargo.toml", "-p", "shader", "--features", "ffi", "--release"], "shader-build"),
             (["cmake", "-S", RENDERER / "external/open-wallpaper-engine", "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTS=ON", "-DBUILD_QML=OFF", "-DBUILD_WAYWALLEN=OFF", "-DRUST_SHADER_FFI=ON", "-DRUST_SHADER_STATICLIB=" + str(RENDERER / "target/release/libshader.a")], "configure"),
-            (["cmake", "--build", build, "--target", "offscreen_scene_probe", "render_target_lifetime_test", "text_object_runtime_test", "shader_cache_metadata_test", "-j", "6"], "build"),
+            (["cmake", "--build", build, "--target", "offscreen_scene_probe", "scene_reload_cycle_probe", "render_target_lifetime_test", "text_object_runtime_test", "shader_cache_metadata_test", "-j", "6"], "build"),
         ]
         for command, name in steps:
             if run(command, out / (name + ".log"), env, 600):
@@ -111,7 +174,7 @@ def main():
     for binary in ["render_target_lifetime_test", "text_object_runtime_test", "shader_cache_metadata_test"]:
         status = run([build / "tests" / binary], out / (binary + ".log"), env)
         report[ binary ] = status
-    for project in [*fixtures(out / "fixtures"), *args.project]:
+    for project in [*fixtures(out / "fixtures"), alpha_composite_fixture(out / "fixtures"), *args.project]:
         project = project.resolve()
         manifest_bytes = project.read_bytes()
         manifest = json.loads(manifest_bytes)
@@ -147,14 +210,32 @@ def main():
             isolated = (case_dir / "isolated/frame-2.ppm").read_bytes()
             case["pixels_equal"] = pooled == isolated
             case["sha256"] = hashlib.sha256(pooled).hexdigest()
-            if len(report["cases"]) < 8:
+            if len(report["cases"]) < GENERATED_CASE_COUNT:
                 case["expected_pixels"] = check_generated_pixels(pooled, len(report["cases"]))
         case["full_compatibility_verified"] = False  # No authored-reference comparison.
         report["cases"].append(case)
         (out / "report.json").write_text(json.dumps(report, indent=2))
         print(f"{project.parent.name}: {case['runs']}; pixels_equal={case['pixels_equal']}; diagnostics={len(case['diagnostics'])}", flush=True)
+    # Switching wallpapers reloads scenes inside one process; per-process state
+    # left behind by a previous load must not stall the next parse.
+    reload_projects = [p.resolve() for p in args.project] or list(fixtures(out / "fixtures"))
+    reload_env = env.copy()
+    reload_env.update(
+        WE_TEST_PROJECTS=";".join(str(p) for p in reload_projects),
+        WE_TEST_ASSETS=str(args.assets.resolve()),
+        WE_TEST_OUTPUT=str(out / "reload-cycles"),
+        WE_TEST_CYCLES="2",
+    )
+    try:
+        report["scene_reload_cycle_probe"] = run(
+            [build / "tests/scene_reload_cycle_probe"], out / "reload-cycles.log", reload_env,
+            60 + 60 * len(reload_projects))
+    except subprocess.TimeoutExpired:
+        report["scene_reload_cycle_probe"] = "timeout"
+    (out / "report.json").write_text(json.dumps(report, indent=2))
+    print(f"reload cycles ({len(reload_projects)} projects x2): {report['scene_reload_cycle_probe']}", flush=True)
     print(f"Evidence: {out}")
-    return int(any(report[k] for k in ["render_target_lifetime_test", "text_object_runtime_test", "shader_cache_metadata_test"]) or any(not c["pixels_equal"] for c in report["cases"]) or any(c["diagnostics"] or not c.get("expected_pixels", False) for c in report["cases"][:8]))
+    return int(any(report[k] for k in ["render_target_lifetime_test", "text_object_runtime_test", "shader_cache_metadata_test", "scene_reload_cycle_probe"]) or any(not c["pixels_equal"] for c in report["cases"]) or any(c["diagnostics"] or not c.get("expected_pixels", False) for c in report["cases"][:GENERATED_CASE_COUNT]))
 
 
 if __name__ == "__main__":

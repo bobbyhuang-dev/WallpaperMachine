@@ -115,7 +115,6 @@ async fn wallpaper_options_snapshot_returns_entry_defaults() {
     assert!(options.supported);
     assert!(!options.dirty);
     assert!(options.display_configurations.is_empty());
-    assert!(!options.audio_response_enabled);
     assert!(!options.muted);
     assert!(
         (options.volume - 1.0).abs() <= f32::EPSILON,

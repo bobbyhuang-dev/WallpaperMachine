@@ -11,7 +11,7 @@ use wallpaper_core::{
 };
 
 use crate::{
-    BridgeErrorKind, BridgePlaybackState, BridgeScalingMode, WallpaperBridge, api::BridgeBuilder,
+    BridgeErrorKind, BridgePlaybackState, BridgeScalingMode, api::BridgeBuilder,
     config::ConfigStore, engine::FakeEngineFacade,
 };
 
@@ -398,7 +398,7 @@ async fn audio_option_edits_apply_to_active_scene_without_reconcile() {
     bridge.set_volume("100".to_string(), 0.25).await.unwrap();
     bridge.set_muted("100".to_string(), true).await.unwrap();
     bridge
-        .set_audio_response_enabled("100".to_string(), true)
+        .set_audio_response_enabled("100".to_string(), false)
         .await
         .unwrap();
 
@@ -413,11 +413,11 @@ async fn audio_option_edits_apply_to_active_scene_without_reconcile() {
     );
     wait_for_audio_response_calls(
         &engine,
-        &[(SceneHandle::new(1), false), (SceneHandle::new(42), true)],
+        &[(SceneHandle::new(1), true), (SceneHandle::new(42), false)],
     );
     wait_for_audio_capture_calls(
         &engine,
-        &[(SceneHandle::new(1), false), (SceneHandle::new(42), true)],
+        &[(SceneHandle::new(1), true), (SceneHandle::new(42), false)],
     );
 
     let options = bridge
@@ -561,7 +561,7 @@ async fn pending_render_option_edits_apply_to_active_scene_without_reconcile() {
 }
 
 #[tokio::test]
-async fn applying_audio_response_enabled_scene_starts_audio_capture() {
+async fn applying_default_scene_starts_audio_capture() {
     let engine = FakeEngineFacade::default();
     engine.set_snapshot(vec![display_snapshot(7, 75)]);
     let bridge = BridgeBuilder::new(engine.clone())
@@ -574,10 +574,6 @@ async fn applying_audio_response_enabled_scene_starts_audio_capture() {
 
     bridge.set_volume("100".to_string(), 0.25).await.unwrap();
     bridge.set_muted("100".to_string(), true).await.unwrap();
-    bridge
-        .set_audio_response_enabled("100".to_string(), true)
-        .await
-        .unwrap();
     bridge
         .set_display_config_enabled("100".to_string(), "7".to_string(), true)
         .await
@@ -627,6 +623,10 @@ async fn live_audio_response_toggle_keeps_selection_responsive_while_capture_sta
     bridge
         .inject_scene_wallpaper_config_for_test("200", "Other")
         .await;
+    bridge
+        .set_audio_response_enabled("100".to_string(), false)
+        .await
+        .unwrap();
 
     bridge
         .set_display_config_enabled("100".to_string(), "7".to_string(), true)
@@ -695,6 +695,10 @@ async fn failed_audio_activation_is_reported_and_rolls_back_without_losing_other
     bridge
         .inject_scene_wallpaper_config_for_test("100", "Scene")
         .await;
+    bridge
+        .set_audio_response_enabled("100".into(), false)
+        .await
+        .unwrap();
     bridge
         .set_display_config_enabled("100".into(), "7".into(), true)
         .await

@@ -60,7 +60,7 @@ actor WorkshopService {
 
     init(session: URLSession = .shared) { self.session = session }
 
-    static func browseURL(search: String, kind: WorkshopKind, sort: WorkshopSort, page: Int) -> URL {
+    static func browseURL(search: String, kind: WorkshopKind, sort: WorkshopSort, page: Int, tags: [String] = []) -> URL {
         var url = URLComponents(string: "https://steamcommunity.com/workshop/browse/")!
         url.queryItems = [
             URLQueryItem(name: "appid", value: "431960"),
@@ -73,11 +73,16 @@ actor WorkshopService {
             URLQueryItem(name: "l", value: "english")
         ]
         if kind != .all { url.queryItems?.append(URLQueryItem(name: "requiredtags[]", value: kind.rawValue)) }
+        // Steam requires every selected tag, including the wallpaper type.
+        var seen: Set<String> = kind == .all ? [] : [kind.rawValue]
+        for tag in tags where seen.insert(tag).inserted {
+            url.queryItems?.append(URLQueryItem(name: "requiredtags[]", value: tag))
+        }
         return url.url!
     }
 
-    func browse(search: String, kind: WorkshopKind, sort: WorkshopSort, page: Int) async throws -> WorkshopPage {
-        var request = URLRequest(url: Self.browseURL(search: search, kind: kind, sort: sort, page: page))
+    func browse(search: String, kind: WorkshopKind, sort: WorkshopSort, page: Int, tags: [String] = []) async throws -> WorkshopPage {
+        var request = URLRequest(url: Self.browseURL(search: search, kind: kind, sort: sort, page: page, tags: tags))
         request.timeoutInterval = 35
         request.setValue("MacWallpaperEngine/1.0 (macOS; public Workshop browser)", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)

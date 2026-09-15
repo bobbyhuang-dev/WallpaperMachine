@@ -71,10 +71,27 @@ impl<'src> ParsingContext<'src> {
     /// Returns a parse error when a top-level function/struct body contains
     /// unbalanced braces or parentheses.
     pub fn parse(&self) -> ShaderResult<ShaderModule<'src>> {
+        self.parse_with_conditionals(false)
+    }
+
+    /// Parses metadata sources whose conditional branches remain unevaluated.
+    ///
+    /// Alternative function headers can share a body, so their opening braces
+    /// must not be counted as nested scopes.
+    pub(crate) fn parse_metadata(&self) -> ShaderResult<ShaderModule<'src>> {
+        self.parse_with_conditionals(true)
+    }
+
+    /// Selects delimiter handling for compiled or metadata-only sources.
+    fn parse_with_conditionals(
+        &self,
+        preserve_conditionals: bool,
+    ) -> ShaderResult<ShaderModule<'src>> {
         let mut parser = Parser {
             context: self,
             tokens: self.token_stream().cursor(),
             cursor: 0,
+            preserve_conditionals,
         };
         parser.parse_module()
     }

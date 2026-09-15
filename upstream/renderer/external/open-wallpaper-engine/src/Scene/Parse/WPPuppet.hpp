@@ -31,6 +31,12 @@ public:
         std::string     name;
         int32_t         sim_type { 0 };
         Eigen::Affine3f local_bind { Eigen::Affine3f::Identity() };
+        // Character-sheet bind geometry and assembled animation reference pose differ.
+        Eigen::Affine3f local_reference { Eigen::Affine3f::Identity() };
+        bool has_local_reference { false };
+        Eigen::Vector3f reference_position { Eigen::Vector3f::Zero() };
+        Eigen::Vector3f reference_scale { Eigen::Vector3f::Ones() };
+        Eigen::Quaterniond reference_rotation { Eigen::Quaterniond::Identity() };
         // Local dump/schema compatibility mirror. Runtime hierarchy follows
         // upstream's bind_parent/anim_parent/file_parent fields below.
         uint32_t        parent { NO_PARENT };

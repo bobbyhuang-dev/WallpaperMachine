@@ -58,7 +58,7 @@ impl ShaderCompiler for NagaCompiler {
         let mut validator = Validator::new(ValidationFlags::default(), Capabilities::default());
         let module_info = validator.validate(&module).map_err(|err| {
             let diagnostic = DiagnosticBuilder::new(stage, "naga validate", source_path)
-                .with_message(format!("{err}"))
+                .with_message(err.emit_to_string_with_path(source_text, source_path))
                 .with_source(source_text)
                 .with_source_location(err.location(source_text))
                 .build();

@@ -425,6 +425,7 @@ void SceneRuntimeContext::Tick(double frame_time) {
         if (scaled_delta <= 0.0) continue;
         playback.absolute_seconds += scaled_delta;
     }
+    for (auto& binding : m_scalar_animations) binding.playback->Advance(frame_time);
     for (auto* value : m_scripted_values) {
         if (value != nullptr) value->reevaluate();
     }
@@ -466,26 +467,33 @@ void SceneRuntimeContext::Tick(double frame_time) {
         if (binding.node == nullptr || binding.layer == nullptr) continue;
         SyncEffectFinalNode(*binding.node, *binding.layer);
     }
-    for (auto& binding : m_material_alpha) {
-        auto material = binding.material.lock();
-        if (material == nullptr) continue;
-        ApplyMaterialAlpha(*material,
-                           binding.animation.Evaluate(m_host_context->runtime_seconds));
-    }
     for (auto& binding : m_material_constants) {
-        if (binding.value == nullptr) continue;
+        if (binding.value == nullptr && binding.animation == nullptr) continue;
         auto material = binding.material.lock();
         if (material == nullptr) continue;
-        ApplyMaterialConstant(*material, binding.name, *binding.value);
+        if (binding.animation != nullptr) {
+            material->customShader.constValues[binding.name][0] = binding.animation->Value();
+        } else {
+            ApplyMaterialConstant(*material, binding.name, *binding.value);
+        }
     }
     for (auto& script : m_scene_scripts) {
         if (script.script != nullptr) script.script->Tick(*m_host_context);
     }
-    for (auto& binding : m_material_constants) {
-        if (binding.value == nullptr) continue;
+    for (auto& binding : m_material_alpha) {
         auto material = binding.material.lock();
         if (material == nullptr) continue;
-        ApplyMaterialConstant(*material, binding.name, *binding.value);
+        ApplyMaterialAlpha(*material, binding.animation->Value());
+    }
+    for (auto& binding : m_material_constants) {
+        if (binding.value == nullptr && binding.animation == nullptr) continue;
+        auto material = binding.material.lock();
+        if (material == nullptr) continue;
+        if (binding.animation != nullptr) {
+            material->customShader.constValues[binding.name][0] = binding.animation->Value();
+        } else {
+            ApplyMaterialConstant(*material, binding.name, *binding.value);
+        }
     }
 }
 
@@ -967,16 +975,19 @@ void SceneRuntimeContext::RegisterTextValue(std::string name,
 
 void SceneRuntimeContext::RegisterMaterialConstant(std::shared_ptr<SceneMaterial> material,
                                                    std::string name,
-                                                   std::unique_ptr<DynamicValue> value) {
+                                                   std::unique_ptr<DynamicValue> value,
+                                                   std::shared_ptr<ScalarAnimationPlayback> animation) {
     if (material == nullptr || name.empty() || value == nullptr) return;
 
     ApplyMaterialConstant(*material, name, *value);
+    if (animation != nullptr) material->customShader.constValues[name] = { animation->Value() };
     auto* raw = value.get();
     m_owned_values.push_back(std::move(value));
     m_material_constants.push_back(MaterialConstantBinding {
         .material = material,
         .name     = std::move(name),
         .value    = raw,
+        .animation = std::move(animation),
     });
 }
 
@@ -1021,14 +1032,40 @@ void SceneRuntimeContext::RegisterNodeEffectFinal(std::string name,
     };
 }
 
-void SceneRuntimeContext::RegisterMaterialAlphaAnimation(std::shared_ptr<SceneMaterial> material,
-                                                         ScalarAnimation                  animation) {
-    if (material == nullptr) return;
-    ApplyMaterialAlpha(*material, animation.Evaluate(m_host_context->runtime_seconds));
+void SceneRuntimeContext::RegisterMaterialAlphaAnimation(
+    std::shared_ptr<SceneMaterial> material, std::shared_ptr<ScalarAnimationPlayback> animation) {
+    if (material == nullptr || animation == nullptr) return;
+    ApplyMaterialAlpha(*material, animation->Value());
     m_material_alpha.push_back(MaterialAlphaBinding {
-        .material  = material,
+        .material = material,
         .animation = std::move(animation),
     });
+}
+
+std::shared_ptr<ScalarAnimationPlayback> SceneRuntimeContext::RegisterScalarAnimation(
+    std::string_view layer_name, ScalarAnimation animation) {
+    if (!animation.name.empty()) {
+        for (const auto& binding : m_scalar_animations) {
+            if (binding.layer_name == layer_name && binding.playback->animation.name == animation.name) {
+                return binding.playback;
+            }
+        }
+    }
+    auto playback = std::make_shared<ScalarAnimationPlayback>();
+    playback->playing = !animation.start_paused;
+    playback->animation = std::move(animation);
+    m_scalar_animations.push_back({ std::string(layer_name), playback });
+    return playback;
+}
+
+ScalarAnimationPlayback* SceneRuntimeContext::FindScalarAnimation(
+    std::string_view layer_name, std::string_view animation_name) const {
+    for (const auto& binding : m_scalar_animations) {
+        if (binding.layer_name == layer_name && binding.playback->animation.name == animation_name) {
+            return binding.playback.get();
+        }
+    }
+    return nullptr;
 }
 
 void SceneRuntimeContext::RegisterSceneScript(std::string script_source, std::string layer_name) {
@@ -1243,6 +1280,7 @@ std::string SceneRuntimeContext::CreateLayerFromTemplate(std::string_view reques
                 .material = material_binding.cloned_material,
                 .name     = constant_binding.name,
                 .value    = constant_binding.value,
+                .animation = constant_binding.animation,
             });
         }
     }

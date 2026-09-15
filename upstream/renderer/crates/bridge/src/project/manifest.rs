@@ -34,7 +34,7 @@ pub struct ProjectProperty {
     pub label_html: String,
     pub order: i64,
     pub index: i64,
-    pub condition: Option<String>, // raw string; parsed lazily by Task 14
+    pub condition: Option<String>, // Parsed lazily when building property snapshots.
     pub metadata: PropertyMetadata,
 }
 
@@ -140,11 +140,10 @@ impl ProjectModel {
                                                     .and_then(Value::as_str)
                                                     .unwrap_or("")
                                                     .to_string(),
-                                                value: option
-                                                    .get("value")
-                                                    .and_then(Value::as_str)
-                                                    .unwrap_or("")
-                                                    .to_string(),
+                                                value: option.get("value").map_or_else(
+                                                    String::new,
+                                                    PropertyValue::json_scalar_to_string,
+                                                ),
                                             })
                                         })
                                         .collect()

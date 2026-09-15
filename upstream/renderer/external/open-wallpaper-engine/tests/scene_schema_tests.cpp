@@ -1875,6 +1875,67 @@ void main() {
     EXPECT_NEAR(child->ModelTrans()(0, 3), 15.0, 1.0e-5);
     EXPECT_NEAR(child->ModelTrans()(1, 3), 27.0, 1.0e-5);
     EXPECT_NEAR(child->ModelTrans()(2, 3), 9.0, 1.0e-5);
+    auto reordered = nlohmann::json::parse(scene);
+    std::reverse(reordered["objects"].begin(), reordered["objects"].end());
+    auto reversed = parser.Parse("attachment-child-reversed", reordered.dump(), vfs, sound_manager);
+    ASSERT_NE(reversed, nullptr);
+    auto reversed_parent = FindRootChildByName(*reversed, "puppet parent");
+    ASSERT_NE(reversed_parent, nullptr);
+    auto* reversed_child = FindFirstChildByName(*reversed_parent, "hat child");
+    ASSERT_NE(reversed_child, nullptr);
+    reversed_child->UpdateTrans();
+    EXPECT_TRUE(reversed_child->ModelTrans().isApprox(child->ModelTrans(), 1e-6));
+}
+
+TEST(SceneSchema, PuppetAttachmentFollowsAnimatedAffineAndPreservesLocalEdits) {
+    Scene scene;
+    WPShaderValueUpdater updater(&scene);
+    auto puppet = std::make_shared<WPPuppet>();
+    auto& root = puppet->bones.emplace_back();
+    root.local_bind.translate(Eigen::Vector3f(100, 200, 0));
+    auto& animation = puppet->anims.emplace_back();
+    animation.id = 1;
+    animation.fps = 1;
+    animation.length = 1;
+    animation.mode = WPPuppet::PlayMode::Single;
+    auto& track = animation.bone_tracks.emplace_back();
+    track.frames.push_back({ Eigen::Vector3f(10, 20, 0), Eigen::Vector3f::Zero(),
+                             Eigen::Vector3f::Ones() });
+    track.frames.push_back({ Eigen::Vector3f(30, 40, 0), Eigen::Vector3f(0, 0, 1.57079632679f),
+                             Eigen::Vector3f(2, 3, 1) });
+    puppet->prepared();
+    WPPuppetLayer layer(puppet);
+    WPPuppetLayer::AnimationLayer settings;
+    settings.id = 1;
+    layer.prepared(std::span(&settings, 1));
+    auto parent = std::make_shared<SceneNode>();
+    parent->SetTranslate(Eigen::Vector3f(5, 7, 0));
+    parent->SetScale(Eigen::Vector3f(2, 2, 1));
+    auto child = std::make_shared<SceneNode>();
+    child->SetTranslate(Eigen::Vector3f(1, 2, 0));
+    parent->AppendChild(child);
+    auto attachment = puppet->bones[0].world_bind;
+    attachment.translate(Eigen::Vector3f(4, 5, 0));
+    updater.RegisterPuppetAttachments(layer, { { child.get(), 0, attachment } });
+    child->UpdateTrans();
+    EXPECT_NEAR(child->ModelTrans()(0, 3), 35, 1e-4);
+    EXPECT_NEAR(child->ModelTrans()(1, 3), 61, 1e-4);
+    scene.PassFrameTime(1.0);
+    updater.FrameBegin();
+    child->UpdateTrans();
+    EXPECT_NEAR(child->ModelTrans()(0, 3), 23, 1e-4);
+    EXPECT_NEAR(child->ModelTrans()(1, 3), 107, 1e-4);
+    EXPECT_NEAR(child->ModelTrans()(0, 1), -6, 1e-4);
+    EXPECT_NEAR(child->ModelTrans()(1, 0), 4, 1e-4);
+    const Eigen::Matrix4d sampled = child->ModelTrans();
+    updater.FrameBegin();
+    child->UpdateTrans();
+    EXPECT_TRUE(child->ModelTrans().isApprox(sampled, 1e-6));
+    child->SetTranslate(Eigen::Vector3f(3, 2, 0));
+    updater.FrameBegin();
+    child->UpdateTrans();
+    EXPECT_NEAR(child->ModelTrans()(0, 3), 23, 1e-4);
+    EXPECT_NEAR(child->ModelTrans()(1, 3), 115, 1e-4);
 }
 
 TEST(SceneSchema, ParserUsesStableRuntimeNamesForDuplicateGenericLayerNames) {
@@ -2520,6 +2581,51 @@ TEST(SceneSchema, ParserFallsBackWhenPuppetMeshSlotMaterialFailsToLoad) {
     ASSERT_EQ(node->Mesh()->Submeshes().size(), 2u);
     EXPECT_EQ(node->Mesh()->Submeshes()[0].material_slot, 0u);
     EXPECT_EQ(node->Mesh()->Submeshes()[1].material_slot, 0u);
+}
+
+TEST(SceneSchema, ParserPreservesPausedMaterialTimelineAndAppliesItsFirstKey) {
+    auto files = std::map<std::string, std::string> {};
+    AddMultiVideoImageSceneFiles(files);
+    auto material = nlohmann::json::parse(files.at("/mat/multi_video.json"));
+    material["passes"][0]["constantshadervalues"]["Opacity"] = nlohmann::json::parse(R"({
+        "value":1.5,"animation":{
+            "options":{"fps":30,"length":9,"mode":"single","startpaused":true,"name":"transition"},
+            "c0":[{"frame":0,"value":0},{"frame":5,"value":1.5},{"frame":9,"value":0}]
+        }
+    })");
+    files["/mat/multi_video.json"] = material.dump();
+    files["/shaders/multivideo.frag"] = R"(
+uniform float u_Opacity; // {"material":"Opacity","default":1}
+void main() { gl_FragColor = vec4(u_Opacity); }
+)";
+    fs::VFS vfs;
+    ASSERT_TRUE(vfs.Mount("/assets", std::make_unique<MemoryFs>(std::move(files))));
+    audio::SoundManager sound_manager;
+    WPSceneParser parser;
+    ProjectProperties properties;
+    SceneParseRequest request {
+        .scene_id = "paused-material-timeline",
+        .project_properties = &properties,
+    };
+    auto parsed = parser.Parse(request, BasicImageSceneJson(), vfs, sound_manager);
+    ASSERT_NE(parsed, nullptr);
+    ASSERT_NE(parsed->runtime, nullptr);
+    auto node = FindRootChildByName(*parsed, "video image");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->Mesh(), nullptr);
+    ASSERT_NE(node->Mesh()->Material(), nullptr);
+    const auto& values = node->Mesh()->Material()->customShader.constValues;
+    ASSERT_TRUE(values.contains("u_Opacity"));
+    EXPECT_FLOAT_EQ(values.at("u_Opacity")[0], 0.0f);
+    parsed->runtime->Tick(2.0);
+    EXPECT_FLOAT_EQ(values.at("u_Opacity")[0], 0.0f);
+    auto* animation = parsed->runtime->FindScalarAnimation("video image", "transition");
+    ASSERT_NE(animation, nullptr);
+    animation->Play();
+    parsed->runtime->Tick(5.0 / 30.0);
+    EXPECT_FLOAT_EQ(values.at("u_Opacity")[0], 1.5f);
+    parsed->runtime->Tick(4.0 / 30.0);
+    EXPECT_FLOAT_EQ(values.at("u_Opacity")[0], 0.0f);
 }
 
 TEST(SceneSchema, ParserRegistersEveryVideoTextureInImageMaterialForLayerControls) {

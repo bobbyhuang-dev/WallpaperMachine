@@ -28,6 +28,7 @@ struct WPConstantShaderValue {
     std::string        user;
     std::string        script;
     nlohmann::json     scriptproperties;
+    nlohmann::json     animation;
 };
 
 class WPMaterialPass {

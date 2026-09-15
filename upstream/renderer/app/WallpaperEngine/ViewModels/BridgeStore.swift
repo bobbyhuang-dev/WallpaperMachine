@@ -153,13 +153,7 @@ final class BridgeStore {
             }
         } catch {
             // A bridge error may happen after reconciliation. Never infer rollback from a stale bundle.
-            do {
-                let actual = try await bridge.allSnapshots()
-                apply(actual)
-            } catch let refreshError {
-                activationNeedsRefresh = true
-                throw WallpaperActionError(message: String(localized: "Could not confirm the display state after applying: \(error.localizedDescription). Refresh failed: \(refreshError.localizedDescription). Refresh all wallpaper state before retrying."))
-            }
+            try await resyncAfterFailedApplyAsync(cause: error)
             if isWallpaperActive(id: id, displayId: displayId), applyCompleted || !previouslyActive {
                 throw WallpaperActionError(message: String(localized: "The display assignment changed, but the operation could not be fully saved: \(error.localizedDescription)"))
             }
@@ -395,7 +389,14 @@ final class BridgeStore {
         defer { applyingWallpaperID = nil }
         try await validateWallpaperForPlaybackAsync(id: wallpaperId)
         try await commitPendingWallpaperEditsAsync(id: wallpaperId)
-        try await applyValidatedWallpaperOptionsAsync(wallpaperId: wallpaperId)
+        do {
+            try await applyValidatedWallpaperOptionsAsync(wallpaperId: wallpaperId)
+        } catch {
+            // The engine restores its previous configuration when an apply fails,
+            // so re-read it instead of leaving the UI stuck behind a manual refresh.
+            try await resyncAfterFailedApplyAsync(cause: error)
+            throw error
+        }
     }
 
     private func validateWallpaperForPlaybackAsync(id wallpaperId: String) async throws {
@@ -427,8 +428,22 @@ final class BridgeStore {
             wallpaperAppliesNeedingSave.remove(wallpaperId)
         } catch {
             wallpaperAppliesNeedingSave.insert(wallpaperId)
-            activationNeedsRefresh = true
+            // `activationNeedsRefresh` disables every Library action, so only the
+            // callers may latch it, and only when they cannot re-read the engine.
             throw error
+        }
+    }
+
+    /// Re-reads authoritative engine state after a failed apply. A successful
+    /// re-read means the app and engine agree again, so the Library stays usable.
+    /// Only a failed re-read forces the user through a manual refresh.
+    private func resyncAfterFailedApplyAsync(cause: Error) async throws {
+        do {
+            let actual = try await bridge.allSnapshots()
+            apply(actual)
+        } catch let refreshError {
+            activationNeedsRefresh = true
+            throw WallpaperActionError(message: String(localized: "Could not confirm the display state after applying: \(cause.localizedDescription). Refresh failed: \(refreshError.localizedDescription). Refresh all wallpaper state before retrying."))
         }
     }
 

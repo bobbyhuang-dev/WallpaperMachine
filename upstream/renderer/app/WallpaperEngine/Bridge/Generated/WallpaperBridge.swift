@@ -2002,6 +2002,72 @@ public func FfiConverterTypeBridgeAppSnapshot_lower(_ value: BridgeAppSnapshot) 
 }
 
 
+public struct BridgeComboOption {
+    public var label: String
+    public var value: BridgePropertyValue
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(label: String, value: BridgePropertyValue) {
+        self.label = label
+        self.value = value
+    }
+}
+
+
+
+extension BridgeComboOption: Equatable, Hashable {
+    public static func ==(lhs: BridgeComboOption, rhs: BridgeComboOption) -> Bool {
+        if lhs.label != rhs.label {
+            return false
+        }
+        if lhs.value != rhs.value {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(label)
+        hasher.combine(value)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeComboOption: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeComboOption {
+        return
+            try BridgeComboOption(
+                label: FfiConverterString.read(from: &buf), 
+                value: FfiConverterTypeBridgePropertyValue.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BridgeComboOption, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.label, into: &buf)
+        FfiConverterTypeBridgePropertyValue.write(value.value, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeComboOption_lift(_ buf: RustBuffer) throws -> BridgeComboOption {
+    return try FfiConverterTypeBridgeComboOption.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeComboOption_lower(_ value: BridgeComboOption) -> RustBuffer {
+    return FfiConverterTypeBridgeComboOption.lower(value)
+}
+
+
 public struct BridgeDisplayConfigRow {
     public var displayId: String
     public var title: String
@@ -2940,19 +3006,21 @@ public struct BridgePropertyDescriptor {
     public var value: BridgePropertyValue
     public var defaultValue: BridgePropertyValue
     public var slider: BridgeSliderMetadata?
+    public var comboOptions: [BridgeComboOption]
     public var dirty: Bool
     public var canRestoreDefaults: Bool
     public var enabled: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, kind: BridgePropertyKind, labelHtml: String, value: BridgePropertyValue, defaultValue: BridgePropertyValue, slider: BridgeSliderMetadata?, dirty: Bool, canRestoreDefaults: Bool, enabled: Bool) {
+    public init(id: String, kind: BridgePropertyKind, labelHtml: String, value: BridgePropertyValue, defaultValue: BridgePropertyValue, slider: BridgeSliderMetadata?, comboOptions: [BridgeComboOption], dirty: Bool, canRestoreDefaults: Bool, enabled: Bool) {
         self.id = id
         self.kind = kind
         self.labelHtml = labelHtml
         self.value = value
         self.defaultValue = defaultValue
         self.slider = slider
+        self.comboOptions = comboOptions
         self.dirty = dirty
         self.canRestoreDefaults = canRestoreDefaults
         self.enabled = enabled
@@ -2981,6 +3049,9 @@ extension BridgePropertyDescriptor: Equatable, Hashable {
         if lhs.slider != rhs.slider {
             return false
         }
+        if lhs.comboOptions != rhs.comboOptions {
+            return false
+        }
         if lhs.dirty != rhs.dirty {
             return false
         }
@@ -3000,6 +3071,7 @@ extension BridgePropertyDescriptor: Equatable, Hashable {
         hasher.combine(value)
         hasher.combine(defaultValue)
         hasher.combine(slider)
+        hasher.combine(comboOptions)
         hasher.combine(dirty)
         hasher.combine(canRestoreDefaults)
         hasher.combine(enabled)
@@ -3020,6 +3092,7 @@ public struct FfiConverterTypeBridgePropertyDescriptor: FfiConverterRustBuffer {
                 value: FfiConverterTypeBridgePropertyValue.read(from: &buf), 
                 defaultValue: FfiConverterTypeBridgePropertyValue.read(from: &buf), 
                 slider: FfiConverterOptionTypeBridgeSliderMetadata.read(from: &buf), 
+                comboOptions: FfiConverterSequenceTypeBridgeComboOption.read(from: &buf), 
                 dirty: FfiConverterBool.read(from: &buf), 
                 canRestoreDefaults: FfiConverterBool.read(from: &buf), 
                 enabled: FfiConverterBool.read(from: &buf)
@@ -3033,6 +3106,7 @@ public struct FfiConverterTypeBridgePropertyDescriptor: FfiConverterRustBuffer {
         FfiConverterTypeBridgePropertyValue.write(value.value, into: &buf)
         FfiConverterTypeBridgePropertyValue.write(value.defaultValue, into: &buf)
         FfiConverterOptionTypeBridgeSliderMetadata.write(value.slider, into: &buf)
+        FfiConverterSequenceTypeBridgeComboOption.write(value.comboOptions, into: &buf)
         FfiConverterBool.write(value.dirty, into: &buf)
         FfiConverterBool.write(value.canRestoreDefaults, into: &buf)
         FfiConverterBool.write(value.enabled, into: &buf)
@@ -4576,6 +4650,31 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeBridgeComboOption: FfiConverterRustBuffer {
+    typealias SwiftType = [BridgeComboOption]
+
+    public static func write(_ value: [BridgeComboOption], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBridgeComboOption.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BridgeComboOption] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BridgeComboOption]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBridgeComboOption.read(from: &buf))
         }
         return seq
     }

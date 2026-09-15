@@ -65,6 +65,7 @@ struct ParseContext {
     std::unordered_map<int32_t, std::shared_ptr<SceneNode>> layer_nodes;
     std::unordered_map<int32_t, int32_t>                    layer_parent_ids;
     std::unordered_map<int32_t, std::shared_ptr<WPPuppet>>  layer_puppets;
+    std::unordered_map<int32_t, WPPuppetLayer>              layer_puppet_animations;
     std::unordered_set<int32_t>                             attached_layer_nodes;
     std::vector<int32_t>                                    layer_node_order;
     std::vector<std::pair<std::string, std::string>>        pending_scene_scripts;
@@ -326,45 +327,32 @@ void AttachLayerNode(ParseContext& context, int32_t layer_id) {
     context.attached_layer_nodes.insert(layer_id);
 }
 
-Eigen::Affine3f PuppetFileBindTransform(const WPPuppet& puppet, uint32_t bone_index) {
-    Eigen::Affine3f transform = Eigen::Affine3f::Identity();
-    if (bone_index >= puppet.bones.size()) return transform;
-
-    std::vector<uint32_t> chain;
-    while (bone_index != WPPuppet::Bone::NO_PARENT && bone_index < puppet.bones.size()) {
-        chain.push_back(bone_index);
-        bone_index = puppet.bones[bone_index].file_parent;
+void RegisterLayerAttachments(ParseContext& context) {
+    if (context.object_list == nullptr) return;
+    std::unordered_map<int32_t, std::vector<WPShaderValueUpdater::PuppetAttachment>> groups;
+    for (const auto& object : *context.object_list) {
+        if (!object.contains("attachment") || !object["attachment"].is_string() ||
+            !object.contains("parent") || !object["parent"].is_number_integer() ||
+            !object.contains("id") || !object["id"].is_number_integer()) continue;
+        const auto parent_id = object["parent"].get<int32_t>();
+        const auto node = context.layer_nodes.find(object["id"].get<int32_t>());
+        const auto puppet = context.layer_puppets.find(parent_id);
+        if (node == context.layer_nodes.end() || puppet == context.layer_puppets.end()) continue;
+        const auto name = object["attachment"].get<std::string>();
+        const auto& model = *puppet->second;
+        const auto attachment = std::find_if(model.attachments.begin(), model.attachments.end(),
+            [&name](const auto& item) { return item.name == name; });
+        if (attachment == model.attachments.end() || attachment->bone_index >= model.bones.size())
+            continue;
+        // genFrame returns skinning matrices (animated world * inverse bind).
+        // Restore the bind frame before applying the attachment's local affine.
+        groups[parent_id].push_back({ node->second.get(), attachment->bone_index,
+            model.bones[attachment->bone_index].world_bind * attachment->local_xform });
     }
-    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-        transform = transform * puppet.bones[*it].local_bind;
+    for (auto& [parent_id, attachments] : groups) {
+        context.shader_updater->RegisterPuppetAttachments(
+            std::move(context.layer_puppet_animations.at(parent_id)), std::move(attachments));
     }
-    return transform;
-}
-
-std::optional<Eigen::Vector3f> ResolveLayerAttachmentOffset(const ParseContext& context,
-                                                            int32_t             parent_id,
-                                                            std::string_view attachment) {
-    if (attachment.empty()) return std::nullopt;
-
-    const auto puppet_iterator = context.layer_puppets.find(parent_id);
-    if (puppet_iterator == context.layer_puppets.end() || puppet_iterator->second == nullptr) {
-        return std::nullopt;
-    }
-
-    const auto& puppet = *puppet_iterator->second;
-    const auto attachment_iterator =
-        std::find_if(puppet.attachments.begin(), puppet.attachments.end(), [attachment](auto& item) {
-            return item.name == attachment;
-        });
-    if (attachment_iterator == puppet.attachments.end() ||
-        attachment_iterator->bone_index >= puppet.bones.size()) {
-        return std::nullopt;
-    }
-
-    const auto anchor =
-        PuppetFileBindTransform(puppet, attachment_iterator->bone_index) *
-        attachment_iterator->local_xform;
-    return anchor.translation();
 }
 
 void AttachRemainingLayerNodes(ParseContext& context) {
@@ -1635,6 +1623,7 @@ nlohmann::json MaterialConstantSettingJson(const wpscene::WPConstantShaderValue&
     if (! source.scriptproperties.is_null()) {
         setting["scriptproperties"] = source.scriptproperties;
     }
+    if (! source.animation.is_null()) setting["animation"] = source.animation;
     return setting;
 }
 
@@ -1678,27 +1667,34 @@ void AddConstantValue(wpscene::WPMaterial& material, std::string name, std::vect
 }
 
 void RegisterMaterialConstants(ParseContext& context, std::shared_ptr<SceneMaterial> material,
-                               const wpscene::WPMaterial& wpmat, const WPShaderInfo& info) {
+                               const wpscene::WPMaterial& wpmat, const WPShaderInfo& info,
+                               std::string_view runtime_name = {}) {
     if (material == nullptr || context.scene->runtime == nullptr) return;
 
     for (const auto& cs : wpmat.constantshadervalues) {
         const auto& name  = cs.first;
         const auto& value = cs.second;
-        if (value.user.empty() && value.script.empty()) continue;
+        if (value.user.empty() && value.script.empty() && value.animation.is_null()) continue;
 
         const auto glname = ResolveConstvalueGlName(name, info);
         if (glname.empty()) continue;
 
         auto dynamic_value =
-            MakeMaterialConstantDynamicValue(*context.scene->runtime, value, glname);
+            MakeMaterialConstantDynamicValue(*context.scene->runtime, value, runtime_name);
         if (value.script.empty()) {
             if (auto* property_value = context.scene->runtime->FindPropertyValue(value.user);
                 property_value != nullptr) {
                 dynamic_value->connect(property_value);
             }
         }
+        std::shared_ptr<ScalarAnimationPlayback> playback;
+        if (value.value.size() == 1 && !value.animation.is_null()) {
+            if (auto animation = ResolveScalarAnimation(MaterialConstantSettingJson(value))) {
+                playback = context.scene->runtime->RegisterScalarAnimation(runtime_name, std::move(*animation));
+            }
+        }
         context.scene->runtime->RegisterMaterialConstant(
-            material, glname, std::move(dynamic_value));
+            material, glname, std::move(dynamic_value), std::move(playback));
     }
 }
 
@@ -1861,7 +1857,7 @@ void AttachEffectsToNode(ParseContext& context,
             shader_value_data.parallaxDepth = parallax_depth;
             auto mesh = std::make_shared<SceneMesh>();
             mesh->AddMaterial(std::move(material));
-            RegisterMaterialConstants(context, mesh->MaterialSlotPtr(), wpmat, shader_info);
+            RegisterMaterialConstants(context, mesh->MaterialSlotPtr(), wpmat, shader_info, runtime_name);
             effect_node->AddMesh(mesh);
             context.shader_updater->SetNodeData(effect_node.get(), shader_value_data);
             image_effect->nodes.push_back({ matOutRT, effect_node });
@@ -2426,6 +2422,9 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
                 puppet = nullptr;
             } else if (puppet->puppet != nullptr) {
                 context.layer_puppets[wpimgobj.id] = puppet->puppet;
+                auto layer = WPPuppetLayer(puppet->puppet);
+                layer.prepared(wpimgobj.puppet_layers);
+                context.layer_puppet_animations.emplace(wpimgobj.id, std::move(layer));
             }
         }
     }
@@ -2454,18 +2453,15 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
         wpimgobj.id,
         &context.pending_scene_scripts);
     auto registerImageNode = [&context, &wpimgobj, &spImgNode]() {
-        if (const auto offset =
-                ResolveLayerAttachmentOffset(context, wpimgobj.parent_id, wpimgobj.attachment)) {
-            spImgNode->SetTranslate(spImgNode->Translate() + *offset);
-        }
         context.layer_parent_ids[wpimgobj.id] = wpimgobj.parent_id;
     };
-    const auto registerImageAlphaAnimation = [&context, &wpimgobj](std::shared_ptr<SceneMaterial> material) {
+    const auto registerImageAlphaAnimation = [&context, &wpimgobj, &runtime_name](std::shared_ptr<SceneMaterial> material) {
         if (context.scene->runtime == nullptr || material == nullptr || ! wpimgobj.dynamic_alpha)
             return;
         const auto animation = ResolveScalarAnimation(wpimgobj.alpha_setting);
         if (! animation.has_value()) return;
-        context.scene->runtime->RegisterMaterialAlphaAnimation(material, *animation);
+        context.scene->runtime->RegisterMaterialAlphaAnimation(material,
+            context.scene->runtime->RegisterScalarAnimation(runtime_name, *animation));
     };
     if (context.scene->runtime != nullptr) {
         context.scene->runtime->RegisterNode(runtime_name, spImgNode.get());
@@ -2651,14 +2647,14 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
             auto        material_slot      = mesh.MaterialSlotPtr(material_slot_index);
             context.shader_updater->SetNodeData(
                 spImgNode.get(), material_slot_index, slot.shader_value_data);
-            RegisterMaterialConstants(context, material_slot, slot.source, slot.shader_info);
+            RegisterMaterialConstants(context, material_slot, slot.source, slot.shader_info, runtime_name);
             registerImageAlphaAnimation(material_slot);
             RegisterNodeVideoTextureRuntime(context, runtime_name, material_slot.get());
         }
     } else {
         mesh.AddMaterial(std::move(material));
         RemapSubmeshesToMaterialSlot(mesh, 0);
-        RegisterMaterialConstants(context, spMesh->MaterialSlotPtr(), wpimgobj.material, shaderInfo);
+        RegisterMaterialConstants(context, spMesh->MaterialSlotPtr(), wpimgobj.material, shaderInfo, runtime_name);
         registerImageAlphaAnimation(spMesh->MaterialSlotPtr());
         RegisterNodeVideoTextureRuntime(context, runtime_name, spMesh->Material());
     }
@@ -2755,7 +2751,7 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
                     RegisterMaterialConstants(context,
                                               passthrough_mesh->MaterialSlotPtr(),
                                               passthrough_wp_material,
-                                              passthrough_shader_info);
+                                              passthrough_shader_info, runtime_name);
                     passthrough_node->AddMesh(passthrough_mesh);
                     context.shader_updater->SetNodeData(passthrough_node.get(),
                                                         passthrough_sv_data);
@@ -2895,7 +2891,7 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
                     }
                 }
                 spMesh->AddMaterial(std::move(material));
-                RegisterMaterialConstants(context, spMesh->MaterialSlotPtr(), wpmat, wpEffShaderInfo);
+                RegisterMaterialConstants(context, spMesh->MaterialSlotPtr(), wpmat, wpEffShaderInfo, runtime_name);
                 registerImageAlphaAnimation(spMesh->MaterialSlotPtr());
                 spEffNode->AddMesh(spMesh);
 
@@ -3253,7 +3249,8 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
     LoadControlPoint(*particleSub, particle_obj);
 
     mesh.AddMaterial(std::move(material));
-    RegisterMaterialConstants(context, spMesh->MaterialSlotPtr(), particle_obj.material, shaderInfo);
+    RegisterMaterialConstants(context, spMesh->MaterialSlotPtr(), particle_obj.material, shaderInfo,
+                              LayerRuntimeName(context, wppartobj));
     if (! is_child && context.scene->runtime != nullptr && spMesh->Material() != nullptr) {
         const auto runtime_name = LayerRuntimeName(context, wppartobj);
         for (const auto& texture_name : spMesh->Material()->textures) {
@@ -3600,6 +3597,7 @@ std::shared_ptr<Scene> WPSceneParser::Parse(const SceneParseRequest& request,
     }
 
     AttachRemainingLayerNodes(context);
+    RegisterLayerAttachments(context);
     SyncImageEffectFinalTransforms(context);
 
     if (context.scene->runtime != nullptr) {

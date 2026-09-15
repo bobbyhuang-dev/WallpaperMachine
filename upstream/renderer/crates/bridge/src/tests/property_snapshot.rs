@@ -1,4 +1,4 @@
-use crate::{BridgeErrorKind, BridgePropertyKind, BridgePropertyValue, WallpaperBridge};
+use crate::{BridgeErrorKind, BridgePropertyKind, BridgePropertyValue, BridgeWallpaperOptionsSnapshot, WallpaperBridge};
 
 fn assert_f64_close(actual: f64, expected: f64) {
     assert!(
@@ -216,4 +216,144 @@ async fn restore_unknown_property_returns_invalid_input_without_dirtying_draft()
         .unwrap();
     assert!(!snapshot.dirty);
     assert!(snapshot.properties.iter().all(|property| !property.dirty));
+}
+
+#[tokio::test]
+async fn combo_snapshot_options_preserve_labels_and_use_editable_value_types() {
+    let bridge = WallpaperBridge::new_for_test();
+    bridge
+        .inject_scene_project_for_test(
+            "100",
+            "Scene",
+            r#"{
+                "type":"scene",
+                "general":{"properties":{
+                    "choice":{"type":"combo","value":1,"options":[
+                        {"label":"English","value":1},
+                        {"label":"日本語","value":"2"},
+                        {"label":"Enabled","value":true},
+                        {"label":"Color-like identifier","value":"0.1 0.2 0.3"}
+                    ]}
+                }}
+            }"#,
+        )
+        .await;
+    bridge.select_wallpaper("100".to_string()).await.unwrap();
+
+    let snapshot = bridge
+        .wallpaper_options_snapshot("100".to_string())
+        .await
+        .unwrap();
+    let choice = &snapshot.properties[0];
+    assert_eq!(choice.kind, BridgePropertyKind::Combo);
+    assert_eq!(choice.value, BridgePropertyValue::String { value: "1".into() });
+    assert_eq!(choice.default_value, choice.value);
+    assert_eq!(
+        choice.combo_options.iter().map(|option| (option.label.as_str(), &option.value)).collect::<Vec<_>>(),
+        vec![
+            ("English", &BridgePropertyValue::String { value: "1".into() }),
+            ("日本語", &BridgePropertyValue::String { value: "2".into() }),
+            ("Enabled", &BridgePropertyValue::String { value: "true".into() }),
+            ("Color-like identifier", &BridgePropertyValue::String { value: "0.1 0.2 0.3".into() }),
+        ]
+    );
+
+    for option in &choice.combo_options {
+        let edited = bridge
+            .edit_property("100".to_string(), "choice".to_string(), option.value.clone())
+            .await
+            .unwrap()
+            .wallpaper_options;
+        assert_eq!(edited.properties[0].value, option.value);
+    }
+    let restored = bridge
+        .restore_property_default("100".to_string(), "choice".to_string())
+        .await
+        .unwrap()
+        .wallpaper_options;
+    assert_eq!(restored.properties[0].value, choice.default_value);
+    assert!(!restored.dirty);
+}
+
+fn assert_property_ids(snapshot: &BridgeWallpaperOptionsSnapshot, expected: &[&str]) {
+    assert_eq!(
+        snapshot.properties.iter().map(|property| property.id.as_str()).collect::<Vec<_>>(),
+        expected
+    );
+}
+
+#[tokio::test]
+async fn conditional_snapshot_tracks_language_defaults_discard_and_hidden_overrides() {
+    let bridge = WallpaperBridge::new_for_test();
+    bridge
+        .inject_scene_project_for_test(
+            "100",
+            "Scene",
+            r#"{
+                "type":"scene",
+                "general":{"properties":{
+                    "language":{"type":"combo","value":"1","index":0,"options":[
+                        {"label":"English","value":"1"},
+                        {"label":"日本語","value":"2"}
+                    ]},
+                    "english":{"type":"bool","value":true,"index":1,"condition":"language.value == 1"},
+                    "japanese":{"type":"text","text":"日本語","index":2,"condition":"language.value == 2"},
+                    "dependent":{"type":"text","text":"Disabled","index":3,"condition":"!english.value"},
+                    "malformed":{"type":"text","text":"Still visible","index":4,"condition":"language.value = 1"}
+                }}
+            }"#,
+        )
+        .await;
+    bridge.select_wallpaper("100".to_string()).await.unwrap();
+
+    let initial = bridge
+        .wallpaper_options_snapshot("100".to_string())
+        .await
+        .unwrap();
+    assert_property_ids(&initial, &["language", "english", "malformed"]);
+
+    let edited = bridge
+        .edit_property("100".to_string(), "english".to_string(), BridgePropertyValue::Bool { value: false })
+        .await
+        .unwrap()
+        .wallpaper_options;
+    assert_property_ids(&edited, &["language", "english", "dependent", "malformed"]);
+
+    let japanese = bridge
+        .edit_property("100".to_string(), "language".to_string(), BridgePropertyValue::String { value: "2".into() })
+        .await
+        .unwrap()
+        .wallpaper_options;
+    assert_property_ids(&japanese, &["language", "japanese", "dependent", "malformed"]);
+    assert!(japanese.dirty);
+
+    let restored = bridge
+        .restore_property_default("100".to_string(), "language".to_string())
+        .await
+        .unwrap()
+        .wallpaper_options;
+    assert_property_ids(&restored, &["language", "english", "dependent", "malformed"]);
+    let english = restored.properties.iter().find(|property| property.id == "english").unwrap();
+    assert_eq!(english.value, BridgePropertyValue::Bool { value: false });
+    assert!(english.dirty);
+
+    bridge
+        .edit_property("100".to_string(), "language".to_string(), BridgePropertyValue::String { value: "2".into() })
+        .await
+        .unwrap();
+    let discarded = bridge
+        .cancel_wallpaper_options("100".to_string())
+        .await
+        .unwrap()
+        .wallpaper_options;
+    assert_eq!(discarded.properties, initial.properties);
+    assert!(!discarded.dirty);
+
+    // A hidden property's authored default must still participate in conditions.
+    let japanese_default = bridge
+        .edit_property("100".to_string(), "language".to_string(), BridgePropertyValue::String { value: "2".into() })
+        .await
+        .unwrap()
+        .wallpaper_options;
+    assert_property_ids(&japanese_default, &["language", "japanese", "malformed"]);
 }

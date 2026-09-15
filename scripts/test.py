@@ -16,9 +16,10 @@ def main():
     target = "MacWallpaperEngineUITests" if args.ui else "MacWallpaperEngineTests"
     if args.ui:
         print("Desktop automation explicitly enabled: do not use the mouse or keyboard during this run.", flush=True)
-    version_tests = subprocess.run([sys.executable, str(root / "scripts" / "test_bump_version.py")], cwd=root)
-    if version_tests.returncode != 0:
-        return version_tests.returncode
+    for module in ["test_bump_version.py", "test_glyphs.py"]:
+        script_tests = subprocess.run([sys.executable, str(root / "scripts" / module)], cwd=root)
+        if script_tests.returncode != 0:
+            return script_tests.returncode
     subprocess.run(["xcodegen", "generate"], cwd=root, check=True)
     prefix = "UI-" if args.ui else "Tests-"
     result = root / "build" / (prefix + datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".xcresult")

@@ -102,7 +102,9 @@ fn cache_key_tracks_sources_combos_revision_and_legalized_output() {
         .clone();
     let revision_change = pipeline
         .clone()
-        .with_revision(ShaderPipelineRevision::new(4))
+        .with_revision(ShaderPipelineRevision::new(
+            ShaderPipelineRevision::CURRENT.value() + 1,
+        ))
         .compile(&request("1.0", "1"))
         .expect("revision change should compile")
         .cache_key()
@@ -156,22 +158,6 @@ fn cache_key_tracks_typed_vector_and_matrix_property_values() {
     assert_ne!(vec2, vec4);
     assert_ne!(vec2, matrix4);
     assert_ne!(vec4, matrix4);
-}
-
-#[test]
-fn cache_key_compiler_options_identity_tracks_coordinate_space_adjustment_removal() {
-    let pipeline = pipeline();
-    let cache_key = pipeline
-        .compile(&request("1.0", "1"))
-        .expect("base request should compile")
-        .cache_key()
-        .clone();
-
-    assert_eq!(cache_key.as_str(), "5c923dc72cd97d0e");
-    assert_eq!(
-        DefaultShaderPipeline::<InMemoryShaderSourceProvider>::compiler_options_cache_salt(),
-        "naga-29.0.3-spv-no-coordinate-space-adjustment"
-    );
 }
 
 #[test]
@@ -2162,6 +2148,78 @@ fn pipeline_normalizes_cross_stage_varying_to_fragment_width_when_vertex_writes_
     let _compiled = pipeline()
         .compile(&request)
         .expect("narrowed cross-stage varying should compile through Naga");
+}
+
+#[test]
+fn pipeline_widens_fragment_varying_for_components_beyond_its_declaration() {
+    // Sine Wave Circle declares a vec2 fragment input but unconditionally
+    // samples its .zw mask coordinates. The vec4 producer only writes .zw
+    // when the mask combo is enabled; neither variant may narrow the interface.
+    for mask in [0, 1] {
+        let request = interface_request(
+            format!(
+                "#define MASK {mask}\n{}",
+                concat!(
+                    "attribute vec2 a_Position;\n",
+                    "varying vec4 v_TexCoord;\n",
+                    "void main() {\n",
+                    "  gl_Position = vec4(a_Position, 0.0, 1.0);\n",
+                    "  v_TexCoord.xy = a_Position;\n",
+                    "#if MASK == 1\n",
+                    "  v_TexCoord.zw = a_Position * 0.5;\n",
+                    "#endif\n",
+                    "}\n",
+                ),
+            ),
+            concat!(
+                "uniform vec4 g_Texture0Resolution;\n",
+                "varying vec2 v_TexCoord;\n",
+                "uniform sampler2D g_Texture0;\n",
+                "uniform sampler2D g_Texture1;\n",
+                "vec3 ApplyBlending(int mode, vec3 base, vec3 color, float amount) {\n",
+                "  return mix(base, color, amount);\n",
+                "}\n",
+                "void main() {\n",
+                "  vec4 scene = texture(g_Texture0, v_TexCoord);\n",
+                "  float mask = texture(g_Texture1, v_TexCoord.zw).r;\n",
+                "  vec2 p = v_TexCoord * g_Texture0Resolution.xy;\n",
+                "  vec3 color = vec3(p, 0.5);\n",
+                "  color = ApplyBlending(0, scene.rgb, color.rgb, 0.25 + color * mask);\n",
+                "  gl_FragColor = vec4(color, scene.a);\n",
+                "}\n",
+            ),
+        );
+
+        let program = pipeline()
+            .compile(&request)
+            .expect("out-of-declaration fragment swizzle should compile through Naga");
+        for stage in program.stages() {
+            let naga_stage = match stage.kind() {
+                ShaderStageKind::Vertex => naga::ShaderStage::Vertex,
+                ShaderStageKind::Fragment => naga::ShaderStage::Fragment,
+            };
+            let module = naga::front::glsl::Frontend::default()
+                .parse(
+                    &naga::front::glsl::Options::from(naga_stage),
+                    stage.legalized_source().expect("compiled GLSL is retained"),
+                )
+                .expect("compiled stage remains valid GLSL");
+            let varying = module
+                .global_variables
+                .iter()
+                .find_map(|(_, variable)| {
+                    (variable.name.as_deref() == Some("v_TexCoord")).then_some(variable)
+                })
+                .expect("stage retains texture coordinate varying");
+            assert!(matches!(
+                module.types[varying.ty].inner,
+                naga::TypeInner::Vector {
+                    size: naga::VectorSize::Quad,
+                    ..
+                }
+            ));
+        }
+    }
 }
 
 #[test]

@@ -84,6 +84,27 @@ final class SteamCMDApprovalTests: XCTestCase {
         XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: record.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
 
+    func testPrivateCopyDropsTheDownloadMarkAndLeavesTheInstallationMarked() async throws {
+        let fixture = try ApprovalFixture()
+        defer { fixture.remove() }
+        // macOS refuses to load a quarantined library into a process, so a marked private copy
+        // cannot dlopen Valve's steamclient.dylib when a download starts.
+        for url in [fixture.executable, fixture.resource] {
+            try fixture.attribute("com.apple.quarantine", value: "0083;fixture", at: url)
+        }
+        let service = fixture.service(runner: ApprovalSystemRunner(assessmentStatus: 0))
+        let privateCopy = fixture.directory.appendingPathComponent("private-copy")
+        let prepared = try await service.prepare(executable: fixture.executable, staging: privateCopy)
+        let copiedResource = privateCopy.appendingPathComponent("Frameworks/Breakpad.framework/Versions/A/Resources/Info.txt")
+        XCTAssertEqual(try Data(contentsOf: prepared), try Data(contentsOf: fixture.executable))
+        for url in [prepared, copiedResource] {
+            XCTAssertNil(try fixture.attribute("com.apple.quarantine", at: url))
+        }
+        for url in [fixture.executable, fixture.resource] {
+            XCTAssertEqual(try fixture.attribute("com.apple.quarantine", at: url), "0083;fixture")
+        }
+    }
+
     func testChangedImageRevokesApprovalAndStaleCandidateCannotClearQuarantine() async throws {
         let fixture = try ApprovalFixture()
         defer { fixture.remove() }

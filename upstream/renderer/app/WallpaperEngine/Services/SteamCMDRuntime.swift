@@ -311,6 +311,11 @@ struct SteamCMDRuntimeService: SteamCMDRuntimeProviding, SteamCMDRuntimeApprovin
                 try files.copyItem(at: source, to: staging.appendingPathComponent(name))
             }
         }
+        // macOS refuses to load a quarantined library into a process, so Valve's dlopen'd
+        // components (steamclient.dylib and its siblings) fail with "library load disallowed
+        // by system policy" at download time. Drop the download mark from this private copy
+        // only; the selected installation is never touched, and the copy is revalidated below.
+        _ = try fingerprint(at: canonicalURL(staging), removingQuarantine: true)
         // Revalidate the actual private copy, not just the source descriptor.
         try await validate(at: staging)
         return staging.appendingPathComponent("steamcmd")

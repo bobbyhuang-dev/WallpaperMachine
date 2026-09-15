@@ -1,0 +1,69 @@
+# Build the Release app on macOS and attach it to the tag's GitHub Release.
+#
+# Called by Version right after it pushes a bump tag, and by Release for hand-pushed
+# tags. Version has to call it directly: a tag pushed with GITHUB_TOKEN never starts
+# another workflow, so Release alone would never run for CI-produced tags.
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Version tag to build and publish."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Install renderer and Xcode project dependencies
+        run: |
+          set -euo pipefail
+          brew install --quiet xcodegen cmake quickjs-ng glslang ffmpeg@8 freetype lz4 \
+            vulkan-loader vulkan-headers molten-vk eigen nlohmann-json argparse shaderc \
+            spirv-tools glm
+
+      - name: Cache renderer build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            upstream/renderer/target
+          key: renderer-${{ hashFiles('upstream/renderer/Cargo.lock') }}
+          restore-keys: renderer-
+
+      - name: Build and package
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          python3 scripts/build.py --configuration Release
+          python3 scripts/package.py --configuration Release
+
+      - name: Publish the release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          # package.py names the archive from CFBundleShortVersionString, so a mismatch here
+          # means the bump never reached the build the in-app updater would download.
+          archive="build/Build/Products/Release/MacWallpaperEngine-${TAG#v}-arm64.zip"
+          if [ ! -f "$archive" ]; then
+            echo "Built archive does not match ${TAG}:"
+            ls build/Build/Products/Release/*.zip || true
+            exit 1
+          fi
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+          fi
+          gh release upload "$TAG" "$archive" --clobber

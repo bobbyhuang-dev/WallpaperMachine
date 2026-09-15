@@ -1,10 +1,11 @@
-# Bump MARKETING_VERSION from a `release:` commit on main.
+# Bump MARKETING_VERSION from a `release:` commit on main, then build and publish it.
 #
 # Commit subject (or any line in a pushed commit, including a squash title):
 #   release: patch | minor | major | x.y.z | vx.y.z
 #
 # CI updates project.yml and mac-wallpaper-engine.xcodeproj, commits
-# `chore: bump version to x.y.z`, and tags `vx.y.z`.
+# `chore: bump version to x.y.z`, tags `vx.y.z`, and calls Build for that tag.
+# The call is required: a tag pushed with GITHUB_TOKEN never starts Release itself.
 name: Version
 
 on:
@@ -18,16 +19,20 @@ on:
         default: patch
         type: string
 
-concurrency:
-  group: version-${{ github.ref }}
-  cancel-in-progress: false
-
 permissions:
   contents: write
 
 jobs:
   bump:
     runs-on: ubuntu-latest
+    # Lock the branch only while the bump commit is produced. A workflow-wide group would
+    # hold it through the macOS build, and GitHub keeps only the newest pending run, so a
+    # queued `release:` push could be replaced by a later ordinary push and silently lost.
+    concurrency:
+      group: version-${{ github.ref }}
+      cancel-in-progress: false
+    outputs:
+      tag: ${{ steps.push.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,6 +45,7 @@ jobs:
         run: python3 scripts/bump_version.py --ci --apply
 
       - name: Commit, tag, and push
+        id: push
         if: steps.bump.outputs.changed == 'true'
         env:
           VERSION: ${{ steps.bump.outputs.new_marketing }}
@@ -57,3 +63,16 @@ jobs:
           git commit -m "chore: bump version to ${VERSION}"
           git tag "${TAG}"
           git push --atomic origin "HEAD:${{ github.ref_name }}" "refs/tags/${TAG}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: bump
+    if: needs.bump.outputs.tag != ''
+    uses: ./.github/workflows/build.yml
+    with:
+      tag: ${{ needs.bump.outputs.tag }}
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-${{ needs.bump.outputs.tag }}
+      cancel-in-progress: false

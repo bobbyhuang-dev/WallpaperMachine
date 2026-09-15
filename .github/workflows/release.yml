@@ -1,7 +1,6 @@
-# Create a GitHub Release for version tags produced by the Version workflow.
-# Attach MacWallpaperEngine-x.y.z-arm64.zip from a local
-# `python3 scripts/build.py --configuration Release` plus `python3 scripts/package.py`
-# when publishing a downloadable in-app update.
+# Build and publish a GitHub Release for a hand-pushed version tag.
+# Tags created by the Version workflow are published by that workflow instead,
+# because a tag pushed with GITHUB_TOKEN does not start this one.
 name: Release
 
 on:
@@ -12,24 +11,14 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release ${tag} already exists."
-            exit 0
-          fi
-          gh release create "$tag" --title "$tag" --generate-notes --verify-tag
+  publish:
+    uses: ./.github/workflows/build.yml
+    with:
+      tag: ${{ github.ref_name }}
+    permissions:
+      contents: write
+    # Same group as Version's publish job: one tag is only ever built once at a time.
+    concurrency:
+      group: publish-${{ github.ref_name }}
+      cancel-in-progress: false

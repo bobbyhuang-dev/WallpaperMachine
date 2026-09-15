@@ -35,6 +35,9 @@ struct SteamCMDRuntimeService: SteamCMDRuntimeProviding, SteamCMDRuntimeApprovin
         "steamconsole.dylib", "steamclient.dylib", "libtier0_s.dylib", "libvstdlib_s.dylib",
         "libaudio.dylib", "libsteaminput.dylib", "public", "package"
     ]
+    /// Valve's Developer ID team. Only the spawned executable can be pinned to it: Valve ships
+    /// libsteaminput.dylib ad-hoc signed, so the runtime has no single signing authority.
+    private static let valveAuthority = #"anchor apple generic and certificate leaf[subject.OU] = "MXGJJ98X76""#
 
     init(processRunner: any SteamCMDProcessRunning = SteamCMDProcessRunner(),
          approvalDirectory: URL = ClientPaths.supportURL.appendingPathComponent("SteamCMDApprovals", isDirectory: true)) {
@@ -362,14 +365,26 @@ struct SteamCMDRuntimeService: SteamCMDRuntimeProviding, SteamCMDRuntimeApprovin
             }
         }
         let frameworkBinary = canonicalURL(framework.appendingPathComponent("Breakpad"))
-        guard binaries[frameworkBinary] != nil else { throw issue(.incompleteRuntime, "Breakpad.framework has no valid Mach-O binary.") }
+        guard let frameworkImages = binaries[frameworkBinary] else { throw issue(.incompleteRuntime, "Breakpad.framework has no valid Mach-O binary.") }
         let executableImages = binaries[descriptor.executableURL] ?? []
         try validateDependencies(binaries, runtime: descriptor)
         let verifiedFingerprint = try fingerprint(at: canonical)
-        // Verify resource seals as well as every Mach-O image. No repair/sign operation exists here.
-        for target in [framework] + binaries.keys.sorted(by: { $0.path < $1.path }) {
-            let status = try await runSystem("/usr/bin/codesign", ["--verify", "--deep", "--strict", target.path], root: canonical).status
-            guard status == 0 else { throw issue(.invalidSignature, "SteamCMD signature validation failed for \(target.path). Select a valid installation or reinstall; no signatures were changed.") }
+        // Valve rules out both a bundle-wide and a whole-file verification: their updater installs a
+        // Breakpad.framework whose sealed Headers/Breakpad.h no longer matches its own CodeResources,
+        // and steamclient.dylib keeps unsigned bytes in its fat-header padding, which fails a universal
+        // verify while every slice verifies. Check the code seal dyld actually enforces, once per slice,
+        // across every Mach-O image found by walking the runtime; that reaches more than --deep, which
+        // only follows sealed resources. No repair/sign operation exists here.
+        let signed = [(framework, frameworkImages)] + binaries.sorted { $0.key.path < $1.key.path }.map { ($0.key, $0.value) }
+        for (target, images) in signed {
+            let requirement = target == descriptor.executableURL ? ["-R=" + Self.valveAuthority] : []
+            for image in images {
+                let architecture = try architectureName(for: image.cpu, at: target)
+                let status = try await runSystem("/usr/bin/codesign",
+                                                 ["--verify", "--strict", "--ignore-resources", "--arch", architecture] + requirement + [target.path],
+                                                 root: canonical).status
+                guard status == 0 else { throw issue(.invalidSignature, "SteamCMD signature validation failed for \(target.path). Select a valid installation or reinstall; no signatures were changed.") }
+            }
         }
         let assessment = try await runSystem("/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose=2", descriptor.executableURL.path], root: canonical)
         // spctl(8): only exit 3 is policy denial; 1/2/4 are operational failures.
@@ -540,6 +555,17 @@ struct SteamCMDRuntimeService: SteamCMDRuntimeProviding, SteamCMDRuntimeApprovin
         return value
     }
 
+    /// codesign needs an explicit slice: Valve's steamclient.dylib carries unsigned bytes in its
+    /// fat-header padding, which makes a whole-file verification fail while each slice verifies.
+    private func architectureName(for cpu: UInt32, at url: URL) throws -> String {
+        switch cpu {
+        case 0x0100_000c: return "arm64"
+        case 0x0100_0007: return "x86_64"
+        case 0x0000_0007: return "i386"
+        default: throw issue(.incompleteRuntime, "Unsupported SteamCMD runtime architecture in \(url.path).")
+        }
+    }
+
     private func expanded(_ path: String, loader: URL, executable: URL, root: URL) throws -> URL {
         let url: URL
         if path == "@loader_path" || path.hasPrefix("@loader_path/") {
@@ -698,7 +724,9 @@ private enum MachO {
             let offset = Int(offsetValue), size = Int(sizeValue)
             guard offset >= 8 + count * row, offset <= data.count, size <= data.count - offset else { throw malformed() }
             let range = offset..<(offset + size)
-            guard !ranges.contains(where: { $0.overlaps(range) }) else { throw malformed() }
+            // Dependency resolution and codesign's --arch both select a slice by CPU type alone,
+            // so a repeated type would leave one slice unresolved and unverified.
+            guard !ranges.contains(where: { $0.overlaps(range) }), !images.contains(where: { $0.cpu == cpu }) else { throw malformed() }
             ranges.append(range)
             let parsed = try image(offset, size)
             guard parsed.cpu == cpu else { throw malformed() }

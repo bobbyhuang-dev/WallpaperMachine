@@ -722,6 +722,35 @@ final class DownloaderTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: executable), malformed)
     }
 
+    func testFatBinaryRepeatingOneCPUTypeIsRejectedWithoutModifyingSource() throws {
+        let root = try makeRuntime("exit 0")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("runtime/steamcmd")
+        // Two x86_64 slices differing only by subtype: a CPU-keyed selection resolves one and
+        // would leave the other unvalidated and unverified by codesign --arch.
+        let slice = fixtureMachO(fileType: 2)
+        var fat = Data()
+        func append(_ values: [UInt32]) {
+            for value in values {
+                var bigEndian = value.bigEndian
+                withUnsafeBytes(of: &bigEndian) { fat.append(contentsOf: $0) }
+            }
+        }
+        let first = 4096, second = 8192
+        append([0xcafebabe, 2])
+        append([0x01000007, 3, UInt32(first), UInt32(slice.count), 12])
+        append([0x01000007, 8, UInt32(second), UInt32(slice.count), 12])
+        fat.append(Data(repeating: 0, count: first - fat.count))
+        fat.append(slice)
+        fat.append(Data(repeating: 0, count: second - fat.count))
+        fat.append(slice)
+        try fat.write(to: executable)
+        XCTAssertThrowsError(try SteamCMDRuntimeService().resolve(executable: executable)) { error in
+            XCTAssertEqual((error as? SteamCMDSetupIssue)?.kind, .incompleteRuntime)
+        }
+        XCTAssertEqual(try Data(contentsOf: executable), fat)
+    }
+
     func testDefaultProviderPreservesContainedFrameworkLinksAcrossPrivateVarAliases() async throws {
         let files = FileManager.default
         let directory = try makeMachOFrameworkRuntime()

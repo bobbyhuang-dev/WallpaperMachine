@@ -1087,6 +1087,9 @@
     "Missing architecture-compatible runtime image: %@" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Missing architecture-compatible runtime image: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "缺少架构兼容的运行时二进制文件：%@"}}}
     },
+    "Unsupported SteamCMD runtime architecture in %@." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Unsupported SteamCMD runtime architecture in %@."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "%@ 中的 SteamCMD 运行时架构不受支持。"}}}
+    },
     "SteamCMD system validation timed out while running %@. Retry after checking system security prompts." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD system validation timed out while running %@. Retry after checking system security prompts."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD 系统验证在运行 %@ 时超时。请检查系统安全提示后重试。"}}}
     },

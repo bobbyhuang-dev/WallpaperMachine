@@ -35,6 +35,18 @@ final class SteamCMDApprovalTests: XCTestCase {
         XCTAssertEqual(try fixture.attribute("com.apple.quarantine", at: fixture.executable), "0081;fixture")
     }
 
+    func testBrokenBundleResourceSealValidatesWhileTheExecutableStaysPinnedToValve() async throws {
+        let fixture = try ApprovalFixture()
+        defer { fixture.remove() }
+        // Valve's own updater installs a Breakpad.framework whose sealed Headers/Breakpad.h no longer
+        // matches its CodeResources, so any bundle-wide resource check rejects a genuine installation.
+        let sealed = ApprovalSystemRunner(assessmentStatus: 0, sealedResourcesModified: true)
+        try await fixture.service(runner: sealed).validate(at: fixture.runtime)
+        // Skipping resource seals is only safe while the executable this app spawns stays Valve's.
+        let foreign = ApprovalSystemRunner(assessmentStatus: 0, satisfiesRequirement: false)
+        await expect(.invalidSignature) { try await fixture.service(runner: foreign).validate(at: fixture.runtime) }
+    }
+
     func testExplicitApprovalIsNarrowAndSurvivesRelaunchAndPrivateCopy() async throws {
         let fixture = try ApprovalFixture()
         defer { fixture.remove() }
@@ -256,18 +268,28 @@ private actor ApprovalSystemRunner: SteamCMDProcessRunning {
     let signatureStatus: Int32
     let assessmentStatus: Int32
     let assessmentOutput: String
+    let sealedResourcesModified: Bool
+    let satisfiesRequirement: Bool
     private(set) var assessments = 0
-    init(signatureStatus: Int32 = 0, assessmentStatus: Int32 = 3, assessmentOutput: String = "") {
+    init(signatureStatus: Int32 = 0, assessmentStatus: Int32 = 3, assessmentOutput: String = "",
+         sealedResourcesModified: Bool = false, satisfiesRequirement: Bool = true) {
         self.signatureStatus = signatureStatus
         self.assessmentStatus = assessmentStatus
         self.assessmentOutput = assessmentOutput
+        self.sealedResourcesModified = sealedResourcesModified
+        self.satisfiesRequirement = satisfiesRequirement
     }
 
     func run(executable: URL, arguments: [String], workingDirectory: URL, environment: [String: String],
              onOutput: @escaping @Sendable (Data) -> Void) async throws -> Int32 {
         try Task.checkCancellation()
         switch executable.path {
-        case "/usr/bin/codesign": return signatureStatus
+        case "/usr/bin/codesign":
+            // codesign(1): resource seals are only read without --ignore-resources, and an
+            // unsatisfied -R requirement exits 3 rather than reporting a broken signature.
+            if sealedResourcesModified, !arguments.contains("--ignore-resources") { return 1 }
+            if !satisfiesRequirement, arguments.contains(where: { $0.hasPrefix("-R=") }) { return 3 }
+            return signatureStatus
         case "/usr/sbin/spctl":
             assessments += 1
             if !assessmentOutput.isEmpty { onOutput(Data(assessmentOutput.utf8)) }

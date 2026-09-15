@@ -117,8 +117,10 @@ Run the same bump locally with `python3 scripts/bump_version.py --spec patch --a
 or from **Actions → Version → Run workflow**. The workflow needs permission to
 push to `main` (contents write, and branch protection must allow GitHub Actions).
 
-Tagging `vx.y.z` also creates a GitHub Release. Settings → About can check that
-release, download `MacWallpaperEngine-x.y.z-arm64.zip` after confirmation, and
-restart-install an Applications copy. Attach the zip from
-`python3 scripts/package.py --configuration Release` so in-app download has an
-asset; without it the app opens GitHub Releases for a manual update.
+Tagging `vx.y.z` publishes a GitHub Release. The Version workflow calls the Build
+workflow for the tag it just pushed, because a tag pushed with `GITHUB_TOKEN` never
+starts another workflow; a hand-pushed tag goes through the Release workflow instead.
+Build runs on a `macos-26` runner, produces `MacWallpaperEngine-x.y.z-arm64.zip` with
+`scripts/build.py` and `scripts/package.py`, and uploads it to the release. Settings →
+About checks that release, downloads the zip after confirmation, and restart-installs
+an Applications copy; with no asset the app opens GitHub Releases for a manual update.

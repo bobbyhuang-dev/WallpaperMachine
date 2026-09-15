@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""Bump app versions from a `release:` commit message.
+
+Commit subject or a line in the message:
+
+  release: patch
+  release: minor
+  release: major
+  release: 1.2.3
+  release: v1.2.3
+
+`project.yml` is the source of truth. The generated Xcode project is updated
+to match so a committed pbxproj stays in sync without running xcodegen.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+PROJECT_YML = "project.yml"
+PBXPROJ = "mac-wallpaper-engine.xcodeproj/project.pbxproj"
+
+RELEASE_LINE = re.compile(
+    r"^release:\s*v?(major|minor|patch|\d+\.\d+\.\d+)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+YML_MARKETING = re.compile(r'(MARKETING_VERSION:\s*")([^"]+)(")')
+YML_BUILD = re.compile(r'(CURRENT_PROJECT_VERSION:\s*")([^"]+)(")')
+PBX_MARKETING = re.compile(r"(MARKETING_VERSION = )([^;]+)(;)")
+PBX_BUILD = re.compile(r"(CURRENT_PROJECT_VERSION = )([^;]+)(;)")
+BUMP_RANK = {"patch": 1, "minor": 2, "major": 3}
+
+
+class VersionError(Exception):
+    pass
+
+
+def parse_specs(message: str) -> list[str]:
+    return [match.group(1).lower() for match in RELEASE_LINE.finditer(message or "")]
+
+
+def resolve_specs(specs: list[str]) -> str | None:
+    if not specs:
+        return None
+    explicit = [spec for spec in specs if spec[0].isdigit()]
+    if explicit:
+        return explicit[-1]
+    return max(specs, key=lambda spec: BUMP_RANK[spec])
+
+
+def parse_semver(value: str) -> tuple[int, int, int]:
+    match = SEMVER.fullmatch(value.strip())
+    if not match:
+        raise VersionError(f"invalid version {value!r}; expected x.y.z")
+    return int(match.group(1)), int(match.group(2)), int(match.group(3))
+
+
+def format_semver(parts: tuple[int, int, int]) -> str:
+    return f"{parts[0]}.{parts[1]}.{parts[2]}"
+
+
+def bump_marketing(current: str, spec: str) -> str:
+    spec = spec.lower().lstrip("v")
+    if not spec:
+        raise VersionError("empty release spec")
+    if spec[0].isdigit():
+        target = format_semver(parse_semver(spec))
+        if parse_semver(target) < parse_semver(current):
+            raise VersionError(f"refusing to lower version from {current} to {target}")
+        return target
+    if spec not in BUMP_RANK:
+        raise VersionError(f"unknown release spec {spec!r}")
+    major, minor, patch = parse_semver(current)
+    if spec == "major":
+        return format_semver((major + 1, 0, 0))
+    if spec == "minor":
+        return format_semver((major, minor + 1, 0))
+    return format_semver((major, minor, patch + 1))
+
+
+def read_yml_versions(text: str) -> tuple[str, str]:
+    marketing = YML_MARKETING.search(text)
+    build = YML_BUILD.search(text)
+    if not marketing or not build:
+        raise VersionError("project.yml is missing MARKETING_VERSION or CURRENT_PROJECT_VERSION")
+    return marketing.group(2), build.group(2)
+
+
+def _replace_all(pattern: re.Pattern[str], text: str, value: str, label: str) -> str:
+    updated, count = pattern.subn(rf"\g<1>{value}\g<3>", text)
+    if count == 0:
+        raise VersionError(f"no {label} entries to update")
+    return updated
+
+
+def replace_project_yml(text: str, marketing: str, build: str) -> str:
+    text = _replace_all(YML_MARKETING, text, marketing, "MARKETING_VERSION")
+    return _replace_all(YML_BUILD, text, build, "CURRENT_PROJECT_VERSION")
+
+
+def replace_pbxproj(text: str, marketing: str, build: str) -> str:
+    text = _replace_all(PBX_MARKETING, text, marketing, "MARKETING_VERSION")
+    return _replace_all(PBX_BUILD, text, build, "CURRENT_PROJECT_VERSION")
+
+
+def next_build(current: str) -> str:
+    try:
+        number = int(current)
+    except ValueError as error:
+        raise VersionError(f"CURRENT_PROJECT_VERSION must be an integer, got {current!r}") from error
+    if number < 1:
+        raise VersionError(f"CURRENT_PROJECT_VERSION must be >= 1, got {current}")
+    return str(number + 1)
+
+
+def collect_event_messages(event: dict) -> list[str]:
+    messages: list[str] = []
+    head = (event.get("head_commit") or {}).get("message") or ""
+    if head:
+        messages.append(head)
+    for commit in event.get("commits") or []:
+        message = commit.get("message") or ""
+        if message and message not in messages:
+            messages.append(message)
+    return messages
+
+
+def spec_from_messages(messages: list[str]) -> str | None:
+    specs: list[str] = []
+    for message in messages:
+        specs.extend(parse_specs(message))
+    return resolve_specs(specs)
+
+
+def plan_bump(root: Path, spec: str) -> dict[str, str | bool]:
+    yml_path = root / PROJECT_YML
+    text = yml_path.read_text()
+    current_marketing, current_build = read_yml_versions(text)
+    new_marketing = bump_marketing(current_marketing, spec)
+    changed = new_marketing != current_marketing
+    new_build = next_build(current_build) if changed else current_build
+    return {
+        "spec": spec,
+        "old_marketing": current_marketing,
+        "new_marketing": new_marketing,
+        "old_build": current_build,
+        "new_build": new_build,
+        "changed": changed,
+        "tag": f"v{new_marketing}",
+    }
+
+
+def apply_bump(root: Path, marketing: str, build: str) -> None:
+    yml_path = root / PROJECT_YML
+    pbx_path = root / PBXPROJ
+    yml_path.write_text(replace_project_yml(yml_path.read_text(), marketing, build))
+    pbx_path.write_text(replace_pbxproj(pbx_path.read_text(), marketing, build))
+
+
+def write_github_output(path: Path, result: dict[str, str | bool]) -> None:
+    lines = [f"{key}={str(value).lower() if isinstance(value, bool) else value}" for key, value in result.items()]
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+
+
+def resolve_cli_spec(args: argparse.Namespace) -> str | None:
+    if args.spec:
+        return args.spec.strip().lower().lstrip("v")
+    messages: list[str] = []
+    if args.message:
+        messages.append(args.message)
+    if args.message_file:
+        messages.append(Path(args.message_file).read_text())
+    if args.ci:
+        spec = os.environ.get("RELEASE_SPEC", "").strip()
+        if spec:
+            return spec.lower().lstrip("v")
+        event_path = os.environ.get("GITHUB_EVENT_PATH")
+        if event_path:
+            event = json.loads(Path(event_path).read_text())
+            messages.extend(collect_event_messages(event))
+    return spec_from_messages(messages)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--spec", help="patch, minor, major, or x.y.z")
+    parser.add_argument("--message", help="commit message to scan for release: lines")
+    parser.add_argument("--message-file", help="file containing commit message(s)")
+    parser.add_argument("--apply", action="store_true", help="write project.yml and the Xcode project")
+    parser.add_argument("--ci", action="store_true", help="read RELEASE_SPEC or GITHUB_EVENT_PATH")
+    parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument("--output", help="GitHub Actions output file (defaults to GITHUB_OUTPUT)")
+    args = parser.parse_args()
+    try:
+        spec = resolve_cli_spec(args)
+        if not spec:
+            result: dict[str, str | bool] = {"changed": False, "spec": ""}
+            print("No release: spec in commit message; skipping.")
+        else:
+            result = plan_bump(args.root, spec)
+            if result["changed"] and args.apply:
+                apply_bump(args.root, str(result["new_marketing"]), str(result["new_build"]))
+            if result["changed"]:
+                print(
+                    f"{result['old_marketing']} ({result['old_build']}) -> "
+                    f"{result['new_marketing']} ({result['new_build']})"
+                )
+            else:
+                print(f"Version already {result['new_marketing']}; skipping.")
+        output = args.output or os.environ.get("GITHUB_OUTPUT")
+        if output:
+            write_github_output(Path(output), result)
+        return 0
+    except (VersionError, OSError, json.JSONDecodeError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

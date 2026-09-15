@@ -93,3 +93,23 @@ The app used for local delivery is
 `build/Build/Products/Release/MacWallpaperEngine.app`. Quit and reopen it after a
 successful Release build. See `TESTING.md` for non-desktop verification and the
 manual UI/display checklist.
+
+## Versioning
+
+App and lock-screen extension versions are `MARKETING_VERSION` and
+`CURRENT_PROJECT_VERSION` in `project.yml`. Push to `main` with this commit
+format (subject, a body line, or a squash-merge title) to bump them:
+
+- `release: patch` — 0.1.0 → 0.1.1
+- `release: minor` — 0.1.0 → 0.2.0
+- `release: major` — 0.1.0 → 1.0.0
+- `release: 1.2.3` or `release: v1.2.3` — set that marketing version (must not go backwards)
+
+The Version workflow updates `project.yml` and the generated Xcode project,
+increments the integer build number, commits `chore: bump version to x.y.z`,
+and tags `vx.y.z`. Several `release:` lines in one push take an explicit
+`x.y.z` if present, otherwise the highest of major / minor / patch.
+
+Run the same bump locally with `python3 scripts/bump_version.py --spec patch --apply`,
+or from **Actions → Version → Run workflow**. The workflow needs permission to
+push to `main` (contents write, and branch protection must allow GitHub Actions).

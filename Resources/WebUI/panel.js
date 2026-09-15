@@ -135,7 +135,7 @@ function render() {
   if (!state) return;
   const discover = state.page === 'discover';
   const settings = state.page === 'settings';
-  document.querySelectorAll('[data-page]').forEach(tab => { if (tab.dataset.page === state.page) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current'); tab.disabled = busy('navigate', { page: tab.dataset.page }); });
+  document.querySelectorAll('.tabs [data-page]').forEach(tab => { if (tab.dataset.page === state.page) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current'); tab.disabled = busy('navigate', { page: tab.dataset.page }); });
   morph($('app-identity'), `<span class="app-name">MacWallpaperEngine</span>${state.version ? `<span class="app-version">${escapeHTML(state.version)}</span>` : ''}`);
   morph($('top-actions'), `<label class="sr-only" for="target-display">Target display</label><select id="target-display" data-change="target" aria-label="Target display"${disabled(state.busy)}>${(state.displays || []).map(display => `<option value="${escapeHTML(display.id)}"${display.id === state.targetDisplayID ? ' selected' : ''}${disabled(!display.enabled || display.mode === 'mirror')}>${escapeHTML(display.title)}${display.mode === 'mirror' ? ' (mirrored)' : !display.enabled ? ' (disabled)' : ''}</option>`).join('')}</select>${queueButton()}${button('Renderer source', 'openExternal', { url: 'https://github.com/bigsaltyfishes/wallpaper-engine-for-macos.git' }, { icon: 'external', title: 'Renderer source on GitHub', className: 'quiet renderer-link' })}`);
   $('library-page').hidden = settings;
@@ -180,7 +180,7 @@ function renderGrid(discover) {
   const empty = $('browser-empty'); empty.hidden = items.length > 0;
   $('wallpaper-grid').hidden = !items.length;
   if (!items.length) morph(empty, loading ? `<h1>${discover ? 'Loading Workshop' : 'Loading wallpapers'}</h1><p>${discover ? 'Fetching wallpapers from Steam.' : 'Reading your wallpaper library.'}</p>` : workshop.error && discover ? `<h1>Workshop unavailable</h1><p>${escapeHTML(workshop.error)}</p>${button('Try again', 'workshopRetry', {}, { icon: 'refresh' })}` : `<h1>${discover ? 'No wallpapers found' : state.wallpapers.length ? 'No matching wallpapers' : 'Your wallpaper library is empty'}</h1><p>${discover ? 'Try a different search or remove some filters. Every selected tag must match.' : state.wallpapers.length ? 'Change your search or clear filters to see more wallpapers.' : 'Import a wallpaper folder or find something on the Workshop.'}</p><div class="actions">${discover ? button('Clear search and filters', 'clearWorkshopSearch') : state.wallpapers.length ? button('Clear search and filters', 'clearInstalledSearch') : `${button('Import wallpapers', 'openImport', {}, { icon: 'plus' })}${button('Browse Workshop', 'navigate', { page: 'discover' }, { className: 'primary' })}`}</div>`);
-  morph($('pagination'), discover ? `${workshop.error && items.length ? `<p class="error">${escapeHTML(workshop.error)}</p>${button('Retry', 'workshopRetry')}` : ''}${button('', 'workshopPage', { page: Math.max(1, workshop.page - 1) }, { icon: 'chevronLeft', title: 'Previous page', disabled: loading || workshop.page <= 1 })}<span>Page ${workshop.page || 1} of ${Math.max(1, workshop.totalPages || 1)}</span>${button('', 'workshopPage', { page: workshop.page + 1 }, { icon: 'chevronRight', title: 'Next page', disabled: loading || workshop.page >= workshop.totalPages })}` : '');
+  morph($('pagination'), discover ? `${workshop.error && items.length ? `<p class="error">${escapeHTML(workshop.error)}</p>${button('Retry', 'workshopRetry')}` : ''}${button('', 'workshopPage', { workshopPage: Math.max(1, workshop.page - 1) }, { icon: 'chevronLeft', title: 'Previous page', disabled: loading || workshop.page <= 1 })}<span>Page ${workshop.page || 1} of ${Math.max(1, workshop.totalPages || 1)}</span>${button('', 'workshopPage', { workshopPage: workshop.page + 1 }, { icon: 'chevronRight', title: 'Next page', disabled: loading || workshop.page >= workshop.totalPages })}` : '');
 }
 
 function renderInspector(discover) {
@@ -465,7 +465,7 @@ async function handleAction(action, data, element) {
       await send(action, { id }); return;
     case 'navigate': await send(action, { page: data.page }); return;
     case 'refreshWorkshop': await searchWorkshop(); return;
-    case 'workshopPage': await send(action, { page: Number(data.page) }); $('wallpaper-grid').scrollTop = 0; return;
+    case 'workshopPage': await send(action, { page: Number(data.workshopPage) }); $('wallpaper-grid').scrollTop = 0; return;
     case 'openExternal': await send(action, { url: data.url }); return;
     case 'import': await send(action, { duplicates: importDuplicates }); return;
     case 'forgetAccount': await send(action); if (dialogAccount) dialogAccount.account = ''; render(); return;
@@ -481,9 +481,11 @@ async function handleAction(action, data, element) {
 function run(promise) { Promise.resolve(promise).catch(error => { localError = error?.message || String(error); renderError(); }); }
 document.addEventListener('click', event => {
   if (event.target.closest('#settings-content')) return;
-  const tab = event.target.closest('[data-page]');
-  if (tab) { run(send('navigate', { page: tab.dataset.page })); return; }
   const control = event.target.closest('[data-action]');
+  if (!control) {
+    const tab = event.target.closest('.tabs [data-page]');
+    if (tab) { run(send('navigate', { page: tab.dataset.page })); return; }
+  }
   if (control && !control.disabled) {
     // Apply on the second click instead of starting another selection request first.
     const action = control.matches('.tile-select') && state?.page === 'installed' && event.detail === 2
@@ -549,8 +551,8 @@ document.addEventListener('keydown', event => {
     else if (popover) closePopover(true);
   }
   if (event.key === 'Enter' && event.target.dataset.input === 'property') { event.preventDefault(); run(commitProperty(event.target)); }
-  const tab = event.target.closest('[data-page]');
-  if (tab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const tabs = [...document.querySelectorAll('[data-page]')]; const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (tabs.indexOf(tab) + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length; tabs[index].focus(); }
+  const tab = event.target.closest('.tabs [data-page]');
+  if (tab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const tabs = [...document.querySelectorAll('.tabs [data-page]')]; const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (tabs.indexOf(tab) + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length; tabs[index].focus(); }
   const tile = event.target.closest('.tile-select');
   if (tile && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
     event.preventDefault();

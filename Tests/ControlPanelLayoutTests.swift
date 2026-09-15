@@ -86,11 +86,12 @@ final class ControlPanelLayoutTests: XCTestCase {
         const state = await window.webkit.messageHandlers.native.postMessage({action:'navigate',page:'settings'});
         window.wallpaperUI.receive(state);
         return {page:state.page, visible:!document.getElementById('settings-content').hidden,
-                tabs:[...document.querySelectorAll('[data-page]')].map(x=>x.textContent.trim())};
+                tabs:[...document.querySelectorAll('.tabs [data-page]')].map(x=>x.textContent.trim())};
         """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
     XCTAssertEqual(result?["page"] as? String, "settings")
     XCTAssertEqual(result?["visible"] as? Bool, true)
     XCTAssertEqual(navigation.selection, .settings)
+    XCTAssertEqual(result?["tabs"] as? [String], ["Discover", "Installed", "Settings"])
     let denied =
       try await web.callAsyncJavaScript(
         """
@@ -99,6 +100,71 @@ final class ControlPanelLayoutTests: XCTestCase {
         """, arguments: [:], in: nil, contentWorld: .page) as? Bool
     XCTAssertEqual(denied, true)
     XCTAssertNil(web.window, "This regression must not open a desktop window")
+    await workshop.steamCMDSetup.shutdown()
+  }
+
+  /// Previous/Next page controls also carry a numeric page, which must not be
+  /// treated as a Discover/Installed/Settings navigation value.
+  func testWorkshopPaginationDoesNotNavigateWithThePageNumber() async throws {
+    let fixture = makeStore()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "web-page-\(UUID().uuidString)")
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+    defer {
+      defaults.removePersistentDomain(forName: root.lastPathComponent)
+      try? FileManager.default.removeItem(at: root)
+    }
+    let workshop = WorkshopStore(
+      downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
+      defaults: defaults)
+    let navigation = ControlPanelNavigation()
+    let controller = WebPanelController(
+      store: fixture.store, navigation: navigation, workshop: workshop)
+    let web = controller.makeWebView()
+    defer { controller.stop() }
+    web.setFrameSize(NSSize(width: 960, height: 640))
+    let deadline = Date().addingTimeInterval(15)
+    while !controller.isReady && Date() < deadline {
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    XCTAssertTrue(controller.isReady)
+    guard controller.isReady else { return }
+    let result =
+      try await web.callAsyncJavaScript(
+        """
+        const waitFor = async predicate => {
+          const deadline = Date.now() + 5000;
+          while (!predicate()) {
+            if (Date.now() > deadline) throw new Error('Workshop pagination did not settle');
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+        };
+        const snapshot = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+        window.wallpaperUI.receive(Object.assign({}, snapshot, {
+          page: 'discover',
+          workshop: Object.assign({}, snapshot.workshop, {
+            page: 1, totalPages: 4, loaded: true, loading: false, items: [], error: null
+          })
+        }));
+        const next = document.querySelector('[data-action="workshopPage"][title="Next page"]');
+        if (!next) throw new Error('Next page control missing');
+        if (next.hasAttribute('data-page')) throw new Error('Pagination must not reuse the main tab data-page attribute');
+        if (next.closest('.tabs [data-page]')) throw new Error('Pagination was treated as a main tab');
+        next.click();
+        await waitFor(() => {
+          const banner = document.getElementById('error-banner');
+          return (banner && !banner.hidden) || !document.querySelector('[title="Next page"]');
+        });
+        const banner = document.getElementById('error-banner');
+        return {error: banner.hidden ? '' : banner.textContent, workshopPage: next.dataset.workshopPage};
+        """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+    XCTAssertEqual(
+      result?["error"] as? String, "",
+      "Clicking Next page must request that Workshop page, not navigate with its page number")
+    XCTAssertEqual(result?["workshopPage"] as? String, "2")
+    XCTAssertNil(controller.actionError)
+    XCTAssertEqual(navigation.selection, .wallpaper)
+    XCTAssertNil(web.window)
     await workshop.steamCMDSetup.shutdown()
   }
 

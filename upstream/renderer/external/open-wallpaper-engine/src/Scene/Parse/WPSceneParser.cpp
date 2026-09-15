@@ -788,7 +788,10 @@ void LoadEmitter(ParticleSubSystem& pSys, const wpscene::Particle& wp,
     for (const auto& em : wp.emitters) {
         if (em.audioprocessingmode != 0) {
             MarkSceneRequiresAudioResponse(scene);
-            LogUnsupportedParticleAudioModeOnce(em.audioprocessingmode);
+            if (em.audioprocessingmode > 3 ||
+                (em.name != "boxrandom" && em.name != "sphererandom")) {
+                LogUnsupportedParticleAudioModeOnce(em.audioprocessingmode);
+            }
         }
         auto newEm = em;
         if (newEm.controlpoint >= 0) newEm.controlpoint += cp_start_index;
@@ -796,7 +799,11 @@ void LoadEmitter(ParticleSubSystem& pSys, const wpscene::Particle& wp,
             const float scale = world_scale[i];
             if (std::abs(scale) > 1.0e-6f) newEm.origin[i] /= scale;
         }
-        pSys.AddEmitter(WPParticleParser::genParticleEmittOp(newEm, sort, over));
+        pSys.AddEmitter(WPParticleParser::genParticleEmittOp(newEm, sort, over, [scene]() {
+            return scene != nullptr && scene->runtime != nullptr
+                       ? scene->runtime->CurrentAudioSpectrumSnapshot()
+                       : audio::AudioSpectrumSnapshot {};
+        }));
     }
 }
 

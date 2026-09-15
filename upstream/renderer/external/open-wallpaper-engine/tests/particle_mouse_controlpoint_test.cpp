@@ -135,20 +135,189 @@ TEST(ParticleMouseControlpoint, EmitterControlpointOffsetsBoxSpawnOrigin) {
     EXPECT_FLOAT_EQ(particle.position.z(), 37.0f);
 }
 
-TEST(ParticleMouseControlpoint, EmitterParsesAudioResponseParameters) {
-    wpscene::Emitter emitter;
+class ParticleEmitterAudio : public testing::TestWithParam<const char*> {
+protected:
+    ParticleEmittOp MakeEmitter(nlohmann::json fields) {
+        fields["name"] = GetParam();
+        fields["id"]   = 1;
+        wpscene::Emitter authored;
+        EXPECT_TRUE(authored.FromJson(fields));
+        return WPParticleParser::genParticleEmittOp(authored, false, nullptr, [this]() {
+            return spectrum;
+        });
+    }
 
-    ASSERT_TRUE(emitter.FromJson(nlohmann::json {
-        { "name", "boxrandom" },
+    void Emit(ParticleEmittOp& emitter, double duration) {
+        emitter(particles, initializers, 128, duration, {});
+    }
+
+    audio::AudioSpectrumSnapshot spectrum;
+    std::vector<Particle>        particles;
+    std::vector<ParticleInitOp>  initializers { [](Particle& particle, double) {
+        ParticleModify::InitLifetime(particle, 1000.0f);
+    } };
+};
+
+TEST_P(ParticleEmitterAudio, SilenceDiscardsPendingEmissionAcrossAudioTransitions) {
+    auto emitter = MakeEmitter({
+        { "audioprocessingmode", 3 },
+        { "audioprocessingbounds", "0 1" },
+        { "audioprocessingexponent", 1 },
+        { "rate", 4.0f },
+    });
+    Emit(emitter, 100.0);
+    EXPECT_TRUE(particles.empty());
+    spectrum.average16.fill(0.5f);
+    Emit(emitter, 0.25);
+    EXPECT_TRUE(particles.empty());
+    spectrum = {};
+    Emit(emitter, 100.0);
+    EXPECT_TRUE(particles.empty());
+    spectrum.average16.fill(0.5f);
+    Emit(emitter, 0.25);
+    EXPECT_TRUE(particles.empty());
+    Emit(emitter, 0.25);
+    EXPECT_EQ(particles.size(), 1u);
+    spectrum = {};
+    Emit(emitter, 100.0);
+    EXPECT_EQ(particles.size(), 1u);
+    spectrum.average16.fill(1.0f);
+    Emit(emitter, 0.25);
+    EXPECT_EQ(particles.size(), 2u);
+}
+
+TEST_P(ParticleEmitterAudio, SelectedInclusiveBandsApplyBoundsThenExponent) {
+    auto emitter = MakeEmitter({
+        { "audioprocessingmode", 3 },
+        { "audioprocessingbounds", { 0.25f, 0.75f } },
+        { "audioprocessingexponent", 2 },
+        { "audioprocessingfrequencystart", 4 },
+        { "audioprocessingfrequencyend", 5 },
+        { "rate", 8.0f },
+    });
+    spectrum.average16.fill(1.0f);
+    spectrum.average16[4] = spectrum.average16[5] = 0.0f;
+    Emit(emitter, 1.0);
+    EXPECT_TRUE(particles.empty());
+    spectrum.average16[5] = 1.0f;
+    // Mean .5 -> bounds midpoint .5 -> smoothstep .5 -> exponent .25.
+    Emit(emitter, 1.0);
+    EXPECT_EQ(particles.size(), 2u);
+    spectrum.average16[4] = 1.0f;
+    Emit(emitter, 1.0);
+    EXPECT_EQ(particles.size(), 10u);
+    spectrum.average16[4] = spectrum.average16[5] = 0.25f;
+    Emit(emitter, 1.0);
+    EXPECT_EQ(particles.size(), 10u);
+}
+
+TEST_P(ParticleEmitterAudio, DisabledAudioModePreservesOrdinaryEmission) {
+    auto emitter = MakeEmitter({ { "audioprocessingmode", 0 }, { "rate", 4.0f } });
+    Emit(emitter, 0.25);
+    EXPECT_EQ(particles.size(), 1u);
+    spectrum.average16.fill(1.0f);
+    Emit(emitter, 0.25);
+    EXPECT_EQ(particles.size(), 2u);
+    spectrum = {};
+    Emit(emitter, 0.25);
+    EXPECT_EQ(particles.size(), 3u);
+}
+
+TEST_P(ParticleEmitterAudio, OnePerFrameAndInstantaneousCannotBypassSilence) {
+    auto emitter = MakeEmitter({
+        { "audioprocessingmode", 3 },
+        { "audioprocessingbounds", "0 1" },
+        { "audioprocessingexponent", 0 },
+        { "rate", 4.0f },
+        { "instantaneous", 10 },
+        { "flags", 2 },
+    });
+    Emit(emitter, 100.0);
+    EXPECT_TRUE(particles.empty());
+    spectrum.average16.fill(1.0f);
+    Emit(emitter, 0.01);
+    EXPECT_EQ(particles.size(), 1u);
+    Emit(emitter, 0.01);
+    EXPECT_EQ(particles.size(), 1u);
+    Emit(emitter, 1.0);
+    EXPECT_EQ(particles.size(), 2u);
+    particles.clear();
+    spectrum = {};
+    Emit(emitter, 100.0);
+    EXPECT_TRUE(particles.empty());
+    spectrum.average16.fill(1.0f);
+    Emit(emitter, 0.01);
+    EXPECT_TRUE(particles.empty());
+}
+
+TEST_P(ParticleEmitterAudio, InstantaneousQuantityScalesOnceWithAudio) {
+    auto emitter = MakeEmitter({
+        { "audioprocessingmode", 3 },
+        { "audioprocessingbounds", "0 1" },
+        { "audioprocessingexponent", 1 },
+        { "rate", 0.0f },
+        { "instantaneous", 8 },
+    });
+    Emit(emitter, 10.0);
+    EXPECT_TRUE(particles.empty());
+    spectrum.average16.fill(0.5f);
+    Emit(emitter, 1.0);
+    EXPECT_EQ(particles.size(), 4u);
+    particles.clear();
+    spectrum = {};
+    Emit(emitter, 10.0);
+    spectrum.average16.fill(1.0f);
+    Emit(emitter, 1.0);
+    EXPECT_TRUE(particles.empty());
+}
+
+TEST_P(ParticleEmitterAudio, ChannelModesSelectTheirOwnSpectrum) {
+    auto left           = MakeEmitter({
+        { "audioprocessingmode", 1 },
+        { "audioprocessingbounds", "0 1" },
+        { "audioprocessingexponent", 1 },
+        { "audioprocessingfrequencystart", 15 },
+        { "audioprocessingfrequencyend", 15 },
+        { "rate", 4.0f },
+    });
+    auto right          = MakeEmitter({
         { "audioprocessingmode", 2 },
-        { "controlpoint", 3 },
+        { "audioprocessingbounds", "0 1" },
+        { "audioprocessingexponent", 1 },
+        { "audioprocessingfrequencystart", 15 },
+        { "audioprocessingfrequencyend", 15 },
+        { "rate", 4.0f },
+    });
+    spectrum.left16[15] = 1.0f;
+    Emit(right, 1.0);
+    EXPECT_TRUE(particles.empty());
+    Emit(left, 1.0);
+    EXPECT_EQ(particles.size(), 4u);
+    spectrum.left16[15]  = 0.0f;
+    spectrum.right16[15] = 1.0f;
+    Emit(left, 1.0);
+    EXPECT_EQ(particles.size(), 4u);
+    Emit(right, 1.0);
+    EXPECT_EQ(particles.size(), 8u);
+}
+
+TEST_P(ParticleEmitterAudio, MissingAudioSourceNeverEmits) {
+    wpscene::Emitter authored;
+    ASSERT_TRUE(authored.FromJson({
+        { "name", GetParam() },
+        { "id", 1 },
+        { "audioprocessingmode", 3 },
+        { "instantaneous", 8 },
+        { "flags", 2 },
         { "rate", 4.0f },
     }));
-
-    EXPECT_EQ(emitter.audioprocessingmode, 2u);
-    EXPECT_EQ(emitter.controlpoint, 3);
-    EXPECT_FLOAT_EQ(emitter.rate, 4.0f);
+    auto emitter = WPParticleParser::genParticleEmittOp(authored);
+    Emit(emitter, 100.0);
+    EXPECT_TRUE(particles.empty());
 }
+
+INSTANTIATE_TEST_SUITE_P(BoxAndSphere, ParticleEmitterAudio,
+                         testing::Values("boxrandom", "sphererandom"));
 
 TEST(ParticleMouseControlpoint, InstanceoverridePreservesUserBindings) {
     wpscene::ParticleInstanceoverride override;

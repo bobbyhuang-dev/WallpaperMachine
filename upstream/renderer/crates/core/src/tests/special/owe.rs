@@ -48,18 +48,6 @@ pub fn case_apply_config_carries_initial_shader_and_property_override_state() {
     assert!(apply_config_signature.contains("project_property_override_json"));
 }
 
-#[test]
-pub fn case_audio_response_bindings_include_mono_submit() {
-    let bindings = std::fs::read_to_string(concat!(env!("OUT_DIR"), "/owe_backend_bindings.rs"))
-        .expect("generated OWE bindings should be readable");
-    let backend_source = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/owe/backend.rs"),
-    )
-    .expect("OWE backend source should be readable");
-
-    assert!(bindings.contains("pub fn owe_audio_submit_mono_frames("));
-    assert!(backend_source.contains("owe_audio_submit_mono_frames"));
-}
 
 #[test]
 pub fn case_no_duplicate_owe_runtime_descriptors() {

@@ -934,6 +934,48 @@ function update() {
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 
+TEST(AudioResponseCompat, RegisteredBuffersSupportTypedViewsAndClearWhenDisabled) {
+    audio::ResetAudioResponseServiceForTesting();
+    std::array<float, 2400> samples {};
+    for (std::size_t index = 0; index < samples.size(); ++index) {
+        samples[index] = 0.025f * std::sin(2.0 * 3.141592653589793 * 234.375 * index / 12000.0);
+    }
+    std::string error;
+    ASSERT_TRUE(audio::SubmitMonoAudioFrames(12000, samples.size(), samples.data(), &error))
+        << error;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (audio::CurrentAudioSpectrumSnapshot().generation == 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_GT(audio::CurrentAudioSpectrumSnapshot().generation, 0u);
+
+    Scene scene;
+    auto  runtime = MakeRuntimeWithScene(scene);
+    runtime->SetAudioResponseEnabled(true);
+    auto program = runtime->scriptEngine().CreatePropertyScriptProgram(runtime.get(),
+                                                                       R"JS(
+const audio = engine.registerAudioBuffers(engine.AUDIO_RESOLUTION_16);
+const bass = audio.average.subarray(0, 1);
+export function update(value) {
+    return bass[0];
+}
+)JS",
+                                                                       "",
+                                                                       {},
+                                                                       DynamicValue(0.0f),
+                                                                       runtime->hostContext());
+    ASSERT_TRUE(program->Valid());
+    const auto active = program->Evaluate(runtime->hostContext(), DynamicValue(0.0f));
+    ASSERT_NE(active, nullptr);
+    EXPECT_GT(active->getFloat(), 0.05f);
+    runtime->SetAudioResponseEnabled(false);
+    const auto disabled = program->Evaluate(runtime->hostContext(), DynamicValue(0.0f));
+    ASSERT_NE(disabled, nullptr);
+    EXPECT_FLOAT_EQ(disabled->getFloat(), 0.0f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
 TEST(AudioResponseCompat, ShaderSpectrumUniformsUseVec4ArrayStride) {
     audio::ResetAudioResponseServiceForTesting();
 

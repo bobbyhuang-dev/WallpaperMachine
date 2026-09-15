@@ -3630,6 +3630,81 @@ export function update(value) {
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 
+TEST(TextObjectRuntime, FontFallbackHandlesFamiliesMissingFilesAndCorruptAssets) {
+#ifdef __APPLE__
+    const auto reference_path = ResolveSystemFontPath("systemfont_sansserif");
+    ASSERT_FALSE(reference_path.empty());
+    std::ifstream font_file(reference_path, std::ios::binary);
+    const std::vector<uint8_t> valid_font((std::istreambuf_iterator<char>(font_file)), {});
+    ASSERT_FALSE(valid_font.empty());
+    for (const auto* family : {"systemfont_consolas", "systemfont_Segoe UI", "Arial",
+                              "systemfont_serif", "systemfont_monospace", "missing-font-98765", ""}) {
+        for (const auto* text : {"08:36", "Monday September", "Bonjour 你好"}) {
+            TextLayerState reference {
+                .text = text, .font_key = family,
+                .resolved_font_path = ResolveSystemFontPath(family), .point_size = 20, .padding = 4,
+            };
+            if (reference.resolved_font_path.empty()) reference.resolved_font_path = reference_path;
+            const auto raster = [](const TextLayerState& state) {
+                const auto size = TextLayerRasterSize(state);
+                const auto width = static_cast<uint32_t>(std::ceil(size.x()));
+                const auto height = static_cast<uint32_t>(std::ceil(size.y()));
+                std::vector<uint8_t> rgba(width * height * 4, 0);
+                RasterizeTextLayer(state, width, height, rgba);
+                return rgba;
+            };
+            const auto expected = raster(reference);
+            for (int failure = 0; failure < 3; ++failure) {
+                SCOPED_TRACE(::testing::Message() << family << ':' << text << ':' << failure);
+                auto state = reference;
+                state.resolved_font_path = failure == 0 ? "" : "/missing/workshop/font.ttf";
+                if (failure == 2) state.resolved_font_data = std::vector<uint8_t>{1,2,3,4};
+                EXPECT_EQ(TextLayerRasterSize(state), TextLayerRasterSize(reference));
+                EXPECT_EQ(raster(state), expected);
+            }
+            // A valid embedded font wins even when the requested family is absent.
+            auto embedded = reference;
+            embedded.resolved_font_path = "/virtual/font.ttf";
+            embedded.resolved_font_data = valid_font;
+            auto installed = reference;
+            installed.resolved_font_path = reference_path;
+            EXPECT_EQ(raster(embedded), raster(installed));
+        }
+    }
+#endif
+}
+
+TEST(TextObjectRuntime, MissingWindowsFontUsesRealGlyphsInsteadOfRectangles) {
+#ifdef __APPLE__
+    TextLayerState state {
+        .text = "08:36",
+        .font_key = "systemfont_consolas",
+        .resolved_font_path = ResolveSystemFontPath("systemfont_consolas"),
+        .point_size = 33.0f,
+        .padding = 32.0f,
+    };
+    ASSERT_FALSE(state.resolved_font_path.empty());
+    EXPECT_TRUE(std::filesystem::exists(state.resolved_font_path));
+    EXPECT_FALSE(ResolveSystemFontPath("systemfont_missing-workshop-font-12345").empty());
+    const auto size = TextLayerRasterSize(state);
+    const auto width = static_cast<uint32_t>(std::ceil(size.x()));
+    const auto height = static_cast<uint32_t>(std::ceil(size.y()));
+    std::vector<uint8_t> rgba(width * height * 4, 0);
+    RasterizeTextLayer(state, width, height, rgba);
+    uint32_t min_y = height, max_y = 0;
+    std::size_t antialiased = 0;
+    for (uint32_t y = 0; y < height; ++y) {
+        for (uint32_t x = 0; x < width; ++x) {
+            const auto alpha = rgba[(y * width + x) * 4 + 3];
+            if (alpha) { min_y = std::min(min_y, y); max_y = std::max(max_y, y); }
+            if (alpha > 0 && alpha < 255) ++antialiased;
+        }
+    }
+    EXPECT_GT(max_y - min_y, 60u); // Placeholder bars were only 30 px tall.
+    EXPECT_GT(antialiased, 100u);
+#endif
+}
+
 TEST(TextObjectRuntime, ResolvesWallpaperEngineSansSerifSystemFontAlias) {
 #ifdef __APPLE__
     EXPECT_FALSE(ResolveSystemFontPath("systemfont_sansserif").empty());

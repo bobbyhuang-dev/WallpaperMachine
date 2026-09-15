@@ -15,14 +15,16 @@ class PrePass : public VulkanPass {
 public:
     struct Desc {
         // in
-        const std::string_view result { SpecTex_Default };
-        const VkImageLayout    layout { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        std::string result { SpecTex_Default };
+        VkImageLayout layout { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        bool transparent { false };
 
         // prepared
         ImageParameters vk_result;
         VkClearValue    clear_value;
     };
 
+    const Desc& desc() const { return m_desc; }
     PrePass(const Desc&);
     virtual ~PrePass();
 

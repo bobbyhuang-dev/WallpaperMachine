@@ -36,36 +36,38 @@ using ParticleEmittOp =
                        double timepass, std::span<const ParticleControlpoint> controlpoints)>;
 
 struct ParticleBoxEmitterArgs {
-    std::array<float, 3> directions;
-    std::array<float, 3> minDistance;
-    std::array<float, 3> maxDistance;
-    float                emitSpeed;
-    std::array<float, 3> orgin;
-    bool                 one_per_frame;
-    bool                 sort;
-    u32                  instantaneous;
-    float                minSpeed;
-    float                maxSpeed;
-    i32                  controlpoint { 0 };
+    std::array<float, 3>         directions;
+    std::array<float, 3>         minDistance;
+    std::array<float, 3>         maxDistance;
+    float                        emitSpeed;
+    std::array<float, 3>         orgin;
+    bool                         one_per_frame;
+    bool                         sort;
+    u32                          instantaneous;
+    float                        minSpeed;
+    float                        maxSpeed;
+    i32                          controlpoint { 0 };
     std::shared_ptr<const float> countMultiplier;
+    std::function<float()>       audioResponse;
 
     static ParticleEmittOp MakeEmittOp(ParticleBoxEmitterArgs);
 };
 
 struct ParticleSphereEmitterArgs {
-    std::array<float, 3>   directions;
-    float                  minDistance;
-    float                  maxDistance;
-    float                  emitSpeed;
-    std::array<float, 3>   orgin;
-    std::array<int32_t, 3> sign;
-    bool                   one_per_frame;
-    bool                   sort;
-    u32                    instantaneous;
-    float                  minSpeed;
-    float                  maxSpeed;
-    i32                    controlpoint { 0 };
+    std::array<float, 3>         directions;
+    float                        minDistance;
+    float                        maxDistance;
+    float                        emitSpeed;
+    std::array<float, 3>         orgin;
+    std::array<int32_t, 3>       sign;
+    bool                         one_per_frame;
+    bool                         sort;
+    u32                          instantaneous;
+    float                        minSpeed;
+    float                        maxSpeed;
+    i32                          controlpoint { 0 };
     std::shared_ptr<const float> countMultiplier;
+    std::function<float()>       audioResponse;
 
     static ParticleEmittOp MakeEmittOp(ParticleSphereEmitterArgs);
 };

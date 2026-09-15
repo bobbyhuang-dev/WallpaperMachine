@@ -130,35 +130,23 @@ const PassNode& RenderGraphBuilder::workPassNode() const {
 }
 
 std::vector<std::vector<TexNode*>> RenderGraph::getLastReadTexs(std::span<const NodeID> nodes) const {
-    std::vector<std::vector<TexNode*>> res;
-    std::vector<Set<NodeID>> nodes_ids;
-    // get in
-    std::transform(nodes.begin(), nodes.end(), std::back_inserter(nodes_ids), [this, &nodes_ids](auto& n) {
-        Set<NodeID> sets;
-        const auto& ids = m_dg.GetNodeIn(n);
-        for(const auto& id:ids) sets.insert(id);
-        return sets;
-    });
-    // get last in
-    {
-        Set<NodeID> sets;
-        std::for_each(std::rbegin(nodes_ids), std::rend(nodes_ids), [&sets](auto& ids) {
-            std::vector<NodeID> copy {ids.begin(), ids.end()};
-            std::for_each(copy.begin(), copy.end(), [&sets, &ids](auto& id) { 
-                if(exists(sets, id))
-                    ids.erase(id);
-                else sets.insert(id);
-            });
-        });
+    std::vector<std::vector<TexNode*>> res(nodes.size());
+    // Logical versions of a render target all map to the same TextureCache
+    // key/allocation. Releasing a version at its last reader lets a later
+    // target overwrite it while subsequent versions still need its contents
+    // (including blend-only writes). Track the last access of the entire key.
+    Set<std::string> seen_keys;
+    for (std::size_t i = nodes.size(); i-- > 0;) {
+        const auto collect = [&](const auto& edges) {
+            for (const auto id : edges) {
+                auto* tex = getTexNode(id);
+                if (tex != nullptr && seen_keys.insert(std::string(tex->key())).second) {
+                    res[i].push_back(tex);
+                }
+            }
+        };
+        collect(m_dg.GetNodeIn(nodes[i]));
+        collect(m_dg.GetNodeOut(nodes[i]));
     }
-    // to tex node
-    std::transform(nodes_ids.begin(), nodes_ids.end(), std::back_inserter(res), [this](auto& ids) {
-        std::vector<TexNode*> texs;
-        for(auto& id:ids) {
-            auto* tex = getTexNode(id);
-            if(tex != nullptr) texs.push_back(tex);
-        }
-        return texs;
-    });
-    return res; 
+    return res;
 }

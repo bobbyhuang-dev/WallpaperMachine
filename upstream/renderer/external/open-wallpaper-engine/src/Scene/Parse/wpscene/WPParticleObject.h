@@ -72,11 +72,16 @@ public:
     float                  speedmin { 0 };
     float                  speedmax { 0 };
     u32                    audioprocessingmode { 0 };
-    i32                    controlpoint { 0 };
-    i32                    id;
-    EFlags                 flags;
-    std::string            name;
-    float                  rate { 5.0f };
+    // Serialized emitter defaults: linux-wallpaperengine ObjectParser::parseParticleEmitter.
+    std::array<float, 2> audioprocessingbounds { 0.8f, 1.0f };
+    float                audioprocessingexponent { 2.0f };
+    i32                  audioprocessingfrequencystart { 0 };
+    i32                  audioprocessingfrequencyend { 1 };
+    i32                  controlpoint { 0 };
+    i32                  id;
+    EFlags               flags;
+    std::string          name;
+    float                rate { 5.0f };
 };
 
 class ParticleChild;

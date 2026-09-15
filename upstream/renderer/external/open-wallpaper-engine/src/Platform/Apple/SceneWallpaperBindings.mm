@@ -104,7 +104,11 @@ void configure_desktop_poster(wallpaper::RenderInitInfo& info, void* metal_layer
     info.wants_poster = [mailbox] {
         const auto now = std::chrono::steady_clock::now();
         const auto requested = mailbox->requested.load();
-        if (requested == mailbox->delivered || now < mailbox->next_attempt) return false;
+        if (requested == mailbox->delivered) return false;
+        // New apply/refresh requests must export the next presented frame,
+        // even if the previous wallpaper was sampled less than two seconds ago.
+        // Only retries of a FAILED readback retain the backoff.
+        if (requested == mailbox->in_flight && now < mailbox->next_attempt) return false;
         mailbox->next_attempt = now + std::chrono::seconds(2);
         mailbox->in_flight = requested;
         return true;

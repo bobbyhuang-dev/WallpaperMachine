@@ -21,11 +21,11 @@ enum WorkshopKind: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
     var compatibility: String {
         switch self {
-        case .scene: "Scene · experimental renderer"
-        case .video: "Video · codec dependent"
-        case .web: "Web · not supported by this renderer"
-        case .application: "Application · unsupported on macOS"
-        case .all: "Compatibility checked after download"
+        case .scene: String(localized: "Scene · experimental renderer")
+        case .video: String(localized: "Video · codec dependent")
+        case .web: String(localized: "Web · not supported by this renderer")
+        case .application: String(localized: "Application · unsupported on macOS")
+        case .all: String(localized: "Compatibility checked after download")
         }
     }
 }
@@ -35,10 +35,10 @@ enum WorkshopSort: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .trending: "Trending this week"
-        case .popular: "Most subscribed"
-        case .newest: "Newest"
-        case .relevance: "Relevance"
+        case .trending: String(localized: "Trending this week")
+        case .popular: String(localized: "Most subscribed")
+        case .newest: String(localized: "Newest")
+        case .relevance: String(localized: "Relevance")
         }
     }
 }
@@ -56,6 +56,10 @@ struct WorkshopFailure: LocalizedError, Sendable {
 }
 
 actor WorkshopService {
+    private let session: URLSession
+
+    init(session: URLSession = .shared) { self.session = session }
+
     static func browseURL(search: String, kind: WorkshopKind, sort: WorkshopSort, page: Int) -> URL {
         var url = URLComponents(string: "https://steamcommunity.com/workshop/browse/")!
         url.queryItems = [
@@ -76,13 +80,13 @@ actor WorkshopService {
         var request = URLRequest(url: Self.browseURL(search: search, kind: kind, sort: sort, page: page))
         request.timeoutInterval = 35
         request.setValue("MacWallpaperEngine/1.0 (macOS; public Workshop browser)", forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw WorkshopFailure(message: "Steam could not load the Workshop. Check your connection or open Steam in your browser, then retry.")
+            throw WorkshopFailure(message: String(localized: "Steam could not load the Workshop. Check your connection or open Steam in your browser, then retry."))
         }
         guard data.count < 12_000_000, let html = String(data: data, encoding: .utf8) else {
-            throw WorkshopFailure(message: "Steam returned an unreadable Workshop page. Try again or browse on Steam.")
+            throw WorkshopFailure(message: String(localized: "Steam returned an unreadable Workshop page. Try again or browse on Steam."))
         }
         return try Self.decodePage(html)
     }
@@ -104,7 +108,7 @@ actor WorkshopService {
               let result = state["data"] as? [String: Any],
               let rows = result["results"] as? [[String: Any]],
               (result["eresult"] as? Int) == 1 else {
-            throw WorkshopFailure(message: "Steam changed its public page or requires a browser sign-in. Open Workshop on Steam, then retry.")
+            throw WorkshopFailure(message: String(localized: "Steam changed its public page or requires a browser sign-in. Open Workshop on Steam, then retry."))
         }
         var creators: [String: String] = [:]
         for query in queries {
@@ -120,7 +124,7 @@ actor WorkshopService {
                   let title = row["title"] as? String, seen.insert(id).inserted else { return nil }
             let preview = (row["preview_url"] as? String).flatMap(URL.init(string:))
             return WorkshopItem(
-                id: id, title: title, creator: creators[row["creator"] as? String ?? ""] ?? "Workshop creator",
+                id: id, title: title, creator: creators[row["creator"] as? String ?? ""] ?? String(localized: "Workshop creator"),
                 summary: row["short_description"] as? String ?? "", previewURL: preview?.scheme == "https" ? preview : nil,
                 tags: (row["tags"] as? [[String: Any]] ?? []).compactMap { $0["tag"] as? String },
                 size: Int64(row["file_size"] as? String ?? "") ?? 0,

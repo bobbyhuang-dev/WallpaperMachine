@@ -8,7 +8,7 @@ struct LibraryImportView: View {
     @State private var sources: [URL] = []
     @State private var duplicatePolicy: WallpaperImportService.DuplicatePolicy = .skip
     @State private var importTask: Task<Void, Never>?
-    @State private var progress = "Preparing import…"
+    @State private var progress = String(localized: "Preparing import…")
     @State private var report: WallpaperImportService.Report?
     @State private var errorMessage: String?
     private let service = WallpaperImportService()
@@ -66,7 +66,7 @@ struct LibraryImportView: View {
                     Text(progress).font(.callout).lineLimit(2)
                     Spacer()
                     Button("Cancel Import") {
-                        progress = "Cancelling…"
+                        progress = String(localized: "Cancelling…")
                         importTask?.cancel()
                     }
                 }
@@ -106,7 +106,7 @@ struct LibraryImportView: View {
                 Button(report == nil ? "Cancel" : "Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                     .disabled(importTask != nil)
-                Button("Import \(sources.count == 1 ? "Item" : "Items")", action: startImport)
+                Button(sources.count == 1 ? "Import Item" : "Import Items", action: startImport)
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(sources.isEmpty || importTask != nil || report != nil)
@@ -119,9 +119,9 @@ struct LibraryImportView: View {
 
     private func chooseSources() {
         let panel = NSOpenPanel()
-        panel.title = "Choose Wallpaper Content"
-        panel.prompt = "Choose"
-        panel.message = "Select project folders, a Steam library folder, videos, or HTML files. Image-only wallpapers are not supported."
+        panel.title = String(localized: "Choose Wallpaper Content")
+        panel.prompt = String(localized: "Choose")
+        panel.message = String(localized: "Select project folders, a Steam library folder, videos, or HTML files. Image-only wallpapers are not supported.")
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = true
@@ -139,7 +139,7 @@ struct LibraryImportView: View {
     private func startImport() {
         report = nil
         errorMessage = nil
-        progress = "Preparing import…"
+        progress = String(localized: "Preparing import…")
         let selectedSources = sources
         let policy = duplicatePolicy
         let library = ClientPaths.libraryURL

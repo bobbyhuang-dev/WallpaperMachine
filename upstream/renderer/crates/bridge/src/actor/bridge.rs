@@ -2680,7 +2680,18 @@ impl<E: EngineFacade + Clone> Message<CommitApplyAfterReconcile> for BridgeActor
             return self.wallpaper_bundle(msg.wallpaper_id);
         }
 
-        self.save_configs(&msg.candidates.app_config, &msg.candidates.wallpaper_config)?;
+        if let Err(error) =
+            self.save_configs(&msg.candidates.app_config, &msg.candidates.wallpaper_config)
+        {
+            // Reconciliation already changed the renderer. Publish its assignment even
+            // when persistence fails, but keep the draft's committed property baseline.
+            // A display refresh reconciles the saved wallpaper config; Apply can retry
+            // the retained draft without reporting the old desktop as still active.
+            self.state.app_config = msg.candidates.app_config;
+            self.state.set_active_ids_from_scenes(&msg.scenes);
+            self.finish_reconcile(msg.generation, ctx.actor_ref().clone());
+            return Err(error);
+        }
         self.state
             .commit_apply_candidates(msg.wallpaper_id.clone(), msg.candidates, false)?;
         self.state.set_active_ids_from_scenes(&msg.scenes);

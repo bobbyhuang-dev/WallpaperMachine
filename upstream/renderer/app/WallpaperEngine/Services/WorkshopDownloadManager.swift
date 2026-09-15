@@ -15,6 +15,7 @@ final class WorkshopDownload: Identifiable {
     @ObservationIgnored fileprivate var begin: (() -> Void)?
 
     var isPending: Bool { isQueued || occupiesSlot }
+    var isCancelled: Bool { wasCancelled || worker.wasCancelled }
     var status: String {
         if isQueued { return "Queued — waiting for a download slot" }
         if wasCancelled { return "Download cancelled" }
@@ -22,24 +23,26 @@ final class WorkshopDownload: Identifiable {
     }
     var progress: Double? { isQueued ? nil : worker.progress }
 
-    fileprivate init(item: WorkshopItem?, account: String, rememberSession: Bool, sessionDirectory: URL) {
+    fileprivate init(item: WorkshopItem?, account: String, rememberSession: Bool, sessionDirectory: URL,
+                     runtimeProvider: any SteamCMDRuntimeProviding) {
         id = item?.id ?? "scene-assets"
         self.item = item
         self.account = account
         self.rememberSession = rememberSession
-        worker = WorkshopDownloader(sessionDirectory: sessionDirectory)
+        worker = WorkshopDownloader(sessionDirectory: sessionDirectory, runtimeProvider: runtimeProvider)
     }
 }
 
 /// Owns independent SteamCMD terminals and bounds disk/network contention.
 @MainActor
 @Observable
-final class WorkshopDownloadManager {
+final class WorkshopDownloadManager: SteamCMDDownloadActivity {
     private(set) var downloads: [WorkshopDownload] = []
     private(set) var savedAccount: String?
     private(set) var errorMessage: String?
     let maximumConcurrentDownloads: Int
     @ObservationIgnored private let sessionDirectory: URL
+    @ObservationIgnored private let runtimeProvider: any SteamCMDRuntimeProviding
     @ObservationIgnored private var isShuttingDown = false
 
     var activeCount: Int { downloads.lazy.filter { $0.occupiesSlot }.count }
@@ -48,8 +51,11 @@ final class WorkshopDownloadManager {
     var suggestedAccount: String? { downloads.last(where: { $0.isPending })?.account ?? savedAccount }
     var rememberSessionWhileRunning: Bool? { downloads.first(where: { $0.isPending })?.rememberSession }
 
-    init(sessionDirectory: URL = ClientPaths.supportURL.appendingPathComponent("SteamSession", isDirectory: true), maximumConcurrentDownloads: Int = 3) {
+    init(sessionDirectory: URL = ClientPaths.supportURL.appendingPathComponent("SteamSession", isDirectory: true),
+         maximumConcurrentDownloads: Int = 3,
+         runtimeProvider: any SteamCMDRuntimeProviding = SteamCMDRuntimeService()) {
         self.sessionDirectory = sessionDirectory
+        self.runtimeProvider = runtimeProvider
         self.maximumConcurrentDownloads = max(1, maximumConcurrentDownloads)
         savedAccount = WorkshopDownloader.readSavedAccount(at: sessionDirectory)
     }
@@ -80,6 +86,10 @@ final class WorkshopDownloadManager {
         } else {
             job.worker.cancel()
         }
+    }
+
+    func clearCompleted() {
+        downloads.removeAll { !$0.isPending }
     }
 
     func forgetSavedAccount() {
@@ -119,7 +129,8 @@ final class WorkshopDownloadManager {
             guard errorMessage == nil else { return }
         }
         errorMessage = nil
-        let job = WorkshopDownload(item: item, account: account, rememberSession: rememberSession, sessionDirectory: sessionDirectory)
+        let job = WorkshopDownload(item: item, account: account, rememberSession: rememberSession,
+                                   sessionDirectory: sessionDirectory, runtimeProvider: runtimeProvider)
         job.begin = { [weak job] in
             guard let job else { return }
             begin(job.worker, account)

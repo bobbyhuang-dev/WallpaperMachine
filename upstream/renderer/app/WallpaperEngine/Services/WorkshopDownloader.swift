@@ -4,10 +4,11 @@ import Observation
 
 @MainActor
 @Observable
-final class WorkshopDownloader {
+final class WorkshopDownloader: SteamCMDDownloadActivity {
     enum Prompt: String { case password = "Steam password", guardCode = "Steam Guard code" }
     enum SteamGuardChallenge { case mobileApproval, authenticatorCode, emailCode }
     private(set) var isRunning = false
+    private(set) var wasCancelled = false
     private(set) var status = "Ready to download"
     private(set) var progress: Double?
     private(set) var prompt: Prompt?
@@ -20,10 +21,11 @@ final class WorkshopDownloader {
     private(set) var savedAccount: String?
     private(set) var sessionWarning: String?
     @ObservationIgnored private let sessionDirectory: URL
+    @ObservationIgnored private let runtimeProvider: any SteamCMDRuntimeProviding
     @ObservationIgnored private var cachedCredentialsRejected = false
     @ObservationIgnored private var assetsDownloadCompleted = false
     @ObservationIgnored private var workshopDownloadCompleted = false
-    @ObservationIgnored private var process: Process?
+    @ObservationIgnored private var process: SteamCMDTerminalProcess?
     @ObservationIgnored private var terminal: FileHandle?
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored var onFinished: (@MainActor () -> Void)?
@@ -36,8 +38,10 @@ final class WorkshopDownloader {
     private static let progressPattern = try! NSRegularExpression(pattern: #"(\d{1,3}(?:\.\d+)?)\s*%"#)
     nonisolated private static let sessionLock = NSLock()
 
-    init(sessionDirectory: URL = ClientPaths.supportURL.appendingPathComponent("SteamSession", isDirectory: true)) {
+    init(sessionDirectory: URL = ClientPaths.supportURL.appendingPathComponent("SteamSession", isDirectory: true),
+         runtimeProvider: any SteamCMDRuntimeProviding = SteamCMDRuntimeService()) {
         self.sessionDirectory = sessionDirectory
+        self.runtimeProvider = runtimeProvider
         savedAccount = Self.readSavedAccount(at: sessionDirectory)
     }
 
@@ -90,6 +94,7 @@ final class WorkshopDownloader {
             guard errorMessage == nil else { return }
         }
         failure = nil
+        wasCancelled = false
         errorMessage = nil
         sessionWarning = nil
         cachedCredentialsRejected = false
@@ -119,9 +124,7 @@ final class WorkshopDownloader {
             }
             var restoredSessionRevision: UInt64?
             do {
-                let prepared = try await Task.detached(priority: .utility) {
-                    try Self.prepare(executable: executable, staging: staging)
-                }.value
+                let prepared = try await runtimeProvider.prepare(executable: executable, staging: staging)
                 if rememberSession {
                     let directory = sessionDirectory
                     restoredSessionRevision = try await Task.detached(priority: .utility) {
@@ -133,9 +136,7 @@ final class WorkshopDownloader {
                 var restarts = 0
                 repeat {
                     try Task.checkCancellation()
-                    try await Task.detached(priority: .utility) {
-                        try Self.validateRuntime(at: staging)
-                    }.value
+                    try await runtimeProvider.validate(at: staging)
                     try Task.checkCancellation()
                     try launch(executable: prepared, staging: staging, account: account, itemID: itemID)
                     while let process, process.isRunning {
@@ -151,6 +152,8 @@ final class WorkshopDownloader {
                         }
                         try await Task.sleep(for: .milliseconds(200))
                     }
+                    // Reap our child and stop any descendants before a restart or staging cleanup.
+                    await stopProcess()
                     // Drain the last output before closing, even when SteamCMD has already exited.
                     try readTerminalOutput()
                     try? terminal?.close()
@@ -172,6 +175,7 @@ final class WorkshopDownloader {
                 }
                 try await onDownloaded(staging)
             } catch is CancellationError {
+                wasCancelled = true
                 await stopProcess()
                 try? readTerminalOutput()
                 authenticationFailed = false
@@ -257,31 +261,27 @@ final class WorkshopDownloader {
             throw WorkshopFailure(message: "Could not read SteamCMD’s private terminal without blocking. Restart MacWallpaperEngine and retry.")
         }
         terminal = input
-        let process = Process()
-        process.executableURL = executable
-        process.currentDirectoryURL = staging
-        let isInstalled = FileManager.default.fileExists(atPath: staging.appendingPathComponent("steamconsole.dylib").path)
         let installDirectory = itemID == nil ? staging.appendingPathComponent("wallpaper-engine") : staging
         let platform = itemID == nil ? ["+@sSteamCmdForcePlatformType", "windows"] : []
         let command = itemID.map { ["+workshop_download_item", "431960", $0] } ?? ["+app_update", "431960", "validate"]
-        process.arguments = (isInstalled ? ["-inhibitbootstrap"] : []) + ["+@ShutdownOnFailedCommand", "1"] + platform
+        let arguments = ["-inhibitbootstrap", "+@ShutdownOnFailedCommand", "1"] + platform
             + ["+force_install_dir", installDirectory.path, "+login", account] + command + ["+quit"]
-        var environment = ProcessInfo.processInfo.environment
-        environment["HOME"] = staging.path
-        environment["TERM"] = "dumb"
-        environment["DYLD_LIBRARY_PATH"] = staging.path
-        environment["DYLD_FRAMEWORK_PATH"] = staging.path
-        process.environment = environment
-        process.standardInput = child
-        process.standardOutput = child
-        process.standardError = child
-        self.process = process
+        let temporary = staging.appendingPathComponent("tmp", isDirectory: true)
+        try Self.privateDirectory(temporary)
+        let environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": staging.path,
+                           "TMPDIR": temporary.path, "TERM": "dumb", "LANG": "en_US.UTF-8",
+                           "DYLD_LIBRARY_PATH": staging.path,
+                           "DYLD_FRAMEWORK_PATH": staging.appendingPathComponent("Frameworks").path]
         recentOutput = ""
         prompt = nil
         steamGuardChallenge = nil
         isAuthenticating = true
         lastActivity = Date()
-        do { try process.run() }
+        do {
+            process = try SteamCMDTerminalProcess(executable: executable, arguments: arguments,
+                                                  workingDirectory: staging, environment: environment,
+                                                  master: master, slave: slave)
+        }
         catch {
             try? child.close()
             throw WorkshopFailure(message: "Cannot launch SteamCMD: \(error.localizedDescription). Install the macOS SteamCMD distribution; on Apple silicon install Rosetta 2 if requested.")
@@ -422,17 +422,7 @@ final class WorkshopDownloader {
     }
 
     private func stopProcess() async {
-        guard let process, process.isRunning else { return }
-        process.terminate()
-        for _ in 0..<20 {
-            if !process.isRunning { return }
-            await Task.detached { try? await Task.sleep(for: .milliseconds(100)) }.value
-        }
-        if process.isRunning {
-            // This PID belongs to our still-live direct child, not an externally discovered process.
-            Darwin.kill(process.processIdentifier, SIGKILL)
-            while process.isRunning { await Task.detached { try? await Task.sleep(for: .milliseconds(50)) }.value }
-        }
+        await process?.stop()
     }
 
     nonisolated static func normalizedAccount(_ username: String) -> String? {
@@ -556,38 +546,96 @@ final class WorkshopDownloader {
         return true
     }
 
-    nonisolated private static func prepare(executable: URL, staging: URL) throws -> URL {
-        let files = FileManager.default
-        let resolved = executable.resolvingSymlinksInPath()
-        let root = resolved.deletingLastPathComponent()
-        let binary = root.appendingPathComponent("steamcmd")
-        guard files.isExecutableFile(atPath: binary.path) else {
-            throw WorkshopFailure(message: "Choose steamcmd.sh or steamcmd from Valve’s complete macOS SteamCMD distribution. Keep its Frameworks folder and crashhandler.dylib beside the executable.")
+
+}
+
+/// The PTY downloader needs interactive input; the installer runner intentionally does not.
+/// Both use spawn-time process-group ownership, never a racy setpgid after launch.
+@MainActor
+private final class SteamCMDTerminalProcess {
+    private let pid: pid_t
+    private var exitStatus: Int32?
+    private var leaderExited = false
+    private var cleaned = false
+
+    var isRunning: Bool {
+        guard !cleaned, !leaderExited else { return false }
+        // Keep the zombie leader until every group signal has been sent; its PID cannot be reused.
+        var information = siginfo_t()
+        let result = waitid(P_PID, id_t(pid), &information, WEXITED | WNOHANG | WNOWAIT)
+        if result == 0, information.si_pid == pid { leaderExited = true }
+        if result == -1, errno == ECHILD {
+            // Ownership was lost; never signal a potentially recycled process-group ID.
+            cleaned = true
+            exitStatus = 255
         }
-        try files.createDirectory(at: staging, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        for name in ["steamcmd", "Frameworks", "crashhandler.dylib", "Steam.AppBundle", "steamconsole.dylib", "steamclient.dylib", "libtier0_s.dylib", "libvstdlib_s.dylib", "libaudio.dylib", "libsteaminput.dylib", "public", "package"] {
-            let source = root.appendingPathComponent(name)
-            if files.fileExists(atPath: source.path) {
-                try files.copyItem(at: source, to: staging.appendingPathComponent(name))
+        return !cleaned && !leaderExited
+    }
+
+    var terminationStatus: Int32 {
+        _ = isRunning
+        return exitStatus ?? -1
+    }
+
+    func stop() async {
+        guard !cleaned else { return }
+        let exited = !isRunning
+        guard !cleaned else { return }
+        cleaned = true
+        let processID = pid
+        let status = await Task.detached(priority: .utility) {
+            Darwin.kill(-processID, SIGTERM)
+            if !exited {
+                let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+                while Darwin.kill(-processID, 0) == 0, ContinuousClock.now < deadline {
+                    try? await Task.sleep(for: .milliseconds(40))
+                }
+            }
+            Darwin.kill(-processID, SIGKILL)
+            var status: Int32 = 0
+            var result: pid_t
+            repeat { result = waitpid(processID, &status, 0) } while result < 0 && errno == EINTR
+            return result == processID ? status : Int32(255 << 8)
+        }.value
+        exitStatus = (status & 0x7f) == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f)
+    }
+
+    init(executable: URL, arguments: [String], workingDirectory: URL, environment: [String: String], master: Int32, slave: Int32) throws {
+        var actions: posix_spawn_file_actions_t?
+        var attributes: posix_spawnattr_t?
+        func check(_ result: Int32) throws {
+            guard result == 0 else { throw POSIXError(POSIXErrorCode(rawValue: result) ?? .EIO) }
+        }
+        try check(posix_spawn_file_actions_init(&actions))
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        try check(posix_spawnattr_init(&attributes))
+        defer { posix_spawnattr_destroy(&attributes) }
+        try check(posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)))
+        try check(posix_spawnattr_setpgroup(&attributes, 0))
+        try check(posix_spawn_file_actions_addchdir_np(&actions, workingDirectory.path))
+        for descriptor in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO] {
+            try check(posix_spawn_file_actions_adddup2(&actions, slave, descriptor))
+        }
+        try check(posix_spawn_file_actions_addclose(&actions, master))
+        try check(posix_spawn_file_actions_addclose(&actions, slave))
+        let argv = ([executable.path] + arguments).map { strdup($0) } + [nil]
+        let envp = environment.sorted(by: { $0.key < $1.key }).map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer {
+            argv.forEach { free($0) }
+            envp.forEach { free($0) }
+        }
+        guard argv.dropLast().allSatisfy({ $0 != nil }), envp.dropLast().allSatisfy({ $0 != nil }) else {
+            throw POSIXError(.ENOMEM)
+        }
+        var child: pid_t = 0
+        let result = argv.withUnsafeBufferPointer { arguments in
+            envp.withUnsafeBufferPointer { environment in
+                posix_spawn(&child, executable.path, &actions, &attributes,
+                            UnsafeMutablePointer(mutating: arguments.baseAddress!),
+                            UnsafeMutablePointer(mutating: environment.baseAddress!))
             }
         }
-        return staging.appendingPathComponent("steamcmd")
+        try check(result)
+        pid = child
     }
-
-    nonisolated private static func validateRuntime(at root: URL) throws {
-        let framework = root.appendingPathComponent("Frameworks/Breakpad.framework")
-        guard FileManager.default.fileExists(atPath: root.appendingPathComponent("steamconsole.dylib").path),
-              FileManager.default.fileExists(atPath: framework.path) else { return }
-        let check = Process()
-        check.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-        check.arguments = ["--verify", "--deep", "--strict", framework.path]
-        check.standardOutput = FileHandle.nullDevice
-        check.standardError = FileHandle.nullDevice
-        try check.run()
-        check.waitUntilExit()
-        guard check.terminationStatus == 0 else {
-            throw WorkshopFailure(message: "SteamCMD’s Breakpad framework has an invalid signature. The download was stopped before launching it, so macOS will not repeatedly show a damaged-app warning. Select a repaired, complete SteamCMD installation or run this project’s scripts/setup-steamcmd.py. Your account has not been signed in.")
-        }
-    }
-
 }

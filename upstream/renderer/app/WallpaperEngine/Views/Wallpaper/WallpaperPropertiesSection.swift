@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct WallpaperPropertiesSection: View {
     let options: BridgeWallpaperOptionsSnapshot
+    @Binding var activePropertyBridgeActionIds: Set<String>
     var onError: (Error) -> Void = { _ in }
 
     private var groups: [WallpaperPropertyGroup] {
@@ -16,6 +17,11 @@ struct WallpaperPropertiesSection: View {
                 Text(options.supported ? "No editable properties loaded." : "This wallpaper type is not editable.")
                     .foregroundStyle(.secondary)
             } else {
+                Text("Properties apply to this wallpaper on all displays and are saved with Apply Changes.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(groups) { group in
                         if group.isUngrouped {
@@ -23,6 +29,7 @@ struct WallpaperPropertiesSection: View {
                                 WallpaperPropertyRow(
                                     wallpaperId: options.wallpaperId,
                                     property: property,
+                                    activePropertyBridgeActionIds: $activePropertyBridgeActionIds,
                                     onError: onError
                                 )
                                 .id("\(options.wallpaperId)-\(property.id)")
@@ -31,6 +38,7 @@ struct WallpaperPropertiesSection: View {
                             WallpaperPropertyDisclosureGroup(
                                 wallpaperId: options.wallpaperId,
                                 group: group,
+                                activePropertyBridgeActionIds: $activePropertyBridgeActionIds,
                                 onError: onError
                             )
                             .id("\(options.wallpaperId)-group-\(group.id)")
@@ -88,18 +96,21 @@ private struct WallpaperPropertyGroup: Identifiable {
 }
 
 private struct WallpaperPropertyDisclosureGroup: View {
+    @Environment(BridgeStore.self) private var store
+
     let wallpaperId: String
     let group: WallpaperPropertyGroup
+    @Binding var activePropertyBridgeActionIds: Set<String>
     let onError: (Error) -> Void
-    @State private var expanded = false
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
+        DisclosureGroup(isExpanded: expanded) {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(group.properties, id: \.id) { property in
                     WallpaperPropertyRow(
                         wallpaperId: wallpaperId,
                         property: property,
+                        activePropertyBridgeActionIds: $activePropertyBridgeActionIds,
                         onError: onError
                     )
                 }
@@ -113,6 +124,15 @@ private struct WallpaperPropertyDisclosureGroup: View {
         .background {
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color.secondary.opacity(0.08))
+        }
+    }
+
+    private var expanded: Binding<Bool> {
+        let key = WallpaperEditorState.FieldKey(wallpaperID: wallpaperId, fieldID: "property-group:\(group.id)")
+        return Binding {
+            store.editorState.expandedSections[key] ?? false
+        } set: { expanded in
+            store.editorState.expandedSections[key] = expanded
         }
     }
 
@@ -130,24 +150,31 @@ private struct WallpaperPropertyDisclosureGroup: View {
 
 private struct WallpaperPropertyRow: View {
     @Environment(BridgeStore.self) private var store
+    @Environment(\.isEnabled) private var isEnabled
 
     let wallpaperId: String
     let property: BridgePropertyDescriptor
+    @Binding var activePropertyBridgeActionIds: Set<String>
     let onError: (Error) -> Void
+    private let accessibilityName: String
     @State private var boolValue: Bool
     @State private var numberValue: Double
     @State private var textValue: String
     @State private var colorValue: Color
+    @State private var numberIsEditing = false
     @State private var bridgeActionInProgress = false
 
     init(
         wallpaperId: String,
         property: BridgePropertyDescriptor,
+        activePropertyBridgeActionIds: Binding<Set<String>>,
         onError: @escaping (Error) -> Void
     ) {
         self.wallpaperId = wallpaperId
         self.property = property
+        _activePropertyBridgeActionIds = activePropertyBridgeActionIds
         self.onError = onError
+        accessibilityName = RichTextLabel.plainPropertyLabel(property.labelHtml, fallback: property.id)
         _boolValue = State(initialValue: property.value.boolValue ?? false)
         _numberValue = State(initialValue: property.value.numberValue ?? 0)
         _textValue = State(initialValue: property.value.stringValue ?? "")
@@ -155,67 +182,34 @@ private struct WallpaperPropertyRow: View {
     }
 
     var body: some View {
-        Group {
-            if property.kind == .bool {
-                HStack(alignment: .center, spacing: 12) {
-                    propertyLabel
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                propertyLabel
 
-                    if property.dirty {
-                        Text("Modified")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer()
-
-                    if property.canRestoreDefaults {
-                        Button("Restore Defaults") {
-                            restoreDefault()
-                        }
-                        .buttonStyle(.link)
-                        .disabled(bridgeActionInProgress)
-                    }
-
-                    Toggle("", isOn: Binding {
-                        boolValue
-                    } set: { value in
-                        edit(.bool(value: value)) {
-                            boolValue = value
-                        }
-                    })
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .disabled(!property.enabled || bridgeActionInProgress)
+                if property.dirty || store.editorState.propertyTextDrafts[fieldKey] != nil {
+                    Text("Modified")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .firstTextBaseline) {
-                        propertyLabel
 
-                        if property.dirty {
-                            Text("Modified")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                Spacer(minLength: 4)
 
-                        Spacer()
-
-                        if property.canRestoreDefaults {
-                            Button("Restore Defaults") {
-                                restoreDefault()
-                            }
-                            .buttonStyle(.link)
-                            .disabled(bridgeActionInProgress)
-                        }
-                    }
-
-                    control
-                        .disabled(!property.enabled || bridgeActionInProgress)
+                if property.canRestoreDefaults {
+                    Button("Restore Defaults", action: restoreDefault)
+                        .buttonStyle(.link)
+                        .accessibilityLabel(Text("Restore defaults for \(accessibilityName)"))
+                        .disabled(actionsAreDisabled)
                 }
             }
+
+            control
+                .disabled(!property.enabled || actionsAreDisabled)
         }
-        .onChange(of: property) { _, updatedProperty in
-            reset(from: updatedProperty)
+        .onChange(of: property.value) { _, _ in
+            synchronizeValue()
+        }
+        .onChange(of: property.kind) { _, _ in
+            synchronizeValue()
         }
     }
 
@@ -232,41 +226,47 @@ private struct WallpaperPropertyRow: View {
     private var control: some View {
         switch property.kind {
         case .bool:
-            EmptyView()
+            Toggle(accessibilityName, isOn: Binding {
+                boolValue
+            } set: { value in
+                edit(.bool(value: value)) {
+                    boolValue = value
+                }
+            })
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .accessibilityLabel(Text(accessibilityName))
+            .accessibilityValue(boolValue ? Text("On") : Text("Off"))
         case .slider:
             let metadata = sliderMetadata
             HStack {
                 Slider(
-                    value: Binding {
-                        numberValue
-                    } set: { value in
-                        numberValue = value
-                    },
+                    value: $numberValue,
                     in: metadata.range,
                     step: metadata.step,
                     onEditingChanged: { editing in
+                        numberIsEditing = editing
                         if !editing {
                             edit(.number(value: numberValue))
                         }
                     }
                 )
-                Text(numberValue.formatted(.number.precision(.fractionLength(metadata.precision))))
+                .accessibilityLabel(Text(accessibilityName))
+                .accessibilityValue(Text(numberValue.formatted(.number.grouping(.never).precision(.fractionLength(metadata.precision)))))
+                Text(numberValue.formatted(.number.grouping(.never).precision(.fractionLength(metadata.precision))))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
-                    .frame(width: 48, alignment: .trailing)
+                    .fixedSize()
+                    .accessibilityHidden(true)
             }
         case .textInput:
-            TextField("Value", text: Binding {
-                textValue
-            } set: { value in
-                textValue = value
-            })
-            .textFieldStyle(.roundedBorder)
-            .onSubmit {
-                edit(.string(value: textValue))
-            }
+            TextField("Value", text: propertyText)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityLabel(Text(accessibilityName))
+                .accessibilityValue(Text(propertyText.wrappedValue))
+                .onSubmit(commitPropertyText)
         case .color:
-            ColorPicker("Color", selection: Binding {
+            ColorPicker(accessibilityName, selection: Binding {
                 colorValue
             } set: { value in
                 colorValue = value
@@ -279,9 +279,12 @@ private struct WallpaperPropertyRow: View {
                     )
                 )
             })
+            .labelsHidden()
+            .accessibilityLabel(Text(accessibilityName))
+            .accessibilityValue(colorAccessibilityValue)
         case .directory:
             HStack(spacing: 8) {
-                Text(textValue.isEmpty ? "No image selected" : textValue)
+                Text(textValue.isEmpty ? String(localized: "No image selected") : textValue)
                     .font(.caption)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -294,15 +297,14 @@ private struct WallpaperPropertyRow: View {
                             textValue = ""
                         }
                     }
-                    .disabled(bridgeActionInProgress)
+                    .accessibilityLabel(Text("Clear image for \(accessibilityName)"))
                 }
 
-                Button {
-                    chooseTexture()
-                } label: {
+                Button(action: chooseTexture) {
                     Label("Choose Image", systemImage: "photo.badge.plus")
                 }
-                .disabled(bridgeActionInProgress)
+                .accessibilityLabel(Text("Choose image for \(accessibilityName)"))
+                .accessibilityValue(Text(textValue.isEmpty ? String(localized: "No image selected") : textValue))
             }
         case .combo, .text, .group, .unknown:
             Text("Unsupported property type.")
@@ -310,27 +312,82 @@ private struct WallpaperPropertyRow: View {
         }
     }
 
-    private func reset(from property: BridgePropertyDescriptor) {
+    private var fieldKey: WallpaperEditorState.FieldKey {
+        WallpaperEditorState.FieldKey(wallpaperID: wallpaperId, fieldID: property.id)
+    }
+
+    private var propertyText: Binding<String> {
+        let key = fieldKey
+        return Binding {
+            store.editorState.propertyTextDrafts[key] ?? property.value.stringValue ?? ""
+        } set: { text in
+            store.editorState.setPropertyText(text, key: key)
+        }
+    }
+
+    private var colorAccessibilityValue: Text {
+        let color = NSColor(colorValue).usingColorSpace(.sRGB) ?? .white
+        let format = FloatingPointFormatStyle<Double>.Percent().precision(.fractionLength(0...1))
+        let red = Double(color.redComponent).formatted(format)
+        let green = Double(color.greenComponent).formatted(format)
+        let blue = Double(color.blueComponent).formatted(format)
+        return Text("Red \(red), green \(green), blue \(blue)")
+    }
+
+    private var actionsAreDisabled: Bool {
+        bridgeActionInProgress || store.activatingWallpaperID != nil || store.applyingWallpaperID != nil
+            || store.isWallpaperEditInProgress(id: wallpaperId)
+    }
+
+    private func synchronizeValue() {
         boolValue = property.value.boolValue ?? false
-        numberValue = property.value.numberValue ?? 0
+        if !numberIsEditing {
+            numberValue = property.value.numberValue ?? 0
+        }
         textValue = property.value.stringValue ?? ""
         colorValue = property.value.colorValue ?? .white
     }
 
+    private func commitPropertyText() {
+        let key = fieldKey
+        guard let text = store.editorState.propertyTextDrafts[key] else { return }
+        edit(.string(value: text)) {
+            if store.editorState.propertyTextDrafts[key] == text {
+                store.editorState.clearPropertyText(key)
+            }
+        }
+    }
+
     private func restoreDefault() {
+        let key = fieldKey
+        let pendingText = store.editorState.propertyTextDrafts[key]
         performAsyncBridgeAction {
             try await store.restorePropertyDefaultAsync(wallpaperId: wallpaperId, propertyId: property.id)
+            if store.editorState.propertyTextDrafts[key] == pendingText {
+                store.editorState.clearPropertyText(key)
+            }
+            boolValue = property.defaultValue.boolValue ?? false
+            numberValue = property.defaultValue.numberValue ?? 0
+            textValue = property.defaultValue.stringValue ?? ""
+            colorValue = property.defaultValue.colorValue ?? .white
         }
     }
 
     private func edit(_ value: BridgePropertyValue, afterSuccess: (() -> Void)? = nil) {
         performAsyncBridgeAction {
-            try await store.editPropertyAsync(wallpaperId: wallpaperId, propertyId: property.id, value: value)
-            afterSuccess?()
+            do {
+                try await store.editPropertyAsync(wallpaperId: wallpaperId, propertyId: property.id, value: value)
+                afterSuccess?()
+            } catch {
+                synchronizeValue()
+                throw error
+            }
         }
     }
 
     private func chooseTexture() {
+        guard isEnabled, !actionsAreDisabled else { return }
+
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -349,18 +406,24 @@ private struct WallpaperPropertyRow: View {
     }
 
     private func performAsyncBridgeAction(_ action: @escaping () async throws -> Void) {
-        guard !bridgeActionInProgress else {
-            return
-        }
+        guard isEnabled, !actionsAreDisabled else { return }
 
+        let actionId = "\(wallpaperId):\(property.id)"
+        let errorRevision = store.latestBridgeErrorRevision
         bridgeActionInProgress = true
+        activePropertyBridgeActionIds.insert(actionId)
         Task {
+            defer {
+                bridgeActionInProgress = false
+                activePropertyBridgeActionIds.remove(actionId)
+            }
             do {
                 try await action()
             } catch {
-                onError(error)
+                if store.latestBridgeErrorRevision == errorRevision {
+                    onError(error)
+                }
             }
-            bridgeActionInProgress = false
         }
     }
 

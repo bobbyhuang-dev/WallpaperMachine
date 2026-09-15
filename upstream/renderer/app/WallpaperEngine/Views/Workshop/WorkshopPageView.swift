@@ -3,196 +3,259 @@ import SwiftUI
 
 struct WorkshopPageView: View {
     @Environment(BridgeStore.self) private var bridge
+    @EnvironmentObject private var navigation: ControlPanelNavigation
     @Bindable var workshop: WorkshopStore
-    @State private var selectedItem: WorkshopItem?
     @State private var showSetup = false
-    @State private var showAssetsSetup = false
+    @State private var columnCount = 1
+    @FocusState private var searchIsFocused: Bool
+    @FocusState private var focusedItemID: String?
 
     var body: some View {
-        @Bindable var workshop = workshop
-        VStack(spacing: 0) {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
             header
             Divider()
-            HStack(spacing: 12) {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search Steam Workshop", text: $workshop.searchText)
-                        .textFieldStyle(.plain)
-                        .onSubmit { workshop.search() }
-                        .accessibilityIdentifier("workshop.search")
-                    if !workshop.searchText.isEmpty {
-                        Button { workshop.searchText = ""; workshop.search() } label: { Image(systemName: "xmark.circle.fill") }
-                            .buttonStyle(.plain).foregroundStyle(.secondary).help("Clear search")
-                    }
-                }
-                .padding(10).background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 9))
-                Button("Search") { workshop.search() }.keyboardShortcut(.return, modifiers: [])
-                Picker("Type", selection: $workshop.kind) {
-                    ForEach(WorkshopKind.allCases) { Text($0.rawValue).tag($0) }
-                }.frame(width: 150)
-                Picker("Sort", selection: $workshop.sort) {
-                    ForEach(WorkshopSort.allCases) { Text($0.title).tag($0) }
-                }.frame(width: 210)
-            }.padding(20)
-            .onChange(of: workshop.kind) { workshop.search() }
-            .onChange(of: workshop.sort) { workshop.search() }
-
-            if let error = workshop.errorMessage {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    Text(error).textSelection(.enabled)
-                    Spacer()
-                    Button("Retry") { workshop.search(page: workshop.page) }
-                    Button { workshop.errorMessage = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
-                }.padding(14).background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10)).padding(.horizontal, 20).padding(.bottom, 12)
-            }
-            if let message = workshop.applyMessage {
-                Label(message, systemImage: "checkmark.circle.fill").foregroundStyle(.green).padding(.bottom, 10)
-            }
-            if !workshop.downloader.downloads.isEmpty {
-                downloadsPanel
-            }
-            if workshop.isLoading && workshop.items.isEmpty {
-                VStack(spacing: 14) {
-                    ProgressView()
-                    Text("Discovering wallpapers on Steam…").foregroundStyle(.secondary)
-                    Button("Cancel") { workshop.cancelSearch() }
-                }.frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if workshop.items.isEmpty {
-                ContentUnavailableView {
-                    Label(workshop.hasLoaded ? "No wallpapers found" : "Explore Steam Workshop", systemImage: "sparkles.rectangle.stack")
-                } description: {
-                    Text(workshop.hasLoaded ? "Try a different search or wallpaper type." : "Browse public wallpapers without a Steam API key. Download only with an account that owns Wallpaper Engine.")
-                } actions: {
-                    Button("Browse wallpapers") { workshop.search() }.buttonStyle(.borderedProminent)
-                    Link("Open Steam Workshop", destination: workshop.browseURL)
-                }
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 360), spacing: 18)], spacing: 18) {
-                        ForEach(workshop.items) { item in
-                            WorkshopCard(item: item, installed: isInstalled(item.id), download: workshop.downloader.download(for: item.id)) { selectedItem = item }
-                        }
-                    }.padding(20).padding(.top, -8)
-                }.overlay(alignment: .top) {
-                    if workshop.isLoading {
-                        HStack(spacing: 12) { ProgressView().controlSize(.small); Text("Loading results…"); Button("Cancel") { workshop.cancelSearch() } }
-                            .padding(12).background(.regularMaterial, in: Capsule()).padding(8)
-                    }
-                }
-            }
+                searchControls(compact: geometry.size.width < 380)
+                results
             Divider()
             footer
+        }
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle("Workshop")
         .task { if !workshop.hasLoaded && !workshop.isLoading { workshop.search() } }
-        .sheet(item: $selectedItem) { item in
-            WorkshopDetailView(item: item, workshop: workshop, installed: isInstalled(item.id))
-                .environment(bridge)
-        }
-        .sheet(isPresented: $showSetup) { WorkshopSetupView() }
-        .sheet(isPresented: $showAssetsSetup) { SceneAssetsSetupView(workshop: workshop).environment(bridge) }
+        .sheet(isPresented: $showSetup) { WorkshopSetupView(workshop: workshop) }
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 16) {
-            Image(systemName: "sparkles.rectangle.stack.fill").font(.system(size: 30)).foregroundStyle(.tint)
-                .frame(width: 56, height: 56).background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Discover your next desktop").font(.system(size: 25, weight: .semibold))
-                Text("Steam Workshop · Community-made wallpapers, in MacWallpaperEngine").foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Discover your next desktop")
+                .font(.title3.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Steam Workshop · Community-made wallpapers, in MacWallpaperEngine")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button("Download setup", systemImage: "person.badge.key") { showSetup = true }
+                Spacer(minLength: 0)
+                Link(destination: workshop.browseURL) {
+                    Image(systemName: "arrow.up.right.square")
+                }
+                .accessibilityLabel("Open Steam Workshop in your browser")
+                .help("Open Steam Workshop in your browser")
             }
-            Spacer()
-            Button("Download setup", systemImage: "person.badge.key") { showSetup = true }
-            Link(destination: workshop.browseURL) { Image(systemName: "arrow.up.right.square") }.help("Open Steam Workshop in your browser")
-        }.padding(24)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
     }
 
-    private var downloadsPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label("Downloads", systemImage: "arrow.down.circle").font(.callout.weight(.semibold))
-                Spacer()
-                Text("\(workshop.downloader.activeCount)/\(workshop.downloader.maximumConcurrentDownloads) active · \(workshop.downloader.queuedCount) queued")
-                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-            }
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    ForEach(workshop.downloader.downloads) { download in
-                        WorkshopDownloadRow(download: download) {
-                            if let item = download.item { selectedItem = item }
-                            else { showAssetsSetup = true }
-                        } cancel: {
-                            workshop.downloader.cancel(download)
+    private func searchControls(compact: Bool) -> some View {
+        @Bindable var workshop = workshop
+        let filtersLayout = compact
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(spacing: 8))
+        return VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    Button { searchIsFocused = true } label: {
+                        Image(systemName: "magnifyingglass")
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .keyboardShortcut("f", modifiers: .command)
+                    .accessibilityLabel("Search Steam Workshop")
+                    .help("Search Steam Workshop")
+                    TextField("Search Steam Workshop", text: $workshop.searchText)
+                        .textFieldStyle(.plain)
+                        .frame(minWidth: 0, maxWidth: .infinity)
+                        .focused($searchIsFocused)
+                        .onSubmit { workshop.search() }
+                        .accessibilityIdentifier("workshop.search")
+                    if !workshop.searchText.isEmpty {
+                        Button { workshop.searchText = ""; workshop.search() } label: {
+                            Image(systemName: "xmark.circle.fill")
                         }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Clear search")
+                        .help("Clear search")
                     }
                 }
-            }.frame(height: min(CGFloat(workshop.downloader.downloads.count) * 78, 190))
+                .padding(8)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: .separatorColor)))
+                Button("Search") { workshop.search() }
+            }
+            filtersLayout {
+                Picker("Type", selection: $workshop.kind) {
+                    ForEach(WorkshopKind.allCases) { Text(LocalizedStringKey($0.rawValue)).tag($0) }
+                }
+                .labelsHidden()
+                .accessibilityLabel("Type")
+                .help("Type")
+                Picker("Sort", selection: $workshop.sort) {
+                    ForEach(WorkshopSort.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
+                }
+                .labelsHidden()
+                .accessibilityLabel("Sort")
+                .help("Sort")
+                if !compact { Spacer(minLength: 0) }
+                Group {
+                    if workshop.hasLoaded {
+                        Text("\(workshop.totalCount.formatted()) results")
+                            .help("\(workshop.totalCount.formatted()) matching wallpapers")
+                    } else {
+                        Text("Live results from Steam")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
         }
-        .padding(12).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 20).padding(.bottom, 12)
-        .accessibilityIdentifier("workshop.downloads")
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .onChange(of: workshop.kind) { workshop.search() }
+        .onChange(of: workshop.sort) { workshop.search() }
     }
 
+    private func searchError(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label {
+                Text(message).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            }
+            HStack(spacing: 8) {
+                Button("Retry") { workshop.retrySearch() }
+                Spacer(minLength: 0)
+                Button { workshop.errorMessage = nil } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss search error")
+                    .help("Dismiss search error")
+            }
+        }
+        .font(.callout)
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var results: some View {
+        GeometryReader { geometry in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    if let error = workshop.errorMessage {
+                        searchError(error).padding(12)
+                    }
+                    if workshop.isLoading && !workshop.items.isEmpty {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Loading results…").font(.callout).foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                            Button("Cancel") { workshop.cancelSearch() }
+                        }
+                        .padding(12)
+                    }
+                    if workshop.isLoading && workshop.items.isEmpty {
+                        VStack(spacing: 12) {
+                            ProgressView()
+                            Text("Discovering wallpapers on Steam…").foregroundStyle(.secondary)
+                            Button("Cancel") { workshop.cancelSearch() }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: max(0, geometry.size.height - 32))
+                        .padding(16)
+                    } else if workshop.items.isEmpty {
+                        ControlPanelEmptyState(workshop.hasLoaded ? "No wallpapers found" : "Explore Steam Workshop",
+                            systemImage: "sparkles.rectangle.stack",
+                            description: Text(workshop.hasLoaded ? "Try a different search or wallpaper type." : "Browse public wallpapers without a Steam API key. Download only with an account that owns Wallpaper Engine.")) {
+                            Button("Browse wallpapers") { workshop.search() }.buttonStyle(.borderedProminent)
+                            Link("Open Steam Workshop", destination: workshop.browseURL)
+                        }
+                        .frame(minHeight: max(0, geometry.size.height - 32))
+                        .padding(16)
+                    } else {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 164, maximum: 240), spacing: 12)], spacing: 12) {
+                            ForEach(workshop.items) { item in
+                                WorkshopCard(item: item, installed: isInstalled(item.id),
+                                             download: workshop.downloader.download(for: item.id),
+                                             isSelected: workshop.selectedItem?.id == item.id,
+                                             focusedItemID: $focusedItemID) {
+                                    workshop.selectedItem = item
+                                    focusedItemID = item.id
+                                }
+                                .id(item.id)
+                                .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { key in
+                                    moveFocus(key, proxy: proxy)
+                                }
+                            }
+                        }
+                        .scrollTargetLayout()
+                        .onGeometryChange(for: Int.self) { geometry in
+                            max(1, Int((geometry.size.width + 12) / (164 + 12)))
+                        } action: { columnCount = $0 }
+                        .padding(12)
+                    }
+                }
+                .scrollPosition(id: $navigation.workshopScrollID)
+            }
+        }
+    }
+
+
     private var footer: some View {
-        HStack(spacing: 12) {
-            Text(workshop.hasLoaded ? "\(workshop.totalCount.formatted()) matching wallpapers" : "Live results from Steam")
-                .font(.caption).foregroundStyle(.secondary)
-            Spacer()
-            Button { workshop.search(page: workshop.page - 1) } label: { Label("Previous", systemImage: "chevron.left") }
-                .disabled(workshop.page <= 1 || workshop.isLoading)
-            Text("Page \(workshop.page) of \(workshop.totalPages)").monospacedDigit().font(.callout)
-            Button { workshop.search(page: workshop.page + 1) } label: { Label("Next", systemImage: "chevron.right") }
-                .disabled(workshop.page >= workshop.totalPages || workshop.isLoading)
-        }.padding(.horizontal, 24).padding(.vertical, 14)
+        HStack(spacing: 8) {
+            Button { workshop.loadPage(workshop.page - 1) } label: {
+                Label("Previous", systemImage: "chevron.left")
+            }
+            .disabled(workshop.page <= 1 || workshop.isLoading)
+            .labelStyle(.iconOnly)
+            .help("Previous")
+            Spacer(minLength: 0)
+            Text("Page \(workshop.page) of \(workshop.totalPages)")
+                .monospacedDigit().font(.callout)
+                .lineLimit(1)
+                .frame(minWidth: 0, maxWidth: .infinity)
+            Spacer(minLength: 0)
+            Button { workshop.loadPage(workshop.page + 1) } label: {
+                Label("Next", systemImage: "chevron.right")
+            }
+            .disabled(workshop.page >= workshop.totalPages || workshop.isLoading)
+            .labelStyle(.iconOnly)
+            .help("Next")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+    }
+
+    private func moveFocus(_ key: KeyPress, proxy: ScrollViewProxy) -> KeyPress.Result {
+        guard key.modifiers.intersection([.command, .control, .option, .shift]).isEmpty,
+              let focusedItemID,
+              let index = workshop.items.firstIndex(where: { $0.id == focusedItemID }) else { return .ignored }
+        let offset: Int
+        switch key.key {
+        case .leftArrow: offset = -1
+        case .rightArrow: offset = 1
+        case .upArrow: offset = -columnCount
+        case .downArrow: offset = columnCount
+        default: return .ignored
+        }
+        let nextIndex = min(max(index + offset, 0), workshop.items.count - 1)
+        let nextID = workshop.items[nextIndex].id
+        proxy.scrollTo(nextID)
+        self.focusedItemID = nextID
+        return .handled
     }
 
     private func isInstalled(_ id: String) -> Bool {
-        bridge.librarySnapshot.wallpapers.contains { $0.id == id } || workshop.downloader.download(for: id)?.worker.downloadedID == id
-    }
-}
-
-private struct WorkshopDownloadRow: View {
-    let download: WorkshopDownload
-    let open: () -> Void
-    let cancel: () -> Void
-
-    private var needsAuthentication: Bool {
-        download.isPending && !download.isQueued && (download.worker.prompt != nil || download.worker.steamGuardChallenge != nil)
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(action: open) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(download.item?.title ?? "Scene assets").font(.callout.weight(.medium)).lineLimit(1)
-                        Text(download.account).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-                    }
-                    if let error = download.worker.errorMessage {
-                        Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange).lineLimit(2)
-                    } else if needsAuthentication {
-                        Label("Sign-in needed · \(download.status)", systemImage: "person.badge.key").foregroundStyle(.orange).lineLimit(2)
-                    } else if let warning = download.worker.sessionWarning {
-                        Label(warning, systemImage: "exclamationmark.shield").foregroundStyle(.orange).lineLimit(2)
-                    } else {
-                        Text(download.status).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    if download.isPending && !download.isQueued {
-                        ProgressView(value: download.progress).progressViewStyle(.linear)
-                            .accessibilityLabel("Download progress")
-                    }
-                }.font(.caption).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain)
-                .help(download.item == nil ? "Open scene assets setup" : "Open wallpaper details")
-            if download.isPending {
-                Button("Cancel", role: .cancel, action: cancel).controlSize(.small)
-                    .accessibilityLabel("Cancel \(download.item?.title ?? "scene assets")")
-            }
-        }.padding(.vertical, 3)
+        bridge.librarySnapshot.wallpapers.contains { $0.id == id }
     }
 }
 
@@ -200,42 +263,65 @@ private struct WorkshopCard: View {
     let item: WorkshopItem
     let installed: Bool
     let download: WorkshopDownload?
+    let isSelected: Bool
+    let focusedItemID: FocusState<String?>.Binding
     let action: () -> Void
-    @State private var hovered = false
 
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 0) {
                 WorkshopPreview(url: item.previewURL)
-                    .aspectRatio(16 / 10, contentMode: .fit)
+                    .aspectRatio(16.0 / 10.0, contentMode: .fit)
                     .overlay(alignment: .topTrailing) {
                         if let download, download.isPending {
                             Label(download.isQueued ? "Queued" : "Downloading", systemImage: download.isQueued ? "clock" : "arrow.down.circle")
-                                .font(.caption.weight(.medium)).padding(7).background(.regularMaterial, in: Capsule()).padding(10)
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(.regularMaterial, in: Capsule())
+                                .padding(8)
                         } else if installed {
-                            Label("In Library", systemImage: "checkmark").font(.caption.weight(.medium)).padding(7).background(.regularMaterial, in: Capsule()).padding(10)
+                            Label("In Library", systemImage: "checkmark.circle")
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(.regularMaterial, in: Capsule())
+                                .padding(8)
                         }
                     }
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(item.title).font(.headline).lineLimit(2).frame(height: 38, alignment: .topLeading)
-                    Text(item.creator).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    HStack {
-                        Text(item.kind == .all ? "Wallpaper" : item.kind.rawValue).font(.caption.weight(.medium))
-                            .padding(.horizontal, 7).padding(.vertical, 3).background(Color.accentColor.opacity(0.1), in: Capsule())
-                        Spacer()
-                        Label(item.subscriptions.formatted(.number.notation(.compactName)), systemImage: "person.2")
-                            .font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(item.title).font(.headline).lineLimit(2, reservesSpace: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 8) {
+                        if item.kind == .application || item.kind == .web {
+                            Image(systemName: "exclamationmark.triangle")
+                        }
+                        Text(LocalizedStringKey(item.kind == .all ? "Wallpaper" : item.kind.rawValue))
+                            .lineLimit(1)
                     }
-                    Text(item.kind.compatibility).font(.caption2).foregroundStyle(item.kind == .application || item.kind == .web ? Color.orange : Color.secondary).lineLimit(1)
-                }.padding(13)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }.padding(12)
             }
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 13))
-            .clipShape(RoundedRectangle(cornerRadius: 13))
-            .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(hovered ? Color.accentColor.opacity(0.7) : .primary.opacity(0.08), lineWidth: 1))
-            .shadow(color: .black.opacity(hovered ? 0.13 : 0.04), radius: hovered ? 8 : 3, y: 3)
-        }.buttonStyle(.plain).onHover { hovered = $0 }
-            .accessibilityLabel("\(item.title), \(item.kind.compatibility)\(installed ? ", in library" : "")\(download?.isPending == true ? ", \(download?.status ?? "")" : "")")
-            .accessibilityIdentifier("workshop.item.\(item.id)")
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(
+                isSelected ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: isSelected ? 2 : 1))
+        }
+        .buttonStyle(.plain)
+        .focusable()
+        .focused(focusedItemID, equals: item.id)
+        .onKeyPress(.return, phases: .down) { key in
+            guard key.modifiers.intersection([.command, .control, .option, .shift]).isEmpty else { return .ignored }
+            action()
+            return .handled
+        }
+        .accessibilityLabel(Text(verbatim: item.title))
+        .accessibilityValue(download?.isPending == true ? Text(download?.status ?? "") : installed ? Text("In Library") : Text(""))
+        .accessibilityHint(Text(LocalizedStringKey(item.kind.compatibility)))
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        .accessibilityIdentifier("workshop.item.\(item.id)")
+        .help(item.title)
     }
 }
 
@@ -254,8 +340,9 @@ struct WorkshopPreview: View {
     }
     private func placeholder(symbol: String) -> some View {
         ZStack {
-            LinearGradient(colors: [.indigo.opacity(0.18), .cyan.opacity(0.12)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            Color(nsColor: .quaternaryLabelColor)
             Image(systemName: symbol).font(.largeTitle).foregroundStyle(.secondary)
         }
+        .accessibilityHidden(true)
     }
 }

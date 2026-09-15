@@ -12,22 +12,17 @@ struct WallpaperOptionsEditorView: View {
     var onError: (Error) -> Void = { _ in }
     var onApply: (BridgeWallpaperOptionsSnapshot) -> Void = { _ in }
 
-    @State private var displayExpanded = false
-    @State private var generalExpanded = false
-    @State private var propertiesExpanded = false
-    @State private var currentWallpaperId: String?
-    @State private var localResetRevision: UInt64 = 0
     @State private var applyInProgress = false
-    @State private var pendingScalingFactors: [String: Double] = [:]
-    @State private var invalidScalingFactorDisplayIds: Set<String> = []
     @State private var activeDisplayBridgeActionIds: Set<String> = []
+    @State private var activePropertyBridgeActionIds: Set<String> = []
+    @State private var generalBridgeActionInProgress = false
 
     var body: some View {
         VStack(spacing: 0) {
             if scrollsContent {
                 ScrollView {
                     editorContent
-                        .padding(24)
+                        .padding(16)
                 }
             } else {
                 editorContent
@@ -36,46 +31,46 @@ struct WallpaperOptionsEditorView: View {
             if showsActions {
                 Divider()
 
-                HStack {
-
-                    Spacer()
-
-                    Button("Revert") {
-                        performAsyncBridgeAction {
-                            try await store.cancelWallpaperOptionsAsync(wallpaperId: options.wallpaperId)
-                            clearPendingDisplayEdits()
-                            localResetRevision &+= 1
-                        }
+                VStack(alignment: .leading, spacing: 8) {
+                    if let invalidDisplayTitle {
+                        Text("Correct the scaling factor for \(invalidDisplayTitle) before applying.")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if fieldsAreSaving {
+                        Text("Wait for the current setting to finish saving.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .disabled(applyInProgress)
 
-                    Button("Apply") {
-                        performAsyncBridgeAction {
-                            try await commitPendingDisplayEdits()
-                            try await store.applyWallpaperOptionsAsync(wallpaperId: options.wallpaperId)
-                            if let updatedOptions = store.wallpaperOptionsSnapshot,
-                               updatedOptions.wallpaperId == options.wallpaperId
-                            {
-                                onApply(updatedOptions)
+                    HStack {
+                        Spacer()
+
+                        Button("Revert") {
+                            let wallpaperId = options.wallpaperId
+                            performAsyncBridgeAction {
+                                try await store.cancelWallpaperOptionsAsync(wallpaperId: wallpaperId)
                             }
                         }
+                        .disabled(!hasPendingChanges || actionsAreDisabled)
+
+                        Button("Apply Changes") {
+                            let wallpaperId = options.wallpaperId
+                            performAsyncBridgeAction {
+                                try await store.applyWallpaperOptionsAsync(wallpaperId: wallpaperId)
+                                if let updatedOptions = store.wallpaperOptionsSnapshot,
+                                   updatedOptions.wallpaperId == wallpaperId
+                                {
+                                    onApply(updatedOptions)
+                                }
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!hasPendingChanges || hasInvalidScaling || actionsAreDisabled || store.activationNeedsRefresh)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(
-                        (!options.dirty && pendingScalingFactors.isEmpty)
-                            || !invalidScalingFactorDisplayIds.isEmpty
-                            || applyInProgress
-                            || !activeDisplayBridgeActionIds.isEmpty
-                    )
                 }
                 .padding(14)
             }
-        }
-        .onAppear {
-            resetExpansionIfNeeded(options.wallpaperId)
-        }
-        .onChange(of: options.wallpaperId) { _, wallpaperId in
-            resetExpansionIfNeeded(wallpaperId)
         }
     }
 
@@ -83,19 +78,21 @@ struct WallpaperOptionsEditorView: View {
         VStack(alignment: .leading, spacing: 20) {
             if showsTitle {
                 Text(options.title)
-                    .font(.largeTitle.bold())
-                    .lineLimit(2)
+                    .font(.title2.bold())
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            DisclosureGroup(isExpanded: $displayExpanded) {
+            Text("Apply Changes saves pending properties and scaling factor. Revert discards only pending changes.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            DisclosureGroup(isExpanded: expansion("display", default: true)) {
                 DisplayConfigurationSection(
                     options: options,
-                    snapshotRevision: store.snapshotRevision,
-                    resetRevision: localResetRevision,
                     displayIdFilter: displayIdFilter,
                     rowsAreCollapsible: displayRowsAreCollapsible,
-                    pendingScalingFactors: $pendingScalingFactors,
-                    invalidScalingFactorDisplayIds: $invalidScalingFactorDisplayIds,
                     activeDisplayBridgeActionIds: $activeDisplayBridgeActionIds,
                     onError: onError
                 )
@@ -104,73 +101,86 @@ struct WallpaperOptionsEditorView: View {
                     .font(.headline)
             }
 
-            DisclosureGroup(isExpanded: $generalExpanded) {
+            DisclosureGroup(isExpanded: expansion("general", default: true)) {
                 GeneralConfigurationSection(
                     options: options,
-                    snapshotRevision: store.snapshotRevision,
-                    resetRevision: localResetRevision,
+                    bridgeActionInProgress: $generalBridgeActionInProgress,
                     onError: onError
                 )
-                .id("\(options.wallpaperId)-general-\(displayIdFilter ?? "all")")
+                .id("\(options.wallpaperId)-general")
             } label: {
                 Label("General Configuration", systemImage: "slider.horizontal.3")
                     .font(.headline)
             }
 
-            DisclosureGroup(isExpanded: $propertiesExpanded) {
-                WallpaperPropertiesSection(options: options, onError: onError)
+            DisclosureGroup(isExpanded: expansion("properties", default: !options.properties.isEmpty)) {
+                WallpaperPropertiesSection(
+                    options: options,
+                    activePropertyBridgeActionIds: $activePropertyBridgeActionIds,
+                    onError: onError
+                )
             } label: {
                 Label("Wallpaper Properties", systemImage: "info.circle")
                     .font(.headline)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .disabled(applyInProgress || store.activatingWallpaperID != nil || store.applyingWallpaperID != nil)
     }
 
-    private func resetExpansionIfNeeded(_ wallpaperId: String) {
-        guard currentWallpaperId != wallpaperId else {
-            return
+    private var hasPendingChanges: Bool {
+        options.dirty || store.editorState.hasPendingEdits(wallpaperID: options.wallpaperId)
+    }
+
+    private var hasInvalidScaling: Bool {
+        store.editorState.hasInvalidScaling(wallpaperID: options.wallpaperId)
+    }
+
+    private var invalidDisplayTitle: String? {
+        guard hasInvalidScaling else { return nil }
+        if let row = options.displayConfigurations.first(where: {
+            let key = WallpaperEditorState.FieldKey(wallpaperID: options.wallpaperId, fieldID: $0.displayId)
+            return store.editorState.scalingDrafts[key]?.errorMessage != nil
+        }) {
+            return row.title
         }
-
-        currentWallpaperId = wallpaperId
-        displayExpanded = false
-        generalExpanded = false
-        propertiesExpanded = false
-        localResetRevision = 0
-        applyInProgress = false
-        activeDisplayBridgeActionIds.removeAll()
-        clearPendingDisplayEdits()
+        return store.editorState.scalingDrafts.first(where: {
+            $0.key.wallpaperID == options.wallpaperId && $0.value.value == nil
+        })?.key.fieldID
     }
 
-    private func clearPendingDisplayEdits() {
-        pendingScalingFactors.removeAll()
-        invalidScalingFactorDisplayIds.removeAll()
+    private var fieldsAreSaving: Bool {
+        !activeDisplayBridgeActionIds.isEmpty || !activePropertyBridgeActionIds.isEmpty
+            || generalBridgeActionInProgress || store.isWallpaperEditInProgress(id: options.wallpaperId)
     }
 
-    private func commitPendingDisplayEdits() async throws {
-        for (displayId, factor) in pendingScalingFactors {
-            try await store.editScalingFactorAsync(
-                wallpaperId: options.wallpaperId,
-                displayId: displayId,
-                factor: factor
-            )
+    private var actionsAreDisabled: Bool {
+        applyInProgress || fieldsAreSaving || store.activatingWallpaperID != nil || store.applyingWallpaperID != nil
+    }
+
+    private func expansion(_ section: String, default defaultValue: Bool) -> Binding<Bool> {
+        let key = WallpaperEditorState.FieldKey(wallpaperID: options.wallpaperId, fieldID: "section:\(section)")
+        return Binding {
+            store.editorState.expandedSections[key] ?? defaultValue
+        } set: { expanded in
+            store.editorState.expandedSections[key] = expanded
         }
-        clearPendingDisplayEdits()
     }
 
     private func performAsyncBridgeAction(_ action: @escaping () async throws -> Void) {
-        guard !applyInProgress else {
-            return
-        }
+        guard !actionsAreDisabled else { return }
 
+        let errorRevision = store.latestBridgeErrorRevision
         applyInProgress = true
         Task {
+            defer { applyInProgress = false }
             do {
                 try await action()
             } catch {
-                onError(error)
+                if store.latestBridgeErrorRevision == errorRevision {
+                    onError(error)
+                }
             }
-            applyInProgress = false
         }
     }
 }

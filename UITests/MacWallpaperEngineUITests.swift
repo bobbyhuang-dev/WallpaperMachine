@@ -36,8 +36,7 @@ final class MacWallpaperEngineUITests: XCTestCase {
     }
 
     func testLaunchHasNoBlankFloatingWindows() {
-        XCTAssertTrue(app.staticTexts["Your collection"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.buttons["Aurora Drift"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["library.item.starter-aurora"].waitForExistence(timeout: 15))
         // Some empty SwiftUI panels are absent from the accessibility tree.
         // Check WindowServer too, ignoring the menu bar and desktop wallpapers.
         let pid = NSRunningApplication.runningApplications(withBundleIdentifier: "app.mac-wallpaper-engine")
@@ -55,49 +54,47 @@ final class MacWallpaperEngineUITests: XCTestCase {
     }
 
     func testSettingsShortcutUsesExistingWindow() {
-        XCTAssertTrue(app.staticTexts["Your collection"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.textFields["library.search"].waitForExistence(timeout: 15))
         app.windows.firstMatch.click()
         app.typeKey(",", modifierFlags: .command)
-        XCTAssertTrue(app.buttons["Locate assets…"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["steamcmd.install"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.windows.count, 1)
         navigate("Library")
         app.typeKey(",", modifierFlags: .command)
-        XCTAssertTrue(app.buttons["Locate assets…"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["steamcmd.install"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.windows.count, 1)
     }
 
     func testFirstLaunchNavigationAndSettings() {
-        XCTAssertTrue(app.staticTexts["Your collection"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.buttons["Aurora Drift"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["library.item.starter-aurora"].waitForExistence(timeout: 15))
         navigate("Settings")
-        XCTAssertTrue(app.buttons["Locate assets…"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["Show in Finder"].exists)
+        XCTAssertTrue(app.buttons["steamcmd.install"].waitForExistence(timeout: 10))
         navigate("Display")
         XCTAssertTrue(app.windows.firstMatch.exists)
         navigate("Library")
-        XCTAssertTrue(app.staticTexts["Your collection"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.textFields["library.search"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.alerts.count, 0)
     }
     func testImportSheetCancelAndEmptyLibrarySearch() {
         app.buttons["Import"].firstMatch.click()
-        XCTAssertTrue(app.staticTexts["Import to MacWallpaperEngine"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Import Items"].isEnabled)
         app.buttons["Cancel"].click()
-        XCTAssertTrue(app.staticTexts["Your collection"].exists)
+        XCTAssertEqual(app.sheets.count, 0)
         let search = app.textFields["library.search"]
         XCTAssertTrue(search.exists)
         search.click()
         search.typeText("no-local-wallpaper-with-this-title")
         search.typeKey(.return, modifierFlags: [])
-        XCTAssertTrue(app.staticTexts["No matching wallpapers"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["library.item.starter-aurora"].exists)
         app.buttons["Clear Search & Filters"].click()
-        XCTAssertTrue(app.buttons["Aurora Drift"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["library.item.starter-aurora"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.alerts.count, 0)
     }
 
     func testWorkshopLoadsRealResultsAndSetup() {
         navigate("Workshop")
-        XCTAssertTrue(app.staticTexts["Discover your next desktop"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.textFields["workshop.search"].waitForExistence(timeout: 10))
         let setup = app.buttons["Download setup"]
         XCTAssertTrue(setup.exists)
         setup.click()
@@ -111,10 +108,11 @@ final class MacWallpaperEngineUITests: XCTestCase {
     }
 
     func testSelectionSurvivesLibraryRefresh() {
-        app.buttons["Aurora Drift"].click()
-        XCTAssertTrue(app.disclosureTriangles["Display Configuration"].waitForExistence(timeout: 5))
+        app.buttons["library.item.starter-aurora"].click()
+        XCTAssertTrue(app.staticTexts["wallpaper.activationStatus"].waitForExistence(timeout: 30))
+        let selectedValue = app.buttons["library.item.starter-aurora"].value as? String
         app.buttons["Refresh"].click()
-        XCTAssertTrue(app.disclosureTriangles["Display Configuration"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["library.item.starter-aurora"].value as? String, selectedValue)
         XCTAssertEqual(app.alerts.count, 0)
     }
 
@@ -127,11 +125,11 @@ final class MacWallpaperEngineUITests: XCTestCase {
     }
 
     func testApplyPauseResumeAndRelaunch() {
-        app.buttons["Apply Aurora Drift to primary display"].click()
-        XCTAssertTrue(app.staticTexts["Applied Aurora Drift to your primary display"].waitForExistence(timeout: 30))
-        app.buttons["Pause wallpapers"].click()
+        app.buttons["library.item.starter-aurora"].click()
+        XCTAssertTrue(app.staticTexts["wallpaper.activationStatus"].waitForExistence(timeout: 30))
+        app.buttons["playback.toggle"].click()
         XCTAssertTrue(app.buttons["Resume wallpapers"].waitForExistence(timeout: 5))
-        app.buttons["Resume wallpapers"].click()
+        app.buttons["playback.toggle"].click()
         XCTAssertTrue(app.buttons["Pause wallpapers"].waitForExistence(timeout: 5))
         app.terminate()
         app.launch()
@@ -160,12 +158,16 @@ final class MacWallpaperEngineUITests: XCTestCase {
         XCTAssertEqual(app.alerts.count, 0)
     }
     func testInvalidVideoReportsFailureAndRemainsUsable() throws {
-        XCTAssertTrue(app.buttons["Apply Broken Video to primary display"].waitForExistence(timeout: 5))
-        app.buttons["Apply Broken Video to primary display"].click()
-        XCTAssertTrue(app.buttons["OK"].firstMatch.waitForExistence(timeout: 30))
-        app.typeKey(.return, modifierFlags: [])
-        XCTAssertTrue(app.buttons["Apply Aurora Drift to primary display"].isEnabled)
-        app.buttons["Apply Aurora Drift to primary display"].click()
-        XCTAssertTrue(app.staticTexts["Applied Aurora Drift to your primary display"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.buttons["library.item.broken-video"].waitForExistence(timeout: 5))
+        app.buttons["library.item.broken-video"].click()
+        let status = app.staticTexts["wallpaper.activationStatus"]
+        XCTAssertTrue(status.waitForExistence(timeout: 30))
+        let failureStatus = status.label
+        XCTAssertFalse(app.buttons["playback.toggle"].isEnabled)
+        XCTAssertTrue(app.buttons["library.item.starter-aurora"].isEnabled)
+        app.buttons["library.item.starter-aurora"].click()
+        expectation(for: NSPredicate(format: "label != %@ AND label != ''", failureStatus), evaluatedWith: status)
+        waitForExpectations(timeout: 30)
+        XCTAssertTrue(app.buttons["playback.toggle"].isEnabled)
     }
 }

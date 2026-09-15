@@ -12,6 +12,14 @@ struct RichTextLabel: View {
     static func sanitizedPropertyLabelHtml(_ html: String) -> String {
         RichTextLabelSanitizer.propertyLabelHtml(html)
     }
+
+    static func plainPropertyLabel(_ html: String, fallback: String) -> String {
+        let sanitized = sanitizedPropertyLabelHtml(html)
+        let plain = RichTextLabelCache.shared.attributedString(for: sanitized).string
+            .replacingOccurrences(of: "\u{FFFC}", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return plain.isEmpty ? fallback : plain
+    }
 }
 
 private final class RichTextLabelCache {

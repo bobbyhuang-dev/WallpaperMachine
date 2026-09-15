@@ -31,9 +31,8 @@ struct LibrarySettingsSection: View {
             HStack {
                 Button("Locate assets…") {
                     if ClientPaths.selectAssetsFolder() { assetsPath = ClientPaths.assetsURL.path }
-                }.disabled(workshop.downloader.isRunning)
-                Button("Install scene assets…") { showAssetsSetup = true }
-                    .disabled(workshop.downloader.isRunning)
+                }.disabled(workshop.downloader.download(for: nil)?.isPending == true)
+                Button(workshop.downloader.download(for: nil)?.isPending == true ? "View scene assets download…" : "Install scene assets…") { showAssetsSetup = true }
             }
             Text(assetsPath).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
             Text("Scene wallpapers need shared resources in addition to the Workshop download. Install them once through Steam or choose your purchased installation’s assets folder. Videos do not require it. Scene support is experimental; some effects and scripts may differ from Windows.")

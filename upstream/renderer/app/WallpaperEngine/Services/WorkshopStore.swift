@@ -16,7 +16,7 @@ final class WorkshopStore {
     var errorMessage: String?
     var applyMessage: String?
     private(set) var applyingID: String?
-    let downloader = WorkshopDownloader()
+    let downloader = WorkshopDownloadManager()
     @ObservationIgnored private let service = WorkshopService()
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private var generation = UUID()

@@ -500,6 +500,186 @@ final class DownloaderTests: XCTestCase {
         try assertNoStaging(in: root)
     }
 
+    func testConcurrentDownloadsKeepPromptsCancellationAndQueueIndependent() async throws {
+        let root = try makeRuntime("""
+            set -eu
+            item=''
+            while [ "$#" -gt 0 ]; do
+                if [ "$1" = +workshop_download_item ]; then shift; shift; item="$1"; fi
+                shift
+            done
+            printf 'password: '
+            IFS= read -r password
+            [ "$password" = "secret$item" ] || exit 10
+            printf '\\nWaiting for user info...OK\\nDownloading item %s ... (25%%)\\n' "$item"
+            touch "../running-$item"
+            while [ ! -f "../release-$item" ]; do sleep 0.02; done
+            content="steamapps/workshop/content/431960/$item"
+            mkdir -p "$content"
+            printf '{"type":"video","file":"movie.mp4"}' > "$content/project.json"
+            printf 'content-%s' "$item" > "$content/movie.mp4"
+            printf 'Success. Downloaded item %s\\n' "$item"
+            """)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = WorkshopDownloadManager(sessionDirectory: root.appendingPathComponent("SteamSession"))
+        var imported = Set<String>()
+        func enqueue(_ id: String) throws -> WorkshopDownload {
+            let requested = WorkshopItem(id: id, title: "Concurrent \(id)", creator: "Test", summary: "", previewURL: nil, tags: ["Video"], size: 0, subscriptions: 0)
+            manager.start(item: requested, username: "localtest", executable: root.appendingPathComponent("runtime/steamcmd"), library: root.appendingPathComponent("Library"), rememberSession: false) {
+                imported.insert(id)
+            }
+            return try XCTUnwrap(manager.download(for: id))
+        }
+        do {
+            let first = try enqueue("1")
+            let second = try enqueue("2")
+            let third = try enqueue("3")
+            let fourth = try enqueue("4")
+            let fifth = try enqueue("5")
+            XCTAssertTrue(try enqueue("1") === first, "A repeated click must not create a second transfer")
+            try await waitUntil { [first, second, third].allSatisfy { $0.worker.prompt == .password } }
+            XCTAssertTrue(fourth.isQueued)
+            XCTAssertTrue(fifth.isQueued)
+            first.worker.submitSecret("secret1")
+            try await waitUntil { first.progress == 0.25 }
+            XCTAssertEqual(second.worker.prompt, .password)
+            XCTAssertEqual(third.worker.prompt, .password)
+            manager.cancel(second)
+            try await waitUntil { fourth.worker.prompt == .password }
+            XCTAssertTrue(first.isPending)
+            XCTAssertTrue(third.isPending)
+            XCTAssertTrue(fifth.isQueued, "Only the oldest queued item may claim a freed slot")
+            manager.cancel(fifth)
+            third.worker.submitSecret("secret3")
+            fourth.worker.submitSecret("secret4")
+            try await waitUntil { ["1", "3", "4"].allSatisfy { FileManager.default.fileExists(atPath: root.appendingPathComponent("running-\($0)").path) } }
+            for id in ["1", "3", "4"] { try Data().write(to: root.appendingPathComponent("release-\(id)")) }
+            try await waitUntil { !manager.isRunning }
+            XCTAssertEqual(imported, ["1", "3", "4"])
+            for id in imported {
+                XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("Library/\(id)/movie.mp4"), encoding: .utf8), "content-\(id)")
+            }
+            XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("Library/2").path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("running-5").path))
+            try assertNoStaging(in: root)
+        } catch {
+            await manager.shutdown()
+            throw error
+        }
+    }
+
+    func testFailedDownloadReleasesSlotAndShutdownNeverLaunchesQueuedWork() async throws {
+        let root = try makeRuntime("""
+            set -eu
+            item=''
+            while [ "$#" -gt 0 ]; do
+                if [ "$1" = +workshop_download_item ]; then shift; shift; item="$1"; fi
+                shift
+            done
+            touch "../launched-$item"
+            if [ "$item" = 1 ]; then printf 'FAILED (Invalid Password)\\n'; exit 1; fi
+            printf 'password: '
+            IFS= read -r password
+            """)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = WorkshopDownloadManager(sessionDirectory: root.appendingPathComponent("SteamSession"), maximumConcurrentDownloads: 1)
+        for id in ["1", "2", "3"] {
+            let requested = WorkshopItem(id: id, title: id, creator: "Test", summary: "", previewURL: nil, tags: ["Video"], size: 0, subscriptions: 0)
+            manager.start(item: requested, username: "localtest", executable: root.appendingPathComponent("runtime/steamcmd"), library: root.appendingPathComponent("Library"), rememberSession: false, onImported: {})
+        }
+        do {
+            try await waitUntil { manager.download(for: "2")?.worker.prompt == .password }
+            XCTAssertTrue(manager.download(for: "1")?.worker.canRetryAuthentication == true)
+            XCTAssertTrue(manager.download(for: "3")?.isQueued == true)
+            await manager.shutdown()
+            XCTAssertFalse(manager.isRunning)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("launched-3").path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("Library").path))
+            try assertNoStaging(in: root)
+        } catch {
+            await manager.shutdown()
+            throw error
+        }
+    }
+
+    func testPendingDownloadsPreventSessionPreferenceChanges() async throws {
+        let root = try makeSessionRuntime()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let initial = startDownload(in: root)
+        try await authenticate(initial)
+        try await assertImported(initial, in: root, itemID: item.id)
+        try setSessionMode("cancel", in: root)
+        let manager = WorkshopDownloadManager(sessionDirectory: root.appendingPathComponent("SteamSession"))
+        manager.start(item: item, username: "localtest", executable: root.appendingPathComponent("runtime/steamcmd"), library: root.appendingPathComponent("OtherLibrary"), onImported: {})
+        do {
+            try await waitUntil { manager.download(for: item.id)?.progress == 0.25 }
+            manager.forgetSavedAccount()
+            XCTAssertNotNil(manager.errorMessage)
+            XCTAssertEqual(manager.savedAccount, "localtest")
+            let other = WorkshopItem(id: "234567", title: "Opt out", creator: "Test", summary: "", previewURL: nil, tags: ["Video"], size: 0, subscriptions: 0)
+            manager.start(item: other, username: "localtest", executable: root.appendingPathComponent("runtime/steamcmd"), library: root.appendingPathComponent("OtherLibrary"), rememberSession: false, onImported: {})
+            XCTAssertNil(manager.download(for: other.id))
+            await manager.shutdown()
+            try assertPrivateSession(in: root)
+            manager.forgetSavedAccount()
+            XCTAssertNil(manager.savedAccount)
+            try assertNoSavedCredentials(in: root)
+        } catch {
+            await manager.shutdown()
+            throw error
+        }
+    }
+
+    func testLateCachedCredentialRejectionCannotEraseNewerSession() async throws {
+        let root = try makeSessionRuntime()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let initial = startDownload(in: root)
+        try await authenticate(initial)
+        try await assertImported(initial, in: root, itemID: "123456")
+        let rejectingRuntime = try makeRuntime("""
+            [ -f config/config.vdf ] || exit 10
+            printf 'Logging in using cached credentials\\n'
+            touch ../old-session-restored
+            while [ ! -f ../reject-old-session ]; do sleep 0.02; done
+            printf 'FAILED (Invalid cached credentials)\\n'
+            exit 1
+            """)
+        defer { try? FileManager.default.removeItem(at: rejectingRuntime) }
+        let rejected = WorkshopDownloader(sessionDirectory: root.appendingPathComponent("SteamSession"))
+        rejected.start(item: item, username: "localtest", executable: rejectingRuntime.appendingPathComponent("runtime/steamcmd"), library: root.appendingPathComponent("OtherLibrary"), onImported: {})
+        do {
+            try await waitUntil { FileManager.default.fileExists(atPath: root.appendingPathComponent("old-session-restored").path) }
+            let renewed = startDownload(in: root, itemID: "234567")
+            try await assertImported(renewed, in: root, itemID: "234567")
+            try Data().write(to: root.appendingPathComponent("reject-old-session"))
+            try await waitForStop(rejected)
+            XCTAssertTrue(rejected.canRetryAuthentication)
+            XCTAssertEqual(rejected.savedAccount, "localtest")
+            let next = startDownload(in: root, itemID: "345678")
+            try await assertImported(next, in: root, itemID: "345678")
+        } catch {
+            await rejected.shutdown()
+            throw error
+        }
+    }
+
+    func testUnconfirmedWorkshopContentIsNotPublished() async throws {
+        let root = try makeRuntime("""
+            printf 'Waiting for user info...OK\\nDownloading item 123456 ...\\n'
+            mkdir -p steamapps/workshop/content/431960/123456
+            printf '{"type":"video","file":"movie.mp4"}' > steamapps/workshop/content/431960/123456/project.json
+            printf 'partial-content' > steamapps/workshop/content/431960/123456/movie.mp4
+            exit 0
+            """)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let downloader = startDownload(in: root)
+        try await waitForStop(downloader)
+        XCTAssertNotNil(downloader.errorMessage)
+        XCTAssertNil(downloader.downloadedID)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("Library/123456").path))
+        try assertNoStaging(in: root)
+    }
+
     private func makeSessionRuntime() throws -> URL {
         try makeRuntime("""
             set -eu

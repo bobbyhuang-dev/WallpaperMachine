@@ -1,6 +1,7 @@
+import Darwin
 import Foundation
 
-/// Copies user-selected content into the managed library, never modifying the source.
+/// Copies user imports non-destructively and adopts validated private Steam downloads.
 actor WallpaperImportService {
     enum DuplicatePolicy: String, CaseIterable, Identifiable, Sendable {
         case skip = "Skip existing"
@@ -111,6 +112,99 @@ actor WallpaperImportService {
         return report
     }
 
+    /// Consumes a complete item from disposable Steam staging without copying payload bytes.
+    /// A valid existing item is left untouched; the caller remains responsible for staging cleanup.
+    func importDownloadedItem(_ itemID: String, from staging: URL, into library: URL) throws {
+        try Task.checkCancellation()
+        guard !itemID.isEmpty, itemID.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+              let numericID = UInt64(itemID), numericID > 0 else {
+            throw ImportError(message: "Choose a valid numeric Workshop item identifier.")
+        }
+        let fm = FileManager.default
+        let stagingRoot = staging.standardizedFileURL
+        let canonicalStaging = stagingRoot.resolvingSymlinksInPath().standardizedFileURL
+        var managedRoot = library.resolvingSymlinksInPath().standardizedFileURL
+        guard !isWithin(canonicalStaging, managedRoot), !isWithin(managedRoot, canonicalStaging) else {
+            throw ImportError(message: "Download staging must be outside the managed library.")
+        }
+
+        // Check each fixed ancestor before descending: resolving the final path alone would
+        // silently accept a Steam content directory redirected through a symbolic link.
+        var source = stagingRoot
+        try requireDownloadDirectory(source)
+        for component in ["steamapps", "workshop", "content", "431960", itemID] {
+            try Task.checkCancellation()
+            source.appendPathComponent(component, isDirectory: true)
+            try requireDownloadDirectory(source)
+        }
+        try validateDownloadedProject(at: source)
+        try Task.checkCancellation()
+        try fm.createDirectory(at: library, withIntermediateDirectories: true)
+        managedRoot = library.resolvingSymlinksInPath().standardizedFileURL
+        guard !isWithin(canonicalStaging, managedRoot), !isWithin(managedRoot, canonicalStaging) else {
+            throw ImportError(message: "Download staging must be outside the managed library.")
+        }
+        let destination = managedRoot.appendingPathComponent(itemID, isDirectory: true)
+        try Task.checkCancellation()
+        // Unlike moveItem, this cannot fall back to a cross-volume copy. RENAME_EXCL
+        // atomically refuses even a destination created after our validation.
+        let result = source.path.withCString { sourcePath in
+            destination.path.withCString { destinationPath in
+                renamex_np(sourcePath, destinationPath, UInt32(RENAME_EXCL))
+            }
+        }
+        guard result == 0 else {
+            let code = errno
+            if code == EEXIST {
+                try validateDownloadedProject(at: destination)
+                try Task.checkCancellation()
+                return
+            }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [
+                NSFilePathErrorKey: destination.path,
+                NSLocalizedDescriptionKey: "Could not publish Workshop item \(itemID): \(String(cString: strerror(code))). Download staging and the library must be on the same volume."
+            ])
+        }
+    }
+
+    private func downloadMetadata(at url: URL) throws -> stat {
+        var metadata = stat()
+        // URL directory representations can include a trailing slash, which makes
+        // lstat follow a final symlink. URL.path removes that directory marker.
+        let result = url.path.withCString { lstat($0, &metadata) }
+        guard result == 0 else {
+            let code = errno
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [NSFilePathErrorKey: url.path])
+        }
+        return metadata
+    }
+
+    private func requireDownloadDirectory(_ url: URL) throws {
+        let metadata = try downloadMetadata(at: url)
+        guard metadata.st_mode & S_IFMT == S_IFDIR else {
+            throw ImportError(message: "Download directories must be real folders, not symbolic links or special files: \(url.lastPathComponent).")
+        }
+    }
+
+    private func validateDownloadedProject(at root: URL) throws {
+        try requireDownloadDirectory(root)
+        var pending = [root]
+        while let next = pending.popLast() {
+            try Task.checkCancellation()
+            let metadata = try downloadMetadata(at: next)
+            switch metadata.st_mode & S_IFMT {
+            case S_IFDIR:
+                pending.append(contentsOf: try FileManager.default.contentsOfDirectory(at: next, includingPropertiesForKeys: nil))
+            case S_IFREG:
+                break
+            default:
+                throw ImportError(message: "Downloaded projects may contain only regular files and folders, not symbolic links or special files: \(next.lastPathComponent).")
+            }
+        }
+        try Task.checkCancellation()
+        try validateProject(at: root, requireNonemptyContent: true)
+    }
+
     private func discover(_ source: URL) throws -> [URL] {
         let fm = FileManager.default
         let values = try source.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
@@ -138,7 +232,7 @@ actor WallpaperImportService {
         return projects.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }
 
-    private func validateProject(at root: URL) throws {
+    private func validateProject(at root: URL, requireNonemptyContent: Bool = false) throws {
         let manifestURL = root.appendingPathComponent("project.json")
         let metadata = try manifestURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
         guard metadata.isRegularFile == true, metadata.isSymbolicLink != true,
@@ -162,10 +256,12 @@ actor WallpaperImportService {
         }
         let entry = root.appendingPathComponent(file)
         let package = entry.deletingPathExtension().appendingPathExtension("pkg")
-        let entryValues = try? entry.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-        let packageValues = type == "scene" ? (try? package.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])) : nil
-        let exists = (entryValues?.isRegularFile == true && entryValues?.isSymbolicLink != true)
-            || (packageValues?.isRegularFile == true && packageValues?.isSymbolicLink != true)
+        let entryValues = try? entry.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        let packageValues = type == "scene" ? (try? package.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])) : nil
+        let exists = (entryValues?.isRegularFile == true && entryValues?.isSymbolicLink != true
+                      && (!requireNonemptyContent || (entryValues?.fileSize ?? 0) > 0))
+            || (packageValues?.isRegularFile == true && packageValues?.isSymbolicLink != true
+                && (!requireNonemptyContent || (packageValues?.fileSize ?? 0) > 0))
         guard exists else {
             throw ImportError(message: "Missing project content: \(file). Copy the complete wallpaper folder, not just project.json.")
         }

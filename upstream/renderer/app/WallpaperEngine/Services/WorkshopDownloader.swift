@@ -144,7 +144,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                     try Task.checkCancellation()
                     try await runtimeProvider.validate(at: staging)
                     try Task.checkCancellation()
-                    try launch(executable: prepared, staging: staging, account: account, itemID: itemID)
+                    try launch(executable: prepared, staging: staging, account: account, itemID: itemID, claim: claim)
                     while let process, process.isRunning {
                         try Task.checkCancellation()
                         try readTerminalOutput()
@@ -249,7 +249,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         await current.value
     }
 
-    private func launch(executable: URL, staging: URL, account: String, itemID: String?) throws {
+    private func launch(executable: URL, staging: URL, account: String, itemID: String?, claim: Int32) throws {
         var master: Int32 = 0
         var slave: Int32 = 0
         guard openpty(&master, &slave, nil, nil, nil) == 0 else {
@@ -286,7 +286,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         do {
             process = try SteamCMDTerminalProcess(executable: executable, arguments: arguments,
                                                   workingDirectory: staging, environment: environment,
-                                                  master: master, slave: slave)
+                                                  master: master, slave: slave, claim: claim)
         }
         catch {
             try? child.close()
@@ -439,8 +439,9 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
     }
 
     /// Staging is removed when a download ends, so a leftover means the owning process died with a
-    /// download inside it. Hold the claim open for the download's lifetime: a process identifier
-    /// can be recycled and a record can go stale, but a held lock cannot.
+    /// download inside it. The claim is a held lock rather than a recorded process identifier, and
+    /// SteamCMD inherits it, so it stays held for as long as anything can still write here —
+    /// including a child that outlived the app that started it.
     nonisolated private static func claimStaging(_ staging: URL) -> Int32 {
         let descriptor = open(staging.appendingPathComponent(ownerName).path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { return -1 }
@@ -448,76 +449,52 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         return descriptor
     }
 
-    /// Reclaims downloads stranded by a crash. A SteamCMD child keeps writing after the app that
-    /// started it dies, so a released claim is never enough on its own: deletion needs positive
-    /// evidence that nothing is still writing here.
+    /// Reclaims downloads stranded by a crash. Deletion needs positive evidence that nothing can
+    /// still write here, so anything that cannot be inspected is left alone.
     nonisolated static func removeAbandonedStaging(in root: URL, quietFor quiet: TimeInterval = 600) {
         let files = FileManager.default
         let candidates = ((try? files.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.lastPathComponent.hasPrefix(stagingPrefix) }
-        guard !candidates.isEmpty else { return }
-        let occupied = workingDirectories()
         let deadline = Date().addingTimeInterval(-quiet)
         for entry in candidates {
             var metadata = stat()
             guard lstat(entry.path, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFDIR,
-                  isUnclaimed(entry), !occupied.contains(where: { contained($0, in: entry) }),
-                  isQuiet(entry, since: deadline) else { continue }
+                  isUnclaimed(entry), isQuiet(entry, since: deadline) else { continue }
             try? files.removeItem(at: entry)
         }
     }
 
     nonisolated private static func isUnclaimed(_ staging: URL) -> Bool {
         let descriptor = open(staging.appendingPathComponent(ownerName).path, O_RDWR | O_CLOEXEC)
-        // No claim was ever written; the other two checks still have to clear it.
+        // Staging from before claims existed; the quiet window is all that stands behind it. Any
+        // other failure means the claim could not be read, which is not permission to delete.
         guard descriptor >= 0 else { return errno == ENOENT }
         defer { close(descriptor) }
         return flock(descriptor, LOCK_EX | LOCK_NB) == 0
     }
 
-    /// Working directory of every process this user can see. SteamCMD runs inside the staging it
-    /// downloads into, so a surviving child shows up here even once its parent is gone.
-    nonisolated private static func workingDirectories() -> [String] {
-        var identifiers = [pid_t](repeating: 0, count: 8192)
-        let bytes = proc_listpids(UInt32(PROC_ALL_PIDS), 0, &identifiers,
-                                  Int32(identifiers.count * MemoryLayout<pid_t>.size))
-        guard bytes > 0 else { return [] }
-        var paths: [String] = []
-        for identifier in identifiers.prefix(Int(bytes) / MemoryLayout<pid_t>.size) where identifier > 0 {
-            var info = proc_vnodepathinfo()
-            guard proc_pidinfo(identifier, PROC_PIDVNODEPATHINFO, 0, &info,
-                               Int32(MemoryLayout<proc_vnodepathinfo>.size)) > 0 else { continue }
-            let path = withUnsafeBytes(of: &info.pvi_cdir.vip_path) {
-                String(cString: $0.baseAddress!.assumingMemoryBound(to: CChar.self))
-            }
-            if !path.isEmpty { paths.append(path) }
-        }
-        return paths
-    }
-
-    nonisolated private static func contained(_ path: String, in directory: URL) -> Bool {
-        let root = directory.resolvingSymlinksInPath().standardizedFileURL.path
-        let candidate = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
-        return candidate == root || candidate.hasPrefix(root + "/")
-    }
-
     /// A directory's own timestamp does not move when a download writes deeper in the tree, so the
-    /// whole tree decides. An unreadable or implausibly large tree counts as busy.
+    /// whole tree decides, and a tree that cannot be walked completely counts as busy. The window
+    /// outlasts the downloader's own limit on silence, so a download worth keeping is never idle
+    /// for this long.
     nonisolated private static func isQuiet(_ staging: URL, since deadline: Date) -> Bool {
         var metadata = stat()
         guard lstat(staging.path, &metadata) == 0,
-              Double(metadata.st_mtimespec.tv_sec) <= deadline.timeIntervalSince1970,
-              let walker = FileManager.default.enumerator(at: staging, includingPropertiesForKeys: nil,
-                                                          options: [.producesRelativePathURLs]) else { return false }
+              Double(metadata.st_mtimespec.tv_sec) <= deadline.timeIntervalSince1970 else { return false }
+        var readable = true
+        guard let walker = FileManager.default.enumerator(at: staging, includingPropertiesForKeys: nil,
+                                                          options: [], errorHandler: { _, _ in
+            readable = false
+            return false
+        }) else { return false }
         var visited = 0
         for case let url as URL in walker {
             visited += 1
-            guard visited <= 200_000 else { return false }
             var entry = stat()
-            guard lstat(staging.appendingPathComponent(url.relativePath).path, &entry) == 0 else { continue }
-            guard Double(entry.st_mtimespec.tv_sec) <= deadline.timeIntervalSince1970 else { return false }
+            guard visited <= 200_000, lstat(url.path, &entry) == 0,
+                  Double(entry.st_mtimespec.tv_sec) <= deadline.timeIntervalSince1970 else { return false }
         }
-        return true
+        return readable
     }
 
     nonisolated static func readSavedAccount(at directory: URL) -> String? {
@@ -688,7 +665,8 @@ private final class SteamCMDTerminalProcess {
         exitStatus = (status & 0x7f) == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f)
     }
 
-    init(executable: URL, arguments: [String], workingDirectory: URL, environment: [String: String], master: Int32, slave: Int32) throws {
+    init(executable: URL, arguments: [String], workingDirectory: URL, environment: [String: String],
+         master: Int32, slave: Int32, claim: Int32) throws {
         var actions: posix_spawn_file_actions_t?
         var attributes: posix_spawnattr_t?
         func check(_ result: Int32) throws {
@@ -706,6 +684,14 @@ private final class SteamCMDTerminalProcess {
         }
         try check(posix_spawn_file_actions_addclose(&actions, master))
         try check(posix_spawn_file_actions_addclose(&actions, slave))
+        // SteamCMD keeps the staging claim alive if it outlives this process, which is what stops a
+        // later launch from reclaiming a download still being written. The duplicate has to be a
+        // different descriptor than the one it lands on, because dup2 onto itself does nothing and
+        // would leave the claim closing on exec; it also has to survive the closes above.
+        var inherited: Int32 = -1
+        if claim >= 0 { inherited = fcntl(claim, F_DUPFD, 20) }
+        defer { if inherited >= 0 { close(inherited) } }
+        if inherited >= 0 { try check(posix_spawn_file_actions_adddup2(&actions, inherited, 3)) }
         let argv = ([executable.path] + arguments).map { strdup($0) } + [nil]
         let envp = environment.sorted(by: { $0.key < $1.key }).map { strdup("\($0.key)=\($0.value)") } + [nil]
         defer {

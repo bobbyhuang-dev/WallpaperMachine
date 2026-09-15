@@ -56,21 +56,81 @@ final class DownloaderTests: XCTestCase {
         defer { close(claim) }
         XCTAssertEqual(flock(claim, LOCK_EX | LOCK_NB), 0)
 
-        // A crash leaves SteamCMD running inside staging with no claim and no parent left.
+        // A crash leaves SteamCMD writing with the app that started it gone. SteamCMD inherits the
+        // claim, so handing the locked descriptor to a child and dropping this process's own copy
+        // is what an orphaned download looks like from a later launch.
+        let inherited = open(occupied.appendingPathComponent("owner").path, O_CREAT | O_RDWR, 0o600)
+        XCTAssertGreaterThanOrEqual(inherited, 0)
+        XCTAssertEqual(flock(inherited, LOCK_EX | LOCK_NB), 0)
         let child = Process()
         child.executableURL = URL(fileURLWithPath: "/bin/sh")
         child.arguments = ["-c", "sleep 30"]
-        child.currentDirectoryURL = occupied
+        child.standardInput = FileHandle(fileDescriptor: inherited, closeOnDealloc: false)
         try child.run()
+        close(inherited)
         defer { child.terminate() }
 
         WorkshopDownloader.removeAbandonedStaging(in: root, quietFor: 60)
 
         XCTAssertFalse(files.fileExists(atPath: abandoned.path), "Nothing holds or writes here; it must be reclaimed")
         XCTAssertTrue(files.fileExists(atPath: claimed.path), "A held claim must survive")
-        XCTAssertTrue(files.fileExists(atPath: occupied.path), "A surviving SteamCMD child must keep its download")
+        XCTAssertTrue(files.fileExists(atPath: occupied.path), "A claim inherited by a surviving child must survive")
         XCTAssertTrue(files.fileExists(atPath: writing.path), "A stale directory timestamp must not condemn a live download")
         XCTAssertTrue(files.fileExists(atPath: unrelated.path), "Only staging directories are swept")
+    }
+
+    func testStagingSweepKeepsWhatItCannotInspect() throws {
+        let files = FileManager.default
+        let root = files.temporaryDirectory.appendingPathComponent("mwe-staging-faults-\(UUID().uuidString)")
+        defer { try? files.removeItem(at: root) }
+        try files.createDirectory(at: root, withIntermediateDirectories: true)
+        func staging(_ name: String) throws -> URL {
+            let url = root.appendingPathComponent(WorkshopDownloader.stagingPrefix + name, isDirectory: true)
+            try files.createDirectory(at: url.appendingPathComponent("steamapps"), withIntermediateDirectories: true)
+            try Data("payload".utf8).write(to: url.appendingPathComponent("steamapps/item"))
+            var paths = [url.path]
+            if let walker = files.enumerator(at: url, includingPropertiesForKeys: nil) {
+                for case let child as URL in walker { paths.append(child.path) }
+            }
+            for path in paths {
+                try files.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -3600)], ofItemAtPath: path)
+            }
+            return url
+        }
+
+        // Otherwise reclaimable: quiet, unclaimed, and nothing working inside it.
+        let unreadableTree = try staging("unreadable-tree")
+        let locked = unreadableTree.appendingPathComponent("steamapps/locked", isDirectory: true)
+        try files.createDirectory(at: locked, withIntermediateDirectories: false)
+        try files.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
+        defer { try? files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
+
+        let unreadableClaim = try staging("unreadable-claim")
+        let owner = unreadableClaim.appendingPathComponent("owner")
+        try Data().write(to: owner)
+        try files.setAttributes([.posixPermissions: 0], ofItemAtPath: owner.path)
+        defer { try? files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: owner.path) }
+
+        let quiet = try staging("quiet")
+        WorkshopDownloader.removeAbandonedStaging(in: root, quietFor: 60)
+        XCTAssertTrue(files.fileExists(atPath: unreadableTree.path), "A tree that cannot be walked is not known to be idle")
+        XCTAssertTrue(files.fileExists(atPath: unreadableClaim.path), "A claim that cannot be read is not known to be released")
+        XCTAssertFalse(files.fileExists(atPath: quiet.path), "A fully inspected idle directory is still reclaimed")
+    }
+
+    func testSteamCMDInheritsTheStagingClaim() async throws {
+        // A crash leaves this child writing on its own; the claim it inherits is what tells a later
+        // launch the staging is still in use.
+        let root = try makeRuntime("""
+            [ -e /dev/fd/3 ] && printf inherited > ../claim-visible
+            IFS= read -r finish
+            """)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let downloader = startDownload(in: root)
+        defer { Task { await downloader.shutdown() } }
+        let marker = root.appendingPathComponent("claim-visible")
+        try await waitUntil { FileManager.default.fileExists(atPath: marker.path) }
+        XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "inherited")
     }
 
     func testImmediateShutdownWaitsForStagingCleanup() async throws {

@@ -101,6 +101,148 @@ final class ControlPanelLayoutTests: XCTestCase {
     await workshop.steamCMDSetup.shutdown()
   }
 
+  func testUpdateSnapshotExposesCheckDownloadAndReadyActions() async throws {
+    let fixture = makeStore()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "update-snap-\(UUID().uuidString)")
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+    defer {
+      defaults.removePersistentDomain(forName: root.lastPathComponent)
+      try? FileManager.default.removeItem(at: root)
+    }
+    let workshop = WorkshopStore(
+      downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
+      defaults: defaults)
+    let client = PanelUpdateClient()
+    client.release = PanelUpdateClient.release(version: "1.1.0")
+    let installer = PanelUpdateInstaller()
+    let updater = AppUpdateStore(
+      currentVersion: "1.0.0", client: client, installer: installer,
+      workspace: AppUpdateWorkspace(
+        archiveURL: { _, _ in root.appendingPathComponent("update.zip") },
+        reveal: { _ in }, open: { _ in }),
+      scheduleInstall: { _ in }, terminate: {})
+    let navigation = ControlPanelNavigation()
+    let controller = WebPanelController(
+      store: fixture.store, navigation: navigation, workshop: workshop, updater: updater)
+    let idle = try XCTUnwrap(controller.snapshot()["update"] as? [String: Any])
+    XCTAssertEqual(idle["status"] as? String, "idle")
+    XCTAssertEqual(idle["action"] as? String, "checkForUpdates")
+    XCTAssertEqual(idle["showsAction"] as? Bool, true)
+
+    navigation.revealSettingsSection(.about)
+    XCTAssertEqual(controller.snapshot()["settingsSection"] as? String, "about")
+    XCTAssertEqual(controller.snapshot()["settingsSectionToken"] as? Int, 1)
+
+    await updater.checkForUpdates()
+    let available = try XCTUnwrap(controller.snapshot()["update"] as? [String: Any])
+    XCTAssertEqual(available["status"] as? String, "available")
+    XCTAssertEqual(available["action"] as? String, "downloadUpdate")
+
+    await updater.downloadUpdate()
+    let ready = try XCTUnwrap(controller.snapshot()["update"] as? [String: Any])
+    XCTAssertEqual(ready["status"] as? String, "ready")
+    XCTAssertEqual(ready["action"] as? String, "installUpdate")
+    XCTAssertEqual(ready["showsReveal"] as? Bool, true)
+
+    try await controller.perform("installUpdate", body: ["action": "installUpdate"])
+    XCTAssertEqual(
+      updater.state, .ready(currentVersion: "1.0.0", availableVersion: "1.1.0"),
+      "Install confirmation requires a window, so an offscreen panel must not replace the app")
+    XCTAssertEqual(installer.installCalls, 0)
+    await workshop.steamCMDSetup.shutdown()
+  }
+
+  func testAboutUpdateControlsCheckDownloadAndBlockInstallWithoutWindow() async throws {
+    let fixture = makeStore()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "update-ui-\(UUID().uuidString)")
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+    defer {
+      defaults.removePersistentDomain(forName: root.lastPathComponent)
+      try? FileManager.default.removeItem(at: root)
+    }
+    let workshop = WorkshopStore(
+      downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
+      defaults: defaults)
+    let client = PanelUpdateClient()
+    client.release = PanelUpdateClient.release(version: "1.1.0")
+    let installer = PanelUpdateInstaller()
+    let updater = AppUpdateStore(
+      currentVersion: "1.0.0", client: client, installer: installer,
+      workspace: AppUpdateWorkspace(
+        archiveURL: { _, _ in root.appendingPathComponent("update.zip") },
+        reveal: { _ in }, open: { _ in }),
+      scheduleInstall: { _ in }, terminate: {})
+    let navigation = ControlPanelNavigation()
+    let controller = WebPanelController(
+      store: fixture.store, navigation: navigation, workshop: workshop, updater: updater)
+    let web = controller.makeWebView()
+    defer { controller.stop() }
+    web.setFrameSize(NSSize(width: 960, height: 640))
+    let deadline = Date().addingTimeInterval(15)
+    while !controller.isReady && Date() < deadline {
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    XCTAssertTrue(controller.isReady)
+    guard controller.isReady else { return }
+
+    let byTab =
+      try await web.callAsyncJavaScript(
+        """
+        const waitFor = async predicate => {
+          const deadline = Date.now() + 5000;
+          while (!predicate()) {
+            if (Date.now() > deadline) throw new Error('About updates did not settle');
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+        };
+        window.wallpaperUI.receive(await window.webkit.messageHandlers.native.postMessage({action:'ready'}));
+        document.querySelector('.tabs [data-page="settings"]').click();
+        await waitFor(() => !document.getElementById('settings-content').hidden);
+        document.querySelector('[data-section="about"]').click();
+        await waitFor(() => !document.getElementById('settings-about').hidden);
+        const check = document.querySelector('[data-key="about-updates"] [data-action="checkForUpdates"]');
+        if (!check) throw new Error('Check for Updates missing from Settings → About');
+        check.click();
+        await waitFor(() => document.querySelector('[data-key="about-updates"] [data-action="downloadUpdate"]'));
+        document.querySelector('[data-key="about-updates"] [data-action="downloadUpdate"]').click();
+        await waitFor(() => document.querySelector('[data-key="about-updates"] [data-action="installUpdate"]'));
+        document.querySelector('[data-key="about-updates"] [data-action="installUpdate"]').click();
+        const ready = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+        document.querySelector('[data-section="general"]').click();
+        await waitFor(() => !document.getElementById('settings-general').hidden);
+        return {status: ready.update.status, action: ready.update.action, fetchCalls: true};
+        """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+    XCTAssertEqual(byTab?["status"] as? String, "ready")
+    XCTAssertEqual(byTab?["action"] as? String, "installUpdate")
+    XCTAssertEqual(client.fetchCalls, 1)
+    XCTAssertEqual(client.downloadCalls, 1)
+    XCTAssertEqual(installer.installCalls, 0)
+    XCTAssertEqual(
+      updater.state, .ready(currentVersion: "1.0.0", availableVersion: "1.1.0"))
+
+    navigation.revealSettingsSection(.about)
+    let restored =
+      try await web.callAsyncJavaScript(
+        """
+        const waitFor = async predicate => {
+          const deadline = Date.now() + 5000;
+          while (!predicate()) {
+            if (Date.now() > deadline) throw new Error('Native About reveal did not settle');
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+        };
+        window.wallpaperUI.receive(await window.webkit.messageHandlers.native.postMessage({action:'ready'}));
+        await waitFor(() => !document.getElementById('settings-about').hidden
+          && !!document.querySelector('[data-key="about-updates"] [data-action="installUpdate"]'));
+        return !document.getElementById('settings-about').hidden;
+        """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+    XCTAssertEqual(restored, true)
+    XCTAssertNil(web.window, "This regression must not open a desktop window")
+    await workshop.steamCMDSetup.shutdown()
+  }
+
   func testAppearanceControlsPersistAndFollowNativeAppearanceWithoutWindow() async throws {
     let fixture = makeStore()
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -779,6 +921,55 @@ private final class LayoutSnapshotBridge: WallpaperBridge {
     guard let snapshot else { throw CancellationError() }
     return snapshot
   }
+}
+
+private final class PanelUpdateClient: AppUpdateClient, @unchecked Sendable {
+  var release: GitHubRelease?
+  var fetchCalls = 0
+  var downloadCalls = 0
+
+  func fetchLatestRelease() async throws -> GitHubRelease {
+    fetchCalls += 1
+    guard let release else {
+      throw AppUpdateIssue(code: .configuration, detail: "missing release")
+    }
+    return release
+  }
+
+  func download(
+    _ asset: GitHubReleaseAsset, to destination: URL,
+    progress: @escaping @Sendable (Int64, Int64, Int64) -> Void
+  ) async throws {
+    downloadCalls += 1
+    progress(asset.size, asset.size, 0)
+    try FileManager.default.createDirectory(
+      at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("zip".utf8).write(to: destination)
+  }
+
+  static func release(version: String) -> GitHubRelease {
+    GitHubRelease(
+      version: SemanticVersion(version)!,
+      htmlURL: URL(
+        string: "https://github.com/bobbyhuang-dev/mac-wallpaper-engine/releases/tag/v\(version)")!,
+      prerelease: false,
+      assets: [
+        GitHubReleaseAsset(
+          name: "MacWallpaperEngine-\(version)-arm64.zip",
+          downloadURL: URL(
+            string:
+              "https://github.com/bobbyhuang-dev/mac-wallpaper-engine/releases/download/v\(version)/MacWallpaperEngine-\(version)-arm64.zip"
+          )!,
+          size: 1_000, digest: nil)
+      ])
+  }
+}
+
+private final class PanelUpdateInstaller: AppUpdateInstalling, @unchecked Sendable {
+  var canInstallInPlace = true
+  var installCalls = 0
+  func prepareInstallation(archive: URL) throws -> URL { archive }
+  func install(extractedApp: URL, replacing destination: URL) throws { installCalls += 1 }
 }
 
 private struct UnavailableRuntime: SteamCMDRuntimeProviding {

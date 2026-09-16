@@ -127,7 +127,9 @@ Swift tests cover, without starting the app:
   window width without forcing a taller window; an offscreen `WKWebView`
   regression that loads the bundled interface under its custom scheme, waits for
   the native reply bridge, routes a `navigate` message to Settings, and rejects
-  a non-allowlisted external URL; a `dismissError` regression where a
+  a non-allowlisted external URL; an About-updates regression that checks,
+  downloads, and refuses to install without a window, plus a snapshot mapping of
+  idle/available/ready actions; a `dismissError` regression where a
   library-refresh failure and a download failure raised through the real
   download path are reported once, stay suppressed after dismissal, and surface
   again when the same failure recurs after a successful refresh; and a hidden

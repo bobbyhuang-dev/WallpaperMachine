@@ -113,9 +113,10 @@ publish job so one tag is never built twice at once.
 
 ## What the in-app updater expects
 
-**Settings -> About** checks the repository's latest GitHub Release and, after
-confirmation, downloads the asset and restart-installs it. The contract it relies
-on:
+**Settings -> About** is the in-app update surface. It checks the repository's
+latest GitHub Release and, after confirmation, downloads the asset and
+restart-installs it. **Check for Updates…** in the application menu opens that
+section and starts the same check. The contract it relies on:
 
 - the release is not a prerelease, and its tag parses as `vx.y.z` (no
   prerelease suffixes, no `nightly`);

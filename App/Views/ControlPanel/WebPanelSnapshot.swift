@@ -43,6 +43,7 @@ extension WebPanelController {
     _ = setup.selectedRuntime
     _ = setup.retainedCandidateURL
     let downloader = workshop.downloader
+    _ = updater.state
     _ = downloader.savedAccount
     _ = downloader.rememberSessionWhileRunning
     _ = downloader.errorMessage
@@ -206,6 +207,8 @@ extension WebPanelController {
       "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         ?? "",
       "page": page, "targetDisplayID": navigation.targetDisplayID,
+      "settingsSection": navigation.settingsSection.rawValue,
+      "settingsSectionToken": Int(navigation.settingsSectionToken),
       "theme": theme.preferences.snapshot,
       "selectedID": store.appSnapshot.selectedWallpaperId as Any? ?? null,
       "paused": store.appSnapshot.playbackState == .paused,
@@ -251,6 +254,7 @@ extension WebPanelController {
       "savedAccount": workshop.downloader.savedAccount as Any? ?? null,
       "rememberSession": workshop.downloader.rememberSessionWhileRunning ?? remembersSession,
       "downloadError": downloadError as Any? ?? null,
+      "update": Self.update(updater.state),
       "import": [
         "busy": importTask != nil, "status": importStatus,
         "report": importReport.map { report -> [String: Any] in
@@ -261,6 +265,119 @@ extension WebPanelController {
         } as Any? ?? null,
       ],
     ]
+  }
+
+  static func update(_ state: AppUpdateState) -> [String: Any] {
+    let null = NSNull()
+    let status: String
+    let statusText: String
+    var percent: Any = null
+    var transferred: Any = null
+    var total: Any = null
+    switch state {
+    case .unsupported:
+      status = "unsupported"
+      statusText = String(localized: "In-app updates are available only in installed builds.")
+    case .idle:
+      status = "idle"
+      statusText = String(localized: "Updates not yet checked")
+    case .checking:
+      status = "checking"
+      statusText = String(localized: "Checking for updates...")
+    case .upToDate:
+      status = "upToDate"
+      statusText = String(localized: "Up to date")
+    case .available(_, let version):
+      status = "available"
+      statusText = String(localized: "Version \(version) is available from GitHub Releases.")
+    case .manual(_, let version):
+      status = "manual"
+      statusText = String(localized: "Version \(version) is available from GitHub Releases.")
+    case .downloading(_, let version, let value, let done, let expected, _):
+      status = "downloading"
+      statusText = String(
+        localized: "Downloading version \(version) — \(Int(value.rounded())) percent")
+      percent = value
+      transferred = done
+      total = expected
+    case .ready(_, let version):
+      status = "ready"
+      statusText = String(localized: "Version \(version) is ready. Restart the app to install it.")
+    case .error(_, _, let code, _):
+      status = "error"
+      statusText = updateErrorText(code)
+    }
+    let action: Any
+    let actionLabel: String
+    let showsAction: Bool
+    switch state {
+    case .unsupported, .manual:
+      action = null
+      actionLabel = ""
+      showsAction = false
+    case .available:
+      action = "downloadUpdate"
+      actionLabel = String(localized: "Download Update")
+      showsAction = true
+    case .ready:
+      action = "installUpdate"
+      actionLabel = String(localized: "Restart and Install")
+      showsAction = true
+    case .error(_, .install, _, let version) where version != nil:
+      action = "installUpdate"
+      actionLabel = String(localized: "Retry installation")
+      showsAction = true
+    case .error:
+      action = "checkForUpdates"
+      actionLabel = String(localized: "Retry")
+      showsAction = true
+    case .upToDate:
+      action = "checkForUpdates"
+      actionLabel = String(localized: "Check Again")
+      showsAction = true
+    case .downloading(_, _, let value, _, _, _):
+      action = "downloadUpdate"
+      actionLabel = String(localized: "Downloading \(Int(value.rounded())) percent")
+      showsAction = true
+    case .checking, .idle:
+      action = "checkForUpdates"
+      actionLabel = String(localized: "Check for Updates")
+      showsAction = true
+    }
+    let showsReleases: Bool
+    switch state {
+    case .unsupported, .manual, .error: showsReleases = true
+    default: showsReleases = false
+    }
+    let showsReveal: Bool
+    if case .ready = state { showsReveal = true } else { showsReveal = false }
+    return [
+      "status": status, "statusText": statusText, "action": action, "actionLabel": actionLabel,
+      "showsAction": showsAction, "showsReleases": showsReleases, "showsReveal": showsReveal,
+      "busy": state.isBusy, "percent": percent, "transferred": transferred, "total": total,
+      "footnote": String(
+        localized:
+          "Updates are checked against the latest published GitHub Release. Download and restart-install happen only after you confirm."
+      ),
+      "releasesLabel": String(localized: "Open GitHub Releases"),
+      "revealLabel": String(localized: "Show in Finder"),
+      "progressLabel": String(localized: "Update download progress"),
+    ]
+  }
+
+  static func updateErrorText(_ code: AppUpdateErrorCode) -> String {
+    switch code {
+    case .network:
+      String(localized: "Couldn't reach GitHub Releases. Check your connection and try again.")
+    case .configuration:
+      String(localized: "The GitHub Release update metadata is unavailable.")
+    case .verification:
+      String(localized: "The update couldn't be verified, so it wasn't installed.")
+    case .permission:
+      String(localized: "The updater doesn't have permission to install this update.")
+    case .unknown:
+      String(localized: "The update couldn't be completed. Try again or install it from GitHub Releases.")
+    }
   }
 
   static func kind(_ value: BridgeWallpaperKind) -> String {

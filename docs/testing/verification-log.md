@@ -11,6 +11,31 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-16 — Restore Settings → About update controls
+
+The WebKit control panel still held `AppUpdateStore` and the application
+menu still had **Check for Updates…**, but Settings → About never drew
+the updater after the native SwiftUI settings were removed. The About
+page now shows check / download / restart-install, and the menu item
+opens that section.
+
+Verified:
+
+- `python3 scripts/test.py`: Python script tests **24** and **10**
+  passed; `xcodegen generate`; `MacWallpaperEngineTests` **225 passed**,
+  0 failed, 0 skipped (~95 s of test execution). New coverage:
+  `testUpdateSnapshotExposesCheckDownloadAndReadyActions` and
+  `testAboutUpdateControlsCheckDownloadAndBlockInstallWithoutWindow`
+  (offscreen `WKWebView`; fake GitHub client; install confirmation
+  refused without a window).
+- No renderer or bridge changes; `python3 scripts/check_renderer.py`
+  was not run.
+
+Not verified: live GitHub Releases, archive extraction, replacement of
+an app in Applications, or visual layout of the About page in a real
+window. No desktop automation, wallpaper change, or Release delivery
+was performed.
+
 ## 2026-09-16 — Compact agent guidance and Claude entry point
 
 Documentation and symlink only. Aligned the root guidance with the workspace

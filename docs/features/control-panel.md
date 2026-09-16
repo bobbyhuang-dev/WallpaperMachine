@@ -28,6 +28,9 @@ filter disclosure or popover.
 - **Installed** shows the local library.
 - **Settings** replaces the browser with a sectioned native-feeling settings
   view (General, Appearance, Displays, Library & Steam, Storage, About).
+  **About** is where in-app updates live: **Check for Updates** reads the latest
+  GitHub Release, and download / restart-install happen only after confirmation.
+  The application menu item **Check for Updates…** opens this section.
 
 ## Selection versus apply
 

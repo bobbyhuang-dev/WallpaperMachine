@@ -4,7 +4,7 @@ const sections = [['general', 'General'], ['appearance', 'Appearance'], ['displa
 export function renderSettings(container, state, helpers) {
   let view = views.get(container);
   if (!view) {
-    view = { container, state, helpers, section: 'general', drafts: new Map(), pending: new Set(), error: '' };
+    view = { container, state, helpers, section: 'general', settingsSectionToken: NaN, drafts: new Map(), pending: new Set(), error: '' };
     views.set(container, view);
     container.addEventListener('click', event => onClick(view, event));
     container.addEventListener('input', event => onInput(view, event));
@@ -22,6 +22,11 @@ export function renderSettings(container, state, helpers) {
   }
   view.state = state;
   view.helpers = helpers;
+  const token = Number(state.settingsSectionToken);
+  if (Number.isFinite(token) && token !== view.settingsSectionToken) {
+    view.settingsSectionToken = token;
+    if (sections.some(([id]) => id === state.settingsSection)) view.section = state.settingsSection;
+  }
   // Prerequisites, sign-in and Steam Guard live only in the panel's focused download dialog.
   draw(view);
 }
@@ -134,12 +139,26 @@ function draw(view) {
     + row('download-history', 'Completed downloads', button('Clear history', 'clearDownloads', {}, busy || !downloads.some(download => !download.pending)))
     + disclosure('storage-context', 'What gets removed', '<p>Clearing the shader cache removes compiled shaders. They are rebuilt as wallpapers load, which may temporarily slow playback. Clearing logs removes diagnostic history, not wallpapers or settings. Clearing download history keeps downloaded files.</p>');
   const versionRow = (id, label, value) => row(id, label, `<span class="settings-version">${e(value || 'Unavailable')}</span>`);
+  const update = state.update || {};
+  const updateBusy = Boolean(update.busy) || ['checkForUpdates', 'downloadUpdate', 'installUpdate', 'openReleases', 'revealDownloadedUpdate'].some(action => view.pending.has(action));
+  const updateProgress = update.status === 'downloading'
+    ? `<progress class="settings-progress" max="1" value="${Math.max(0, Math.min(1, Number(update.percent || 0) / 100))}" aria-label="${e(update.progressLabel || 'Update download progress')}"></progress>`
+      + (Number(update.total) > 0 ? `<div class="settings-note">${e(bytes(update.transferred))} of ${e(bytes(update.total))}</div>` : '')
+    : '';
+  const updateActions = (update.showsAction && update.action ? button(update.actionLabel || 'Check for Updates', update.action, {}, updateBusy || busy, update.status === 'available' || update.status === 'ready' ? 'settings-primary' : '') : '')
+    + (update.showsReleases ? button(update.releasesLabel || 'Open GitHub Releases', 'openReleases', {}, updateBusy) : '')
+    + (update.showsReveal ? button(update.revealLabel || 'Show in Finder', 'revealDownloadedUpdate', {}, updateBusy) : '');
   const about = `<div class="settings-product"><h3>MacWallpaperEngine</h3><span class="settings-note">Independent macOS client</span></div>`
     + versionRow('app-version', 'App version', state.version)
     + versionRow('bridge-version', 'Bridge', settings.bridgeVersion)
     + versionRow('core-version', 'Core', settings.coreVersion)
     + versionRow('shader-version', 'Shader pipeline', settings.shaderVersion)
     + versionRow('git-version', 'Git revision', settings.gitSha)
+    + `<div class="settings-group-gap"></div>`
+    + `<div class="settings-download" data-key="about-updates" aria-busy="${updateBusy}"><h3>Updates</h3><div class="settings-status" role="status" aria-live="polite">${e(update.statusText || 'Updates not yet checked')}</div>`
+    + updateProgress
+    + `<div class="settings-form-actions">${updateActions}</div>`
+    + `<p class="settings-note">${e(update.footnote || 'Updates are checked against the latest published GitHub Release. Download and restart-install happen only after you confirm.')}</p></div>`
     + `<div class="settings-group-gap"></div>`
     + row('renderer-source', 'Scene renderer', button('bigsaltyfishes / Wallpaper Engine for macOS', 'openExternal', { url: 'https://github.com/bigsaltyfishes/wallpaper-engine-for-macos.git' }))
     + `<div class="settings-attribution">Not affiliated with Wallpaper Engine or Valve. Built on the GPLv2-only open-source renderer. Workshop browsing is independently implemented. No warranty is provided.</div>`

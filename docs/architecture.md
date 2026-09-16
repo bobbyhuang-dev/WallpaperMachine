@@ -31,7 +31,7 @@ Swift hosts it, but the page is app-owned: the renderer never draws into this we
 
 | Piece | Responsibility |
 |---|---|
-| `App/Views/ControlPanel/ControlPanelView.swift` | SwiftUI container; `ControlPanelNavigation` (`SidebarSelection`, `targetDisplayID`) shared with native menu commands |
+| `App/Views/ControlPanel/ControlPanelView.swift` | SwiftUI container; `ControlPanelNavigation` (`SidebarSelection`, `targetDisplayID`, Settings section) shared with native menu commands |
 | `App/Views/ControlPanel/WebControlPanel.swift` | `NSViewRepresentable` over `WKWebView`; `WebPanelController` coordinator, `WebPanelAssets` scheme handler, message proxy |
 | `App/Views/ControlPanel/WebPanelSnapshot.swift` | Builds the single `[String: Any]` state payload handed to the page |
 | `App/Views/ControlPanel/WebPanelActions.swift` | Decodes and executes page-originated actions (`WebPanelRequest`) |
@@ -46,7 +46,7 @@ Protocol, both directions:
   restrictive CSP (`default-src 'none'`, `connect-src 'none'`).
 - **Swift to page.** `WebPanelController.snapshot()` produces one dictionary describing the whole
   UI (page, library, displays, options, settings, workshop, SteamCMD setup, downloads, import
-  status, theme), delivered by `callAsyncJavaScript("return window.wallpaperUI.receive(state)")`.
+  status, theme, GitHub update state), delivered by `callAsyncJavaScript("return window.wallpaperUI.receive(state)")`.
   Updates are coalesced through `scheduleUpdate()` and suppressed entirely while the window is
   hidden, miniaturized or occluded. Observation is installed with
   `withObservationTracking { trackSnapshotDependencies() }`, so any observed store property that

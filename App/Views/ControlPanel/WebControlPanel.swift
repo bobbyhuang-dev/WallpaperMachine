@@ -11,9 +11,10 @@ struct WebControlPanel: NSViewRepresentable {
   let store: BridgeStore
   let navigation: ControlPanelNavigation
   let workshop: WorkshopStore
+  let updater: AppUpdateStore
 
   func makeCoordinator() -> WebPanelController {
-    WebPanelController(store: store, navigation: navigation, workshop: workshop)
+    WebPanelController(store: store, navigation: navigation, workshop: workshop, updater: updater)
   }
 
   func makeNSView(context: Context) -> WKWebView { context.coordinator.makeWebView() }
@@ -28,6 +29,7 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
   let store: BridgeStore
   let navigation: ControlPanelNavigation
   let workshop: WorkshopStore
+  let updater: AppUpdateStore
   let theme: AppThemeStore
   weak var webView: WKWebView?
   let assets = WebPanelAssets()
@@ -58,12 +60,15 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
 
   init(
     store: BridgeStore, navigation: ControlPanelNavigation, workshop: WorkshopStore,
+    updater: AppUpdateStore? = nil,
     isPresentationVisible: (@MainActor () -> Bool)? = nil,
     theme: AppThemeStore? = nil
   ) {
     self.store = store
     self.navigation = navigation
     self.workshop = workshop
+    self.updater =
+      updater ?? AppUpdateStore(currentVersion: "0.0.0", client: DisabledAppUpdateClient())
     self.isPresentationVisible = isPresentationVisible
     self.theme = theme ?? .shared
     favoriteIDs = Set(

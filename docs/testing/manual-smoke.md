@@ -184,6 +184,8 @@ verification.
 
 ## App update
 
+- [ ] Settings → About shows **Check for Updates**. The application menu item
+      **Check for Updates…** opens that same section.
 - [ ] A live GitHub release check, archive extraction and replacement of the app
       in Applications. Update tests use fixture JSON and a fake client, so this
       path is manual only.

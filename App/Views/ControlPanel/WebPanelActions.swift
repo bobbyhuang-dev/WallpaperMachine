@@ -77,6 +77,18 @@ extension WebPanelController {
     case "setupCancel":
       workshop.steamCMDSetup.cancel()
       return
+    case "checkForUpdates":
+      _ = await updater.checkForUpdates()
+      return
+    case "downloadUpdate":
+      _ = await updater.downloadUpdate()
+      return
+    case "openReleases":
+      updater.openReleases()
+      return
+    case "revealDownloadedUpdate":
+      updater.revealDownloadedUpdate()
+      return
     default: break
     }
     guard !commandBusy else {
@@ -301,6 +313,15 @@ extension WebPanelController {
         throw WebPanelRequest.invalid
       }
       NSWorkspace.shared.open(url)
+    case "installUpdate":
+      if await confirm(
+        String(localized: "Restart and install this update?"),
+        detail: String(
+          localized: "The current app will quit and be replaced. Wallpapers and settings are kept."),
+        button: String(localized: "Restart and Install"))
+      {
+        await updater.installUpdate()
+      }
     default: throw WebPanelRequest.invalid
     }
   }

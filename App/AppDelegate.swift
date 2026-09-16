@@ -384,6 +384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     @objc func checkForUpdates() {
+        controlPanelNavigation.revealSettingsSection(.about)
         showControlPanel(selection: .settings)
         Task { _ = await appUpdater.checkForUpdates() }
     }

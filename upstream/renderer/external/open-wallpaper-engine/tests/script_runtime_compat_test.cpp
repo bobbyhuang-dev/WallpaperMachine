@@ -41,6 +41,61 @@ std::unique_ptr<SceneRuntimeContext> MakeRuntimeWithScene(Scene& scene) {
     return runtime;
 }
 
+TEST(ScriptRuntimeCompat, CallbackOnlyPropertyScriptsInitializeAndToggleLayersOnHit) {
+    Scene scene;
+    auto runtime = MakeRuntimeWithScene(scene);
+    auto button = std::make_shared<SceneNode>();
+    auto target = std::make_shared<SceneNode>();
+    button->SetTranslate(Eigen::Vector3f(300, 200, 0));
+    runtime->RegisterNode("button", button.get());
+    runtime->RegisterNodeSize("button", Eigen::Vector2f(80, 60));
+    runtime->RegisterNode("target", target.get());
+    runtime->RegisterNodeVisibility("button", button.get(), ResolveBoolSetting(*runtime, {
+        {"value", true}, {"script", R"JS(
+let visible;
+export function init(value) { visible = true; return value; }
+export function cursorClick(event) {
+    visible = !visible;
+    thisScene.getLayer('target').visible = visible;
+}
+)JS"}}, "button"));
+    runtime->Tick(0.01);
+    runtime->SetCursorEnter(true);
+    runtime->SetCursorWorldPosition(Eigen::Vector3f(600, 200, 0));
+    runtime->SetCursorButtons(0, 1, 1);
+    runtime->DispatchCursorFrameEvents(false);
+    EXPECT_TRUE(target->Visible());
+    runtime->SetCursorWorldPosition(Eigen::Vector3f(300, 200, 0));
+    runtime->DispatchCursorFrameEvents(true);
+    runtime->Tick(0.01);
+    EXPECT_FALSE(target->Visible());
+    runtime->DispatchCursorFrameEvents(true);
+    runtime->Tick(0.01);
+    EXPECT_TRUE(target->Visible());
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, CallbackOnlySelfWritesSurviveSubsequentTicksAndUserChanges) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {
+        .project_properties = {{"enabled", RuntimeScalarValue::Bool(true)}},
+    });
+    auto node = std::make_shared<SceneNode>();
+    runtime->RegisterNode("button", node.get());
+    runtime->RegisterNodeVisibility("button", node.get(), ResolveBoolSetting(*runtime, {
+        {"value", true}, {"user", "enabled"}, {"script", R"JS(
+export function cursorClick() { thisLayer.visible = !thisLayer.visible; }
+)JS"}}, "button"));
+    runtime->Tick(0.01);
+    runtime->DispatchCursorClick();
+    EXPECT_FALSE(node->Visible());
+    for (int i = 0; i < 3; ++i) runtime->Tick(0.01);
+    EXPECT_FALSE(node->Visible());
+    runtime->ApplyProjectPropertyOverride({{"enabled", RuntimeScalarValue::Bool(true)}});
+    runtime->Tick(0.01);
+    EXPECT_TRUE(node->Visible());
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
 TEST(ScriptRuntimeCompat, TextureAnimationSelectsAMPMFrameWithoutScriptErrors) {
     Scene scene;
     auto runtime = MakeRuntimeWithScene(scene);

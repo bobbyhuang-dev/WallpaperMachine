@@ -3526,6 +3526,12 @@ std::shared_ptr<Scene> WPSceneParser::Parse(const SceneParseRequest& request,
     InitContext(context, vfs, sc);
     ParseLayerNodes(context, json.at("objects"));
     ParseCamera(context, sc.general);
+    if (context.scene->runtime != nullptr && json.at("general").contains("zoom")) {
+        if (auto animation = ResolveScalarAnimation(json.at("general").at("zoom"))) {
+            auto& runtime = *context.scene->runtime;
+            runtime.RegisterSceneZoomAnimation(runtime.RegisterScalarAnimation("", std::move(*animation)));
+        }
+    }
 
     {
         const auto render_width =

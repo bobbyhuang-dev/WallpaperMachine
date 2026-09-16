@@ -159,6 +159,9 @@ extension WebPanelController {
         "title": job.item?.title ?? "Scene assets", "status": job.status,
         "preview": job.item?.previewURL?.absoluteString as Any? ?? null, "account": job.account,
         "progress": job.progress as Any? ?? null, "pending": job.isPending, "queued": job.isQueued,
+        "bytesReceived": job.bytesReceived as Any? ?? null,
+        "bytesExpected": job.bytesExpected as Any? ?? null,
+        "bytesPerSecond": job.bytesPerSecond as Any? ?? null,
         // The sign-in handoff has no prompt yet; the dialog must stay open through it.
         "authenticating": job.isPending && !job.isQueued && worker.isAuthenticating,
         "cancelled": job.isCancelled,

@@ -15,6 +15,7 @@
 		1D2A1C43D834024285B922FD /* SteamCMDRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 885F48842373E254CDA847C0 /* SteamCMDRuntime.swift */; };
 		1E5F81FC80C4E8C2A0BAEEF3 /* WebPanelSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE998C4C68841505B6641145 /* WebPanelSnapshot.swift */; };
 		210D91BFE7AADE6C0482D091 /* WallpaperEditorState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624EF5EB08D950A3C9CE36C1 /* WallpaperEditorState.swift */; };
+		212F6EA1483C361784536E26 /* LockScreenWallpaperServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E608F0B28BC57D1B0D27FAD2 /* LockScreenWallpaperServiceTests.swift */; };
 		24B2B8A4B3B8A5876DA01778 /* DownloaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DA1151F7DF6E45A2CF55E77 /* DownloaderTests.swift */; };
 		2551E2BE771FF7075EE2EC25 /* WallpaperController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A7D63898BF83E153B02B44A /* WallpaperController.swift */; };
 		2CD25A9CB66CDDE69F781DA2 /* WallpaperDeletionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 700DA8CFC1D1F819ED213F58 /* WallpaperDeletionService.swift */; };
@@ -163,6 +164,7 @@
 		CAA2B64EE4561C51BD8A48B7 /* WallpaperActivationRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WallpaperActivationRecoveryTests.swift; sourceTree = "<group>"; };
 		CB2D9524FD112F23D952B167 /* WorkshopService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkshopService.swift; sourceTree = "<group>"; };
 		E4812E3CF9CC9739B406EAD2 /* AppLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLog.swift; sourceTree = "<group>"; };
+		E608F0B28BC57D1B0D27FAD2 /* LockScreenWallpaperServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LockScreenWallpaperServiceTests.swift; sourceTree = "<group>"; };
 		ED539436975F3291E60ABD6F /* AppUpdateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateStore.swift; sourceTree = "<group>"; };
 		F2B1F3E3BAB769E257175234 /* DesktopWallpaperLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopWallpaperLedger.swift; sourceTree = "<group>"; };
 		F489878E165FE4A50A2F5E02 /* LockScreenWallpaperService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LockScreenWallpaperService.swift; sourceTree = "<group>"; };
@@ -231,6 +233,7 @@
 				F6CDA4B390B8DD1CD511D246 /* DesktopWallpaperTests.swift */,
 				0DA1151F7DF6E45A2CF55E77 /* DownloaderTests.swift */,
 				671D3A28861AFF379737274F /* ImportTests.swift */,
+				E608F0B28BC57D1B0D27FAD2 /* LockScreenWallpaperServiceTests.swift */,
 				6BED7B4C02F56C118F23A3D3 /* LockScreenWallpaperTests.swift */,
 				16839C8A30A3EBA7F4EE5A0E /* SteamCMDApprovalTests.swift */,
 				FA335B781AEB0FDF2C91D661 /* SteamCMDSetupTests.swift */,
@@ -585,6 +588,7 @@
 				7D4FC3C360A63E03A53B4CDF /* DesktopWallpaperTests.swift in Sources */,
 				24B2B8A4B3B8A5876DA01778 /* DownloaderTests.swift in Sources */,
 				D78E25952E92F0E0B91D95E0 /* ImportTests.swift in Sources */,
+				212F6EA1483C361784536E26 /* LockScreenWallpaperServiceTests.swift in Sources */,
 				8B4FDB5F7255B377072BFD53 /* LockScreenWallpaperTests.swift in Sources */,
 				1B5D5D8763579BBFDE51230F /* SteamCMDApprovalTests.swift in Sources */,
 				50794B62BF8BBEFE8A38414A /* SteamCMDSetupTests.swift in Sources */,
@@ -631,7 +635,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = WallpaperExtension/WallpaperExtension.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				ENABLE_APP_SANDBOX = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/upstream/renderer/external/open-wallpaper-engine/src/Platform/Apple";
@@ -651,7 +655,7 @@
 					"/opt/homebrew/opt/quickjs-ng/lib",
 					/opt/homebrew/opt/glslang/lib,
 				);
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.2.1;
 				OTHER_LDFLAGS = (
 					"-lwallpaper_bridge",
 					"-lc++",
@@ -718,7 +722,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = WallpaperExtension/WallpaperExtension.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				ENABLE_APP_SANDBOX = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/upstream/renderer/external/open-wallpaper-engine/src/Platform/Apple";
@@ -738,7 +742,7 @@
 					"/opt/homebrew/opt/quickjs-ng/lib",
 					/opt/homebrew/opt/glslang/lib,
 				);
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.2.1;
 				OTHER_LDFLAGS = (
 					"-lwallpaper_bridge",
 					"-lc++",
@@ -807,7 +811,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated";
 				INFOPLIST_FILE = upstream/renderer/app/WallpaperEngine/Resources/Info.plist;
@@ -824,7 +828,7 @@
 					"/opt/homebrew/opt/quickjs-ng/lib",
 					/opt/homebrew/opt/glslang/lib,
 				);
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.2.1;
 				OTHER_LDFLAGS = (
 					"-lwallpaper_bridge",
 					"-lc++",
@@ -1042,7 +1046,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated";
 				INFOPLIST_FILE = upstream/renderer/app/WallpaperEngine/Resources/Info.plist;
@@ -1059,7 +1063,7 @@
 					"/opt/homebrew/opt/quickjs-ng/lib",
 					/opt/homebrew/opt/glslang/lib,
 				);
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.2.1;
 				OTHER_LDFLAGS = (
 					"-lwallpaper_bridge",
 					"-lc++",

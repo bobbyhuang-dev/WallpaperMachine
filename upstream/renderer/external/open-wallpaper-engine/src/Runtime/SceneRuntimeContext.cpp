@@ -11,6 +11,7 @@
 #include "Scripting/ScriptEngine.hpp"
 #include "SpecTexs.hpp"
 #include "Utils/Logging.h"
+#include "Utils/Algorism.h"
 #include "WPSoundParser.hpp"
 
 #include <algorithm>
@@ -480,6 +481,7 @@ void SceneRuntimeContext::Tick(double frame_time) {
     for (auto& script : m_scene_scripts) {
         if (script.script != nullptr) script.script->Tick(*m_host_context);
     }
+    ApplySceneZoomAnimation();
     for (auto& binding : m_material_alpha) {
         auto material = binding.material.lock();
         if (material == nullptr) continue;
@@ -989,6 +991,31 @@ void SceneRuntimeContext::RegisterMaterialConstant(std::shared_ptr<SceneMaterial
         .value    = raw,
         .animation = std::move(animation),
     });
+}
+
+void SceneRuntimeContext::RegisterSceneZoomAnimation(
+    std::shared_ptr<ScalarAnimationPlayback> animation) {
+    m_scene_zoom_animation = std::move(animation);
+    ApplySceneZoomAnimation();
+}
+
+void SceneRuntimeContext::ApplySceneZoomAnimation() {
+    if (m_scene == nullptr || m_scene_zoom_animation == nullptr) return;
+    double zoom = m_scene_zoom_animation->Value();
+    if (!std::isfinite(zoom) || zoom <= 0.0) zoom = 1.0;
+    const auto dimension = [zoom](int32_t value) {
+        return std::clamp(static_cast<double>(value) / zoom, 1.0,
+                          static_cast<double>(std::numeric_limits<int32_t>::max()));
+    };
+    auto& camera = *m_scene->cameras.at("global");
+    camera.SetWidth(dimension(m_scene->ortho[0]));
+    camera.SetHeight(dimension(m_scene->ortho[1]));
+    camera.Update();
+    auto& perspective = *m_scene->cameras.at("global_perspective");
+    perspective.SetAspect(camera.Aspect());
+    perspective.SetFov(algorism::CalculatePersperctiveFov(1000.0, camera.Height()));
+    perspective.Update();
+    m_scene->UpdateLinkedCamera("global");
 }
 
 void SceneRuntimeContext::RegisterSceneClearColor(std::unique_ptr<DynamicValue> value) {

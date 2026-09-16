@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -552,6 +553,16 @@ json DumpWorkshop(const std::string& workshop_dir, std::string& err) {
             for (const auto& b : mdl.puppet->bones) {
                 json jb;
                 jb["parent"] = static_cast<int64_t>(b.parent);
+                if (std::getenv("WE_TEST_DUMP_POSES")) {
+                    jb["name"] = b.name;
+                    jb["bind_parent"] = b.bind_parent;
+                    jb["anim_parent"] = b.anim_parent;
+                    jb["has_file_skin_pivot"] = b.has_file_skin_pivot;
+                    jb["bind"] = std::vector<float>(b.local_bind.data(), b.local_bind.data() + 16);
+                    jb["skin"] = std::vector<float>(b.file_skin_mat.data(), b.file_skin_mat.data() + 16);
+                    jb["pivot"] = std::vector<float>(b.file_skin_pivot.data(), b.file_skin_pivot.data() + 3);
+                    jb["centroid_offset"] = std::vector<float>(b.vertex_centroid_offset.data(), b.vertex_centroid_offset.data() + 3);
+                }
                 std::array<double, 4> col_sums { 0, 0, 0, 0 };
                 for (int c = 0; c < 4; ++c)
                     for (int r = 0; r < 4; ++r)
@@ -574,6 +585,21 @@ json DumpWorkshop(const std::string& workshop_dir, std::string& err) {
                 for (const auto& bf : a.bone_tracks)
                     total_frames += static_cast<int>(bf.frames.size());
                 ja["total_bone_frames"] = total_frames;
+                if (std::getenv("WE_TEST_DUMP_POSES")) {
+                    ja["poses"] = json::array();
+                    for (const auto& track : a.bone_tracks) {
+                        json frames = json::array();
+                        for (std::size_t i = 0; i < track.frames.size(); ++i) {
+                            if (i != 0 && i != track.frames.size() / 2 && i + 1 != track.frames.size()) continue;
+                            const auto& frame = track.frames[i];
+                            frames.push_back({
+                                {"position", std::vector<float>(frame.position.data(), frame.position.data() + 3)},
+                                {"angle", std::vector<float>(frame.angle.data(), frame.angle.data() + 3)},
+                                {"scale", std::vector<float>(frame.scale.data(), frame.scale.data() + 3)}});
+                        }
+                        ja["poses"].push_back(std::move(frames));
+                    }
+                }
                 anims.push_back(std::move(ja));
             }
             jm["anim_tracks"] = std::move(anims);

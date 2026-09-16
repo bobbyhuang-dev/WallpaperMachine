@@ -108,6 +108,7 @@ public:
                                   std::unique_ptr<DynamicValue> value,
                                   std::shared_ptr<ScalarAnimationPlayback> animation = {});
     void RegisterSceneClearColor(std::unique_ptr<DynamicValue> value);
+    void RegisterSceneZoomAnimation(std::shared_ptr<ScalarAnimationPlayback> animation);
     void RegisterDynamicValueListener(std::unique_ptr<DynamicValue> value,
                                       std::function<void(const DynamicValue&)> callback);
     void RegisterNodeEffectFinal(std::string name, SceneNode* node, SceneImageEffectLayer* layer,
@@ -300,6 +301,7 @@ private:
     std::shared_ptr<WPSoundStream> LockSoundLayer(std::string_view name) const;
     void DispatchMediaPlaybackChanged(std::string_view name, bool playing);
     void ApplyNodeTransform(std::string_view name);
+    void ApplySceneZoomAnimation();
     bool CursorHitsLayer(std::string_view name) const;
     bool CursorHitsScriptLayer(const ScriptedDynamicValue& value) const;
     bool CursorHitsScriptLayer(const SceneScriptProgram& script) const;
@@ -330,6 +332,7 @@ private:
         std::shared_ptr<ScalarAnimationPlayback> playback;
     };
     std::vector<ScalarAnimationBinding> m_scalar_animations;
+    std::shared_ptr<ScalarAnimationPlayback> m_scene_zoom_animation;
     std::vector<MaterialConstantBinding>                           m_material_constants;
     std::vector<TextValueBinding>                                  m_text_values;
     std::vector<DynamicValueListenerBinding>                       m_dynamic_value_listeners;

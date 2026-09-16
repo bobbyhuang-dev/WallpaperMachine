@@ -15,7 +15,7 @@ final class LockScreenWallpaperService {
   @ObservationIgnored var afterDeactivation: (() throws -> Void)?
 
   private static let preference = "MacWallpaperEngineAnimateLockScreen"
-  @ObservationIgnored private let bridge: WallpaperBridge
+  @ObservationIgnored private let scenes: () async throws -> [BridgeLockScreenScene]
   @ObservationIgnored private let selection: LockScreenWallpaperSelection
   @ObservationIgnored private let documents: URL
   @ObservationIgnored private var work: Task<Void, Never>?
@@ -23,17 +23,27 @@ final class LockScreenWallpaperService {
   @ObservationIgnored private var generation: UInt64 = 0
   @ObservationIgnored private var recovered = false
   @ObservationIgnored private var stopping = false
-  @ObservationIgnored private var ownsDesktopProvider = false
+  @ObservationIgnored private(set) var ownsDesktopProvider = false
   @ObservationIgnored private var lastInputs: [LockScreenPublishInput]?
   @ObservationIgnored private var published: LockScreenConfiguration?
 
-  init(bridge: WallpaperBridge) {
-    self.bridge = bridge
-    selection = LockScreenWallpaperSelection(
-      folder: ClientPaths.supportURL.appendingPathComponent("LockScreen"))
-    documents = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-      "Library/Containers/\(LockScreenConfiguration.extensionIdentifier)/Data/Documents",
-      isDirectory: true)
+  convenience init(bridge: WallpaperBridge) {
+    self.init(
+      scenes: { try await bridge.lockScreenScenes() },
+      selection: LockScreenWallpaperSelection(
+        folder: ClientPaths.supportURL.appendingPathComponent("LockScreen")),
+      documents: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
+        "Library/Containers/\(LockScreenConfiguration.extensionIdentifier)/Data/Documents",
+        isDirectory: true))
+  }
+
+  init(
+    scenes: @escaping () async throws -> [BridgeLockScreenScene],
+    selection: LockScreenWallpaperSelection, documents: URL
+  ) {
+    self.scenes = scenes
+    self.selection = selection
+    self.documents = documents
   }
 
   /// Always recover before either native or PNG providers are allowed to start.
@@ -108,17 +118,13 @@ final class LockScreenWallpaperService {
       }
       guard isRequested else {
         status = "Restoring system wallpapers…"
-        try restoreNativeSelection()
-        isEnabled = false
-        lastInputs = nil
-        try afterDeactivation?()
-        ownsDesktopProvider = false
+        try deactivate()
         errorMessage = nil
         status = "Off"
         return
       }
       status = "Preparing committed wallpapers…"
-      let records = try await bridge.lockScreenScenes()
+      let records = try await scenes()
       try Task.checkCancellation()
       guard generation == revision else { return }
       try selection.checkCompatibility()
@@ -146,9 +152,7 @@ final class LockScreenWallpaperService {
           propertiesJSON: record.propertiesJson, paused: record.paused)
       }.sorted { $0.displayID < $1.displayID }
       guard !inputs.isEmpty else {
-        try restoreNativeSelection()
-        isEnabled = false
-        lastInputs = nil
+        try deactivate()
         status = "Waiting for an applied video or live scene on a connected display"
         errorMessage = nil
         return
@@ -198,20 +202,29 @@ final class LockScreenWallpaperService {
       // A newer snapshot/disable owns the next publication and final status.
     } catch {
       guard generation == revision else { return }
-      isEnabled = false
-      lastInputs = nil
       var message = error.localizedDescription
-      do {
-        try restoreNativeSelection()
-        try afterDeactivation?()
-        ownsDesktopProvider = false
-      } catch {
+      do { try deactivate() } catch {
         message += " Restoration also failed: \(error.localizedDescription)"
       }
       errorMessage = message
       status = "Not enabled — action required"
       AppLog.error("Lock screen wallpaper: \(message)")
     }
+  }
+
+  /// Restore the native selection and hand the desktop back to the poster
+  /// provider. Both steps always run so a failed restoration can never leave
+  /// the poster sync suspended; the first error is rethrown afterwards.
+  private func deactivate() throws {
+    isEnabled = false
+    lastInputs = nil
+    var firstError: Error?
+    do { try restoreNativeSelection() } catch { firstError = error }
+    if ownsDesktopProvider {
+      ownsDesktopProvider = false
+      do { try afterDeactivation?() } catch { if firstError == nil { firstError = error } }
+    }
+    if let firstError { throw firstError }
   }
 
   private func awaitReadiness(_ configuration: LockScreenConfiguration) async throws {

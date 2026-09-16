@@ -151,6 +151,8 @@
 .settings-progress { display: block; width: 100%; height: 5px; margin: 12px 0; accent-color: var(--accent); }
 .settings-progress::-webkit-progress-bar { background: var(--raised); border-radius: 3px; }
 .settings-progress::-webkit-progress-value { background: var(--accent); border-radius: 3px; }
+.settings-progress:indeterminate { background: linear-gradient(90deg, var(--raised) 0 30%, var(--accent) 50%, var(--raised) 70% 100%) 0 0 / 200% 100%; animation: progress-slide 1.4s linear infinite; }
+.settings-progress:indeterminate::-webkit-progress-bar { background: transparent; }
 .settings-download { margin-top: 22px; padding-top: 17px; border-top: 1px solid var(--line); }
 .settings-inline { display: flex; align-items: center; gap: 7px; }
 .settings-inline input { flex: 1; }

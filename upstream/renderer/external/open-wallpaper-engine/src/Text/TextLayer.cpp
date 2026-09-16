@@ -247,14 +247,14 @@ bool ContainsSubstring(std::string_view value, std::string_view needle) {
     return value.find(needle) != std::string_view::npos;
 }
 
-float HorizontalLineStart(const TextLayerState& state, float line_width, float max_line_width,
-                          float padding, uint32_t width) {
+float HorizontalLineStart(const TextLayerState& state, float line_width, float padding,
+                          uint32_t width) {
     const std::string_view align = state.horizontal_align;
     if (ContainsSubstring(align, "right")) {
         return std::max(0.0f, static_cast<float>(width) - padding - line_width);
     }
     if (ContainsSubstring(align, "center") || align.empty()) {
-        return std::max(padding, padding + (max_line_width - line_width) * 0.5f);
+        return std::max(padding, (static_cast<float>(width) - line_width) * 0.5f);
     }
     return padding;
 }
@@ -372,11 +372,6 @@ bool RasterizeFreeTypeText(const TextLayerState& state, uint32_t width, uint32_t
     const auto lines =
         BuildLineRuns(face.get(), fallback_face ? fallback_face->face.get() : nullptr, state.text);
 
-    float max_line_width = 0.0f;
-    for (const auto& line : lines) {
-        max_line_width = std::max(max_line_width, line.LayoutWidth());
-    }
-
     const auto  metrics     = face->size->metrics;
     const float line_height = std::max(1.0f, static_cast<float>(metrics.height) / 64.0f);
     const float padding     = std::max(0.0f, std::isfinite(state.padding) ? state.padding : 0.0f);
@@ -386,7 +381,7 @@ bool RasterizeFreeTypeText(const TextLayerState& state, uint32_t width, uint32_t
     float baseline_y = FirstBaselineY(state, face.get(), lines.size(), padding, height);
     for (const auto& line : lines) {
         const float line_width = line.LayoutWidth();
-        float       pen_x = HorizontalLineStart(state, line_width, max_line_width, padding, width) -
+        float       pen_x = HorizontalLineStart(state, line_width, padding, width) -
                       line.ExtentLeft();
         for (const auto& glyph : line.glyphs) {
             FT_Face glyph_face =

@@ -204,6 +204,17 @@ a GPU-time improvement or an attributable GPU regression, and are not power or
 battery measurements. Raw phase distributions remain in the evidence directory.
 Temporary instrumentation was removed.
 
+Before pushing, this work was merged with upstream `main` at `9f192ce`.
+The additive control-panel test conflict retained both sets of regressions.
+The hidden-panel download fixture now observes password-prompt/downloading
+transitions instead of the removed, fabricated Workshop percentages.
+Post-merge checks: **219 native and 34 Python tests passed**, all **13 PlaybackGPU
+cases passed**, Rust core/bridge remained **174/214 passed**, and the targeted
+upstream camera-zoom, callback-only script, MDLS3 hierarchy, and text-centering
+regressions passed. Script runtime now has **32 passed and the same 1 pre-existing
+Vector-constructor failure**. Evidence: `build/verification/playback-push-merge/`
+and `build/Tests-20260916-174512-553927.xcresult`.
+
 No Release application was built or delivered, and neither app installation was
 replaced or restarted. Real screen playback, surface/acquire/present failure
 recovery, visual equivalence on the desktop, and battery/power gains remain

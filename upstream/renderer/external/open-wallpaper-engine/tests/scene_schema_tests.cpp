@@ -2042,6 +2042,56 @@ TEST(SceneSchema, ParserUsesStableRuntimeNamesForDuplicateImageLayerNames) {
     EXPECT_EQ(scene->runtime->NodeSize("__we_layer_21"), Eigen::Vector2f(64.0f, 32.0f));
 }
 
+TEST(SceneSchema, CallbackOnlyDuplicateButtonsToggleNamedGroupsThroughParser) {
+    fs::VFS vfs;
+    MountSceneFiles(vfs);
+    audio::SoundManager sound;
+    WPSceneParser parser;
+    const nlohmann::json setting = {
+        {"value", true}, {"script", R"JS(
+export var scriptProperties = createScriptProperties()
+    .addText({name: 'target', value: 'missing'}).finish();
+let visible;
+export function init(value) { visible = true; return value; }
+export function cursorClick() {
+    visible = !visible;
+    thisScene.getLayer(scriptProperties.target).visible = visible;
+}
+)JS"}, {"scriptproperties", {{"target", "mode"}}}};
+    const nlohmann::json source = {
+        {"camera", {{"center", {0, 0, 0}}, {"eye", {0, 0, 1}}, {"up", {0, 1, 0}}}},
+        {"general", {{"ambientcolor", {0, 0, 0}}, {"skylightcolor", {0, 0, 0}},
+                     {"clearcolor", {0, 0, 0}}, {"cameraparallax", false},
+                     {"orthogonalprojection", {{"width", 400}, {"height", 300}}}}},
+        {"objects", nlohmann::json::array({
+            {{"id", 1}, {"name", "mode"}, {"visible", true}},
+            {{"id", 2}, {"name", "content"}, {"image", "image.json"}, {"parent", 1}},
+            {{"id", 3}, {"name", "button"}, {"image", "image.json"},
+             {"origin", {200, 150, 0}}, {"size", {80, 80}}, {"visible", setting}},
+            {{"id", 4}, {"name", "button"}, {"image", "image.json"}, {"parent", 3},
+             {"scale", {0.9, 0.9, 1}}, {"size", {80, 80}}, {"visible", setting}}
+        })}
+    };
+    ProjectProperties properties;
+    auto scene = parser.Parse(SceneParseRequest {
+        .scene_id = "callback-buttons", .project_properties = &properties,
+    }, source.dump(), vfs, sound);
+    ASSERT_NE(scene, nullptr);
+    ASSERT_NE(scene->runtime, nullptr);
+    auto& runtime = *scene->runtime;
+    runtime.Tick(0.01);
+    runtime.SetCursorInput(0.5f, 0.5f);
+    runtime.SetCursorEnter(true);
+    for (bool visible : {false, true, false}) {
+        runtime.SetCursorButtons(0, 1, 1);
+        runtime.DispatchCursorFrameEvents(true);
+        runtime.SetCursorButtons(0, 0, 0);
+        runtime.Tick(0.01);
+        EXPECT_EQ(runtime.NodeVisible("mode"), visible);
+    }
+    EXPECT_EQ(runtime.scriptErrorCount(), 0u);
+}
+
 TEST(SceneSchema, DuplicateParsedImageClickScriptsGateRealAssetSoundLayers) {
     fs::VFS vfs;
     MountSceneFiles(vfs);
@@ -2581,6 +2631,102 @@ TEST(SceneSchema, ParserFallsBackWhenPuppetMeshSlotMaterialFailsToLoad) {
     ASSERT_EQ(node->Mesh()->Submeshes().size(), 2u);
     EXPECT_EQ(node->Mesh()->Submeshes()[0].material_slot, 0u);
     EXPECT_EQ(node->Mesh()->Submeshes()[1].material_slot, 0u);
+}
+
+std::shared_ptr<Scene> ParseCameraZoomScene(const nlohmann::json& zoom) {
+    auto source = nlohmann::json::parse(BasicImageSceneJson());
+    source["objects"] = nlohmann::json::array();
+    source["general"]["orthogonalprojection"] = {{"width", 960}, {"height", 540}};
+    source["general"]["zoom"] = zoom;
+    fs::VFS vfs;
+    audio::SoundManager sound;
+    ProjectProperties properties;
+    return WPSceneParser().Parse(SceneParseRequest {
+        .scene_id = "camera-zoom", .project_properties = &properties,
+    }, source.dump(), vfs, sound);
+}
+
+TEST(SceneSchema, CameraZoomTimelineRevealsFullCanvasWithoutResizingRenderTargets) {
+    auto parsed = ParseCameraZoomScene(nlohmann::json::parse(R"({
+        "value":3,"animation":{
+            "options":{"fps":30,"length":450,"mode":"single","name":"intro"},
+            "c0":[{"frame":0,"value":3},{"frame":300,"value":3},
+                  {"frame":450,"value":1}]
+        }
+    })"));
+    ASSERT_NE(parsed, nullptr);
+    ASSERT_NE(parsed->runtime, nullptr);
+    auto camera = parsed->cameras.at("global");
+    auto perspective = parsed->cameras.at("global_perspective");
+    auto linked = std::make_shared<SceneCamera>(*camera);
+    parsed->cameras["linked"] = linked;
+    parsed->linkedCameras["global"].push_back("linked");
+    EXPECT_DOUBLE_EQ(camera->Width(), 320);
+    EXPECT_DOUBLE_EQ(camera->Height(), 180);
+    const auto initial_fov = perspective->Fov();
+    const auto target = parsed->renderTargets.at(std::string(SpecTex_Default));
+    parsed->runtime->Tick(10.0);
+    EXPECT_DOUBLE_EQ(camera->Width(), 320);
+    parsed->runtime->Tick(2.5);
+    EXPECT_DOUBLE_EQ(camera->Width(), 480);
+    EXPECT_DOUBLE_EQ(camera->Height(), 270);
+    parsed->runtime->Tick(2.5);
+    EXPECT_DOUBLE_EQ(camera->Width(), 960);
+    EXPECT_DOUBLE_EQ(camera->Height(), 540);
+    EXPECT_DOUBLE_EQ(linked->Width(), camera->Width());
+    EXPECT_DOUBLE_EQ(linked->Height(), camera->Height());
+    EXPECT_GT(perspective->Fov(), initial_fov);
+    EXPECT_DOUBLE_EQ(perspective->Aspect(), camera->Aspect());
+    for (const auto* view : {camera.get(), perspective.get(), linked.get()}) {
+        for (const auto& corner : {Eigen::Vector4d(0, 0, 0, 1),
+                                   Eigen::Vector4d(960, 540, 0, 1)}) {
+            const Eigen::Vector4d clip = view->GetViewProjectionMatrix() * corner;
+            EXPECT_NEAR(std::abs(clip.x() / clip.w()), 1.0, 1e-6);
+            EXPECT_NEAR(std::abs(clip.y() / clip.w()), 1.0, 1e-6);
+        }
+    }
+    parsed->runtime->Tick(20.0);
+    EXPECT_DOUBLE_EQ(camera->Width(), 960);
+    EXPECT_EQ(parsed->ortho[0], 960);
+    EXPECT_EQ(parsed->ortho[1], 540);
+    EXPECT_EQ(parsed->renderTargets.at(std::string(SpecTex_Default)).width, target.width);
+    EXPECT_EQ(parsed->renderTargets.at(std::string(SpecTex_Default)).height, target.height);
+}
+
+TEST(SceneSchema, CameraZoomTimelineHonorsPausedFirstKeyAndLooping) {
+    auto parsed = ParseCameraZoomScene(nlohmann::json::parse(R"({
+        "value":7,"animation":{
+            "options":{"fps":30,"length":60,"mode":"loop","startpaused":true,"name":"zoom"},
+            "c0":[{"frame":0,"value":2},{"frame":30,"value":1},{"frame":60,"value":2}]
+        }
+    })"));
+    ASSERT_NE(parsed, nullptr);
+    auto camera = parsed->cameras.at("global");
+    EXPECT_DOUBLE_EQ(camera->Width(), 480);
+    parsed->runtime->Tick(5.0);
+    EXPECT_DOUBLE_EQ(camera->Width(), 480);
+    auto* animation = parsed->runtime->FindScalarAnimation("", "zoom");
+    ASSERT_NE(animation, nullptr);
+    animation->Play();
+    parsed->runtime->Tick(1.0);
+    EXPECT_DOUBLE_EQ(camera->Width(), 960);
+    parsed->runtime->Tick(1.0);
+    EXPECT_DOUBLE_EQ(camera->Width(), 480);
+    animation->Stop();
+    parsed->runtime->Tick(1.0);
+    EXPECT_DOUBLE_EQ(camera->Width(), 480);
+}
+
+TEST(SceneSchema, StaticAndInvalidCameraZoomRemainStable) {
+    for (const auto& zoom : {nlohmann::json(2), nlohmann::json(0), nlohmann::json(-1),
+                            nlohmann::json::parse(R"({"value":2,"animation":{}})")}) {
+        auto parsed = ParseCameraZoomScene(zoom);
+        ASSERT_NE(parsed, nullptr);
+        const double width = zoom.is_number() && zoom.get<float>() <= 0 ? 960 : 480;
+        EXPECT_DOUBLE_EQ(parsed->cameras.at("global")->Width(), width);
+        parsed->runtime->Tick(20.0);
+        EXPECT_DOUBLE_EQ(parsed->cameras.at("global")->Width(), width);
+    }
 }
 
 TEST(SceneSchema, ParserPreservesPausedMaterialTimelineAndAppliesItsFirstKey) {

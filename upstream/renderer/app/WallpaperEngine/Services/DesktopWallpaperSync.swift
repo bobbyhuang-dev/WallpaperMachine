@@ -66,6 +66,7 @@ final class DesktopWallpaperSync {
     private var coalesced: Task<Void, Never>?
     private static let refreshInterval: Duration = .milliseconds(500)
     private var stopped = false
+    var isSuspended: Bool { stopped }
 
     convenience init(folder: URL) throws {
         try self.init(folder: folder, workspace: SystemDesktopPictureWorkspace(), surfaces: {

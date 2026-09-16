@@ -185,14 +185,22 @@ int main() {
         InstallVirtualAssets(vfs);
         ProjectProperties properties;
         Check(ParseProjectProperties(project, &properties, &error), error.c_str());
+        if (const char* json = std::getenv("WE_TEST_PROPERTIES")) {
+            ProjectProperties overrides;
+            Check(ParseFlatProjectPropertyOverrideJson(json, &overrides, &error), error.c_str());
+            properties = MergeProjectProperties(properties, overrides);
+        }
         auto source = vfs.Open("/assets/" + paths.pkg_entry);
         Check(source != nullptr, "scene source");
+        const auto scene_source = source->ReadAllStr();
+        if (std::getenv("WE_TEST_DUMP_SOURCE"))
+            std::ofstream(out / "scene.json") << scene_source;
         WPSceneParser parser;
         audio::SoundManager sound; // Never Init/Play.
         auto scene = parser.Parse(SceneParseRequest {
             .scene_id = paths.scene_id, .project_path = project,
             .project_properties = &properties, .pkg_version = PackageVersion(paths.pkg_path),
-        }, source->ReadAllStr(), vfs, sound);
+        }, scene_source, vfs, sound);
         Check(scene != nullptr, "parse scene");
         milestone("parsed");
         if (audio_hz_env) {
@@ -203,6 +211,49 @@ int main() {
             scene->runtime->Tick(1.0 / 60.0);
             scene->runtime->PumpTextLayerCache();
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        if (const char* click = std::getenv("WE_TEST_CLICK_LAYER")) {
+            int32_t layer_id = 0;
+            const std::string_view text(click);
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), layer_id);
+            Check(parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size(), "invalid click layer ID");
+            SceneNode* target = nullptr;
+            const auto locate = [&](auto&& self, SceneNode* node) -> void {
+                if (!node) return;
+                if (node->ID() == layer_id) target = node;
+                for (const auto& child : node->GetChildren()) self(self, child.get());
+            };
+            locate(locate, scene->sceneGraph.get());
+            Check(target != nullptr, "click layer missing");
+            target->UpdateTrans();
+            const Eigen::Vector3f position = (target->ModelTrans() * Eigen::Vector4d(0, 0, 0, 1)).head<3>().cast<float>();
+            int click_count = 1;
+            if (const char* count = std::getenv("WE_TEST_CLICK_COUNT")) {
+                const std::string_view value(count);
+                const auto parsed_count = std::from_chars(value.data(), value.data() + value.size(), click_count);
+                Check(parsed_count.ec == std::errc{} && parsed_count.ptr == value.data() + value.size() &&
+                          click_count >= 1 && click_count <= 10, "click count must be 1..10");
+            }
+            scene->runtime->SetCursorWorldPosition(position);
+            scene->runtime->SetCursorEnter(true);
+            for (int i = 0; i < click_count; ++i) {
+                scene->runtime->SetCursorButtons(0, 1, 1);
+                scene->runtime->DispatchCursorFrameEvents(i != 0);
+                scene->runtime->SetCursorButtons(0, 0, 0);
+                scene->runtime->Tick(1.0 / 60.0);
+            }
+            std::cout << "click layer=" << layer_id << " count=" << click_count
+                      << " position=" << position.transpose() << std::endl;
+        }
+        if (std::getenv("WE_TEST_DUMP_SOURCE")) {
+            std::ofstream nodes(out / "nodes.txt");
+            const auto dump = [&](auto&& self, SceneNode* node) -> void {
+                if (!node) return;
+                nodes << node->ID() << ' ' << node->Name() << " visible=" << node->Visible()
+                      << " effective=" << node->EffectiveVisible() << " scale=" << node->Scale().transpose() << '\n';
+                for (const auto& child : node->GetChildren()) self(self, child.get());
+            };
+            dump(dump, scene->sceneGraph.get());
         }
         std::vector<std::string> text_names;
         const auto collect_text = [&](auto&& self, SceneNode* node) -> void {

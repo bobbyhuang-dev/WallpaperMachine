@@ -126,7 +126,6 @@ pub struct EjectWallpaperFromDisplay {
 
 pub struct SetGlobalPlayback {
     pub playback_state: BridgePlaybackState,
-    pub paused: bool,
 }
 
 pub struct Shutdown;
@@ -176,6 +175,10 @@ pub struct SetLaunchAtLogin {
 
 pub struct SetPauseOnBatteryPower {
     pub enabled: bool,
+}
+
+pub struct SetPresentationSuspended {
+    pub suspended: bool,
 }
 
 pub struct SetPowerSource {
@@ -262,6 +265,7 @@ pub type SetMirrorMutedReply = DisplayMutationReply;
 pub type EjectWallpaperFromDisplayReply = DisplayMutationReply;
 pub type SetGlobalPlaybackReply = AllSnapshotsReply;
 pub type SetPauseOnBatteryPowerReply = AllSnapshotsReply;
+pub type SetPresentationSuspendedReply = Result<(), BridgeError>;
 pub type SetPowerSourceReply = AllSnapshotsReply;
 pub type InitialFrameReadyReply = AllSnapshotsReply;
 pub type ShutdownReply = Result<(), BridgeError>;

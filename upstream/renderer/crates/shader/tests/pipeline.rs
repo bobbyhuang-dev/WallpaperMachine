@@ -11,8 +11,55 @@ use shader::{
 };
 
 const SPIRV_MAGIC: u32 = 0x0723_0203;
-const ASSET_SHADER_ROOT: &str = "/Users/molyuu/Library/Application \
-                                 Support/Steam/steamapps/common/wallpaper_engine/assets/shaders";
+
+/// Wallpaper Engine's installed `assets/shaders` directory. Honors the same
+/// `MAC_WALLPAPER_ENGINE_ASSETS_ROOT` override the bridge uses
+/// (`crates/bridge/src/paths.rs`), falling back to the standard Steam location
+/// under the current user's home. These assets are licensed content that never
+/// enters Git, so tests needing them skip when the directory is absent.
+fn asset_shader_root() -> Option<std::path::PathBuf> {
+    let root = std::env::var_os("MAC_WALLPAPER_ENGINE_ASSETS_ROOT")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| {
+                std::path::PathBuf::from(home).join(
+                    "Library/Application Support/Steam/steamapps/common/wallpaper_engine/assets",
+                )
+            })
+        })?
+        .join("shaders");
+    root.is_dir().then_some(root)
+}
+
+/// Root for shaders unpacked from workshop packages. Defaults to `unpack/` at
+/// the workspace root; override with `MAC_WALLPAPER_ENGINE_UNPACK_ROOT`.
+fn unpack_root() -> std::path::PathBuf {
+    if let Some(root) = std::env::var_os("MAC_WALLPAPER_ENGINE_UNPACK_ROOT") {
+        return std::path::PathBuf::from(root);
+    }
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("workspace root should be two levels above shader crate")
+        .join("unpack")
+}
+
+/// Reads a corpus file, or reports why the calling test is being skipped.
+/// Returns `None` instead of panicking: the local wallpaper corpus is optional
+/// and machine-specific (see `docs/wallpaper-corpus.md`).
+fn corpus_source_or_skip(path: &std::path::Path, test: &str) -> Option<String> {
+    match std::fs::read_to_string(path) {
+        Ok(source) => Some(source),
+        Err(error) => {
+            eprintln!(
+                "skipping {test}: local wallpaper corpus file {} is unavailable ({error}). Set \
+                 MAC_WALLPAPER_ENGINE_ASSETS_ROOT / MAC_WALLPAPER_ENGINE_UNPACK_ROOT to run it.",
+                path.display()
+            );
+            None
+        }
+    }
+}
 
 #[test]
 fn compiles_program_and_merges_metadata_reflection_and_diagnostics() {
@@ -2396,12 +2443,23 @@ fn pipeline_narrows_generated_vec4_fragment_coordinate_for_sampler2d() {
 
 #[test]
 fn pipeline_compiles_asset_genericimage4_without_widening_rotate_vec2_helper() {
+    let test = "pipeline_compiles_asset_genericimage4_without_widening_rotate_vec2_helper";
+    let Some(root) = asset_shader_root() else {
+        eprintln!(
+            "skipping {test}: no Wallpaper Engine assets/shaders directory. Set \
+             MAC_WALLPAPER_ENGINE_ASSETS_ROOT to run it."
+        );
+        return;
+    };
+    let (Some(vertex), Some(fragment)) = (
+        corpus_source_or_skip(&root.join("genericimage4.vert"), test),
+        corpus_source_or_skip(&root.join("genericimage4.frag"), test),
+    ) else {
+        return;
+    };
+
     let pipeline =
         ShaderPipeline::with_reflector(AssetShaderProvider, SourceCaptureCompiler, EmptyReflector);
-    let vertex = std::fs::read_to_string(format!("{ASSET_SHADER_ROOT}/genericimage4.vert"))
-        .expect("genericimage4 vertex asset should be readable");
-    let fragment = std::fs::read_to_string(format!("{ASSET_SHADER_ROOT}/genericimage4.frag"))
-        .expect("genericimage4 fragment asset should be readable");
     let request =
         ShaderProgramRequest::builder(ShaderName::new("genericimage4").expect("valid name"))
             .stage(ShaderStageSource::new(ShaderStageKind::Vertex, vertex))
@@ -2428,11 +2486,14 @@ fn pipeline_compiles_asset_genericimage4_without_widening_rotate_vec2_helper() {
 
 #[test]
 fn pipeline_compiles_3414858021_depthparallax_with_line_continuations() {
-    let request = unpacked_shader_pair_request(
+    let Some(request) = unpacked_shader_pair_request(
         "workshop/3370055069/effects/depthparallax",
-        "unpack/3414858021/shaders/workshop/3370055069/effects/depthparallax.vert",
-        "unpack/3414858021/shaders/workshop/3370055069/effects/depthparallax.frag",
-    );
+        "3414858021/shaders/workshop/3370055069/effects/depthparallax.vert",
+        "3414858021/shaders/workshop/3370055069/effects/depthparallax.frag",
+        "pipeline_compiles_3414858021_depthparallax_with_line_continuations",
+    ) else {
+        return;
+    };
 
     let program = ShaderPipeline::new(AssetShaderProvider, NagaCompiler)
         .compile(&request)
@@ -2442,11 +2503,14 @@ fn pipeline_compiles_3414858021_depthparallax_with_line_continuations() {
 
 #[test]
 fn pipeline_compiles_3414858021_auto_sway_with_unknown_punctuation_tokens() {
-    let request = unpacked_shader_pair_request(
+    let Some(request) = unpacked_shader_pair_request(
         "workshop/3235948233/effects/auto_sway",
-        "unpack/3414858021/shaders/workshop/3235948233/effects/auto_sway.vert",
-        "unpack/3414858021/shaders/workshop/3235948233/effects/auto_sway.frag",
-    );
+        "3414858021/shaders/workshop/3235948233/effects/auto_sway.vert",
+        "3414858021/shaders/workshop/3235948233/effects/auto_sway.frag",
+        "pipeline_compiles_3414858021_auto_sway_with_unknown_punctuation_tokens",
+    ) else {
+        return;
+    };
 
     let program = ShaderPipeline::new(AssetShaderProvider, NagaCompiler)
         .compile(&request)
@@ -2866,11 +2930,12 @@ struct AssetShaderProvider;
 
 impl shader::ShaderSourceProvider for AssetShaderProvider {
     fn read_to_string(&self, path: &IncludePath) -> ShaderResult<String> {
-        std::fs::read_to_string(format!("{ASSET_SHADER_ROOT}/{}", path.as_str())).map_err(|error| {
-            ShaderError::SourceRead {
-                path: path.clone(),
-                message: error.to_string(),
-            }
+        let source = asset_shader_root()
+            .ok_or_else(|| std::io::Error::other("no Wallpaper Engine assets/shaders directory"))
+            .and_then(|root| std::fs::read_to_string(root.join(path.as_str())));
+        source.map_err(|error| ShaderError::SourceRead {
+            path: path.clone(),
+            message: error.to_string(),
         })
     }
 }
@@ -3060,29 +3125,23 @@ fn unpacked_shader_pair_request(
     name: &str,
     vertex_path: &str,
     fragment_path: &str,
-) -> ShaderProgramRequest {
-    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(std::path::Path::parent)
-        .expect("workspace root should be two levels above shader crate");
-    ShaderProgramRequest::builder(ShaderName::new(name).expect("valid shader name"))
-        .stage(ShaderStageSource::new(
-            ShaderStageKind::Vertex,
-            std::fs::read_to_string(workspace_root.join(vertex_path))
-                .expect("vertex shader should be readable"),
-        ))
-        .stage(ShaderStageSource::new(
-            ShaderStageKind::Fragment,
-            std::fs::read_to_string(workspace_root.join(fragment_path))
-                .expect("fragment shader should be readable"),
-        ))
-        .texture(ShaderTextureInfo::new(
-            TextureSlot::new(0).expect("valid texture slot"),
-            true,
-            TextureFormatHint::Rgba8,
-        ))
-        .build()
-        .expect("unpacked shader pair request should be valid")
+    test: &str,
+) -> Option<ShaderProgramRequest> {
+    let root = unpack_root();
+    let vertex = corpus_source_or_skip(&root.join(vertex_path), test)?;
+    let fragment = corpus_source_or_skip(&root.join(fragment_path), test)?;
+    Some(
+        ShaderProgramRequest::builder(ShaderName::new(name).expect("valid shader name"))
+            .stage(ShaderStageSource::new(ShaderStageKind::Vertex, vertex))
+            .stage(ShaderStageSource::new(ShaderStageKind::Fragment, fragment))
+            .texture(ShaderTextureInfo::new(
+                TextureSlot::new(0).expect("valid texture slot"),
+                true,
+                TextureFormatHint::Rgba8,
+            ))
+            .build()
+            .expect("unpacked shader pair request should be valid"),
+    )
 }
 
 fn assert_cross_stage_error(err: ShaderError, expected: &str) {

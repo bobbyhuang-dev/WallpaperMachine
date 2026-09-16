@@ -467,6 +467,10 @@ final class BridgeStore {
         apply(bundle)
     }
 
+    func setPresentationSuspendedAsync(_ suspended: Bool) async throws {
+        try await bridge.setPresentationSuspended(suspended: suspended)
+    }
+
     func ejectWallpaperFromDisplayAsync(
         displayId: String,
         wallpaperId: String

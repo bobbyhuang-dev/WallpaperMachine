@@ -42,13 +42,103 @@ TEST(FrameTimerTest, FrameEndDropsSuspendedFrameDuration) {
     timer.SetRequiredFps(20);
 
     timer.m_frame_busy_count.store(1);
-    timer.m_clock = std::chrono::steady_clock::now() - std::chrono::hours(8);
-
-    timer.FrameEnd();
+    const auto start = std::chrono::steady_clock::time_point(1s);
+    timer.FrameBegin(start);
+    timer.FrameEnd(start + 8h);
 
     EXPECT_EQ(timer.m_frame_busy_count.load(), 0);
     EXPECT_LT(timer.FrameTime(), 0.1);
     EXPECT_NEAR(timer.IdeaTime(), 0.05, 0.01);
+
+    timer.FrameBegin(start + 8h + 50ms);
+    EXPECT_DOUBLE_EQ(timer.IdeaTime(), 0.05);
+}
+
+TEST(FrameTimerTest, DeliveredFramesIncludeDroppedTickIntervals) {
+    int draws = 0;
+    FrameTimer timer([&]() { ++draws; });
+    timer.SetRequiredFps(30);
+    const auto start = std::chrono::steady_clock::time_point(1s);
+
+    // A 40 ms draw misses every other tick of a 33.333 ms scheduler.
+    // Drive those ticks and delivered-frame timestamps without wall-clock sleeps.
+    for (int frame = 0; frame < 6; ++frame) {
+        const auto begin = start + frame * 66666us;
+        timer.m_timer.m_callback();
+        ASSERT_EQ(draws, frame + 1);
+        timer.FrameBegin(begin);
+        EXPECT_DOUBLE_EQ(timer.IdeaTime(), frame == 0 ? 0.033333 : 0.066666);
+
+        timer.m_timer.m_callback();
+        EXPECT_EQ(draws, frame + 1);
+        timer.FrameEnd(begin + 40ms);
+    }
+
+    // Rendering cost remains distinct from animation time.
+    EXPECT_DOUBLE_EQ(timer.FrameTime(), 0.04);
+}
+
+TEST(FrameTimerTest, RestartExcludesPausedTimeButRunningAgainPreservesElapsedTime) {
+    FrameTimer timer;
+    timer.SetRequiredFps(20);
+    const auto start = std::chrono::steady_clock::time_point(1s);
+
+    timer.Run();
+    timer.FrameBegin(start);
+    EXPECT_DOUBLE_EQ(timer.IdeaTime(), 0.05);
+    timer.FrameEnd(start + 10ms);
+
+    timer.Run();
+    timer.FrameBegin(start + 100ms);
+    EXPECT_DOUBLE_EQ(timer.IdeaTime(), 0.1);
+    timer.FrameEnd(start + 110ms);
+    timer.Stop();
+
+    // Use a pause shorter than the long-frame cutoff so only Run's reset can
+    // exclude it. The following frame must use elapsed time normally again.
+    timer.Run();
+    timer.FrameBegin(start + 2s);
+    EXPECT_DOUBLE_EQ(timer.IdeaTime(), 0.05);
+    timer.FrameEnd(start + 2010ms);
+    timer.FrameBegin(start + 2100ms);
+    EXPECT_DOUBLE_EQ(timer.IdeaTime(), 0.1);
+    timer.FrameEnd(start + 2110ms);
+    timer.Stop();
+}
+
+TEST(FrameTimerTest, FpsChangePreservesInFlightDrawAndElapsedTime) {
+    int draws = 0;
+    FrameTimer timer([&]() { ++draws; });
+    timer.SetRequiredFps(20);
+    const auto start = std::chrono::steady_clock::time_point(1s);
+
+    timer.m_timer.m_callback();
+    timer.FrameBegin(start);
+    timer.SetRequiredFps(40);
+    timer.m_timer.m_callback();
+    EXPECT_EQ(draws, 1);
+    timer.FrameEnd(start + 60ms);
+
+    timer.m_timer.m_callback();
+    EXPECT_EQ(draws, 2);
+    timer.FrameBegin(start + 75ms);
+    EXPECT_DOUBLE_EQ(timer.IdeaTime(), 0.075);
+    timer.FrameEnd(start + 85ms);
+}
+
+TEST(FrameTimerTest, LongDeliveryGapDoesNotCatchUpSuspendedTime) {
+    FrameTimer timer;
+    timer.SetRequiredFps(20);
+    const auto start = std::chrono::steady_clock::time_point(1s);
+
+    timer.FrameBegin(start);
+    timer.FrameEnd(start + 10ms);
+    timer.FrameBegin(start + 8h);
+    EXPECT_DOUBLE_EQ(timer.IdeaTime(), 0.05);
+    timer.FrameEnd(start + 8h + 10ms);
+    timer.FrameBegin(start + 8h + 100ms);
+    EXPECT_DOUBLE_EQ(timer.IdeaTime(), 0.1);
+    timer.FrameEnd(start + 8h + 110ms);
 }
 
 } // namespace

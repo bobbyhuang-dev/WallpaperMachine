@@ -1,6 +1,11 @@
 import AppKit
 import Darwin
 
+/// Sentinel URL for a native selection that carries no image file path.
+/// Hoisted so the force unwrap is evaluated once against a literal rather than
+/// on every decode.
+private let inheritedSelectionURL = URL(string: "mwe-native-selection://inherited")!
+
 struct DesktopPictureTarget: Hashable, Codable {
     var display: String
     // nil is the public-API fallback, scoped to the currently visible Space.
@@ -79,7 +84,7 @@ final class DesktopSpaceWallpaperAPI {
         let data = try PropertyListSerialization.data(fromPropertyList: config, format: .binary, options: 0)
         let path = config["ImageFilePath"] as? String
         let url = path.flatMap { $0.isEmpty ? nil : imageURL($0) }
-            ?? URL(string: "mwe-native-selection://inherited")!
+            ?? inheritedSelectionURL
         return DesktopPicture(url: url,
                               scaling: Int(NSImageScaling.scaleAxesIndependently.rawValue),
                               allowClipping: false, fill: [0, 0, 0, 1], nativeOptions: data)

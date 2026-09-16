@@ -46,4 +46,3 @@ crate::tests::macros::general_smoke_cases!(runtime_smoke, {
 pub mod scene;
 pub mod shader_cache;
 pub mod video_codec;
-pub mod vulkan;

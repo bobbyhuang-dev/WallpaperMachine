@@ -31,8 +31,8 @@ use crate::{
             SetAudioResponseEnabled, SetDisplayConfigEnabled, SetDisplayEnabled, SetDisplayMode,
             SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMirrorMuted, SetMirrorScalingFactor,
             SetMirrorScalingMode, SetMirrorTarget, SetMirrorTargetFps, SetMirrorVolume, SetMuted,
-            SetPauseOnBatteryPower, SetPowerSource, SetScalingFactor, SetScalingMode, SetTargetFps,
-            SetVolume, Shutdown,
+            SetPauseOnBatteryPower, SetPowerSource, SetPresentationSuspended, SetScalingFactor,
+            SetScalingMode, SetTargetFps, SetVolume, Shutdown,
         },
         state::BridgeActorState,
     },
@@ -419,20 +419,23 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
     async fn set_playback(
         &mut self,
         playback_state: BridgePlaybackState,
-        paused: bool,
         origin: PlaybackChangeOrigin,
     ) -> Result<(), BridgeError> {
-        self.engine
-            .set_all_paused(paused)
-            .await
-            .map_err(|error| BridgeError::engine(error.to_string()))?;
+        let previous = self.state.playback_state;
+        let previous_paused = self.playback_paused();
         self.state.playback_state = playback_state;
+        if let Err(error) = self.apply_engine_pause(previous_paused).await {
+            self.state.playback_state = previous;
+            return Err(error);
+        }
         match origin {
             PlaybackChangeOrigin::Manual => {
-                if !paused && self.state.power_source == crate::power::PowerSource::Battery {
+                if playback_state == BridgePlaybackState::Playing
+                    && self.state.power_source == crate::power::PowerSource::Battery
+                {
                     self.state.auto_paused_for_battery = false;
                     self.state.battery_pause_suppressed = true;
-                } else if paused {
+                } else if playback_state == BridgePlaybackState::Paused {
                     self.state.auto_paused_for_battery = false;
                 }
             }
@@ -459,12 +462,8 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                         return Ok(());
                     }
                     log::info!("pausing wallpaper playback on battery power");
-                    self.set_playback(
-                        BridgePlaybackState::Paused,
-                        true,
-                        PlaybackChangeOrigin::Power,
-                    )
-                    .await?;
+                    self.set_playback(BridgePlaybackState::Paused, PlaybackChangeOrigin::Power)
+                        .await?;
                     self.state.auto_paused_for_battery = true;
                 }
             }
@@ -473,12 +472,8 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                 self.state.pending_battery_pause_after_initial_frame = false;
                 if self.state.auto_paused_for_battery {
                     log::info!("resuming wallpaper playback on external power");
-                    self.set_playback(
-                        BridgePlaybackState::Playing,
-                        false,
-                        PlaybackChangeOrigin::Power,
-                    )
-                    .await?;
+                    self.set_playback(BridgePlaybackState::Playing, PlaybackChangeOrigin::Power)
+                        .await?;
                     self.state.auto_paused_for_battery = false;
                 }
             }
@@ -639,7 +634,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             app_config: &self.state.app_config,
             wallpapers: &self.state.wallpaper_configs,
             displays: &displays,
-            paused: self.playback_paused(),
+            paused: self.state.playback_state == BridgePlaybackState::Paused,
             paths: &self.paths,
             force_shader_refresh: false,
         }
@@ -768,7 +763,34 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
     }
 
     fn playback_paused(&self) -> bool {
-        self.state.playback_state == crate::api::BridgePlaybackState::Paused
+        self.state.presentation_suspended
+            || self.state.playback_state == crate::api::BridgePlaybackState::Paused
+    }
+
+    async fn apply_engine_pause(&self, previous_paused: bool) -> Result<(), BridgeError> {
+        let paused = self.playback_paused();
+        let result = async {
+            self.engine.set_all_paused(paused).await?;
+            self.engine.set_audio_capture_suspended(paused).await
+        }
+        .await;
+        if let Err(error) = result {
+            let mut message = error.to_string();
+            // Either operation may have changed live state before failing.
+            // Restore both sides before the caller rolls back its actor state.
+            if let Err(rollback) = self.engine.set_all_paused(previous_paused).await {
+                message.push_str(&format!("; renderer pause rollback failed: {rollback}"));
+            }
+            if let Err(rollback) = self
+                .engine
+                .set_audio_capture_suspended(previous_paused)
+                .await
+            {
+                message.push_str(&format!("; audio capture rollback failed: {rollback}"));
+            }
+            return Err(BridgeError::engine(message));
+        }
+        Ok(())
     }
 
     fn spawn_restore(&mut self, actor: ActorRef<BridgeActor<E>>) {
@@ -2081,6 +2103,32 @@ impl<E: EngineFacade + Clone> Message<SetPauseOnBatteryPower> for BridgeActor<E>
     }
 }
 
+impl<E: EngineFacade + Clone> Message<SetPresentationSuspended> for BridgeActor<E> {
+    type Reply = messages::SetPresentationSuspendedReply;
+
+    async fn handle(
+        &mut self,
+        msg: SetPresentationSuspended,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        if self.state.presentation_suspended == msg.suspended {
+            return Ok(());
+        }
+        let previous_paused = self.playback_paused();
+        self.state.presentation_suspended = msg.suspended;
+        if let Err(error) = self.apply_engine_pause(previous_paused).await {
+            self.state.presentation_suspended = !msg.suspended;
+            return Err(error);
+        }
+        self.bump_generation();
+        log::info!(
+            "presentation {}",
+            if msg.suspended { "suspended" } else { "resumed" }
+        );
+        Ok(())
+    }
+}
+
 impl<E: EngineFacade + Clone> Message<SetPowerSource> for BridgeActor<E> {
     type Reply = messages::SetPowerSourceReply;
 
@@ -2194,7 +2242,7 @@ impl<E: EngineFacade + Clone> Message<SetGlobalPlayback> for BridgeActor<E> {
         msg: SetGlobalPlayback,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.set_playback(msg.playback_state, msg.paused, PlaybackChangeOrigin::Manual)
+        self.set_playback(msg.playback_state, PlaybackChangeOrigin::Manual)
             .await?;
         Ok(self.all_snapshots())
     }

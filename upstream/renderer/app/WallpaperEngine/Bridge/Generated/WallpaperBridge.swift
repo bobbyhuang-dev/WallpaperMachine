@@ -811,6 +811,19 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func setPauseOnBatteryPower(enabled: Bool) async throws  -> BridgeSnapshotBundle
     
     /**
+     * Suspends or resumes rendering and system-audio capture for every
+     * wallpaper without changing the user-visible playback state. Used for
+     * conditions where no wallpaper pixel can reach a display: screens asleep,
+     * session locked, or every wallpaper window fully occluded.
+     *
+     * # Errors
+     *
+     * Returns an error when the actor rejects the update or the engine fails
+     * to apply the pause.
+     */
+    func setPresentationSuspended(suspended: Bool) async throws 
+    
+    /**
      * # Errors
      *
      * Returns an error when the wallpaper or display id is unknown, or
@@ -1725,6 +1738,34 @@ open func setPauseOnBatteryPower(enabled: Bool)async throws  -> BridgeSnapshotBu
             completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
             freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeBridgeSnapshotBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Suspends or resumes rendering and system-audio capture for every
+     * wallpaper without changing the user-visible playback state. Used for
+     * conditions where no wallpaper pixel can reach a display: screens asleep,
+     * session locked, or every wallpaper window fully occluded.
+     *
+     * # Errors
+     *
+     * Returns an error when the actor rejects the update or the engine fails
+     * to apply the pause.
+     */
+open func setPresentationSuspended(suspended: Bool)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_presentation_suspended(
+                    self.uniffiClonePointer(),
+                    FfiConverterBool.lower(suspended)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_void,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_void,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_void,
+            liftFunc: { $0 },
             errorHandler: FfiConverterTypeBridgeError.lift
         )
 }
@@ -5000,6 +5041,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_pause_on_battery_power() != 21085) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_presentation_suspended() != 9550) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_scaling_mode() != 14052) {

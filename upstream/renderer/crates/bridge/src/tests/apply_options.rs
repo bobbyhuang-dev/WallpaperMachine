@@ -1166,6 +1166,153 @@ async fn lock_screen_export_ignores_drafts_and_tracks_pause_and_ejection() {
     assert!(bridge.lock_screen_scenes().await.unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn lock_screen_export_ignores_presentation_suspension_but_preserves_playback_policy() {
+    let engine = FakeEngineFacade::default();
+    engine.set_snapshot(vec![display_snapshot(7, 75)]);
+    let bridge = BridgeBuilder::new(engine.clone())
+        .with_state(crate::actor::state::BridgeActorState::default())
+        .build()
+        .unwrap();
+    bridge
+        .inject_scene_wallpaper_config_for_test("100", "Scene")
+        .await;
+    bridge
+        .set_display_config_enabled("100".into(), "7".into(), true)
+        .await
+        .unwrap();
+    bridge.apply_wallpaper_options("100".into()).await.unwrap();
+
+    bridge.set_presentation_suspended(true).await.unwrap();
+    assert!(engine.rendered_scenes()[0].paused);
+    assert!(!bridge.lock_screen_scenes().await.unwrap()[0].paused);
+    bridge.pause_all().await.unwrap();
+    assert!(bridge.lock_screen_scenes().await.unwrap()[0].paused);
+    bridge.set_presentation_suspended(false).await.unwrap();
+    assert!(bridge.lock_screen_scenes().await.unwrap()[0].paused);
+    bridge.play_all().await.unwrap();
+
+    bridge.set_pause_on_battery_power(true).await.unwrap();
+    bridge
+        .set_power_source_for_test(crate::power::PowerSource::Battery)
+        .await;
+    bridge.set_presentation_suspended(true).await.unwrap();
+    assert!(bridge.lock_screen_scenes().await.unwrap()[0].paused);
+    bridge
+        .set_power_source_for_test(crate::power::PowerSource::External)
+        .await;
+    assert!(engine.rendered_scenes()[0].paused);
+    assert!(!bridge.lock_screen_scenes().await.unwrap()[0].paused);
+}
+
+#[tokio::test]
+async fn presentation_transitions_repair_in_flight_reconcile_pause_state() {
+    for initially_suspended in [false, true] {
+        let engine = FakeEngineFacade::default();
+        engine.set_snapshot(vec![display_snapshot(7, 75)]);
+        let bridge = Arc::new(
+            BridgeBuilder::new(engine.clone())
+                .with_state(crate::actor::state::BridgeActorState::default())
+                .build()
+                .unwrap(),
+        );
+        bridge
+            .inject_scene_wallpaper_config_for_test("100", "Scene")
+            .await;
+        bridge
+            .set_display_config_enabled("100".into(), "7".into(), true)
+            .await
+            .unwrap();
+        bridge.apply_wallpaper_options("100".into()).await.unwrap();
+        bridge
+            .set_presentation_suspended(initially_suspended)
+            .await
+            .unwrap();
+        bridge
+            .inject_scene_wallpaper_config_for_test("200", "Other")
+            .await;
+        bridge
+            .set_display_config_enabled("200".into(), "7".into(), true)
+            .await
+            .unwrap();
+
+        let block = engine.block_next_reconcile();
+        let repair_block = engine.block_next_reconcile();
+        let apply_bridge = Arc::clone(&bridge);
+        let apply = thread::spawn(move || {
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(apply_bridge.apply_wallpaper_options("200".into()))
+        });
+        assert!(
+            block.wait_until_blocked(Duration::from_secs(2)),
+            "apply did not reach reconcile"
+        );
+        bridge
+            .set_presentation_suspended(!initially_suspended)
+            .await
+            .unwrap();
+        block.release();
+        apply.join().unwrap().unwrap();
+        assert!(
+            repair_block.wait_until_blocked(Duration::from_secs(2)),
+            "presentation transition did not invalidate the in-flight reconcile"
+        );
+        let repair_done = engine.wait_for_next_reconcile();
+        repair_block.release();
+        assert!(repair_done.wait(Duration::from_secs(2)));
+
+        let rendered = engine.rendered_scenes();
+        assert_eq!(rendered.len(), 1);
+        assert_eq!(rendered[0].paused, !initially_suspended);
+        assert_eq!(engine.audio_capture_suspended(), !initially_suspended);
+        assert_eq!(
+            bridge.app_snapshot().await.unwrap().playback_state,
+            BridgePlaybackState::Playing
+        );
+    }
+}
+
+#[tokio::test]
+async fn failed_audio_resume_restores_renderer_and_allows_later_presentation_transitions() {
+    let engine = FakeEngineFacade::default();
+    engine.set_snapshot(vec![display_snapshot(7, 75)]);
+    let bridge = BridgeBuilder::new(engine.clone())
+        .with_state(crate::actor::state::BridgeActorState::default())
+        .build()
+        .unwrap();
+    bridge
+        .inject_scene_wallpaper_config_for_test("100", "Scene")
+        .await;
+    bridge
+        .set_display_config_enabled("100".into(), "7".into(), true)
+        .await
+        .unwrap();
+    bridge.apply_wallpaper_options("100".into()).await.unwrap();
+    bridge.set_presentation_suspended(true).await.unwrap();
+    engine.fail_audio_capture_with(Some("audio restart failed".into()));
+
+    let error = bridge.set_presentation_suspended(false).await.unwrap_err();
+    assert!(error.message().contains("audio restart failed"));
+    assert!(engine.rendered_scenes()[0].paused);
+    assert!(engine.audio_capture_suspended());
+    assert_eq!(
+        bridge.app_snapshot().await.unwrap().playback_state,
+        BridgePlaybackState::Playing
+    );
+    bridge.set_presentation_suspended(true).await.unwrap();
+    assert!(engine.rendered_scenes()[0].paused);
+    assert!(engine.audio_capture_suspended());
+
+    engine.fail_audio_capture_with(None);
+    bridge.set_presentation_suspended(false).await.unwrap();
+    assert!(!engine.rendered_scenes()[0].paused);
+    assert!(!engine.audio_capture_suspended());
+    bridge.set_presentation_suspended(true).await.unwrap();
+    assert!(engine.rendered_scenes()[0].paused);
+    assert!(engine.audio_capture_suspended());
+}
+
 fn display_snapshot(display_id: u32, refresh_rate_hz: u32) -> DisplaySnapshotEntry {
     let desc = DisplayDesc::with_identity(
         display_id,

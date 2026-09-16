@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private lazy var appUpdater = AppUpdateStore()
     private var displayChangeObserver: NSObjectProtocol?
     private var desktopWallpaperSync: DesktopWallpaperSync?
+    private var presentationPolicy: WallpaperPresentationPolicy?
     private var store: BridgeStore?
     private var startupError: Error?
     private var lastError: Error?
@@ -70,6 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
             store.onSnapshotApplied = { [weak self, weak lockScreen] in
                 guard let self, !self.shutdownInProgress else { return }
+                self.presentationPolicy?.evaluate()
                 if let lockScreen, lockScreen.isRequested, lockScreen.errorMessage == nil {
                     lockScreen.refresh()
                 } else if lockScreen?.ownsDesktopProvider != true {
@@ -80,6 +82,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     }
                 }
             }
+            let policy = WallpaperPresentationPolicy { [weak self] suspended, completion in
+                guard let self, let store = self.store,
+                      !self.shutdownInProgress, !self.shutdownComplete else {
+                    completion(.failure(CancellationError()))
+                    return
+                }
+                Task {
+                    do {
+                        try await store.setPresentationSuspendedAsync(suspended)
+                        completion(.success(()))
+                    } catch {
+                        AppLog.error("presentation suspend failed: \(error.localizedDescription)")
+                        completion(.failure(error))
+                    }
+                }
+            }
+            presentationPolicy = policy
+            policy.start()
             do {
                 try lockScreen.start()
                 if !lockScreen.isRequested { try startDesktopWallpaperSync() }
@@ -103,6 +123,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        presentationPolicy?.stop()
+        presentationPolicy = nil
         desktopWallpaperSync?.stop()
         if let displayChangeObserver {
             NotificationCenter.default.removeObserver(displayChangeObserver)
@@ -128,11 +150,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         Task {
             do {
                 try await store?.lockScreenWallpaper?.shutdown()
+                presentationPolicy?.stop()
+                presentationPolicy = nil
                 desktopWallpaperSync?.stop()
                 desktopWallpaperSync = nil
             } catch {
                 lastError = error
                 shutdownInProgress = false
+                presentationPolicy?.evaluate()
                 rebuildMenu()
                 sender.reply(toApplicationShouldTerminate: false)
                 return

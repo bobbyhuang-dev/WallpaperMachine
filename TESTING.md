@@ -133,6 +133,45 @@ Coordinator tests use unattached
 CAMetalLayers and injected notification/encoding services; they never create a
 window, initialize a renderer, or call the real wallpaper setter.
 
+## Presentation suspension and scene timing
+
+Desktop presentation suspension is separate from user/battery playback state.
+Lock-screen scene exports retain only the latter, so hiding or locking the
+desktop does not pause the visible lock-screen provider. Presentation changes
+invalidate in-flight reconciliation through the existing generation guard;
+stale completion restores committed configuration with the current effective
+pause. A failed audio restart compensates renderer/capture changes and restores
+capture intent. The Swift policy serializes delivery and tracks acknowledged
+state separately from desired visibility. Failed or withheld delivery remains
+pending for the next evaluation, including unchanged visibility and canceled
+shutdown, instead of being mistaken for a successful resume.
+
+Frame timing keeps render cost separate from animation time. Dropped busy ticks
+remain included in the elapsed delivered-frame delta; restarting excludes paused
+time. Deterministic timer regressions cover dropped ticks, restart, FPS changes,
+and long gaps without using desktop surfaces or audio devices.
+
+Verification (2026-09-16):
+
+- `python3 scripts/test.py`: 192 native tests and 34 Python tests passed.
+  Result bundle: `build/Tests-20260916-111442-571839.xcresult`.
+- With the Homebrew environment from `scripts/build.py`,
+  `cargo test --release -p wallpaper-bridge --lib`: 206 passed;
+  `cargo test --release -p wallpaper-core --lib audio`: 23 passed.
+- The renderer's CMake `timer_tests` target: all six `FrameTimerTest` cases passed.
+- An isolated production-timer smoke at 30 FPS with 40 ms simulated draws
+  advanced 2.215159 seconds of scene time over 2.215392 seconds of wall time
+  (ratio 0.999895); the first delta after a 500 ms pause was 0.033333 seconds.
+  Production-policy smoke checks delivered the withheld resume after canceled
+  shutdown and retried an injected asynchronous audio-start failure without a
+  visibility change. Throwaway probe programs were removed.
+
+Logs and the report are under
+`build/verification/presentation-fixes-20260916-105151/`.
+Desktop presentation, real CoreAudio restart failures, and native lock-screen
+integration were not exercised; their regression coverage uses injected state
+and failures. No Release application build was performed or delivered.
+
 ## Wallpaper properties
 
 The bridge exposes authored combo labels and editable values to native menu

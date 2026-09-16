@@ -389,6 +389,7 @@ pub struct AudioCaptureController<B: AudioCaptureBackend> {
     consumer: Arc<dyn AudioFrameConsumer>,
     backend: B,
     enabled_handles: HashSet<SceneHandle>,
+    suspended: bool,
 }
 
 impl<B: AudioCaptureBackend> AudioCaptureController<B> {
@@ -398,6 +399,7 @@ impl<B: AudioCaptureBackend> AudioCaptureController<B> {
             consumer,
             backend,
             enabled_handles: HashSet::new(),
+            suspended: false,
         }
     }
 
@@ -467,6 +469,27 @@ impl<B: AudioCaptureBackend> AudioCaptureController<B> {
         self.sync_capture_state()
     }
 
+    /// Globally stops capture without forgetting which scenes requested it.
+    /// Resuming restores capture for every scene still enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioCaptureError`] when starting or stopping capture fails.
+    pub fn set_suspended(&mut self, suspended: bool) -> Result<(), AudioCaptureError> {
+        let previous = self.suspended;
+        self.suspended = suspended;
+        if let Err(error) = self.sync_capture_state() {
+            self.suspended = previous;
+            if let Err(rollback) = self.sync_capture_state() {
+                return Err(AudioCaptureError::Platform(format!(
+                    "{error}; audio capture rollback failed: {rollback}"
+                )));
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn is_capturing(&self) -> bool {
         self.backend.is_running()
@@ -483,7 +506,7 @@ impl<B: AudioCaptureBackend> AudioCaptureController<B> {
     }
 
     fn sync_capture_state(&mut self) -> Result<(), AudioCaptureError> {
-        let should_run = !self.enabled_handles.is_empty();
+        let should_run = !self.suspended && !self.enabled_handles.is_empty();
         if should_run {
             if !self.backend.is_running() && self.backend.has_permission()? {
                 self.backend.start(Arc::clone(&self.consumer))?;
@@ -744,5 +767,69 @@ mod capture_controller_tests {
             controller.retain_scenes(&[]).unwrap();
             assert!(!controller.is_capturing());
         }
+    }
+
+    #[test]
+    fn suspending_stops_capture_and_resuming_restores_enabled_scenes() {
+        let backend = TestBackend::default();
+        let mut controller = AudioCaptureController::new(Arc::new(TestConsumer), backend);
+        controller
+            .set_scene_capturing(SceneHandle::new(1), true)
+            .unwrap();
+        assert!(controller.is_capturing());
+
+        controller.set_suspended(true).unwrap();
+        assert!(!controller.is_capturing());
+        assert_eq!(controller.active_scene_count(), 1);
+
+        controller.set_suspended(false).unwrap();
+        assert!(controller.is_capturing());
+    }
+
+    #[test]
+    fn failed_resume_preserves_suspension_across_capture_updates() {
+        let mut controller =
+            AudioCaptureController::new(Arc::new(TestConsumer), TestBackend::default());
+        controller
+            .set_scene_capturing(SceneHandle::new(1), true)
+            .unwrap();
+        controller.set_suspended(true).unwrap();
+        controller.backend.fail_start = true;
+
+        let error = controller.set_suspended(false).unwrap_err();
+        assert_eq!(error, AudioCaptureError::Platform("start failed".into()));
+        assert!(!controller.is_capturing());
+        controller
+            .set_scene_capturing(SceneHandle::new(2), true)
+            .unwrap();
+        assert!(!controller.is_capturing());
+
+        controller.set_suspended(true).unwrap();
+        controller.set_suspended(false).unwrap();
+        assert!(controller.is_capturing());
+        controller.set_suspended(true).unwrap();
+        assert!(!controller.is_capturing());
+        assert_eq!(controller.active_scene_count(), 2);
+    }
+
+    #[test]
+    fn failed_suspend_preserves_running_capture_intent() {
+        let mut controller =
+            AudioCaptureController::new(Arc::new(TestConsumer), TestBackend::default());
+        controller
+            .set_scene_capturing(SceneHandle::new(1), true)
+            .unwrap();
+        controller.backend.fail_stop = true;
+
+        let error = controller.set_suspended(true).unwrap_err();
+        assert_eq!(error, AudioCaptureError::Platform("stop failed".into()));
+        controller
+            .set_scene_capturing(SceneHandle::new(2), true)
+            .unwrap();
+        assert!(controller.is_capturing());
+        controller.set_suspended(true).unwrap();
+        assert!(!controller.is_capturing());
+        controller.set_suspended(false).unwrap();
+        assert!(controller.is_capturing());
     }
 }

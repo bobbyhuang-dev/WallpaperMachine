@@ -20,7 +20,9 @@ public:
 
     u16    RequiredFps() const;
     bool   Running() const;
+    // Smoothed render work duration, excluding time between delivered frames.
     double FrameTime() const;
+    // Elapsed delivered-frame time, excluding stopped time.
     double IdeaTime() const;
 
     void SetRequiredFps(u16);
@@ -33,13 +35,17 @@ private:
     void ResetFrameTiming();
     void AddFrametime(std::chrono::microseconds);
     void UpdateFrametime();
+    void FrameBegin(std::chrono::steady_clock::time_point now);
+    void FrameEnd(std::chrono::steady_clock::time_point now);
 
     std::function<void()>                 m_callback;
     std::deque<std::chrono::microseconds> m_frametime_queue;
 
-    u16                                    m_req_fps;
+    std::atomic<u16>                        m_req_fps;
     std::atomic<std::chrono::microseconds> m_frametime;
     std::atomic<std::chrono::microseconds> m_ideatime;
+    std::atomic<std::chrono::microseconds> m_elapsed_frametime;
+    std::atomic<bool>                      m_reset_frame_clock { true };
     std::atomic<i32>                       m_frame_busy_count;
 
     ThreadTimer m_timer;

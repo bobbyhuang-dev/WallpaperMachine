@@ -64,6 +64,51 @@ async fn failed_pause_keeps_playback_state_unchanged() {
 }
 
 #[tokio::test]
+async fn presentation_suspension_pauses_without_changing_playback_state() {
+    let engine = FakeEngineFacade::default();
+    let bridge = BridgeBuilder::new(engine.clone())
+        .with_state(crate::actor::state::BridgeActorState::default())
+        .build()
+        .expect("tokio runtime and config load for wallpaper bridge");
+
+    bridge.set_presentation_suspended(true).await.unwrap();
+    assert_eq!(
+        bridge.app_snapshot().await.unwrap().playback_state,
+        BridgePlaybackState::Playing,
+        "suspension is a system condition, not the user's Play/Pause choice"
+    );
+    wait_for_paused_calls(&engine, &[true]);
+    assert_eq!(engine.audio_capture_suspend_calls(), vec![true]);
+
+    bridge.set_presentation_suspended(false).await.unwrap();
+    wait_for_paused_calls(&engine, &[true, false]);
+    assert_eq!(engine.audio_capture_suspend_calls(), vec![true, false]);
+}
+
+#[tokio::test]
+async fn resuming_presentation_keeps_a_manual_pause() {
+    let engine = FakeEngineFacade::default();
+    let bridge = BridgeBuilder::new(engine.clone())
+        .with_state(crate::actor::state::BridgeActorState::default())
+        .build()
+        .expect("tokio runtime and config load for wallpaper bridge");
+
+    bridge.pause_all().await.unwrap();
+    bridge.set_presentation_suspended(true).await.unwrap();
+    bridge.set_presentation_suspended(false).await.unwrap();
+
+    assert_eq!(
+        bridge.app_snapshot().await.unwrap().playback_state,
+        BridgePlaybackState::Paused
+    );
+    assert_eq!(
+        engine.paused_calls().last().copied(),
+        Some(true),
+        "a manually paused wallpaper must stay paused after the screen wakes"
+    );
+}
+
+#[tokio::test]
 async fn shutdown_closes_all_engine_scenes() {
     let engine = ShutdownEngine::default();
     let bridge = BridgeBuilder::new(engine.clone())

@@ -2855,14 +2855,18 @@ DynamicValueUniquePtr PropertyScriptProgram::Evaluate(const ScriptHostContext& h
     UpdateScriptProperties();
     ProcessScheduledCallbacks(context_handle);
 
-    if (! m_init_called) {
-        DynamicValue init_input = current_value;
+    // Serialize only the payload; copying DynamicValue also copies its live subscriptions.
+    const auto make_script_input = [&]() {
         if (m_semantic == PropertyScriptValueSemantic::AnglesDegrees &&
-            init_input.getType() == DynamicValue::Vec3) {
-            init_input.update(RadiansToDegrees(init_input.getVec3()));
+            current_value.getType() == DynamicValue::Vec3) {
+            const auto angles = RadiansToDegrees(current_value.getVec3());
+            return CreateJsVec3(context_handle, angles.x(), angles.y(), angles.z());
         }
+        return DynamicValueToJS(context_handle, current_value);
+    };
 
-        JSValue      initial_value_js = DynamicValueToJS(context_handle, init_input);
+    if (! m_init_called) {
+        JSValue      initial_value_js = make_script_input();
         JSValueConst init_argv[]      = { initial_value_js };
         JSValue      init_result =
             CallStoredExport(context_handle, m_exports_object_name.c_str(), "init", 1, init_argv);
@@ -2883,13 +2887,7 @@ DynamicValueUniquePtr PropertyScriptProgram::Evaluate(const ScriptHostContext& h
         m_init_called = true;
     }
 
-    DynamicValue script_input = current_value;
-    if (m_semantic == PropertyScriptValueSemantic::AnglesDegrees &&
-        script_input.getType() == DynamicValue::Vec3) {
-        script_input.update(RadiansToDegrees(script_input.getVec3()));
-    }
-
-    JSValue      current_value_js = DynamicValueToJS(context_handle, script_input);
+    JSValue      current_value_js = make_script_input();
     JSValueConst argv[]           = { current_value_js };
     JSValue      result =
         CallStoredExport(context_handle, m_exports_object_name.c_str(), "update", 1, argv);

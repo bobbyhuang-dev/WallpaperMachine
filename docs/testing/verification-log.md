@@ -39,6 +39,59 @@ grants, or Release delivery. No app build, app launch, desktop automation or
 wallpaper change was performed. Checks created no repository scripts or evidence
 files; existing shared-workspace byproducts were left untouched.
 
+## 2026-09-16 — Property-script feedback and hover enlargement
+
+Source, native runtime and headless GPU checks only; no desktop input or capture.
+
+Changes:
+
+- `ScriptedDynamicValue` passes its current value to `update(value)` rather than
+  restarting from the authored base on every frame. The redundant base-value
+  copy and update override were removed. Explicit property writes remain the
+  starting point for subsequent updates.
+- Script input serialization reads the payload without copying live
+  `DynamicValue` subscriptions. Existing callback-only behavior is preserved.
+- Added original synthetic regressions for hover convergence, interrupted
+  leave/re-entry and user-value replacement. Updated the existing text-field
+  regression to continue from its parse-time script result instead of expecting
+  the original text again.
+
+Results:
+
+- Both new `script_runtime_compat_test` cases failed before the fix and passed
+  afterward. The old hover implementation stayed at **1.02×** instead of
+  progressing toward **1.20×**, and snapped back to **1.00×** on leave.
+- A disposable native driver ran all **13 unmodified hover scale scripts** read
+  from the selected local package, bound to synthetic scene nodes. It checked
+  all three scale components for 120 hover frames and 120 return frames at a
+  fixed 60 Hz step against the authored interpolation. **Zero mismatches and
+  zero script errors**: weekday text reached **1.10×**, date text **1.20×**, and
+  every layer returned to its original scale. This does not compare rendered
+  pixels with Windows or verify real cursor capture.
+- Full script runtime suite: **34 passed, 1 failed**. The remaining failure is
+  the previously documented
+  `ScriptRuntimeCompat.HostVectorUpdatesDoNotCallMutableGlobalVectorConstructors`
+  (`scriptProperties` is undeclared); it was not excluded.
+- Freshly rebuilt C++ targets: camera zoom/callback-only filters **4 passed**,
+  mouse input **6 passed**, MDLS3 hierarchy/pivot regression **1 passed**.
+- `python3 scripts/check_renderer.py --skip-build`, after rebuilding its C++
+  targets: all **9 generated GPU cases** passed known-pixel assertions, exact
+  pooled/isolated comparisons and diagnostic checks; **8 projects × 2 reloads**
+  passed. Texture lifetime **4 passed**, shader-cache metadata **1 passed**,
+  text runtime **60 passed, 2 local-asset cases skipped**.
+- `python3 scripts/test.py`: **223 native and 34 Python tests passed**. This
+  checks the application layer with its existing bridge archive, not delivery
+  of the changed renderer in an app bundle.
+
+Build limitation: the non-skipping renderer check failed while compiling Rust
+`linkme` with **E0463: can't find crate for `linkme_impl`**, including a retry in
+an isolated Cargo target directory. The C++ checks above used the existing
+`libshader.a`; no fresh full-chain build is claimed.
+
+Not verified: desktop presentation, visual smoothness, Windows equivalence or
+real mouse input. No wallpaper files or settings were changed, and no Release
+app was built, replaced, launched or restarted.
+
 ## 2026-09-16 — Continuous-playback resource reuse
 
 Source and headless GPU only.

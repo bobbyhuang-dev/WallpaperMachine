@@ -114,6 +114,7 @@ executable directly from the renderer check build directory.
 | --- | --- |
 | Camera zoom | `scene_schema_tests --gtest_filter='SceneSchema.*CameraZoom*'`. Scene `general.zoom` may contain an authored scalar animation, not just a fixed camera scale. |
 | Callback-only property scripts | `*CallbackOnly*` in `scene_schema_tests` and `script_runtime_compat_test` |
+| Property-script feedback / hover easing | `ScriptRuntimeCompat.HoverScaleInterpolatesAcrossFramesAndReversesWithoutSnapping` and `ScriptRuntimeCompat.PropertyFeedbackResumesFromExplicitUserValueChanges` in `script_runtime_compat_test` |
 | MDLS3 hierarchy/pivots | `MdlSchema.Mdls3SkinningPreservesAuthoredHierarchyAndPivotsAcrossMeshVersions` in `mdl_schema_tests`. Mesh format versions do not justify flattening an authored skeleton. |
 | Large-scene first-frame startup | `offscreen_scene_probe` cold/warm startup timings; staging-buffer growth must stay geometric (see below) |
 | JPEG/EXIF orientation | `tex_schema_tests`: all eight EXIF display transforms on asymmetric RGBA pixels, both TIFF byte orders, truncated JPEG/EXIF data, invalid IFD offsets |
@@ -191,6 +192,13 @@ desktop, or modify the imported wallpaper.
   seek and rate. Puppet animation deltas use the skeleton reference pose, not
   the first animation sample, preserving initially collapsed eyelids and
   authored rotations.
+- Property-script `update(value)` receives the current value, including the
+  previous frame's result and explicit property writes, rather than the
+  original authored value on every tick. This preserves iterative hover easing,
+  full authored enlargement, and continuous reversal on cursor leave/re-entry.
+  JavaScript input conversion serializes only the value payload, without copying
+  the live property's listener/subscription ownership. Callback-only scripts
+  keep their existing no-writeback behavior.
 
 ### Frame timing
 

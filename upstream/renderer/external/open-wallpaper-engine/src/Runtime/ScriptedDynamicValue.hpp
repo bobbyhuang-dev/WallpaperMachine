@@ -28,8 +28,6 @@ public:
                          ScriptedValueSemantic semantic = ScriptedValueSemantic::Generic);
     ~ScriptedDynamicValue() override;
 
-    void update(const DynamicValue& other) override;
-
     const std::string& LayerName() const { return m_current_layer_name; }
 
     void reevaluate();
@@ -48,7 +46,6 @@ private:
     std::string                                  m_current_layer_name;
     std::map<std::string, DynamicValueUniquePtr> m_script_properties;
     std::unique_ptr<PropertyScriptProgram>       m_program;
-    DynamicValue                                 m_base_value;
     ScriptedValueSemantic                        m_semantic { ScriptedValueSemantic::Generic };
     bool                                        m_has_update { false };
 };

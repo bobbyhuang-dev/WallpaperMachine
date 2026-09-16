@@ -96,6 +96,87 @@ export function cursorClick() { thisLayer.visible = !thisLayer.visible; }
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 
+TEST(ScriptRuntimeCompat, HoverScaleInterpolatesAcrossFramesAndReversesWithoutSnapping) {
+    Scene scene;
+    auto runtime = MakeRuntimeWithScene(scene);
+    auto node = std::make_shared<SceneNode>();
+    node->SetTranslate(Eigen::Vector3f(300, 200, 0));
+    runtime->RegisterNodeSize("hover", Eigen::Vector2f(80, 60));
+    runtime->RegisterNodeScale("hover", node.get(), ResolveVec3Setting(*runtime, {
+        {"value", "1 2 1"}, {"script", R"JS(
+import * as WEMath from 'WEMath';
+let original, enlarged, hovered = false;
+export function init(value) {
+    original = value;
+    enlarged = value.multiply(1.2);
+}
+export function cursorEnter() { hovered = true; }
+export function cursorLeave() { hovered = false; }
+export function update(value) {
+    const target = hovered ? enlarged : original;
+    return new Vec3(WEMath.mix(value.x, target.x, 0.1),
+                    WEMath.mix(value.y, target.y, 0.1),
+                    WEMath.mix(value.z, target.z, 0.1));
+}
+)JS"}}, "hover"));
+    runtime->Tick(1.0 / 60.0);
+    runtime->SetCursorEnter(true);
+    runtime->SetCursorWorldPosition(Eigen::Vector3f(300, 200, 0));
+    runtime->DispatchCursorFrameEvents(false);
+    runtime->Tick(1.0 / 60.0);
+    EXPECT_NEAR(node->Scale().x(), 1.02f, 1.0e-6f);
+    runtime->DispatchCursorFrameEvents(true);
+    runtime->Tick(1.0 / 60.0);
+    EXPECT_NEAR(node->Scale().x(), 1.038f, 1.0e-6f);
+    EXPECT_NEAR(node->Scale().y(), 2.076f, 1.0e-6f);
+
+    runtime->SetCursorWorldPosition(Eigen::Vector3f(600, 200, 0));
+    runtime->DispatchCursorFrameEvents(true);
+    runtime->Tick(1.0 / 60.0);
+    EXPECT_NEAR(node->Scale().x(), 1.0342f, 1.0e-6f);
+    runtime->SetCursorWorldPosition(Eigen::Vector3f(300, 200, 0));
+    runtime->DispatchCursorFrameEvents(true);
+    runtime->Tick(1.0 / 60.0);
+    EXPECT_NEAR(node->Scale().x(), 1.05078f, 1.0e-6f);
+
+    for (int frame = 0; frame < 120; ++frame) {
+        runtime->DispatchCursorFrameEvents(true);
+        runtime->Tick(1.0 / 60.0);
+    }
+    EXPECT_NEAR(node->Scale().x(), 1.2f, 1.0e-5f);
+    EXPECT_NEAR(node->Scale().y(), 2.4f, 1.0e-5f);
+    runtime->SetCursorEnter(false);
+    runtime->DispatchCursorFrameEvents(true);
+    runtime->Tick(1.0 / 60.0);
+    EXPECT_NEAR(node->Scale().x(), 1.18f, 1.0e-5f);
+    for (int frame = 0; frame < 120; ++frame) runtime->Tick(1.0 / 60.0);
+    EXPECT_NEAR(node->Scale().x(), 1.0f, 1.0e-5f);
+    EXPECT_NEAR(node->Scale().y(), 2.0f, 1.0e-5f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, PropertyFeedbackResumesFromExplicitUserValueChanges) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {
+        .project_properties = {{"progress", RuntimeScalarValue::Float(2.0f)}},
+    });
+    auto material = std::make_shared<SceneMaterial>();
+    runtime->RegisterMaterialConstant(material, "u_Progress", ResolveVec3Setting(*runtime, {
+        {"value", "0 0 0"}, {"user", "progress"}, {"script", R"JS(
+export function update(value) { value.x += engine.frametime; return value; }
+)JS"}}));
+    runtime->Tick(0.25);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Progress")[0], 2.25f);
+    runtime->Tick(0.25);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Progress")[0], 2.5f);
+
+    runtime->ApplyProjectPropertyOverride({{"progress", RuntimeScalarValue::Float(5.0f)}});
+    runtime->Tick(0.25);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Progress")[0], 5.25f);
+    runtime->Tick(0.25);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Progress")[0], 5.5f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
 TEST(ScriptRuntimeCompat, TextureAnimationSelectsAMPMFrameWithoutScriptErrors) {
     Scene scene;
     auto runtime = MakeRuntimeWithScene(scene);

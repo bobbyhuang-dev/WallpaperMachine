@@ -14,7 +14,8 @@
     "repository": "https://github.com/bigsaltyfishes/open-wallpaper-engine",
     "revision": "c4c36357a40c363f7f9e03e624f3c8820b620ef6",
     "directory": "upstream/renderer/external/open-wallpaper-engine",
-    "modified": true
+    "modified": true,
+    "note": "Property-script updates continue from the current dynamic value rather than restarting from the authored base each frame, preserving hover interpolation and explicit property writes. Script input serialization copies no live subscriptions. Synthetic regressions cover convergence, interrupted reversal and user-value replacement."
   },
   "applicationShell": {
     "derivedFrom": "upstream/renderer at revision 8c19c002ff37930c68117dd591dfe3f44792e25e, path app/WallpaperEngine",

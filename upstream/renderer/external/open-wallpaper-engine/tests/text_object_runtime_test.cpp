@@ -2519,7 +2519,7 @@ TEST(TextObjectRuntime, TextVisibleUserBindingFollowsProjectOverride) {
     EXPECT_FALSE(node->Visible());
 }
 
-TEST(TextObjectRuntime, TextFieldScriptUpdatesRuntimeTextOnTick) {
+TEST(TextObjectRuntime, TextFieldScriptContinuesFromPrimedTextOnTick) {
     fs::VFS vfs;
     MountAssets(vfs);
     audio::SoundManager sound_manager;
@@ -2553,8 +2553,8 @@ TEST(TextObjectRuntime, TextFieldScriptUpdatesRuntimeTextOnTick) {
 
     scene->runtime->Tick(1.0 / 60.0);
 
-    EXPECT_EQ(scene->runtime->NodeText("caption"), "before after");
-    EXPECT_FALSE(scene->runtime->NodeTextDirty("caption"));
+    EXPECT_EQ(scene->runtime->NodeText("caption"), "before after after");
+    EXPECT_TRUE(scene->runtime->NodeTextDirty("caption"));
     EXPECT_EQ(scene->runtime->scriptErrorCount(), 0u);
 }
 

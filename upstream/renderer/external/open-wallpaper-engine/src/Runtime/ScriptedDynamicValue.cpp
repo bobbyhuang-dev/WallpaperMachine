@@ -13,10 +13,9 @@ ScriptedDynamicValue::ScriptedDynamicValue(
     : m_runtime(&runtime),
       m_current_layer_name(std::move(current_layer_name)),
       m_script_properties(std::move(script_properties)),
-      m_base_value(std::move(base_value)),
       m_semantic(semantic),
       m_has_update(script_source.find("export function update") != std::string::npos) {
-    DynamicValue::update(m_base_value);
+    DynamicValue::update(base_value);
 
     std::map<std::string, DynamicValue*> raw_properties;
     for (auto& [name, property] : m_script_properties) {
@@ -31,7 +30,7 @@ ScriptedDynamicValue::ScriptedDynamicValue(
                                                                       std::move(script_source),
                                                                       m_current_layer_name,
                                                                       std::move(raw_properties),
-                                                                      m_base_value,
+                                                                      std::move(base_value),
                                                                       m_runtime->hostContext(),
                                                                       program_semantic);
 
@@ -46,15 +45,11 @@ ScriptedDynamicValue::ScriptedDynamicValue(
 
 ScriptedDynamicValue::~ScriptedDynamicValue() = default;
 
-void ScriptedDynamicValue::update(const DynamicValue& other) {
-    m_base_value.update(other);
-    DynamicValue::update(other);
-}
-
 void ScriptedDynamicValue::reevaluate() {
     if (m_program == nullptr || ! m_program->Valid()) return;
 
-    auto result = m_program->Evaluate(m_runtime->hostContext(), m_base_value);
+    // update(value) continues from the previous result, including explicit property writes.
+    auto result = m_program->Evaluate(m_runtime->hostContext(), *this);
     if (m_has_update && result != nullptr) DynamicValue::update(*result);
 }
 

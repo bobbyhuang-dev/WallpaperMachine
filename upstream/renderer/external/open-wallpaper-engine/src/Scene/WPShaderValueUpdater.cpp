@@ -115,11 +115,15 @@ void WPShaderValueUpdater::InitUniforms(SceneNode* pNode, uint32_t material_slot
     info.has_AudioSpectrum64Left = existsOp(G_AUDIO_SPECTRUM64_LEFT);
     info.has_AudioSpectrum64Right = existsOp(G_AUDIO_SPECTRUM64_RIGHT);
 
-    if (m_scene != nullptr && m_scene->runtime != nullptr &&
-        (info.has_AudioSpectrum16Left || info.has_AudioSpectrum16Right ||
-         info.has_AudioSpectrum32Left || info.has_AudioSpectrum32Right ||
-         info.has_AudioSpectrum64Left || info.has_AudioSpectrum64Right)) {
-        m_scene->runtime->MarkSceneRequiresAudioResponse();
+    if (info.has_AudioSpectrum16Left || info.has_AudioSpectrum16Right ||
+        info.has_AudioSpectrum32Left || info.has_AudioSpectrum32Right ||
+        info.has_AudioSpectrum64Left || info.has_AudioSpectrum64Right) {
+        if (! m_audioSpectrumPacked) {
+            m_audioSpectrumPacked.emplace(std::array<float, 64 * 4> {});
+        }
+        if (m_scene != nullptr && m_scene->runtime != nullptr) {
+            m_scene->runtime->MarkSceneRequiresAudioResponse();
+        }
     }
 
     std::accumulate(begin(info.texs), end(info.texs), 0, [&existsOp](uint index, auto& value) {
@@ -185,8 +189,10 @@ void WPShaderValueUpdater::UpdateUniforms(SceneNode* pNode, uint32_t material_sl
             }
         }
         if (nodeData->puppet_layer.hasPuppet() && info.has_BONES) {
-            auto data = nodeData->puppet_layer.genFrame(m_scene->elapsingTime);
-            updateOp(G_BONES, std::span<const float> { data[0].data(), data.size() * 16 });
+            const auto data = nodeData->puppet_layer.genFrame(m_scene->elapsingTime);
+            if (! data.empty()) {
+                updateOp(G_BONES, std::span<const float> { data.front().data(), data.size() * 16 });
+            }
         }
     }
 
@@ -264,12 +270,13 @@ void WPShaderValueUpdater::UpdateUniforms(SceneNode* pNode, uint32_t material_sl
             ? m_scene->runtime->CurrentAudioSpectrumSnapshot()
             : wallpaper::audio::AudioSpectrumSnapshot {};
 
-        const auto pushAudioSpectrum = [&updateOp](std::string_view name, const auto& values) {
-            std::vector<float> packed(values.size() * 4u, 0.0f);
+        const auto pushAudioSpectrum = [this, &updateOp](std::string_view name, const auto& values) {
+            auto& packed = *m_audioSpectrumPacked;
+            packed.setSize(values.size() * 4u);
             for (std::size_t index = 0; index < values.size(); ++index) {
                 packed[index * 4u] = values[index];
             }
-            updateOp(name, std::span<const float> { packed.data(), packed.size() });
+            updateOp(name, packed);
         };
 
         if (info.has_AudioSpectrum16Left) {

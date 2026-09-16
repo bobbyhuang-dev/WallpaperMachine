@@ -11,6 +11,190 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-17 — Playback optimization rebased onto web-wallpaper main
+
+Before publishing, remote `main` advanced to `6a7ce92` (the Web wallpaper
+implementation and version `0.3.2`). Rebased the playback optimization onto it
+without force-pushing or dropping either side's changes. The two textual
+conflicts were the verification log and renderer provenance note; both histories
+and both modification descriptions were preserved.
+
+Fresh integration verification:
+
+- `cargo test --release -p wallpaper-bridge --lib`: **224 passed**, including
+  Web wallpaper host routing and committed pointer-consumer polling behavior.
+- `python3 scripts/build.py --renderer-only`: succeeded; generated bridge
+  bindings from the integrated static library.
+- `python3 scripts/test.py`: Python **35 passed**; native **246 passed,
+  0 failed, 0 skipped**, including the windowless Web wallpaper tests and
+  lock-screen persistence/monitor regressions.
+- Kept XcodeGen's regenerated target ordering; no hand-edit of the project.
+  No Release app build, normal application launch or desktop run.
+
+The incoming commits did not change the C++ renderer or core input sources;
+the earlier GPU/CPU measurements below were not rerun or relabeled as new
+measurements during this publishing rebase.
+
+## 2026-09-17 — Continuous-playback work reduction, synchronized baseline
+
+Source-only implementation on the refactored `986f2e6` workspace. No fetch,
+branch change, normal application launch, desktop automation, swapchain test,
+screen/audio capture, wallpaper-service reload, administrator sampling or
+Release app delivery. The native gate used its normal non-windowed test host.
+
+Implemented the approved GPU, input, lock-screen and scene-CPU paths. Source
+review also found a cross-boundary button-latch defect in capability gating:
+discarding inactive Rust edges alone could leave native `down` stuck or lose a
+held button's later release. A level-only native baseline now reconciles the
+geometry-resolved sample before its unchanged transitions, with retry on failure;
+pending accepted edges survive. Native pending edges are cleared only on a
+successful scene commit involving a non-consumer, not on failed or
+interactive-to-interactive commits.
+
+### Commands and correctness results
+
+All Cargo commands used `scripts/build.py::build_environment()`,
+`CARGO_NET_OFFLINE=true` and `cwd=upstream/renderer`; CMake used the root working
+directory and the existing GoogleTest 1.14.0 cache with FetchContent fully
+disconnected. The renderer/scene-engine provenance notes were updated without
+changing source pins or licensing boundaries.
+
+- `cargo build --release -p shader --features ffi` and the approved Release
+  CMake configuration succeeded. Step 0's production libraries and probes were
+  built before optimization; **22 private GPU tests passed**, then separate
+  baseline executables/raw samples were preserved.
+- Explicitly built all 16 approved targets: `playback_gpu_test`,
+  `scene_schema_tests`, `script_runtime_compat_test`, `mdl_schema_tests`,
+  `particle_mouse_controlpoint_test`, `mouse_input_test`, `timer_tests`,
+  `audio_tests`, `render_target_lifetime_test`, `text_object_runtime_test`,
+  `shader_cache_metadata_test`, `offscreen_scene_probe`,
+  `scene_reload_cycle_probe`, `vulkan_render_batch_planner_smoke`,
+  `video_texture_submission_smoke`, `scenescript_sound_layer_smoke`.
+- Final direct runs: GPU **31**, scene schema **62**, MDL **52**, particle mouse
+  **38**, mouse input **11**, timers **6**, mono audio **19**, target lifetime
+  **4**, shader-cache metadata **1**, video submission **5**, sound layer
+  **8** passed. The batch-planner standalone smoke exited **0**.
+  `audio_tests` ran only `--gtest_filter=AudioResponseMonoTest.*`.
+- `script_runtime_compat_test`: **56 passed, 1 failed**. The unchanged
+  `HostVectorUpdatesDoNotCallMutableGlobalVectorConstructors` still references
+  undeclared `scriptProperties`; it was run, not excluded. All new script,
+  binding, rollback, audio and puppet regressions passed.
+- `text_object_runtime_test`: **60 passed, 2 skipped** because the opt-in local
+  wallpaper projects were not supplied. No full wallpaper-corpus claim.
+- `python3 scripts/check_renderer.py --skip-build`, using the freshly built
+  same-tree binaries and existing shared assets: **9 generated GPU cases**
+  passed independent known-pixel assertions and pooled/isolated byte equality,
+  **0 case diagnostics**; **8 projects × 2 reloads** passed.
+- `cargo test --release -p wallpaper-core --lib`: **197 passed**.
+  `cargo test --release -p wallpaper-bridge --lib`: **223 passed**.
+- `python3 scripts/build.py --renderer-only` succeeded and regenerated the
+  Swift bridge from the current static library. This is not a Release app.
+- `python3 scripts/test.py`: Python **35 passed**; native **239 passed,
+  0 failed, 0 skipped**. Includes isolated lock-screen journal/timer/readiness
+  failures and recovery, the real local `nettop`/private-PTY streaming test, and
+  CRLF/split-line-ending coverage. Existing public Steam search tests also ran;
+  no live login was performed.
+
+Initial validation caught new-fixture mistakes, not hidden by filtering:
+unsupported `texture2DLod`, a VMA image-creation failpoint that bypassed device
+dispatch, browser-style storage methods, writes to copied JS vector components,
+missing parser runtime bootstrap, and named targets reused without graph
+retirement before resize. Fixtures were corrected to the real APIs and rebuilt/
+rerun. The shared viewport extraction also needed mutable values for vvk's span
+interface; the corrected source compiled and passed the final matrix.
+
+### Deterministic work elimination
+
+- Valid pre-clears decreased **2→1** for hidden clear-only output and **1→0**
+  for a normal first-clear writer. Reader, alias and boundary cases retain the
+  required clear. Direct presentation decreased **2→1 render passes/draws**,
+  with **one successful draw submit per frame** in every variant.
+- The isolated Rust iterator driver emitted **730,000 ordered transitions**
+  over **40,000 iterations**, with **0 allocator requests**.
+- An instrumented copy of the actual private pose evaluator checked full affine
+  results and control mutations: after one prime, **16 same-State copy lookups
+  caused 0 additional solves**. The complete mutation/independent-State matrix
+  made **27** actual evaluator calls; no production counter was added.
+- Audio initialization allocated **one 1,024-byte scratch buffer** on first
+  spectrum discovery. No-audio and repeated/rediscovered initialization allocated
+  **0**; **1,080** steady disabled-spectrum callbacks allocated **0**. Fresh
+  active-spectrum packing also dropped **12→0 C++ `new` requests per call**.
+- Core/bridge tests verify no periodic ask without consumers, independent pause
+  policy, successful-input deduplication, bounded relay delivery and activation
+  edge semantics. Lock-screen tests verify no off-state timer and no unchanged
+  journal rewrite; no production preferences/store were used.
+
+### Fixed-simulation timing samples
+
+CPU: 60 warm frames then **180 samples × 3 interleaved blocks per variant**,
+`t=frame/60`, with checked outputs outside timing. Values are aggregate
+**median / p95 in microseconds**, baseline → optimized:
+
+| Synthetic workload | Baseline | Optimized | C++ `new` requests |
+| --- | ---: | ---: | ---: |
+| 64 init-only property programs | 63.333 / 75.000 | 16.917 / 18.375 | 128→0 |
+| 64 real update programs | 65.541 / 72.292 | 63.500 / 72.208 | 128→128 |
+| 64 absent hover handlers | 97.084 / 108.583 | 0.125 / 0.125 | 0→0 |
+| 128 steady TRS/material bindings | 13.125 / 42.750 | 3.666 / 3.750 | 0→0 |
+| 128 changed/overwritten destinations | 14.458 / 14.958 | 5.500 / 6.250 | 128→128 |
+| 16 copies, 64 bones and attachments | 61.291 / 68.167 | 2.917 / 3.083 | 0→0 |
+| FrameBegin plus 16 bone uniform consumers | 66.334 / 72.917 | 8.458 / 8.792 | 16→16 |
+| Fresh 16/32/64-bin audio packing | 3.958 / 11.583 | 1.375 / 4.542 | 12→0 |
+| Disabled audio packing | 1.688 / 2.125 | 0.500 / 0.959 | 12→0 |
+| 128 unlinked particle subsystems | 2.958 / 4.875 | 0.334 / 2.041 | 0→0 |
+| 128 linked particle subsystems | 3.166 / 3.542 | 2.833 / 6.250 | 0→0 |
+
+The linked-particle control's block medians were **3.166/3.083/3.417 →
+2.833/2.375/5.292 µs**: one block regressed while two improved, so no speedup is
+claimed for that path. The required-update script control is also within small
+timing variation. Allocation counts cover intercepted current-thread C++ `new`,
+not QuickJS/Eigen `malloc`, worker threads or whole-process memory.
+
+GPU: **3840×2160**, **180 frames/block**, three reversed-order baseline/optimized
+pairs, each with three rotating blocks (**1,620 samples per variant**).
+Vulkan timestamps reported **64 valid bits, 1 ns period**. Aggregate
+**median / p95 in microseconds**, baseline → optimized:
+
+| Path | CPU recording | Submit + wait | GPU timestamp elapsed |
+| --- | --- | --- | --- |
+| Hidden clear-only | 2.667 / 11.375 → 2.291 / 8.333 | 694.438 / 1996.250 → 600.021 / 1439.166 | 207.937 / 1323.583 → 166.542 / 676.375 |
+| Normal + final copy | 2.667 / 8.416 → 2.250 / 7.334 | 716.625 / 1964.584 → 596.167 / 1586.792 | 237.354 / 1302.584 → 167.104 / 750.792 |
+| Multi-writer fallback | 3.875 / 12.333 → 2.750 / 8.792 | 824.542 / 2348.917 → 654.979 / 1615.750 | 280.687 / 1646.542 → 207.021 / 812.166 |
+| Direct versus its normal reference | 2.667 / 8.416 → 1.417 / 4.583 | 716.625 / 1964.584 → 493.145 / 1242.792 | 237.354 / 1302.584 → 73.105 / 505.791 |
+
+Raw samples, each block's median/p95/min/max, command traces, build manifests
+and comparison order were preserved in the session's raw-evidence archive before
+repository byproduct cleanup. The benchmark executables were kept separate
+through measurement. GPU timing remains noisy; some CPU recording rounds were
+slower despite the removed work. These uncapped fixed-simulation samples do not
+measure real 60 fps playback, watts, GPU residency or battery life.
+
+### Remaining boundaries
+
+Actual Vulkan layer enumeration returned **no layers**, so synchronization
+validation was unavailable and not installed. Disposable command traces checked
+real RAW/WAR ordering, stage/access scopes and mip ranges; pixel equality alone
+was not treated as synchronization proof. Invalid feedback cases were recorded
+and discarded rather than submitted as undefined GPU work.
+
+Independent failure injection for FinPass's second vertex allocation, each
+individual immediate CPU staging write, and framebuffer-cache `std::bad_alloc`
+was not available through the permitted device-dispatch seam. Their return/
+ownership checks are source-reviewed; real pending-storage, image-view,
+descriptor/pipeline/framebuffer, submit/wait/reset and device-failure scenarios
+were exercised where the existing fixture exposes them. Actual AppKit
+acquire/present, poster output, Spaces, renderer first-ready failure suppression
+through a real swapchain, desktop visuals, live audio and real power remain
+unverified. No normal application was quit, reopened or installed.
+
+Cleanup: after confirming no peers were running and preserving the raw archive,
+`python3 scripts/clean.py --dry-run` followed by `python3 scripts/clean.py`
+removed **1.78 GB** of disposable artifacts/old test results and temporary
+drivers. Built app products and current renderer/bridge outputs were retained.
+The relative `CLAUDE.md → AGENTS.md` symlink, 20 local documentation links and
+unchanged vendored source revisions were checked.
+
+
 ## 2026-09-17 — Web wallpapers receive mouse input; desktop-click setting
 
 Workshop 3799142774 (*Rhine Lab · 莱茵生命交互桌面 | Interactive Desktop*) rendered

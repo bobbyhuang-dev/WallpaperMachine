@@ -1,4 +1,5 @@
 #include "CustomShaderPass.hpp"
+#include "PrePass.hpp"
 #include "Scene/Scene.h"
 #include "Scene/SceneShader.h"
 #include "Runtime/SceneRuntimeContext.hpp"
@@ -18,6 +19,7 @@
 #include <cassert>
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <limits>
 #include <string>
 
@@ -27,10 +29,68 @@ namespace
 {
 using wallpaper::usize;
 
+bool IsPreClearRedundant(const PrePass& pre, std::span<VulkanPass* const> following_passes) {
+    const auto& image = pre.desc().vk_result;
+    if (image.handle == VK_NULL_HANDLE || image.view == VK_NULL_HANDLE ||
+        image.extent.width == 0 || image.extent.height == 0 ||
+        image.extent.depth != 1 || image.mipmap_level != 1)
+        return false;
+    for (auto* pass : following_passes) {
+        if (pass == nullptr || ! pass->prepared()) continue;
+        const auto* custom = dynamic_cast<CustomShaderPass*>(pass);
+        if (custom == nullptr) return false;
+        const auto candidate = custom->batchCandidate();
+        if (! candidate.visible && ! candidate.clear_only) continue;
+        const auto& desc = custom->desc();
+        if (candidate.visible) {
+            for (size_t i = 0; i < desc.vk_textures.size(); ++i) {
+                if (i < desc.vk_texture_bindings.size() &&
+                    desc.vk_texture_bindings[i].image_binding >= 0 &&
+                    ! desc.vk_textures[i].slots.empty() &&
+                    desc.vk_textures[i].getActive().handle == image.handle)
+                    return false;
+            }
+        }
+        const auto& output = candidate.render;
+        if (output.image != image.handle) continue;
+        return output.sample_count == VK_SAMPLE_COUNT_1_BIT &&
+               output.msaa_image == VK_NULL_HANDLE && output.msaa_view == VK_NULL_HANDLE &&
+               output.view == image.view && output.extent.width == image.extent.width &&
+               output.extent.height == image.extent.height && output.extent.depth == image.extent.depth &&
+               desc.vk_output.mipmap_level == 1 &&
+               (candidate.clear_only || output.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR) &&
+               std::memcmp(pre.desc().clear_value.color.float32, output.clear_value.color.float32,
+                           sizeof(output.clear_value.color.float32)) == 0;
+    }
+    return false;
+}
+
 } // namespace
 
 namespace wallpaper::vulkan
 {
+
+CustomShaderPass* FindDirectPresentationPass(Scene& scene, std::span<VulkanPass* const> graph_passes) {
+    if (graph_passes.size() != 1) return nullptr;
+    auto* pass = dynamic_cast<CustomShaderPass*>(graph_passes.front());
+    if (pass == nullptr) return nullptr;
+    const auto& desc = pass->desc();
+    const auto output = scene.ResolveRenderTargetName(desc.output);
+    const auto* target = scene.FindRenderTarget(output);
+    if (output != SpecTex_Default || target == nullptr || target->withDepth || target->has_mipmap ||
+        target->mipmap_level != 1 || target->sample_count != 1 ||
+        desc.sample_count != VK_SAMPLE_COUNT_1_BIT ||
+        ! desc.clear_on_first_use || desc.preserve_target_contents)
+        return nullptr;
+    for (const auto& texture : desc.textures) {
+        if (texture.empty()) continue;
+        const auto input = scene.ResolveRenderTargetName(texture);
+        if (input.empty() || input == output ||
+            (IsSpecTex(input) && ! scene.HasRenderTarget(input)))
+            return nullptr;
+    }
+    return pass;
+}
 
 bool HasUsableReflection(const ShaderReflected& ref) {
     return ! ref.binding_map.empty() || ! ref.blocks.empty() || ! ref.input_location_map.empty();
@@ -90,6 +150,7 @@ CustomShaderPass::CustomShaderPass(const Desc& desc) {
     m_desc.submesh_index   = desc.submesh_index;
     m_desc.material_slot   = desc.material_slot;
     m_desc.sample_count    = desc.sample_count;
+    m_desc.presentation_format = desc.presentation_format;
     m_desc.sprites_map     = desc.sprites_map;
     m_desc.video_textures  = desc.video_textures;
 };
@@ -153,10 +214,11 @@ std::optional<vvk::RenderPass> CreateRenderPass(const vvk::Device& device, VkFor
     VkSubpassDependency dependency {
         .srcSubpass    = VK_SUBPASS_EXTERNAL,
         .dstSubpass    = 0,
-        .srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .srcStageMask  = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                         VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
         .dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        .srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT |
+                         VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
         .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
     };
 
@@ -203,6 +265,7 @@ static bool UpdateUniform(StagingBuffer* buf, const StagingBufferRef& bufref,
 }
 
 void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingResources& rr) {
+    setPrepared(false);
     m_desc.vk_textures.resize(m_desc.textures.size());
     m_desc.vk_texture_image_keys.resize(m_desc.textures.size());
     m_desc.video_textures.resize(m_desc.textures.size(), false);
@@ -400,6 +463,14 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
         for (auto& spv : spvs) pipeline.addStage(std::move(spv));
 
         if (! pipeline.create(device, pass, m_desc.pipeline)) return;
+        if (m_desc.presentation_format != VK_FORMAT_UNDEFINED) {
+            auto presentation_pass = CreateRenderPass(
+                device.handle(), m_desc.presentation_format, VK_ATTACHMENT_LOAD_OP_CLEAR,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_SAMPLE_COUNT_1_BIT);
+            if (! presentation_pass.has_value()) return;
+            pipeline.setSampleCount(VK_SAMPLE_COUNT_1_BIT);
+            if (! pipeline.create(device, *presentation_pass, m_presentation_pipeline)) return;
+        }
     }
 
     {
@@ -542,7 +613,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
                         update_dyn_buf_op]() {
         bool writes_ok = true;
         auto update_unf_op = [uniform_block, buf, bufref, &writes_ok](std::string_view name,
-                                                          wallpaper::ShaderValue value) {
+                                                          const wallpaper::ShaderValue& value) {
             if (uniform_block == nullptr || buf == nullptr || bufref == nullptr || ! (*bufref))
                 return;
             writes_ok = UpdateUniform(buf, *bufref, *uniform_block, name, value) && writes_ok;
@@ -725,47 +796,17 @@ bool CustomShaderPass::textureDescriptorsReady() const {
 }
 
 void CustomShaderPass::recordTextureBarriers(const Device& device, RenderingResources& rr) const {
-    auto&                   cmd = rr.command;
-    VkImageSubresourceRange base_srang {
-        .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-        .baseMipLevel   = 0,
-        .levelCount     = VK_REMAINING_MIP_LEVELS,
-        .baseArrayLayer = 0,
-        .layerCount     = VK_REMAINING_ARRAY_LAYERS,
-    };
     for (usize i = 0; i < m_desc.vk_textures.size(); i++) {
         auto& slot = m_desc.vk_textures[i];
         if (i >= m_desc.vk_texture_bindings.size()) continue;
         const auto& binding = m_desc.vk_texture_bindings[i];
-        if (binding.image_binding < 0) continue;
-        if (slot.slots.empty()) continue;
+        if (binding.image_binding < 0 || slot.slots.empty()) continue;
         device.tex_cache().PinVideoFrame(slot);
-        auto& img = slot.getActive();
-
-        VkImageMemoryBarrier imb {
-            .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .pNext            = nullptr,
-            .srcAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT |
-                                VK_ACCESS_SHADER_READ_BIT,
-            .dstAccessMask    = VK_ACCESS_SHADER_READ_BIT,
-            .oldLayout        = img.layout,
-            .newLayout        = img.layout,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image            = img.handle,
-            .subresourceRange = base_srang,
-        };
-
-        cmd.PipelineBarrier(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
-                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                            VK_DEPENDENCY_BY_REGION_BIT,
-                            imb);
+        RecordShaderReadBarrier(rr.command, slot.getActive());
     }
 }
 
-void CustomShaderPass::recordDescriptors(RenderingResources& rr) const {
+void CustomShaderPass::recordDescriptors(RenderingResources& rr, VkPipelineLayout layout) const {
     std::array<VkDescriptorImageInfo, 2 * WE_GLTEX_NAMES.size()> images;
     std::array<VkWriteDescriptorSet, 2 * WE_GLTEX_NAMES.size() + 1> writes;
     VkDescriptorBufferInfo buffer;
@@ -823,15 +864,20 @@ void CustomShaderPass::recordDescriptors(RenderingResources& rr) const {
     }
     if (write_count != 0) {
         rr.command.PushDescriptorSetKHR(
-            VK_PIPELINE_BIND_POINT_GRAPHICS, *m_desc.pipeline.layout, 0,
+            VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0,
             std::span<const VkWriteDescriptorSet>(writes.data(), write_count));
     }
 }
 
 void CustomShaderPass::recordDraw(const Device& device, RenderingResources& rr) {
-    auto& cmd    = rr.command;
-    auto& outext = m_desc.vk_output.extent;
-    cmd.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, *m_desc.pipeline.handle);
+    recordDrawWithPipeline(device, rr, m_desc.pipeline, m_desc.vk_output.extent);
+}
+
+void CustomShaderPass::recordDrawWithPipeline(
+    const Device& device, RenderingResources& rr, const PipelineParameters& pipeline,
+    VkExtent3D outext) {
+    auto& cmd = rr.command;
+    cmd.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline.handle);
     for (usize i = 0; i < m_desc.vk_textures.size(); ++i) {
         if (i < m_desc.vk_texture_bindings.size() &&
             m_desc.vk_texture_bindings[i].image_binding >= 0 &&
@@ -839,7 +885,7 @@ void CustomShaderPass::recordDraw(const Device& device, RenderingResources& rr) 
             device.tex_cache().PinVideoFrame(m_desc.vk_textures[i]);
         }
     }
-    recordDescriptors(rr);
+    recordDescriptors(rr, *pipeline.layout);
     VkViewport viewport {
         .x        = 0,
         .y        = (float)outext.height,
@@ -894,12 +940,14 @@ void CustomShaderPass::recordClear(const Device&, RenderingResources& rr) {
             .dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
             .oldLayout        = old_layout,
             .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image            = image,
             .subresourceRange = base_srang,
         };
         cmd.PipelineBarrier(src_stage,
                             VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            VK_DEPENDENCY_BY_REGION_BIT,
+                            0,
                             in_bar);
         cmd.ClearColorImage(image,
                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -912,37 +960,43 @@ void CustomShaderPass::recordClear(const Device&, RenderingResources& rr) {
             .dstAccessMask    = dst_access,
             .oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             .newLayout        = final_layout,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image            = image,
             .subresourceRange = base_srang,
         };
         cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
                             dst_stage,
-                            VK_DEPENDENCY_BY_REGION_BIT,
+                            0,
                             out_bar);
     };
     clear_image(m_desc.vk_output.handle,
                 VK_IMAGE_LAYOUT_UNDEFINED,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                0,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                VK_ACCESS_MEMORY_READ_BIT);
+                VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                    VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT |
+                    VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_SHADER_READ_BIT);
     clear_image(m_desc.vk_output_msaa.handle,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                    VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT |
+                    VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                 VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
 }
 
-void CustomShaderPass::execute(const Device& device, RenderingResources& rr) {
+VkResult CustomShaderPass::execute(const Device& device, RenderingResources& rr) {
     const auto candidate = batchCandidate();
     if (! candidate.visible) {
         if (candidate.clear_only) {
             recordClear(device, rr);
         }
-        return;
+        return VK_SUCCESS;
     }
     recordTextureBarriers(device, rr);
 
@@ -964,12 +1018,81 @@ void CustomShaderPass::execute(const Device& device, RenderingResources& rr) {
     rr.command.BeginRenderPass(pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
     recordDraw(device, rr);
     rr.command.EndRenderPass();
+    return VK_SUCCESS;
+}
+
+bool CustomShaderPass::canPresentDirectly(const RenderingResources& rr, VkExtent2D target_extent,
+                                         VkFormat target_format) const {
+    if (! prepared() || ! m_presentation_pipeline.handle || ! m_presentation_pipeline.pass ||
+        ! m_presentation_pipeline.layout || target_format != m_desc.presentation_format ||
+        rr.wallpaper_horizontal_flip || target_extent.width == 0 || target_extent.height == 0)
+        return false;
+    const auto candidate = batchCandidate();
+    const auto& output = m_desc.vk_output;
+    if (! candidate.visible || candidate.clear_only || m_desc.alpha_to_coverage ||
+        candidate.render.sample_count != VK_SAMPLE_COUNT_1_BIT ||
+        candidate.render.msaa_image != VK_NULL_HANDLE || candidate.render.msaa_view != VK_NULL_HANDLE ||
+        output.handle == VK_NULL_HANDLE || output.view == VK_NULL_HANDLE ||
+        output.extent.width != target_extent.width || output.extent.height != target_extent.height ||
+        output.extent.depth != 1 || output.mipmap_level != 1)
+        return false;
+    const auto viewport = ResolvePresentationViewport(rr, target_extent);
+    const auto scissor = ResolvePresentationScissor(rr, target_extent);
+    if (viewport.x != 0.0f || viewport.y != static_cast<float>(target_extent.height) ||
+        viewport.width != static_cast<float>(target_extent.width) ||
+        viewport.height != -static_cast<float>(target_extent.height) ||
+        viewport.minDepth != 0.0f || viewport.maxDepth != 1.0f ||
+        scissor.offset.x != 0 || scissor.offset.y != 0 ||
+        scissor.extent.width != target_extent.width || scissor.extent.height != target_extent.height)
+        return false;
+    for (size_t i = 0; i < m_desc.vk_texture_bindings.size(); ++i) {
+        if (m_desc.vk_texture_bindings[i].image_binding < 0) continue;
+        if (i >= m_desc.vk_textures.size() || m_desc.vk_textures[i].slots.empty()) return false;
+        const auto& image = m_desc.vk_textures[i].getActive();
+        if (image.handle == VK_NULL_HANDLE || image.view == VK_NULL_HANDLE ||
+            image.handle == output.handle)
+            return false;
+    }
+    return true;
+}
+
+VkResult CustomShaderPass::executePresentation(const Device& device, RenderingResources& rr,
+                                               const ImageParameters& target, VkFormat target_format) {
+    const VkExtent2D extent { target.extent.width, target.extent.height };
+    if (target.extent.depth != 1 || target.mipmap_level != 1 ||
+        ! canPresentDirectly(rr, extent, target_format))
+        return VK_ERROR_INITIALIZATION_FAILED;
+    for (size_t i = 0; i < m_desc.vk_textures.size(); ++i) {
+        if (i < m_desc.vk_texture_bindings.size() && m_desc.vk_texture_bindings[i].image_binding >= 0 &&
+            ! m_desc.vk_textures[i].slots.empty() &&
+            m_desc.vk_textures[i].getActive().handle == target.handle)
+            return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    VkFramebuffer framebuffer = VK_NULL_HANDLE;
+    const auto result = GetOrCreateColorFramebuffer(
+        device, *m_presentation_pipeline.pass, target, m_presentation_framebuffers, framebuffer);
+    if (result != VK_SUCCESS) return result;
+    recordTextureBarriers(device, rr);
+    VkRenderPassBeginInfo begin {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass = *m_presentation_pipeline.pass,
+        .framebuffer = framebuffer,
+        .renderArea = { { 0, 0 }, extent },
+        .clearValueCount = 1,
+        .pClearValues = &m_desc.clear_value,
+    };
+    rr.command.BeginRenderPass(begin, VK_SUBPASS_CONTENTS_INLINE);
+    recordDrawWithPipeline(device, rr, m_presentation_pipeline, target.extent);
+    rr.command.EndRenderPass();
+    return VK_SUCCESS;
 }
 
 void CustomShaderPass::destory(const Device&, RenderingResources& rr) {
     setPrepared(false);
     m_frame_visible = false;
     m_frame_clear_only = false;
+    m_presentation_framebuffers.clear();
+    ResetPipelineParameters(m_presentation_pipeline);
     clearReleaseTexs();
     m_desc.update_op = {};
     {
@@ -1013,7 +1136,7 @@ bool wallpaper::vulkan::UpdatePreparedPasses(const Device& device, RenderingReso
     return true;
 }
 
-void wallpaper::vulkan::ExecutePreparedPasses(const Device& device, RenderingResources& rr,
+VkResult wallpaper::vulkan::ExecutePreparedPasses(const Device& device, RenderingResources& rr,
                                               std::span<VulkanPass* const> passes,
                                               CustomPassExecutionScratch& scratch) {
     size_t i = 0;
@@ -1023,8 +1146,14 @@ void wallpaper::vulkan::ExecutePreparedPasses(const Device& device, RenderingRes
             ++i;
             continue;
         }
+        if (const auto* pre = dynamic_cast<PrePass*>(pass);
+            pre != nullptr && IsPreClearRedundant(*pre, passes.subspan(i + 1))) {
+            ++i;
+            continue;
+        }
         if (dynamic_cast<CustomShaderPass*>(pass) == nullptr) {
-            pass->execute(device, rr);
+            const auto result = pass->execute(device, rr);
+            if (result != VK_SUCCESS) return result;
             ++i;
             continue;
         }
@@ -1066,4 +1195,5 @@ void wallpaper::vulkan::ExecutePreparedPasses(const Device& device, RenderingRes
             rr.command.EndRenderPass();
         }
     }
+    return VK_SUCCESS;
 }

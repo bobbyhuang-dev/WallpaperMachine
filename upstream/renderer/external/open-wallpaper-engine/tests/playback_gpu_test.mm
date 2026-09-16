@@ -26,6 +26,8 @@
 #include "Vulkan/Util.hpp"
 #include "VulkanRender/CustomShaderPass.hpp"
 #include "VulkanRender/CopyPass.hpp"
+#include "VulkanRender/FinPass.hpp"
+#include "VulkanRender/PrePass.hpp"
 #include "VulkanRender/PassCommon.hpp"
 #include "VulkanRender/Resource.hpp"
 
@@ -64,13 +66,22 @@ struct DispatchScope {
     vvk::DeviceDispatch saved;
     VkDevice device;
     bool fail_import = false;
+    bool fail_image_view = false;
     bool fail_submit = false;
     bool timeout_wait = false;
     bool fail_reset = false;
+    bool fail_framebuffer = false;
+    bool fail_descriptor_layout = false;
+    bool fail_pipeline_layout = false;
+    bool fail_shader_module = false;
+    int fail_shader_module_after = -1;
     VkResult idle_result = VK_SUCCESS;
     uint64_t waits = 0;
     uint64_t submits = 0;
     uint64_t pushes = 0;
+    uint64_t clears = 0;
+    uint64_t render_passes = 0;
+    uint64_t draws = 0;
     VkBuffer watched_destination = VK_NULL_HANDLE;
     std::vector<VkBufferCopy> copies;
 
@@ -80,12 +91,21 @@ struct DispatchScope {
         Require(current == nullptr, "nested dispatch scope");
         current = this;
         dispatch.vkCreateImage = CreateImage;
+        dispatch.vkCreateImageView = CreateImageView;
         dispatch.vkQueueSubmit = Submit;
         dispatch.vkWaitForFences = Wait;
         dispatch.vkResetFences = Reset;
         dispatch.vkDeviceWaitIdle = Idle;
         dispatch.vkCmdCopyBuffer = Copy;
         dispatch.vkCmdPushDescriptorSetKHR = Push;
+        dispatch.vkCreateFramebuffer = CreateFramebuffer;
+        dispatch.vkCreateDescriptorSetLayout = CreateDescriptorLayout;
+        dispatch.vkCreatePipelineLayout = CreatePipelineLayout;
+        dispatch.vkCreateShaderModule = CreateShaderModule;
+        dispatch.vkCmdClearColorImage = Clear;
+        dispatch.vkCmdBeginRenderPass = BeginRenderPass;
+        dispatch.vkCmdDraw = Draw;
+        dispatch.vkCmdDrawIndexed = DrawIndexed;
     }
     ~DispatchScope() { dispatch = saved; current = nullptr; }
     static VKAPI_ATTR VkResult VKAPI_CALL CreateImage(VkDevice d, const VkImageCreateInfo* info,
@@ -98,6 +118,12 @@ struct DispatchScope {
             }
         }
         return s.saved.vkCreateImage(d, info, alloc, out);
+    }
+    static VKAPI_ATTR VkResult VKAPI_CALL CreateImageView(VkDevice d, const VkImageViewCreateInfo* info,
+                                                         const VkAllocationCallbacks* alloc, VkImageView* out) {
+        auto& s = *current;
+        if (d == s.device && std::exchange(s.fail_image_view, false)) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return s.saved.vkCreateImageView(d, info, alloc, out);
     }
     static VKAPI_ATTR VkResult VKAPI_CALL Submit(VkQueue q, uint32_t n, const VkSubmitInfo* infos, VkFence f) {
         auto& s = *current;
@@ -132,6 +158,52 @@ struct DispatchScope {
         auto& s = *current;
         ++s.pushes;
         s.saved.vkCmdPushDescriptorSetKHR(c, p, l, set, n, writes);
+    }
+    static VKAPI_ATTR VkResult VKAPI_CALL CreateFramebuffer(VkDevice d, const VkFramebufferCreateInfo* info,
+                                                           const VkAllocationCallbacks* alloc, VkFramebuffer* out) {
+        auto& s = *current;
+        if (d == s.device && std::exchange(s.fail_framebuffer, false)) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        return s.saved.vkCreateFramebuffer(d, info, alloc, out);
+    }
+    static VKAPI_ATTR VkResult VKAPI_CALL CreateDescriptorLayout(VkDevice d, const VkDescriptorSetLayoutCreateInfo* info,
+                                                                const VkAllocationCallbacks* alloc, VkDescriptorSetLayout* out) {
+        auto& s = *current;
+        if (d == s.device && std::exchange(s.fail_descriptor_layout, false)) return VK_ERROR_OUT_OF_HOST_MEMORY;
+        return s.saved.vkCreateDescriptorSetLayout(d, info, alloc, out);
+    }
+    static VKAPI_ATTR VkResult VKAPI_CALL CreatePipelineLayout(VkDevice d, const VkPipelineLayoutCreateInfo* info,
+                                                              const VkAllocationCallbacks* alloc, VkPipelineLayout* out) {
+        auto& s = *current;
+        if (d == s.device && std::exchange(s.fail_pipeline_layout, false)) return VK_ERROR_OUT_OF_HOST_MEMORY;
+        return s.saved.vkCreatePipelineLayout(d, info, alloc, out);
+    }
+    static VKAPI_ATTR VkResult VKAPI_CALL CreateShaderModule(VkDevice d, const VkShaderModuleCreateInfo* info,
+                                                            const VkAllocationCallbacks* alloc, VkShaderModule* out) {
+        auto& s = *current;
+        if (d == s.device && std::exchange(s.fail_shader_module, false)) return VK_ERROR_OUT_OF_HOST_MEMORY;
+        if (d == s.device && s.fail_shader_module_after >= 0 && s.fail_shader_module_after-- == 0)
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        return s.saved.vkCreateShaderModule(d, info, alloc, out);
+    }
+    static VKAPI_ATTR void VKAPI_CALL Clear(VkCommandBuffer c, VkImage image, VkImageLayout layout,
+                                           const VkClearColorValue* color, uint32_t n, const VkImageSubresourceRange* ranges) {
+        auto& s = *current; ++s.clears;
+        s.saved.vkCmdClearColorImage(c, image, layout, color, n, ranges);
+    }
+    static VKAPI_ATTR void VKAPI_CALL BeginRenderPass(VkCommandBuffer c, const VkRenderPassBeginInfo* info,
+                                                     VkSubpassContents contents) {
+        auto& s = *current; ++s.render_passes;
+        s.saved.vkCmdBeginRenderPass(c, info, contents);
+    }
+    static VKAPI_ATTR void VKAPI_CALL Draw(VkCommandBuffer c, uint32_t vertices, uint32_t instances,
+                                          uint32_t first, uint32_t first_instance) {
+        auto& s = *current; ++s.draws;
+        s.saved.vkCmdDraw(c, vertices, instances, first, first_instance);
+    }
+    static VKAPI_ATTR void VKAPI_CALL DrawIndexed(VkCommandBuffer c, uint32_t indices, uint32_t instances,
+                                                 uint32_t first, int32_t offset, uint32_t first_instance) {
+        auto& s = *current; ++s.draws;
+        s.saved.vkCmdDrawIndexed(c, indices, instances, first, offset, first_instance);
     }
 };
 thread_local DispatchScope* DispatchScope::current = nullptr;
@@ -301,7 +373,10 @@ protected:
     TestUpdater* updater = nullptr;
     std::vector<std::unique_ptr<CustomShaderPass>> owned_passes;
     std::vector<std::shared_ptr<SceneNode>> nodes;
+    std::vector<std::unique_ptr<VulkanPass>> auxiliary_passes;
     std::vector<std::shared_ptr<SceneShader>> shaders;
+    std::vector<VmaImageParameters> private_targets;
+    std::vector<vvk::ImageView> alias_views;
     CustomPassExecutionScratch scratch;
     bool recording = false;
     bool submitted = false;
@@ -344,8 +419,12 @@ protected:
         if (dynamic) dynamic->finishUpload(submitted);
         submitted = recording = false;
         scratch.passes.clear(); scratch.candidates.clear(); scratch.plan.entries.clear();
+        for (auto& pass : auxiliary_passes) pass->destory(device, rr);
+        auxiliary_passes.clear();
         for (auto& pass : owned_passes) pass->destory(device, rr);
         owned_passes.clear();
+        alias_views.clear();
+        private_targets.clear();
         rr.command = {};
         commands = {};
         rr.fence_frame.reset();
@@ -432,20 +511,34 @@ protected:
     void Submit() { VkRequire(SubmitOnly(), "submit draw"); Complete(); }
     void Abandon() {
         Require(!submitted, "cannot abandon submitted work");
-        VkRequire(rr.command.Reset(), "discard recording");
+        if (rr.command.Reset() != VK_SUCCESS) std::terminate();
+        device.tex_cache().AbandonVideoFrameRecording();
         vertices->finishUpload(false); dynamic->finishUpload(false);
-        device.tex_cache().AbandonVideoFrameRecording(); recording = false;
+        recording = false;
     }
-    std::shared_ptr<SceneShader> Compile(bool texture, bool uniform, bool combined = false) {
+    VkResult CheckRecording(VkResult result) {
+        if (result != VK_SUCCESS) Abandon();
+        return result;
+    }
+    void Execute(VulkanPass& pass) {
+        VkRequire(CheckRecording(pass.execute(device, rr)), "execute pass");
+    }
+    std::shared_ptr<SceneShader> Compile(bool texture, bool uniform, bool combined = false,
+                                         std::string expression = {}, bool vertex_sample = false) {
         shader::RustShaderRequest request;
         request.shader_name = "playback_gpu/" + std::to_string(serial++);
         request.scene_id = "synthetic"; request.cache_enabled = false;
         request.stages = {{ShaderType::VERTEX,
-            "attribute vec2 a_Position;\nvarying vec2 v_Uv;\nvoid main() { v_Uv = a_Position * 0.5 + vec2(0.5); gl_Position=vec4(a_Position,0.0,1.0); }\n"},
+            std::string("attribute vec2 a_Position;\nvarying vec2 v_Uv;\n") +
+            (vertex_sample ? "uniform sampler2D g_Texture0;\nvarying vec4 v_Color;\n" : "") +
+            "void main() { v_Uv = a_Position * 0.5 + vec2(0.5); gl_Position=vec4(a_Position,0.0,1.0);" +
+            (vertex_sample ? "v_Color = textureLod(g_Texture0,vec2(0.5),0.0);" : "") + "}\n"},
             {ShaderType::FRAGMENT, std::string("varying vec2 v_Uv;\n") +
                 (texture ? "uniform sampler2D g_Texture0;\n" : "") +
+                (vertex_sample ? "varying vec4 v_Color;\n" : "") +
                 (uniform ? "uniform vec4 g_TestColor;\n" : "") +
-                "void main() { gl_FragColor=" + (texture ? "texture2D(g_Texture0,v_Uv)" : "vec4(0.0,1.0,0.0,1.0)") +
+                "void main() { gl_FragColor=" + (!expression.empty() ? expression :
+                    (texture ? "texture2D(g_Texture0,v_Uv)" : "vec4(0.0,1.0,0.0,1.0)")) +
                 (uniform ? (texture ? " * g_TestColor" : " * 0.0 + g_TestColor") : "") + "; }\n"}};
         if (texture) request.textures.push_back(shader::RustShaderTextureInfo {.slot = 0, .present = true, .enabled = true});
         shader::RustShaderOutput output;
@@ -483,7 +576,9 @@ protected:
     CustomShaderPass& Pass(bool texture = true, bool uniform = false,
                            std::string output = {}, bool dyn = false,
                            VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT,
-                           std::shared_ptr<SceneShader> shader = {}) {
+                           std::shared_ptr<SceneShader> shader = {},
+                           const std::function<void(CustomShaderPass::Desc&)>& configure = {},
+                           bool require_prepared = true) {
         if (output.empty()) output = Target();
         auto mesh = std::make_shared<SceneMesh>(dyn);
         SceneVertexArray array({{"a_Position", VertexType::FLOAT2, false}}, dyn ? 4 : 3);
@@ -505,12 +600,46 @@ protected:
         if (texture) desc.textures = {""};
         auto pass = std::make_unique<CustomShaderPass>(desc);
         pass->desc().clear_on_first_use = true;
+        if (configure) configure(pass->desc());
         pass->prepare(scene, device, rr);
-        Require(pass->prepared(), "prepare real CustomShaderPass");
+        const bool prepared = pass->prepared();
         owned_passes.push_back(std::move(pass));
+        Require(!require_prepared || prepared, "prepare real CustomShaderPass");
         return *owned_passes.back();
     }
     void Bind(CustomShaderPass& pass, const ImageSlotsRef& ref) { pass.desc().vk_textures.at(0) = ref; }
+    ImageParameters ImageFor(const std::string& name) {
+        auto image = device.tex_cache().Query(name, ToTexKey(scene.renderTargets.at(name)), true);
+        Require(image.has_value(), "allocate private image");
+        return *image;
+    }
+    FinPass& Final(const ImageParameters& target, VkFormat format = VK_FORMAT_R8G8B8A8_UNORM) {
+        auto pass = std::make_unique<FinPass>(FinPass::Desc {});
+        pass->setPresentFormat(format);
+        pass->setPresentLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        pass->setPresentQueueIndex(device.graphics_queue().family_index);
+        pass->setPresent(target);
+        pass->prepare(scene, device, rr);
+        auto& result = *pass;
+        auxiliary_passes.push_back(std::move(pass));
+        return result;
+    }
+    PrePass& ClearPass(const std::string& name) {
+        auto pass = std::make_unique<PrePass>(PrePass::Desc {.result = name});
+        pass->prepare(scene, device, rr);
+        Require(pass->prepared(), "prepare private clear");
+        auto& result = *pass;
+        auxiliary_passes.push_back(std::move(pass));
+        return result;
+    }
+    static Bytes StripePixels(uint32_t width, uint32_t height) {
+        Bytes expected(width * height * 4);
+        for (uint32_t y = 0; y < height; ++y) for (uint32_t x = 0; x < width; ++x) {
+            const Color color = x < width / 2 ? Color {255,0,0,255} : Color {0,0,255,255};
+            std::copy(color.begin(), color.end(), expected.begin() + (y * width + x) * 4);
+        }
+        return expected;
+    }
     void Frame(std::span<VulkanPass* const> passes, bool batched = true) {
         // CPU writes precede command recording and the staging transaction.
         Require(device.tex_cache().BeginVideoFrameRecording(), "begin CPU frame scope");
@@ -520,12 +649,91 @@ protected:
         VkRequire(rr.command.Begin(VkCommandBufferBeginInfo {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                                            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT}), "begin frame command");
         Upload();
-        if (batched) ExecutePreparedPasses(device, rr, passes, scratch);
-        else for (auto* pass : passes) if (pass && pass->prepared()) pass->execute(device, rr);
+        if (batched) VkRequire(CheckRecording(ExecutePreparedPasses(device, rr, passes, scratch)), "execute frame");
+        else for (auto* pass : passes) if (pass && pass->prepared()) Execute(*pass);
         Submit();
     }
     void Draw(CustomShaderPass& pass, bool batched = true) {
         VulkanPass* ptr = &pass; Frame(std::span<VulkanPass* const>(&ptr, 1), batched);
+    }
+    ImageParameters PrivateTarget(uint32_t width, uint32_t height, VkFormat format) {
+        VmaImageParameters owner;
+        owner.extent = {width,height,1};
+        const VkImageCreateInfo image {.sType=VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType=VK_IMAGE_TYPE_2D,.format=format,.extent=owner.extent,.mipLevels=1,.arrayLayers=1,
+            .samples=VK_SAMPLE_COUNT_1_BIT,.tiling=VK_IMAGE_TILING_OPTIMAL,
+            .usage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT|
+                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            .sharingMode=VK_SHARING_MODE_EXCLUSIVE,.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED};
+        const VmaAllocationCreateInfo allocation {.usage=VMA_MEMORY_USAGE_GPU_ONLY};
+        VkRequire(vvk::CreateImage(device.vma_allocator(),image,allocation,owner.handle),"create private presentation image");
+        const VkImageViewCreateInfo view {.sType=VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image=*owner.handle,.viewType=VK_IMAGE_VIEW_TYPE_2D,.format=format,
+            .subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1}};
+        VkRequire(device.handle().CreateImageView(view,owner.view),"create private presentation view");
+        const ImageParameters result(owner);
+        private_targets.push_back(std::move(owner));
+        Poison(result,{1,0,1,1},true);
+        return result;
+    }
+    void Poison(const ImageParameters& image, std::array<float,4> color, bool first = false) {
+        Begin();
+        VkImageMemoryBarrier barrier {.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask=first ? VkAccessFlags(0) : VkAccessFlags(VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_TRANSFER_READ_BIT|
+                VK_ACCESS_TRANSFER_WRITE_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT),
+            .dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout=first ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+            .image=image.handle,.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1}};
+        rr.command.PipelineBarrier(first ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                   VK_PIPELINE_STAGE_TRANSFER_BIT,0,barrier);
+        VkClearColorValue value {}; std::copy(color.begin(),color.end(),value.float32);
+        rr.command.ClearColorImage(image.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&value,barrier.subresourceRange);
+        barrier.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT; barrier.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
+        barrier.oldLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barrier.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        rr.command.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                   VK_PIPELINE_STAGE_VERTEX_SHADER_BIT|VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,0,barrier);
+        Submit();
+    }
+    void FinishPrivatePresentation(const ImageParameters& target) {
+        const VkImageMemoryBarrier barrier {.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,.dstAccessMask=VK_ACCESS_SHADER_READ_BIT,
+            .oldLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+            .image=target.handle,.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1}};
+        rr.command.PipelineBarrier(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                   VK_PIPELINE_STAGE_VERTEX_SHADER_BIT|VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,0,barrier);
+    }
+    bool PresentFrame(CustomShaderPass& pass, FinPass& final, PrePass& pre,
+                      const ImageParameters& target, VkFormat format, bool allow_direct = true) {
+        final.setPresent(target);
+        const std::array<VulkanPass*,3> sequence {&pre,&pass,&final};
+        Begin(); Require(UpdatePreparedPasses(device,rr,sequence),"presentation update"); Upload();
+        const bool direct=allow_direct && pass.canPresentDirectly(rr,{target.extent.width,target.extent.height},format);
+        if (direct) {
+            VkRequire(CheckRecording(pass.executePresentation(device,rr,target,format)),"record private direct");
+            FinishPrivatePresentation(target);
+        } else {
+            VkRequire(CheckRecording(ExecutePreparedPasses(device,rr,sequence,scratch)),"record private normal");
+        }
+        Submit();
+        return direct;
+    }
+    static Bytes NormalizeColorBytes(Bytes raw, VkFormat format) {
+        if (format == VK_FORMAT_B8G8R8A8_UNORM)
+            for(size_t i=0;i<raw.size();i+=4) std::swap(raw[i],raw[i+2]);
+        return raw;
+    }
+    void CompareClearPaths(std::span<VulkanPass* const> sequence,
+                           std::span<const ImageParameters> outputs, uint64_t removed) {
+        std::vector<Bytes> reference;
+        uint64_t before=0,after=0;
+        { DispatchScope scope(device); Frame(sequence,false); before=scope.clears; }
+        for(const auto& image:outputs) reference.push_back(Read(image));
+        { DispatchScope scope(device); Frame(sequence,true); after=scope.clears; }
+        ASSERT_GE(before,removed); EXPECT_EQ(after,before-removed);
+        for(size_t i=0;i<outputs.size();++i) EXPECT_EQ(Read(outputs[i]),reference[i]);
     }
     Bytes BufferRead(StagingBuffer& staging, VkDeviceSize size) {
         VmaBufferParameters readback;
@@ -628,7 +836,7 @@ TEST_F(PlaybackGPU, RecordedConsumersSurviveCacheEviction) {
         expected[i] = Reference(*source);
         ASSERT_TRUE(Update("six", ref));
         Bind(*passes[i], ref);
-        passes[i]->execute(device, rr);
+        Execute(*passes[i]);
         passes[i]->desc().vk_textures[0] = {};
         ref = {};
     }
@@ -721,9 +929,9 @@ TEST_F(PlaybackGPU, RecordingDiscardAndSubmissionRecoveryKeepOwners) {
     auto source = std::make_shared<SyntheticVideo>(); source->Set(1, 80, 170, 100);
     auto ref = Register("recovery", source); auto& pass = Pass(); Bind(pass, ref);
     auto expected = Reference(*source);
-    Begin(); ASSERT_TRUE(pass.updateFrame(device, rr)); Upload(); pass.execute(device, rr); Abandon();
+    Begin(); ASSERT_TRUE(pass.updateFrame(device, rr)); Upload(); Execute(pass); Abandon();
     Draw(pass); EXPECT_EQ(Read(pass.desc().vk_output), expected);
-    Begin(); ASSERT_TRUE(pass.updateFrame(device, rr)); Upload(); pass.execute(device, rr);
+    Begin(); ASSERT_TRUE(pass.updateFrame(device, rr)); Upload(); Execute(pass);
     std::weak_ptr<const void> weak = ref.video_frame_owner;
     pass.desc().vk_textures[0] = {};
     ref = {};
@@ -743,7 +951,7 @@ TEST_F(PlaybackGPU, RecordingDiscardAndSubmissionRecoveryKeepOwners) {
     EXPECT_TRUE(weak.expired());
     Bind(pass, ref);
     expected = Reference(*source);
-    Begin(); ASSERT_TRUE(pass.updateFrame(device, rr)); Upload(); pass.execute(device, rr);
+    Begin(); ASSERT_TRUE(pass.updateFrame(device, rr)); Upload(); Execute(pass);
     {
         DispatchScope scope(device); scope.fail_submit = true;
         EXPECT_EQ(SubmitOnly(), VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -751,7 +959,7 @@ TEST_F(PlaybackGPU, RecordingDiscardAndSubmissionRecoveryKeepOwners) {
         Abandon(); EXPECT_EQ(scope.waits, 0u);
     }
     Draw(pass); EXPECT_EQ(Read(pass.desc().vk_output), expected);
-    Begin(); ASSERT_TRUE(pass.updateFrame(device, rr)); Upload(); pass.execute(device, rr);
+    Begin(); ASSERT_TRUE(pass.updateFrame(device, rr)); Upload(); Execute(pass);
     ASSERT_EQ(SubmitOnly(), VK_SUCCESS);
     {
         DispatchScope scope(device); scope.fail_reset = true;
@@ -995,6 +1203,540 @@ TEST_F(PlaybackGPU, GraphOrderingAndDescriptorWritesPreservePixels) {
                       VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
             EXPECT_EQ(combined.desc().vk_texture_bindings[0].sampler_binding, -1);
             ExpectSolid(Read(combined.desc().vk_output), {0,255,0,255});
+        }
+    }
+}
+TEST_F(PlaybackGPU, AttachmentToFinalPreservesNonuniformPixelsAcrossReuse) {
+    const std::string output(SpecTex_Default);
+    scene.renderTargets[output] = SceneRenderTarget {.width = 33, .height = 19};
+    auto shader = Compile(false, false, false,
+        "gl_FragCoord.x < 16.0 ? vec4(1.0,0.0,0.0,1.0) : vec4(0.0,0.0,1.0,1.0)");
+    auto& producer = Pass(false, false, output, false, VK_SAMPLE_COUNT_1_BIT, shader);
+    const auto present = ImageFor(Target(33, 19));
+    auto& final = Final(present);
+    ASSERT_TRUE(final.prepared());
+    std::array<VulkanPass*, 2> sequence {&producer, &final};
+    const auto expected = StripePixels(33, 19);
+    for (bool batched : {true, false}) for (int repeat = 0; repeat < 3; ++repeat) {
+        Frame(sequence, batched);
+        EXPECT_EQ(Read(producer.desc().vk_output), expected);
+        EXPECT_EQ(Read(present), expected);
+    }
+}
+
+TEST_F(PlaybackGPU, CopyGeneratesEveryMipBeforeSamplingAndReuse) {
+    const auto source = Target(32, 32), destination = Target(32, 32);
+    scene.renderTargets[destination].has_mipmap = true;
+    scene.renderTargets[destination].mipmap_level = 6;
+    auto& producer = Pass(false, true, source);
+    CopyPass copy(CopyPass::Desc {.src = source, .dst = destination});
+    copy.prepare(scene, device, rr);
+    ASSERT_TRUE(copy.prepared());
+    std::vector<CustomShaderPass*> consumers;
+    std::vector<VulkanPass*> sequence {&producer, &copy};
+    for (unsigned mip = 0; mip < 6; ++mip) {
+        auto shader = Compile(true, false, false,
+            "textureLod(g_Texture0,v_Uv," + std::to_string(mip) + ".0)");
+        auto& consumer = Pass(true, false, {}, false, VK_SAMPLE_COUNT_1_BIT, shader);
+        ImageSlotsRef ref; ref.slots = {copy.desc().vk_dst}; Bind(consumer, ref);
+        consumers.push_back(&consumer); sequence.push_back(&consumer);
+    }
+    for (bool batched : {true, false}) for (const auto color : {Color {255,0,0,255}, Color {0,0,255,255}}) {
+        updater->color = {color[0] / 255.0f, color[1] / 255.0f, color[2] / 255.0f, 1};
+        Frame(sequence, batched);
+        ExpectSolid(Read(copy.desc().vk_dst), color);
+        for (auto* consumer : consumers) ExpectSolid(Read(consumer->desc().vk_output), color);
+    }
+}
+
+TEST_F(PlaybackGPU, PriorVertexAndFragmentReadersSurviveEveryOverwriteKind) {
+    const auto target = Target();
+    auto& writer = Pass(false, true, target);
+    auto& fragment_reader = Pass();
+    auto vertex_shader = Compile(true, false, false, "v_Color", true);
+    auto& vertex_reader = Pass(true, false, {}, false, VK_SAMPLE_COUNT_1_BIT, vertex_shader);
+    auto& hidden_clear = Pass(false, false, target);
+    hidden_clear.desc().visibility_node->SetVisible(false);
+    scene.clearColor = {0,0,1};
+    auto& pre = ClearPass(target);
+    ImageSlotsRef ref; ref.slots = {writer.desc().vk_output};
+    Bind(fragment_reader, ref); Bind(vertex_reader, ref);
+    for (bool batched : {true, false}) for (VulkanPass* overwrite :
+         std::array<VulkanPass*,3> {&pre, &hidden_clear, &writer}) {
+        updater->color = {1,0,0,1}; Draw(writer, batched);
+        updater->color = {0,0,1,1};
+        std::array<VulkanPass*,3> sequence {&vertex_reader, &fragment_reader, overwrite};
+        Frame(sequence, batched);
+        ExpectSolid(Read(vertex_reader.desc().vk_output), {255,0,0,255});
+        ExpectSolid(Read(fragment_reader.desc().vk_output), {255,0,0,255});
+        ExpectSolid(Read(writer.desc().vk_output),
+                    overwrite == &hidden_clear ? Color {0,0,0,0} : Color {0,0,255,255});
+    }
+}
+
+TEST_F(PlaybackGPU, FramebufferFailureStopsRecordingWithoutSubmittingOrWaiting) {
+    const std::string output(SpecTex_Default);
+    scene.renderTargets[output] = SceneRenderTarget {.width = 32, .height = 32};
+    auto source = std::make_shared<SyntheticVideo>(); source->Set(1, 80, 170, 100);
+    auto ref = Register("failed-final", source); auto retained = ref;
+    auto& producer = Pass(true, false, output); Bind(producer, ref);
+    const auto expected = Reference(*source);
+    const auto target = ImageFor(Target());
+    auto& final = Final(target); ASSERT_TRUE(final.prepared());
+    auto& trailing = Pass(false, false);
+    std::array<VulkanPass*,3> sequence {&producer, &final, &trailing};
+    ASSERT_TRUE(device.tex_cache().WaitForPendingUploads());
+    Begin(); ASSERT_TRUE(UpdatePreparedPasses(device, rr, sequence)); Upload();
+    {
+        DispatchScope scope(device); scope.fail_framebuffer = true;
+        EXPECT_EQ(CheckRecording(ExecutePreparedPasses(device, rr, sequence, scratch)), VK_ERROR_OUT_OF_DEVICE_MEMORY);
+        EXPECT_EQ(scope.submits, 0u); EXPECT_EQ(scope.waits, 0u);
+        EXPECT_EQ(scope.draws, 1u);
+    }
+    EXPECT_FALSE(recording); EXPECT_FALSE(submitted);
+    for (uint64_t generation = 2; generation < 9; ++generation) {
+        source->Set(generation, 40 + generation * 20, 100, 170);
+        ASSERT_TRUE(Update("failed-final", ref));
+    }
+    Bind(producer, retained);
+    Frame(sequence);
+    EXPECT_EQ(Read(target), expected);
+    ExpectSolid(Read(trailing.desc().vk_output), {0,255,0,255});
+}
+
+TEST_F(PlaybackGPU, InvalidCopyStopsBeforeLaterPassAndCanRecover) {
+    const auto source = Target(), destination = Target();
+    auto& producer = Pass(false, false, source); Draw(producer);
+    CopyPass copy(CopyPass::Desc {.src = source, .dst = destination});
+    copy.prepare(scene, device, rr); ASSERT_TRUE(copy.prepared());
+    auto& trailing = Pass(false, true);
+    updater->color = {1,0,0,1}; Draw(trailing);
+    const auto good = copy.desc().vk_src;
+    copy.desc().vk_src = {};
+    std::array<VulkanPass*,2> sequence {&copy, &trailing};
+    Begin(); ASSERT_TRUE(UpdatePreparedPasses(device, rr, sequence)); Upload();
+    {
+        DispatchScope scope(device);
+        EXPECT_EQ(CheckRecording(ExecutePreparedPasses(device, rr, sequence, scratch)), VK_ERROR_INITIALIZATION_FAILED);
+        EXPECT_EQ(scope.submits, 0u); EXPECT_EQ(scope.waits, 0u); EXPECT_EQ(scope.draws, 0u);
+    }
+    ExpectSolid(Read(trailing.desc().vk_output), {255,0,0,255});
+    copy.desc().vk_src = good;
+    updater->color = {0,0,1,1}; Frame(sequence);
+    ExpectSolid(Read(copy.desc().vk_dst), {0,255,0,255});
+    ExpectSolid(Read(trailing.desc().vk_output), {0,0,255,255});
+    CopyPass missing(CopyPass::Desc {.src = "_rt_missing", .dst = destination});
+    missing.prepare(scene, device, rr); EXPECT_FALSE(missing.prepared());
+}
+
+TEST_F(PlaybackGPU, FinalPreparationDoesNotPublishPartialPipelines) {
+    const std::string output(SpecTex_Default);
+    scene.renderTargets[output] = SceneRenderTarget {.width = 32, .height = 32};
+    ImageFor(output);
+    const auto target = ImageFor(Target());
+    for (int failure = 0; failure < 3; ++failure) {
+        DispatchScope scope(device);
+        scope.fail_descriptor_layout = failure == 0;
+        scope.fail_pipeline_layout = failure == 1;
+        scope.fail_shader_module = failure == 2;
+        auto& final = Final(target);
+        EXPECT_FALSE(final.prepared());
+        EXPECT_EQ(scope.submits, 0u); EXPECT_EQ(scope.draws, 0u);
+    }
+}
+TEST_F(PlaybackGPU, CopyPreservesNonuniformPatternBeforeSampling) {
+    const auto source = Target(33, 19), destination = Target(33, 19);
+    auto shader = Compile(false, false, false,
+        "gl_FragCoord.x < 16.0 ? vec4(1.0,0.0,0.0,1.0) : vec4(0.0,0.0,1.0,1.0)");
+    auto& producer = Pass(false, false, source, false, VK_SAMPLE_COUNT_1_BIT, shader);
+    CopyPass copy(CopyPass::Desc {.src = source, .dst = destination});
+    copy.prepare(scene, device, rr); ASSERT_TRUE(copy.prepared());
+    auto& consumer = Pass(true, false, Target(33,19));
+    ImageSlotsRef ref; ref.slots = {copy.desc().vk_dst}; Bind(consumer, ref);
+    std::array<VulkanPass*,3> sequence {&producer,&copy,&consumer};
+    const auto expected = StripePixels(33,19);
+    for (bool batched : {true,false}) for(int repeat=0;repeat<3;++repeat) {
+        Frame(sequence,batched);
+        EXPECT_EQ(Read(copy.desc().vk_dst),expected);
+        EXPECT_EQ(Read(consumer.desc().vk_output),expected);
+    }
+}
+
+TEST_F(PlaybackGPU, QueryFailureLeavesCopyAndFinalUnprepared) {
+    const auto source = Target(), destination = Target();
+    CopyPass copy(CopyPass::Desc {.src=source,.dst=destination});
+    {
+        DispatchScope scope(device); scope.fail_image_view = true;
+        copy.prepare(scene,device,rr);
+        EXPECT_FALSE(copy.prepared());
+    }
+    const std::string output(SpecTex_Default);
+    scene.renderTargets[output] = SceneRenderTarget {.width=32,.height=32};
+    const auto target = ImageFor(Target());
+    {
+        DispatchScope scope(device); scope.fail_image_view = true;
+        auto& final=Final(target);
+        EXPECT_FALSE(final.prepared());
+    }
+}
+
+TEST_F(PlaybackGPU, FinalPreparationRejectsPendingVertexStorage) {
+    const std::string output(SpecTex_Default);
+    scene.renderTargets[output] = SceneRenderTarget {.width=32,.height=32};
+    ImageFor(output);
+    const auto target = ImageFor(Target());
+    Begin(); Upload();
+    auto& final=Final(target);
+    EXPECT_FALSE(final.prepared());
+    Abandon();
+    auto& recovered=Final(target);
+    ASSERT_TRUE(recovered.prepared());
+    auto& writer=Pass(false,false,output);
+    std::array<VulkanPass*,2> sequence {&writer,&recovered};
+    Frame(sequence);
+    ExpectSolid(Read(target),{0,255,0,255});
+}
+TEST_F(PlaybackGPU, RedundantClearTracksVisibilityReadinessAndPhysicalReaders) {
+    const std::string output(SpecTex_Default);
+    scene.renderTargets[output]=SceneRenderTarget {.width=32,.height=32};
+    scene.clearColor={0,0,1};
+    auto& pre=ClearPass(output);
+    auto& writer=Pass(false,false,output);
+    auto& reader=Pass();
+    reader.desc().clear_on_first_use=false;
+    ImageSlotsRef source; source.slots={writer.desc().vk_output}; Bind(reader,source);
+    std::array<VulkanPass*,2> simple {&pre,&writer};
+    const std::array<ImageParameters,1> target {writer.desc().vk_output};
+    CompareClearPaths(simple,target,1);
+    ExpectSolid(Read(target[0]),{0,255,0,255});
+    writer.desc().visibility_node->SetVisible(false);
+    CompareClearPaths(simple,target,1);
+    ExpectSolid(Read(target[0]),{0,0,255,255});
+    writer.desc().visibility_node->SetVisible(true);
+    const std::array<VulkanPass*,3> with_reader {&pre,&reader,&writer};
+    const std::array<ImageParameters,2> both {reader.desc().vk_output,writer.desc().vk_output};
+    CompareClearPaths(with_reader,both,0);
+    ExpectSolid(Read(both[0]),{0,0,255,255});
+    reader.desc().visibility_node->SetVisible(false);
+    CompareClearPaths(with_reader,target,1);
+    reader.desc().visibility_node->SetVisible(true);
+    reader.desc().vk_textures[0]={};
+    CompareClearPaths(with_reader,target,1);
+    Bind(reader,source);
+    CompareClearPaths(with_reader,both,0);
+    // Same descriptor slot, now a different physical image: no read of pre's target.
+    auto& unrelated=Pass(false,false); Draw(unrelated);
+    source.slots={unrelated.desc().vk_output}; Bind(reader,source);
+    CompareClearPaths(with_reader,both,1);
+    ExpectSolid(Read(both[0]),{0,255,0,255});
+    auto unprepared=std::make_unique<CustomShaderPass>(CustomShaderPass::Desc {});
+    const std::array<VulkanPass*,4> gaps {&pre,nullptr,unprepared.get(),&writer};
+    CompareClearPaths(gaps,target,1);
+}
+
+TEST_F(PlaybackGPU, ClearLookaheadStopsAtPassBoundariesAndUnequalClearColors) {
+    const std::string output(SpecTex_Default);
+    scene.renderTargets[output]=SceneRenderTarget {.width=32,.height=32};
+    scene.clearColor={0,0,1};
+    auto& pre=ClearPass(output);
+    auto& writer=Pass(false,false,output);
+    const std::array<ImageParameters,1> target {writer.desc().vk_output};
+    auto& other=Pass(false,false); Draw(other);
+    auto& another_pre=ClearPass(other.desc().output);
+    CopyPass copy(CopyPass::Desc {.src=other.desc().output,.dst=Target()});
+    copy.prepare(scene,device,rr); ASSERT_TRUE(copy.prepared());
+    const auto present=ImageFor(Target());
+    auto& final=Final(present); ASSERT_TRUE(final.prepared());
+    for(VulkanPass* boundary:std::array<VulkanPass*,3>{&copy,&another_pre,&final}) {
+        const std::array<VulkanPass*,3> sequence {&pre,boundary,&writer};
+        CompareClearPaths(sequence,target,0);
+    }
+    const std::array<VulkanPass*,2> simple {&pre,&writer};
+    writer.desc().clear_value.color.float32[0]=1.0f;
+    CompareClearPaths(simple,target,0);
+    writer.desc().clear_value.color.float32[0]=-0.0f;
+    CompareClearPaths(simple,target,0); // Bitwise equality, not approximate numeric equality.
+    writer.desc().clear_value.color.float32[0]=0.0f;
+    CompareClearPaths(simple,target,1);
+    auto& load_writer=Pass(false,false,output,false,VK_SAMPLE_COUNT_1_BIT,{},
+        [](auto& desc){desc.preserve_target_contents=true;desc.clear_on_first_use=false;});
+    const std::array<VulkanPass*,2> load {&pre,&load_writer};
+    CompareClearPaths(load,target,0);
+}
+
+TEST_F(PlaybackGPU, ClearLookaheadRejectsViewMipMsaaAndAliasBoundaries) {
+    const std::string output(SpecTex_Default);
+    scene.renderTargets[output]=SceneRenderTarget {.width=32,.height=32};
+    auto& pre=ClearPass(output);
+    auto& writer=Pass(false,false,output);
+    const auto original=writer.desc().vk_output;
+    const std::array<ImageParameters,1> target {original};
+    const std::array<VulkanPass*,2> sequence {&pre,&writer};
+    vvk::ImageView alias;
+    const VkImageViewCreateInfo info {.sType=VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image=original.handle,.viewType=VK_IMAGE_VIEW_TYPE_2D,.format=VK_FORMAT_R8G8B8A8_UNORM,
+        .subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1}};
+    VkRequire(device.handle().CreateImageView(info,alias),"alias view");
+    writer.desc().vk_output.view=*alias;
+    CompareClearPaths(sequence,target,0);
+    writer.desc().vk_output=original;
+    alias_views.push_back(std::move(alias));
+    writer.desc().vk_output.extent.depth=2;
+    CompareClearPaths(sequence,target,0);
+    writer.desc().vk_output=original;
+    if(device.limits().framebufferColorSampleCounts & VK_SAMPLE_COUNT_4_BIT) {
+        auto& msaa=Pass(false,false,output,false,VK_SAMPLE_COUNT_4_BIT);
+        const std::array<VulkanPass*,2> msaa_sequence {&pre,&msaa};
+        CompareClearPaths(msaa_sequence,target,0);
+    }
+    const auto mip_name=Target();
+    scene.renderTargets[mip_name].has_mipmap=true;
+    scene.renderTargets[mip_name].mipmap_level=3;
+    scene.clearColor={0,0,0};
+    auto& mip_pre=ClearPass(mip_name);
+    auto& mip_writer=Pass(false,false,mip_name);
+    // Match values so that the mip boundary, not color inequality, prevents removal.
+    mip_writer.desc().clear_value=mip_pre.desc().clear_value;
+    const std::array<VulkanPass*,2> mips {&mip_pre,&mip_writer};
+    const std::array<ImageParameters,1> mip_target {mip_writer.desc().vk_output};
+    CompareClearPaths(mips,mip_target,0);
+    auto& alias_writer=Pass(true,false,output);
+    ImageSlotsRef self; self.slots={original}; Bind(alias_writer,self);
+    const std::array<VulkanPass*,2> feedback {&pre,&alias_writer};
+    Begin(); ASSERT_TRUE(UpdatePreparedPasses(device,rr,feedback)); Upload();
+    {
+        DispatchScope scope(device);
+        VkRequire(CheckRecording(ExecutePreparedPasses(device,rr,feedback,scratch)),"record feedback boundary");
+        EXPECT_EQ(scope.clears,1u);
+    }
+    // Input/output feedback is deliberately never submitted: only prove the
+    // optimizer retains its prior clear, without executing undefined feedback.
+    Abandon();
+}
+
+TEST_F(PlaybackGPU, DirectSelectorRequiresOneResolvedFirstClearWriter) {
+    const std::string output(SpecTex_Default);
+    scene.renderTargets[output]=SceneRenderTarget {.width=32,.height=32};
+    auto& writer=Pass(false,false,output);
+    std::array<VulkanPass*,1> graph {&writer};
+    EXPECT_EQ(FindDirectPresentationPass(scene,graph),&writer);
+    auto& rt=scene.renderTargets[output];
+    rt.withDepth=true; EXPECT_EQ(FindDirectPresentationPass(scene,graph),nullptr); rt.withDepth=false;
+    rt.has_mipmap=true; EXPECT_EQ(FindDirectPresentationPass(scene,graph),nullptr); rt.has_mipmap=false;
+    rt.mipmap_level=2; EXPECT_EQ(FindDirectPresentationPass(scene,graph),nullptr); rt.mipmap_level=1;
+    rt.sample_count=4; EXPECT_EQ(FindDirectPresentationPass(scene,graph),nullptr); rt.sample_count=1;
+    writer.desc().clear_on_first_use=false; EXPECT_EQ(FindDirectPresentationPass(scene,graph),nullptr);
+    writer.desc().clear_on_first_use=true;
+    writer.desc().preserve_target_contents=true; EXPECT_EQ(FindDirectPresentationPass(scene,graph),nullptr);
+    writer.desc().preserve_target_contents=false;
+    writer.desc().textures={"_rt_unknown_direct_input"};
+    EXPECT_EQ(FindDirectPresentationPass(scene,graph),nullptr);
+    scene.renderTargetAliases["_rt_direct_alias"]=output;
+    writer.desc().textures={"_rt_direct_alias"};
+    EXPECT_EQ(FindDirectPresentationPass(scene,graph),nullptr);
+    writer.desc().textures={"synthetic/external.png",""};
+    EXPECT_EQ(FindDirectPresentationPass(scene,graph),&writer);
+    writer.desc().output="_rt_direct_alias";
+    EXPECT_EQ(FindDirectPresentationPass(scene,graph),&writer);
+    writer.desc().output=Target();
+    EXPECT_EQ(FindDirectPresentationPass(scene,graph),nullptr);
+    writer.desc().output=output;
+    auto& second=Pass(false,false,output);
+    const std::array<VulkanPass*,2> multiple {&writer,&second};
+    EXPECT_EQ(FindDirectPresentationPass(scene,multiple),nullptr);
+    CopyPass copy(CopyPass::Desc {.src=output,.dst=Target()});
+    const std::array<VulkanPass*,1> copy_graph {&copy};
+    EXPECT_EQ(FindDirectPresentationPass(scene,copy_graph),nullptr);
+}
+
+TEST_F(PlaybackGPU, DirectPrivateTargetsMatchNormalAcrossFormatsSizesAndPoisonRotation) {
+    const std::string output(SpecTex_Default);
+    for(auto format:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM})
+    for(const auto size:{VkExtent2D{33,19},VkExtent2D{47,25}}) {
+        // A new graph retires its named targets before preparing a new size/format.
+        VkRequire(device.handle().WaitIdle(), "retire prior private graph");
+        VkRequire(rr.command.Reset(), "reset prior private graph command");
+        scratch.passes.clear(); scratch.candidates.clear(); scratch.plan.entries.clear();
+        for (auto& pass : auxiliary_passes) pass->destory(device, rr);
+        auxiliary_passes.clear();
+        for (auto& pass : owned_passes) pass->destory(device, rr);
+        owned_passes.clear();
+        alias_views.clear();
+        private_targets.clear();
+        nodes.clear();
+        Require(device.tex_cache().Clear(), "retire named render targets before resize");
+        scene.renderTargets[output]=SceneRenderTarget {.width=static_cast<int>(size.width),.height=static_cast<int>(size.height)};
+        scene.clearColor={0,0,0};
+        auto shader=Compile(false,false,false,
+            "vec4(gl_FragCoord.x < "+std::to_string(size.width/2)+".0 ? 1.0 : 0.0,"
+            "gl_FragCoord.y < "+std::to_string(size.height/2)+".0 ? 1.0 : 0.0,0.0,0.5)");
+        auto& writer=Pass(false,false,output,false,VK_SAMPLE_COUNT_1_BIT,shader,
+            [format](auto& desc){desc.presentation_format=format;});
+        auto& pre=ClearPass(output);
+        std::array<ImageParameters,3> targets;
+        for(auto& target:targets) target=PrivateTarget(size.width,size.height,format);
+        auto& final=Final(targets[0],format); ASSERT_TRUE(final.prepared());
+        for(unsigned turn=0;turn<9;++turn) {
+            const auto& target=targets[turn%targets.size()];
+            const std::array<float,4> poison {float(turn%2),float((turn+1)%2),1,1};
+            Poison(target,poison);
+            EXPECT_FALSE(PresentFrame(writer,final,pre,target,format,false));
+            const auto reference=Read(target);
+            const auto rgba=NormalizeColorBytes(reference,format);
+            ASSERT_EQ(rgba.size(),size.width*size.height*4u);
+            for(uint32_t y=0;y<size.height;++y) for(uint32_t x=0;x<size.width;++x) {
+                const auto at=(y*size.width+x)*4;
+                ASSERT_EQ(rgba[at],x<size.width/2 ? 255 : 0);
+                ASSERT_EQ(rgba[at+1],y<size.height/2 ? 255 : 0);
+                ASSERT_EQ(rgba[at+2],0);
+                ASSERT_NEAR(rgba[at+3],128,1);
+            }
+            Poison(target,{0,1,1,1});
+            EXPECT_TRUE(PresentFrame(writer,final,pre,target,format));
+            EXPECT_EQ(Read(target),reference);
+        }
+    }
+}
+
+TEST_F(PlaybackGPU, DirectFallbackTransitionsPreserveFullFramesAndClearBackground) {
+    const std::string output(SpecTex_Default);
+    scene.renderTargets[output]=SceneRenderTarget {.width=33,.height=19};
+    scene.clearColor={0,0,1};
+    auto& source=Pass(false,false,Target(33,19));
+    Draw(source);
+    auto& writer=Pass(true,false,output,true,VK_SAMPLE_COUNT_1_BIT,{},
+        [](auto& desc){desc.presentation_format=VK_FORMAT_R8G8B8A8_UNORM;});
+    writer.desc().textures[0]="synthetic/external.png";
+    ImageSlotsRef ref; ref.slots={source.desc().vk_output}; Bind(writer,ref);
+    const std::array<float,8> half {-1,-1,0,-1,-1,1,0,1};
+    ASSERT_TRUE(writer.desc().node->Mesh()->GetVertexArray(0).SetVertexs(0,half));
+    writer.desc().node->Mesh()->SetDirty();
+    auto& pre=ClearPass(output);
+    const auto target=PrivateTarget(33,19,VK_FORMAT_R8G8B8A8_UNORM);
+    auto& final=Final(target); ASSERT_TRUE(final.prepared());
+    const auto compare=[&](bool expected_direct) {
+        EXPECT_FALSE(PresentFrame(writer,final,pre,target,VK_FORMAT_R8G8B8A8_UNORM,false));
+        const auto reference=Read(target);
+        Poison(target,{1,0,1,1});
+        EXPECT_EQ(PresentFrame(writer,final,pre,target,VK_FORMAT_R8G8B8A8_UNORM),expected_direct);
+        EXPECT_EQ(Read(target),reference);
+    };
+    compare(true);
+    auto pixels=Read(target);
+    EXPECT_EQ((Color{pixels[0],pixels[1],pixels[2],pixels[3]}),(Color{0,255,0,255}));
+    const auto right=(33*19-1)*4;
+    EXPECT_EQ((Color{pixels[right],pixels[right+1],pixels[right+2],pixels[right+3]}),(Color{0,0,255,255}));
+    writer.desc().visibility_node->SetVisible(false); compare(false);
+    ExpectSolid(Read(target),{0,0,255,255});
+    writer.desc().visibility_node->SetVisible(true); compare(true);
+    writer.desc().vk_textures[0]={}; compare(false);
+    ExpectSolid(Read(target),{0,0,255,255});
+    Bind(writer,ref); compare(true);
+    rr.wallpaper_horizontal_flip=true; compare(false);
+    rr.wallpaper_horizontal_flip=false; compare(true);
+    rr.wallpaper_viewport={0,19,32,-19,0,1}; compare(false);
+    rr.wallpaper_viewport={}; compare(true);
+    rr.wallpaper_scissor={{1,0},{32,19}}; compare(false);
+    rr.wallpaper_scissor={}; compare(true);
+    writer.desc().alpha_to_coverage=true; compare(false);
+    writer.desc().alpha_to_coverage=false; compare(true);
+    const auto larger=PrivateTarget(35,21,VK_FORMAT_R8G8B8A8_UNORM);
+    EXPECT_FALSE(PresentFrame(writer,final,pre,larger,VK_FORMAT_R8G8B8A8_UNORM));
+    compare(true);
+}
+
+TEST_F(PlaybackGPU, DirectRecordingFailuresDoNotSubmitAndRecoverWithFreshTargets) {
+    const std::string output(SpecTex_Default);
+    scene.renderTargets[output]=SceneRenderTarget {.width=32,.height=32};
+    auto& writer=Pass(false,false,output,false,VK_SAMPLE_COUNT_1_BIT,{},
+        [](auto& desc){desc.presentation_format=VK_FORMAT_R8G8B8A8_UNORM;});
+    auto& pre=ClearPass(output);
+    const auto target=PrivateTarget(32,32,VK_FORMAT_R8G8B8A8_UNORM);
+    auto& final=Final(target); ASSERT_TRUE(final.prepared());
+    Begin(); ASSERT_TRUE(writer.updateFrame(device,rr)); Upload();
+    {
+        DispatchScope scope(device); scope.fail_framebuffer=true;
+        EXPECT_EQ(CheckRecording(writer.executePresentation(device,rr,target,VK_FORMAT_R8G8B8A8_UNORM)),VK_ERROR_OUT_OF_DEVICE_MEMORY);
+        EXPECT_EQ(scope.submits,0u); EXPECT_EQ(scope.waits,0u); EXPECT_EQ(scope.draws,0u);
+    }
+    ExpectSolid(Read(target),{255,0,255,255});
+    EXPECT_TRUE(PresentFrame(writer,final,pre,target,VK_FORMAT_R8G8B8A8_UNORM));
+    ExpectSolid(Read(target),{0,255,0,255});
+    Begin(); ASSERT_TRUE(writer.updateFrame(device,rr)); Upload();
+    {
+        DispatchScope scope(device);
+        EXPECT_EQ(CheckRecording(writer.executePresentation(device,rr,target,VK_FORMAT_B8G8R8A8_UNORM)),VK_ERROR_INITIALIZATION_FAILED);
+        EXPECT_EQ(scope.submits,0u); EXPECT_EQ(scope.waits,0u);
+    }
+    EXPECT_TRUE(PresentFrame(writer,final,pre,target,VK_FORMAT_R8G8B8A8_UNORM));
+    auto& texture_writer=Pass(true,false,output,false,VK_SAMPLE_COUNT_1_BIT,{},
+        [](auto& desc){desc.presentation_format=VK_FORMAT_R8G8B8A8_UNORM;});
+    ImageSlotsRef alias; alias.slots={target};
+    // The target requires a sampler to reach the explicit physical-alias guard.
+    alias.slots[0].sampler=writer.desc().vk_output.sampler;
+    Bind(texture_writer,alias);
+    Begin(); ASSERT_TRUE(texture_writer.updateFrame(device,rr)); Upload();
+    {
+        DispatchScope scope(device);
+        EXPECT_EQ(CheckRecording(texture_writer.executePresentation(device,rr,target,VK_FORMAT_R8G8B8A8_UNORM)),VK_ERROR_INITIALIZATION_FAILED);
+        EXPECT_EQ(scope.submits,0u); EXPECT_EQ(scope.waits,0u);
+    }
+    ExpectSolid(Read(target),{0,255,0,255});
+}
+TEST_F(PlaybackGPU, RequestedPresentationPipelineFailureCannotPublishNormalOnlyPass) {
+    const std::string output(SpecTex_Default);
+    scene.renderTargets[output]=SceneRenderTarget {.width=32,.height=32};
+    ImageFor(output);
+    const auto shader=Compile(false,false);
+    {
+        DispatchScope scope(device);
+        scope.fail_shader_module_after=2; // Normal vertex+fragment succeed; presentation fails.
+        auto& failed=Pass(false,false,output,false,VK_SAMPLE_COUNT_1_BIT,shader,
+            [](auto& desc){desc.presentation_format=VK_FORMAT_R8G8B8A8_UNORM;},false);
+        EXPECT_FALSE(failed.prepared());
+        EXPECT_FALSE(failed.canPresentDirectly(rr,{32,32},VK_FORMAT_R8G8B8A8_UNORM));
+        EXPECT_EQ(scope.submits,0u);
+    }
+    {
+        DispatchScope scope(device); scope.fail_framebuffer=true;
+        auto& failed=Pass(false,false,output,false,VK_SAMPLE_COUNT_1_BIT,shader,
+            [](auto& desc){desc.presentation_format=VK_FORMAT_R8G8B8A8_UNORM;},false);
+        EXPECT_FALSE(failed.prepared());
+        EXPECT_EQ(scope.submits,0u);
+    }
+    auto& recovered=Pass(false,false,output,false,VK_SAMPLE_COUNT_1_BIT,shader,
+        [](auto& desc){desc.presentation_format=VK_FORMAT_R8G8B8A8_UNORM;});
+    auto& pre=ClearPass(output);
+    const auto target=PrivateTarget(32,32,VK_FORMAT_R8G8B8A8_UNORM);
+    auto& final=Final(target);
+    EXPECT_TRUE(PresentFrame(recovered,final,pre,target,VK_FORMAT_R8G8B8A8_UNORM));
+    ExpectSolid(Read(target),{0,255,0,255});
+}
+TEST_F(PlaybackGPU, DirectTranslucentEdgesBlendAgainstTheSameClearColor) {
+    const std::string output(SpecTex_Default);
+    scene.renderTargets[output]=SceneRenderTarget {.width=33,.height=19};
+    scene.clearColor={0,0,1};
+    auto shader=Compile(false,false,false,"vec4(1.0,0.0,0.0,gl_FragCoord.x < 16.0 ? 0.5 : 0.0)");
+    for(auto format:{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM}) {
+        auto& writer=Pass(false,false,output,false,VK_SAMPLE_COUNT_1_BIT,shader,[format](auto& desc){
+            desc.presentation_format=format;
+            desc.node->Mesh()->Material()->blenmode=BlendMode::Translucent;
+        });
+        auto& pre=ClearPass(output);
+        const auto target=PrivateTarget(33,19,format);
+        auto& final=Final(target,format);
+        EXPECT_FALSE(PresentFrame(writer,final,pre,target,format,false));
+        const auto reference=Read(target);
+        Poison(target,{0,1,0,1});
+        EXPECT_TRUE(PresentFrame(writer,final,pre,target,format));
+        EXPECT_EQ(Read(target),reference);
+        const auto rgba=NormalizeColorBytes(reference,format);
+        for(uint32_t y=0;y<19;++y) for(uint32_t x=0;x<33;++x) {
+            const auto offset=(y*33+x)*4;
+            ASSERT_NEAR(rgba[offset],x<16 ? 128 : 0,1);
+            ASSERT_EQ(rgba[offset+1],0);
+            ASSERT_NEAR(rgba[offset+2],x<16 ? 128 : 255,1);
+            ASSERT_EQ(rgba[offset+3],255);
         }
     }
 }

@@ -108,7 +108,7 @@ struct VulkanRender::Impl {
     void SetWallpaperHorizontalFlip(bool);
 
     bool initRes();
-    void executePreparedPasses(RenderingResources&);
+    VkResult executePreparedPasses(RenderingResources&);
     bool drawFrameSwapchain();
     bool drawFrameOffscreen();
     void setRenderTargetSize(Scene&, rg::RenderGraph&);
@@ -122,6 +122,7 @@ struct VulkanRender::Impl {
 
     std::unique_ptr<PrePass> m_prepass { nullptr };
     std::unique_ptr<FinPass> m_finpass { nullptr };
+    CustomShaderPass* m_direct_present_pass { nullptr };
 
     std::unique_ptr<FinPass> m_testpass { nullptr };
     ReDrawCB                 m_redraw_cb;
@@ -450,6 +451,7 @@ bool VulkanRender::Impl::failFrame(VkResult result) {
 
 bool VulkanRender::Impl::releasePresentation() {
     if (quiesceFrame(true) != VK_SUCCESS) return false;
+    m_direct_present_pass = nullptr;
     if (m_device && m_device->handle()) {
         std::string error;
         if (! m_device->tex_cache().WaitForPendingUploads(&error)) {
@@ -530,6 +532,7 @@ bool VulkanRender::Impl::initRes() {
 
 void VulkanRender::Impl::destroy() {
     m_destroying = true;
+    m_direct_present_pass = nullptr;
     const auto result = quiesceFrame(true);
     if (result != VK_SUCCESS && result != VK_ERROR_DEVICE_LOST) {
         LOG_ERROR("cannot destroy renderer resources before GPU completion");
@@ -652,8 +655,8 @@ bool VulkanRender::Impl::drawFrame(Scene& scene) {
     return rendered;
 }
 
-void VulkanRender::Impl::executePreparedPasses(RenderingResources& rr) {
-    ExecutePreparedPasses(*m_device, rr, m_passes, m_pass_scratch);
+VkResult VulkanRender::Impl::executePreparedPasses(RenderingResources& rr) {
+    return ExecutePreparedPasses(*m_device, rr, m_passes, m_pass_scratch);
 }
 
 bool VulkanRender::Impl::drawFrameSwapchain() {
@@ -689,7 +692,30 @@ bool VulkanRender::Impl::drawFrameSwapchain() {
     });
     if (begin_result != VK_SUCCESS) return failFrame(begin_result);
     if (! m_dyn_buf->recordUpload(rr.command)) return failFrame(VK_ERROR_UNKNOWN);
-    executePreparedPasses(rr);
+    VkResult execute_result = VK_SUCCESS;
+    if (m_direct_present_pass != nullptr &&
+        m_direct_present_pass->canPresentDirectly(
+            rr, { image.extent.width, image.extent.height }, format)) {
+        execute_result = m_direct_present_pass->executePresentation(*m_device, rr, image, format);
+        if (execute_result == VK_SUCCESS) {
+            VkImageMemoryBarrier barrier {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                .dstAccessMask = 0,
+                .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = image.handle,
+                .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
+            };
+            rr.command.PipelineBarrier(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                       VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, barrier);
+        }
+    } else {
+        execute_result = executePreparedPasses(rr);
+    }
+    if (execute_result != VK_SUCCESS) return failFrame(execute_result);
     if (export_poster) {
         VkImageMemoryBarrier barrier {
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -800,7 +826,8 @@ bool VulkanRender::Impl::drawFrameOffscreen() {
     });
     if (begin_result != VK_SUCCESS) return failFrame(begin_result);
     if (! m_dyn_buf->recordUpload(rr.command)) return failFrame(VK_ERROR_UNKNOWN);
-    executePreparedPasses(rr);
+    const auto execute_result = executePreparedPasses(rr);
+    if (execute_result != VK_SUCCESS) return failFrame(execute_result);
 
     const auto end_result = rr.command.End();
     if (end_result != VK_SUCCESS) return failFrame(end_result);
@@ -986,6 +1013,7 @@ void VulkanRender::Impl::SetWallpaperHorizontalFlip(bool enabled) {
 
 bool VulkanRender::Impl::clearLastRenderGraph() {
     if (quiesceFrame() != VK_SUCCESS) return false;
+    m_direct_present_pass = nullptr;
     if (! m_device || ! m_device->handle()) return m_passes.empty();
     std::string error;
     if (! m_device->tex_cache().WaitForPendingUploads(&error)) {
@@ -1021,6 +1049,7 @@ bool VulkanRender::Impl::clearLastRenderGraph() {
 bool VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
     if (! m_inited || m_device_lost || m_frame_faulted) return false;
     if (! m_passes.empty() && ! clearLastRenderGraph()) return false;
+    m_direct_present_pass = nullptr;
     if (quiesceFrame() != VK_SUCCESS) return false;
     std::string error;
     if (! m_device->tex_cache().WaitForPendingUploads(&error)) {
@@ -1053,6 +1082,20 @@ bool VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
                        }
                        return vpass;
                    });
+
+    for (auto* pass : m_passes) {
+        if (auto* custom = dynamic_cast<CustomShaderPass*>(pass))
+            custom->desc().presentation_format = VK_FORMAT_UNDEFINED;
+    }
+    if (m_with_surface && ! m_instance.offscreen() &&
+        m_device->graphics_queue().family_index == m_device->present_queue().family_index) {
+        const auto format = m_device->swapchain().format();
+        if (format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_B8G8R8A8_UNORM) {
+            m_direct_present_pass = FindDirectPresentationPass(scene, m_passes);
+            if (m_direct_present_pass != nullptr)
+                m_direct_present_pass->desc().presentation_format = format;
+        }
+    }
 
     m_passes.insert(m_passes.begin(), m_prepass.get());
     m_passes.push_back(m_finpass.get());

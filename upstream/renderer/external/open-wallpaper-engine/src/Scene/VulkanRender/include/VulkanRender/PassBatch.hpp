@@ -12,6 +12,7 @@
 
 namespace wallpaper
 {
+class Scene;
 namespace vulkan
 {
 
@@ -67,8 +68,9 @@ struct CustomPassExecutionScratch {
 };
 
 bool UpdatePreparedPasses(const Device&, RenderingResources&, std::span<VulkanPass* const>);
-void ExecutePreparedPasses(const Device&, RenderingResources&, std::span<VulkanPass* const>,
-                           CustomPassExecutionScratch&);
+VkResult ExecutePreparedPasses(const Device&, RenderingResources&, std::span<VulkanPass* const>,
+                              CustomPassExecutionScratch&);
+CustomShaderPass* FindDirectPresentationPass(Scene&, std::span<VulkanPass* const> graph_passes);
 
 struct CustomPassMsaaAttachmentPlan {
     bool                  needs_resolve_attachment { false };

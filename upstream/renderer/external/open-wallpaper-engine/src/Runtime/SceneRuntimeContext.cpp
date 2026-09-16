@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <sstream>
@@ -370,11 +371,6 @@ ShaderValue ShaderValueFromDynamicValue(const DynamicValue& value) {
     return ShaderValue(0.0f);
 }
 
-void ApplyMaterialConstant(SceneMaterial& material, const std::string& name,
-                           const DynamicValue& value) {
-    if (name.empty()) return;
-    material.customShader.constValues[name] = ShaderValueFromDynamicValue(value);
-}
 
 bool AlignmentContains(std::string_view alignment, std::string_view part) {
     return alignment.find(part) != std::string_view::npos;
@@ -382,8 +378,12 @@ bool AlignmentContains(std::string_view alignment, std::string_view part) {
 
 void SyncEffectFinalNode(SceneNode& source, SceneImageEffectLayer& layer) {
     source.UpdateTrans();
-    const auto sync_node = [&source](SceneNode& target) {
-        target.SetRenderTransformOverride(source.ModelTrans());
+    const auto matrix = source.ModelTrans();
+    const auto sync_node = [&source, &matrix](SceneNode& target) {
+        if (! target.HasRenderTransformOverride() ||
+            ! (target.RenderTrans().array() == matrix.array()).all()) {
+            target.SetRenderTransformOverride(matrix);
+        }
         target.SetTranslate(source.Translate());
         target.SetScale(source.Scale());
         target.SetRotation(source.Rotation());
@@ -453,20 +453,31 @@ void SceneRuntimeContext::Tick(double frame_time) {
     }
     for (auto& [name, binding] : m_node_translate) {
         (void)name;
-        if (binding.node != nullptr && binding.value != nullptr) {
-            m_node_alignment[name].origin = binding.value->getVec3();
-            ApplyNodeTransform(name);
+        if (binding.node == nullptr || binding.value == nullptr ||
+            binding.transform_node == nullptr || binding.alignment == nullptr) continue;
+        auto& alignment = *binding.alignment;
+        const auto& value = binding.value->getVec3();
+        if (! (alignment.origin.array() == value.array()).all()) {
+            alignment.origin = value;
+            alignment.transform_dirty = true;
         }
+        ApplyNodeTransform(*binding.transform_node, alignment,
+                           binding.size != nullptr ? *binding.size : Eigen::Vector2f::Zero());
     }
     for (auto& [name, binding] : m_node_scale) {
         (void)name;
-        if (binding.node != nullptr && binding.value != nullptr) {
-            m_node_alignment[name].scale = binding.value->getVec3();
-            if (m_node_alignment[name].alignment.empty()) {
-                binding.node->SetScale(binding.value->getVec3());
-            } else {
-                ApplyNodeTransform(name);
-            }
+        if (binding.node == nullptr || binding.value == nullptr || binding.alignment == nullptr) continue;
+        auto& alignment = *binding.alignment;
+        const auto& value = binding.value->getVec3();
+        if (! (alignment.scale.array() == value.array()).all()) {
+            alignment.scale = value;
+            alignment.transform_dirty = true;
+        }
+        if (alignment.alignment.empty()) {
+            binding.node->SetScale(value);
+        } else if (binding.transform_node != nullptr) {
+            ApplyNodeTransform(*binding.transform_node, alignment,
+                               binding.size != nullptr ? *binding.size : Eigen::Vector2f::Zero());
         }
     }
     for (auto& [name, binding] : m_node_rotation) {
@@ -483,16 +494,7 @@ void SceneRuntimeContext::Tick(double frame_time) {
         if (binding.node == nullptr || binding.layer == nullptr) continue;
         SyncEffectFinalNode(*binding.node, *binding.layer);
     }
-    for (auto& binding : m_material_constants) {
-        if (binding.value == nullptr && binding.animation == nullptr) continue;
-        auto material = binding.material.lock();
-        if (material == nullptr) continue;
-        if (binding.animation != nullptr) {
-            material->customShader.constValues[binding.name][0] = binding.animation->Value();
-        } else {
-            ApplyMaterialConstant(*material, binding.name, *binding.value);
-        }
-    }
+    for (auto& binding : m_material_constants) ApplyMaterialConstantBinding(binding);
     for (auto& script : m_scene_scripts) {
         if (script.script != nullptr) script.script->Tick(*m_host_context);
     }
@@ -502,16 +504,7 @@ void SceneRuntimeContext::Tick(double frame_time) {
         if (material == nullptr) continue;
         ApplyMaterialAlpha(*material, binding.animation->Value());
     }
-    for (auto& binding : m_material_constants) {
-        if (binding.value == nullptr && binding.animation == nullptr) continue;
-        auto material = binding.material.lock();
-        if (material == nullptr) continue;
-        if (binding.animation != nullptr) {
-            material->customShader.constValues[binding.name][0] = binding.animation->Value();
-        } else {
-            ApplyMaterialConstant(*material, binding.name, *binding.value);
-        }
-    }
+    for (auto& binding : m_material_constants) ApplyMaterialConstantBinding(binding);
 }
 
 ScriptEngine& SceneRuntimeContext::scriptEngine() { return *m_script_engine; }
@@ -742,7 +735,7 @@ bool SceneRuntimeContext::ApplyPreparedTextLayer(const RuntimePreparedTextLayerI
     }
 
     layer.ApplyPreparedLayout(prepared.layout_size, prepared.raster_size);
-    m_node_size[prepared.name] = prepared.layout_size;
+    RegisterNodeSize(prepared.name, prepared.layout_size);
     ApplyNodeTransform(prepared.name);
 
     if (m_scene != nullptr) {
@@ -761,7 +754,12 @@ DynamicValue* SceneRuntimeContext::FindPropertyValue(std::string_view name) cons
 
 void SceneRuntimeContext::RegisterScriptedValue(ScriptedDynamicValue* value) {
     m_scripted_values.push_back(value);
-    m_scripted_value_cursor_inside[value] = false;
+    constexpr auto hover_mask = static_cast<uint8_t>(ScriptCursorEvent::Enter) |
+                                static_cast<uint8_t>(ScriptCursorEvent::Leave) |
+                                static_cast<uint8_t>(ScriptCursorEvent::Move);
+    if (value != nullptr && (value->CursorHandlerMask() & hover_mask) != 0) {
+        m_scripted_value_cursor_inside[value] = false;
+    }
 }
 
 void SceneRuntimeContext::RegisterNode(std::string name, SceneNode* node) {
@@ -778,18 +776,22 @@ void SceneRuntimeContext::RegisterNode(std::string name, SceneNode* node) {
     if (alignment.alignment.empty()) {
         alignment.origin = node->Translate();
         alignment.scale  = node->Scale();
+        alignment.transform_dirty = true;
     }
+    RefreshNodeTransformBindings(key);
 }
 
 void SceneRuntimeContext::UnregisterNode(std::string_view name) {
     const std::string key(name);
-    m_nodes.erase(key);
     m_node_visibility.erase(key);
     m_node_translate.erase(key);
     m_node_scale.erase(key);
     m_node_rotation.erase(key);
     m_node_effect_final.erase(key);
+    m_nodes.erase(key);
     m_node_size.erase(key);
+    m_node_hit_masks.erase(key);
+    m_puppet_layers.erase(key);
     m_text_layers.erase(key);
     m_text_values.erase(std::remove_if(m_text_values.begin(),
                                        m_text_values.end(),
@@ -815,6 +817,16 @@ void SceneRuntimeContext::RollbackNodeRegistration(
     UnregisterNode(key);
     if (previous == nullptr) return;
 
+    m_material_constants.resize(previous->material_constants_size);
+    m_material_alpha.resize(previous->material_alpha_size);
+    m_scalar_animations.resize(previous->scalar_animations_size);
+    for (std::size_t index = previous->dynamic_value_listeners_size;
+         index < m_dynamic_value_listeners.size(); ++index) {
+        auto& binding = m_dynamic_value_listeners[index];
+        if (binding.deregister) binding.deregister();
+    }
+    m_dynamic_value_listeners.resize(previous->dynamic_value_listeners_size);
+
     for (std::size_t index = previous->scripted_values_size; index < m_scripted_values.size();
          ++index) {
         m_scripted_value_cursor_inside.erase(m_scripted_values[index]);
@@ -829,16 +841,23 @@ void SceneRuntimeContext::RollbackNodeRegistration(
     if (previous->rotation.has_value()) m_node_rotation[key] = *previous->rotation;
     if (previous->effect_final.has_value()) m_node_effect_final[key] = *previous->effect_final;
     if (previous->size.has_value()) m_node_size[key] = *previous->size;
+    if (previous->hit_mask.has_value()) m_node_hit_masks[key] = *previous->hit_mask;
+    if (previous->puppet_layer.has_value()) m_puppet_layers[key] = *previous->puppet_layer;
     if (previous->text_layer.has_value()) m_text_layers.emplace(key, *previous->text_layer);
     m_text_values.insert(m_text_values.end(),
                          previous->text_values.begin(),
                          previous->text_values.end());
-    if (previous->alignment.has_value()) m_node_alignment[key] = *previous->alignment;
+    if (previous->alignment.has_value()) {
+        auto& alignment = m_node_alignment[key];
+        alignment = *previous->alignment;
+        alignment.transform_dirty = true;
+    }
     if (previous->template_path.has_value()) m_node_template_paths[key] = *previous->template_path;
     if (! previous->video_textures.empty()) {
         m_node_video_textures[key] = previous->video_textures;
     }
     if (previous->has_sound_layer) m_sound_layers[key] = previous->sound_layer;
+    RefreshNodeTransformBindings(key);
 }
 
 std::shared_ptr<SceneRuntimeContext::NodeRegistrationSnapshot>
@@ -868,6 +887,12 @@ SceneRuntimeContext::CaptureNodeRegistration(std::string_view name) const {
     if (const auto iterator = m_node_size.find(key); iterator != m_node_size.end()) {
         snapshot->size = iterator->second;
     }
+    if (const auto iterator = m_node_hit_masks.find(key); iterator != m_node_hit_masks.end()) {
+        snapshot->hit_mask = iterator->second;
+    }
+    if (const auto iterator = m_puppet_layers.find(key); iterator != m_puppet_layers.end()) {
+        snapshot->puppet_layer = iterator->second;
+    }
     if (const auto iterator = m_text_layers.find(key); iterator != m_text_layers.end()) {
         snapshot->text_layer = iterator->second;
     }
@@ -891,13 +916,23 @@ SceneRuntimeContext::CaptureNodeRegistration(std::string_view name) const {
     }
     snapshot->owned_values_size    = m_owned_values.size();
     snapshot->scripted_values_size = m_scripted_values.size();
+    snapshot->material_constants_size = m_material_constants.size();
+    snapshot->dynamic_value_listeners_size = m_dynamic_value_listeners.size();
+    snapshot->material_alpha_size = m_material_alpha.size();
+    snapshot->scalar_animations_size = m_scalar_animations.size();
 
     return snapshot;
 }
 
 void SceneRuntimeContext::RegisterNodeSize(std::string name, Eigen::Vector2f value) {
     if (name.empty()) return;
-    m_node_size[std::move(name)] = value;
+    const auto previous = m_node_size.find(name);
+    if (previous != m_node_size.end() && (previous->second.array() == value.array()).all()) return;
+    m_node_size[name] = value;
+    if (const auto alignment = m_node_alignment.find(name); alignment != m_node_alignment.end()) {
+        alignment->second.transform_dirty = true;
+    }
+    RefreshNodeTransformBindings(name);
 }
 
 void SceneRuntimeContext::RegisterNodeHitMask(std::string name, NodeHitMask mask) {
@@ -991,10 +1026,11 @@ void SceneRuntimeContext::RegisterNodeTranslate(std::string name, SceneNode* nod
     SetNodeTranslate(name, value->getVec3());
     auto* raw = value.get();
     m_owned_values.push_back(std::move(value));
-    m_node_translate[std::move(name)] = NodeVec3Binding {
+    m_node_translate[name] = NodeVec3Binding {
         .node  = node,
         .value = raw,
     };
+    RefreshNodeTransformBindings(name);
 }
 
 void SceneRuntimeContext::RegisterNodeScale(std::string name, SceneNode* node,
@@ -1005,10 +1041,11 @@ void SceneRuntimeContext::RegisterNodeScale(std::string name, SceneNode* node,
     SetNodeScale(name, value->getVec3());
     auto* raw = value.get();
     m_owned_values.push_back(std::move(value));
-    m_node_scale[std::move(name)] = NodeVec3Binding {
+    m_node_scale[name] = NodeVec3Binding {
         .node  = node,
         .value = raw,
     };
+    RefreshNodeTransformBindings(name);
 }
 
 void SceneRuntimeContext::RegisterNodeRotation(std::string name, SceneNode* node,
@@ -1019,17 +1056,18 @@ void SceneRuntimeContext::RegisterNodeRotation(std::string name, SceneNode* node
     node->SetRotation(value->getVec3());
     auto* raw = value.get();
     m_owned_values.push_back(std::move(value));
-    m_node_rotation[std::move(name)] = NodeVec3Binding {
+    m_node_rotation[name] = NodeVec3Binding {
         .node  = node,
         .value = raw,
     };
+    RefreshNodeTransformBindings(name);
 }
 
 void SceneRuntimeContext::RegisterTextLayer(std::string name, TextLayerState state) {
     if (name.empty()) return;
     if (state.layer_key.empty()) state.layer_key = name;
     auto layer        = TextLayer(std::move(state));
-    m_node_size[name] = layer.size();
+    RegisterNodeSize(name, layer.size());
     m_text_layers.insert_or_assign(std::move(name), std::move(layer));
 }
 
@@ -1058,16 +1096,20 @@ void SceneRuntimeContext::RegisterMaterialConstant(std::shared_ptr<SceneMaterial
                                                    std::shared_ptr<ScalarAnimationPlayback> animation) {
     if (material == nullptr || name.empty() || value == nullptr) return;
 
-    ApplyMaterialConstant(*material, name, *value);
-    if (animation != nullptr) material->customShader.constValues[name] = { animation->Value() };
     auto* raw = value.get();
     m_owned_values.push_back(std::move(value));
-    m_material_constants.push_back(MaterialConstantBinding {
+    MaterialConstantBinding binding {
         .material = material,
-        .name     = std::move(name),
-        .value    = raw,
+        .name = std::move(name),
+        .value = raw,
         .animation = std::move(animation),
-    });
+    };
+    if (binding.animation != nullptr) {
+        material->customShader.constValues[binding.name] = { binding.animation->Value() };
+    } else {
+        ApplyMaterialConstantBinding(binding);
+    }
+    m_material_constants.push_back(std::move(binding));
 }
 
 void SceneRuntimeContext::RegisterSceneZoomAnimation(
@@ -1378,14 +1420,20 @@ std::string SceneRuntimeContext::CreateLayerFromTemplate(std::string_view reques
                 constant_binding.value == nullptr) {
                 continue;
             }
-            ApplyMaterialConstant(
-                *material_binding.cloned_material, constant_binding.name, *constant_binding.value);
-            m_material_constants.push_back(MaterialConstantBinding {
+            MaterialConstantBinding cloned_binding {
                 .material = material_binding.cloned_material,
-                .name     = constant_binding.name,
-                .value    = constant_binding.value,
+                .name = constant_binding.name,
+                .value = constant_binding.value,
                 .animation = constant_binding.animation,
-            });
+            };
+            if (cloned_binding.animation != nullptr) {
+                material_binding.cloned_material->customShader.constValues[cloned_binding.name] = {
+                    cloned_binding.animation->Value(),
+                };
+            } else {
+                ApplyMaterialConstantBinding(cloned_binding);
+            }
+            m_material_constants.push_back(std::move(cloned_binding));
         }
     }
     m_scene_graph_mutated = true;
@@ -1433,7 +1481,11 @@ bool SceneRuntimeContext::SetNodeTranslate(std::string_view name, const Eigen::V
     }
     const auto iterator = m_nodes.find(std::string(name));
     if (iterator == m_nodes.end() || iterator->second == nullptr) return false;
-    m_node_alignment[std::string(name)].origin = value;
+    auto& alignment = m_node_alignment[std::string(name)];
+    if (! (alignment.origin.array() == value.array()).all()) {
+        alignment.origin = value;
+        alignment.transform_dirty = true;
+    }
     ApplyNodeTransform(name);
     return true;
 }
@@ -1446,7 +1498,10 @@ bool SceneRuntimeContext::SetNodeScale(std::string_view name, const Eigen::Vecto
     const auto iterator = m_nodes.find(std::string(name));
     if (iterator == m_nodes.end() || iterator->second == nullptr) return false;
     auto& binding = m_node_alignment[std::string(name)];
-    binding.scale = value;
+    if (! (binding.scale.array() == value.array()).all()) {
+        binding.scale = value;
+        binding.transform_dirty = true;
+    }
     if (binding.alignment.empty()) {
         iterator->second->SetScale(value);
     } else {
@@ -1466,7 +1521,9 @@ bool SceneRuntimeContext::SetNodeAlignment(std::string_view name, std::string al
         binding.origin      = iterator->second->Translate();
         binding.scale       = iterator->second->Scale();
         binding.size_anchor = false;
+        binding.transform_dirty = true;
     }
+    if (binding.alignment != alignment) binding.transform_dirty = true;
     binding.alignment = std::move(alignment);
     ApplyNodeTransform(name);
     return true;
@@ -1478,6 +1535,11 @@ bool SceneRuntimeContext::SetNodeAnchorAlignment(std::string_view name, std::str
     if (iterator == m_nodes.end() || iterator->second == nullptr) return false;
 
     auto& binding       = m_node_alignment[std::string(name)];
+    if (binding.alignment != alignment || ! binding.size_anchor ||
+        ! (binding.origin.array() == origin.array()).all() ||
+        ! (binding.scale.array() == iterator->second->Scale().array()).all()) {
+        binding.transform_dirty = true;
+    }
     binding.alignment   = std::move(alignment);
     binding.origin      = origin;
     binding.scale       = iterator->second->Scale();
@@ -1698,13 +1760,58 @@ std::shared_ptr<WPSoundStream> SceneRuntimeContext::LockSoundLayer(std::string_v
     return iterator->second.lock();
 }
 
+void SceneRuntimeContext::RefreshNodeTransformBindings(const std::string& name) {
+    const auto node = m_nodes.find(name);
+    const auto alignment = m_node_alignment.find(name);
+    const auto size = m_node_size.find(name);
+    const auto refresh = [&](auto& bindings) {
+        const auto iterator = bindings.find(name);
+        if (iterator == bindings.end()) return;
+        auto& binding = iterator->second;
+        binding.transform_node = node != m_nodes.end() ? node->second : nullptr;
+        binding.alignment = alignment != m_node_alignment.end() ? &alignment->second : nullptr;
+        binding.size = size != m_node_size.end() ? &size->second : nullptr;
+    };
+    refresh(m_node_translate);
+    refresh(m_node_scale);
+    refresh(m_node_rotation);
+}
+
+void SceneRuntimeContext::ApplyMaterialConstantBinding(MaterialConstantBinding& binding) {
+    auto material = binding.material.lock();
+    if (material == nullptr || (binding.value == nullptr && binding.animation == nullptr)) return;
+    if (binding.animation != nullptr) {
+        material->customShader.constValues[binding.name][0] = binding.animation->Value();
+        return;
+    }
+    const uint64_t generation = binding.value->Generation();
+    if (! binding.cached_value_valid || binding.observed_generation != generation) {
+        binding.cached_value = ShaderValueFromDynamicValue(*binding.value);
+        binding.observed_generation = generation;
+        binding.cached_value_valid = true;
+    }
+    auto& values = material->customShader.constValues;
+    const auto current = values.find(binding.name);
+    const auto& cached = binding.cached_value;
+    if (current == values.end()) {
+        values.emplace(binding.name, cached);
+    } else if (current->second.size() != cached.size() ||
+               std::memcmp(current->second.data(), cached.data(), cached.size() * sizeof(float)) != 0) {
+        current->second = cached;
+    }
+}
+
 void SceneRuntimeContext::ApplyNodeTransform(std::string_view name) {
     const auto node_iterator = m_nodes.find(std::string(name));
     if (node_iterator == m_nodes.end() || node_iterator->second == nullptr) return;
 
-    auto&           binding   = m_node_alignment[std::string(name)];
-    Eigen::Vector3f translate = binding.origin;
-    const auto      size      = NodeSize(name);
+    ApplyNodeTransform(*node_iterator->second, m_node_alignment[std::string(name)], NodeSize(name));
+}
+
+void SceneRuntimeContext::ApplyNodeTransform(SceneNode& node, NodeAlignmentBinding& binding,
+                                             const Eigen::Vector2f& size) {
+    if (binding.transform_dirty) {
+        Eigen::Vector3f translate = binding.origin;
 
     if (binding.size_anchor) {
         if (AlignmentContains(binding.alignment, "bottom")) {
@@ -1731,9 +1838,11 @@ void SceneRuntimeContext::ApplyNodeTransform(std::string_view name) {
             translate.x() -= size.x() * (binding.scale.x() - 1.0f) * 0.5f;
         }
     }
-
-    node_iterator->second->SetScale(binding.scale);
-    node_iterator->second->SetTranslate(translate);
+        binding.cached_translate = translate;
+        binding.transform_dirty = false;
+    }
+    node.SetScale(binding.scale);
+    node.SetTranslate(binding.cached_translate);
 }
 
 void SceneRuntimeContext::DispatchMediaPlaybackChanged(std::string_view name, bool playing) {
@@ -1834,10 +1943,16 @@ void SceneRuntimeContext::DispatchCursorUp(int button) {
 }
 
 bool SceneRuntimeContext::DispatchCursorFrameEvents(bool cursor_was_in_window) {
+    constexpr auto hover_mask = static_cast<uint8_t>(ScriptCursorEvent::Enter) |
+                                static_cast<uint8_t>(ScriptCursorEvent::Leave) |
+                                static_cast<uint8_t>(ScriptCursorEvent::Move);
+    constexpr auto press_mask = static_cast<uint8_t>(ScriptCursorEvent::Down) |
+                                static_cast<uint8_t>(ScriptCursorEvent::Click);
     const bool cursor_in_window = m_host_context->cursor_in_window;
     if (cursor_in_window && ! cursor_was_in_window) {
         for (auto* value : m_scripted_values) {
-            if (value != nullptr && CursorHitsScriptLayer(*value)) {
+            if (value != nullptr && (value->CursorHandlerMask() & hover_mask) != 0 &&
+                CursorHitsScriptLayer(*value)) {
                 value->DispatchCursorEnter(*m_host_context);
                 m_scripted_value_cursor_inside[value] = true;
             }
@@ -1849,7 +1964,7 @@ bool SceneRuntimeContext::DispatchCursorFrameEvents(bool cursor_was_in_window) {
         }
     } else if (! cursor_in_window && cursor_was_in_window) {
         for (auto* value : m_scripted_values) {
-            if (value == nullptr) continue;
+            if (value == nullptr || (value->CursorHandlerMask() & hover_mask) == 0) continue;
             if (m_scripted_value_cursor_inside[value]) {
                 value->DispatchCursorLeave(*m_host_context);
             }
@@ -1864,7 +1979,7 @@ bool SceneRuntimeContext::DispatchCursorFrameEvents(bool cursor_was_in_window) {
 
     if (cursor_in_window) {
         for (auto* value : m_scripted_values) {
-            if (value == nullptr) continue;
+            if (value == nullptr || (value->CursorHandlerMask() & hover_mask) == 0) continue;
             const bool now_inside = CursorHitsScriptLayer(*value);
             bool&      was_inside = m_scripted_value_cursor_inside[value];
             if (now_inside != was_inside) {
@@ -1897,7 +2012,8 @@ bool SceneRuntimeContext::DispatchCursorFrameEvents(bool cursor_was_in_window) {
         if (cursor_in_window && (m_host_context->mouse_buttons_pressed & mask) != 0) {
             m_host_context->cursor_button = button;
             for (auto* value : m_scripted_values) {
-                if (value == nullptr || ! CursorHitsScriptLayer(*value)) continue;
+                if (value == nullptr || (value->CursorHandlerMask() & press_mask) == 0 ||
+                    ! CursorHitsScriptLayer(*value)) continue;
                 value->DispatchCursorDown(*m_host_context);
                 value->DispatchCursorClick(*m_host_context);
             }
@@ -1910,7 +2026,8 @@ bool SceneRuntimeContext::DispatchCursorFrameEvents(bool cursor_was_in_window) {
         if ((m_host_context->mouse_buttons_released & mask) != 0) {
             m_host_context->cursor_button = button;
             for (auto* value : m_scripted_values) {
-                if (value == nullptr) continue;
+                if (value == nullptr ||
+                    (value->CursorHandlerMask() & static_cast<uint8_t>(ScriptCursorEvent::Up)) == 0) continue;
                 if (cursor_in_window) {
                     if (! CursorHitsScriptLayer(*value)) continue;
                 } else if (! value->LayerName().empty()) {

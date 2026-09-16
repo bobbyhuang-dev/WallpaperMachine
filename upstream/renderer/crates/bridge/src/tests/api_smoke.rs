@@ -8,7 +8,7 @@ use crate::{
     actor::state::BridgeActorState,
     api::BridgeBuilder,
     config::{AppConfig, ConfigStore, MonitorCfg, SerializedSelector, WallpaperConfig},
-    engine::FakeEngineFacade,
+    engine::{EngineFacade, FakeEngineFacade},
 };
 
 #[tokio::test]
@@ -110,6 +110,7 @@ pub(super) fn mouse_scenario<F: Future<Output = ()>>(run: impl FnOnce() -> F + S
 pub(super) fn active_mouse_display() -> DisplaySnapshotEntry {
     let mut display = identified_display("mouse-display", 7);
     display.handle = Some(wallpaper_core::project::SceneHandle::new(42));
+    display.accepts_pointer_input = true;
     display
 }
 
@@ -202,6 +203,170 @@ fn bridge_mouse_polling_waits_for_stalled_engine_poll() {
         assert!(!queued, "stalled poll must not accumulate a backlog");
         drop(bridge);
     });
+}
+
+#[test]
+fn mouse_polling_uses_committed_capability_without_refresh_or_first_frame() {
+    mouse_scenario(|| async {
+        let engine = FakeEngineFacade::default();
+        let mut video = active_mouse_display();
+        video.accepts_pointer_input = false;
+        engine.set_snapshot(vec![video.clone()]);
+        let bridge = BridgeBuilder::new(engine.clone()).build().unwrap();
+        bridge.app_snapshot().await.unwrap();
+        bridge.poll_mouse_position().await.unwrap();
+        assert_mouse_idle(&engine);
+        assert!(engine.mouse_poll_calls().is_empty());
+
+        // A configured refresh is not a committed native capability.
+        engine.set_snapshot_after_refresh(vec![active_mouse_display()]);
+        bridge.poll_mouse_position().await.unwrap();
+        assert!(engine.mouse_poll_calls().is_empty());
+
+        // Unknown native state is conservatively interactive, even without assignment.
+        let mut unknown = active_mouse_display();
+        unknown.desc.display_id = 8;
+        unknown.handle = Some(wallpaper_core::project::SceneHandle::new(43));
+        engine.set_snapshot(vec![video.clone(), unknown]);
+        await_mouse_sample(&engine);
+
+        bridge.pause_all().await.unwrap();
+        engine.set_snapshot(vec![video.clone()]);
+        engine.set_snapshot(vec![active_mouse_display()]);
+        bridge.poll_mouse_position().await.unwrap();
+        assert_mouse_idle(&engine);
+        bridge.play_all().await.unwrap();
+        await_mouse_sample(&engine);
+
+        engine.set_snapshot(vec![video]);
+        bridge.app_snapshot().await.unwrap();
+        assert_mouse_idle(&engine);
+        bridge.pause_all().await.unwrap();
+        bridge.play_all().await.unwrap();
+        assert_mouse_idle(&engine);
+        drop(bridge);
+    });
+}
+
+#[test]
+fn partial_refresh_error_publishes_actual_consumers() {
+    mouse_scenario(|| async {
+        let engine = FakeEngineFacade::default();
+        let bridge = BridgeBuilder::new(engine.clone()).build().unwrap();
+        engine.set_snapshot_after_refresh(vec![active_mouse_display()]);
+        engine.fail_next_refresh();
+        assert!(bridge.refresh_displays().await.is_err());
+        await_mouse_sample(&engine);
+
+        engine.set_snapshot_after_refresh(Vec::new());
+        engine.fail_next_refresh();
+        assert!(bridge.refresh_displays().await.is_err());
+        assert_mouse_idle(&engine);
+        drop(bridge);
+    });
+}
+
+#[test]
+fn dropping_an_older_bridge_does_not_unregister_the_new_consumer_callback() {
+    mouse_scenario(|| async {
+        let engine = FakeEngineFacade::default();
+        let first = BridgeBuilder::new(engine.clone()).build().unwrap();
+        let second = BridgeBuilder::new(engine.clone()).build().unwrap();
+        drop(first);
+        engine.set_snapshot(vec![active_mouse_display()]);
+        await_mouse_sample(&engine);
+        drop(second);
+        let count = engine.mouse_poll_calls().len();
+        engine.set_snapshot(Vec::new());
+        engine.set_snapshot(vec![active_mouse_display()]);
+        assert_eq!(engine.mouse_poll_calls().len(), count);
+    });
+}
+
+#[tokio::test]
+async fn fake_consumer_observer_replays_only_committed_snapshot_changes() {
+    let engine = FakeEngineFacade::default();
+    let (send, receive) = std::sync::mpsc::channel();
+    engine.set_pointer_consumer_callback(Some(std::sync::Arc::new(move |value| {
+        send.send(value).unwrap();
+    })));
+    assert!(!receive.recv().unwrap());
+    engine.set_snapshot_after_refresh(vec![active_mouse_display()]);
+    assert!(receive.try_recv().is_err());
+    engine.refresh_displays().await.unwrap();
+    assert!(receive.recv().unwrap());
+    engine.set_snapshot(vec![active_mouse_display()]);
+    assert!(receive.try_recv().is_err());
+    engine.fail_next_close();
+    assert!(engine.close_all_scenes().await.is_err());
+    assert!(engine.display_snapshot()[0].accepts_pointer_input);
+    assert!(receive.try_recv().is_err());
+    engine.close_all_scenes().await.unwrap();
+    assert!(!receive.recv().unwrap());
+    assert!(engine.display_snapshot()[0].handle.is_none());
+    engine.set_pointer_consumer_callback(None);
+    engine.set_snapshot(vec![active_mouse_display()]);
+    assert!(receive.try_recv().is_err());
+}
+
+#[test]
+fn consumer_registration_and_publication_are_serialized_in_both_orders() {
+    use std::sync::{Arc, Barrier, mpsc};
+
+    for publication_first in [false, true] {
+        let engine = FakeEngineFacade::default();
+        let reached = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let (events, received) = mpsc::channel();
+        let blocking_callback: wallpaper_core::PointerConsumerCallback = {
+            let reached = reached.clone();
+            let release = release.clone();
+            Arc::new(move |value| {
+                events.send(value).unwrap();
+                if value == publication_first {
+                    reached.wait();
+                    release.wait();
+                }
+            })
+        };
+        if publication_first {
+            engine.set_pointer_consumer_callback(Some(blocking_callback.clone()));
+            assert!(!received.recv().unwrap());
+        }
+        let first_engine = engine.clone();
+        let first = std::thread::spawn(move || {
+            if publication_first {
+                first_engine.set_snapshot(vec![active_mouse_display()]);
+            } else {
+                first_engine.set_pointer_consumer_callback(Some(blocking_callback));
+            }
+        });
+        reached.wait();
+        assert_eq!(received.recv().unwrap(), publication_first);
+        let second_engine = engine.clone();
+        let (started, starting) = mpsc::channel();
+        let (replayed, replay) = mpsc::channel();
+        let second = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            if publication_first {
+                second_engine.set_pointer_consumer_callback(Some(Arc::new(move |value| {
+                    replayed.send(value).unwrap();
+                })));
+            } else {
+                second_engine.set_snapshot(vec![active_mouse_display()]);
+            }
+        });
+        starting.recv().unwrap();
+        release.wait();
+        first.join().unwrap();
+        second.join().unwrap();
+        if publication_first {
+            assert!(replay.recv().unwrap());
+        } else {
+            assert!(received.recv().unwrap());
+        }
+        assert!(engine.display_snapshot()[0].accepts_pointer_input);
+    }
 }
 
 #[tokio::test]
@@ -403,6 +568,7 @@ fn identified_display_with_refresh(
         desc: DisplayDesc::with_identity(display_id, identity, 0, 0, 1920, 1080, 2.0)
             .with_refresh_rate(refresh_rate_hz),
         handle: None,
+        accepts_pointer_input: false,
         window_active: true,
         assignment: None,
     }

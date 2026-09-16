@@ -22,6 +22,8 @@ typedef struct owe_scene_wallpaper owe_scene_wallpaper;
 typedef void (*owe_log_callback)(int level, const char* file, int line, const char* message);
 typedef void (*owe_first_frame_callback)(void* user_data);
 typedef void (*owe_first_frame_callback_drop)(void* user_data);
+typedef void (*owe_pointer_input_callback)(void* user_data, bool accepts_pointer_input);
+typedef void (*owe_pointer_input_callback_drop)(void* user_data);
 
 void owe_set_log_callback(owe_log_callback callback);
 
@@ -88,10 +90,24 @@ int owe_scene_wallpaper_set_first_frame_callback(owe_scene_wallpaper* scene,
                                                  void* user_data,
                                                  owe_first_frame_callback_drop drop_user_data);
 
+/*
+ * Reports committed scene pointer capability on the native main looper, with
+ * an immediate replay there when installed. Requires an initialized scene.
+ * Success transfers user_data ownership to drop_user_data; failure does not.
+ * Replacing/clearing keeps old userdata alive until its last queued/in-flight
+ * callback is released. A null callback clears notifications.
+ */
+int owe_scene_wallpaper_set_pointer_input_callback(
+    owe_scene_wallpaper* scene, owe_pointer_input_callback callback, void* user_data,
+    owe_pointer_input_callback_drop drop_user_data);
+
 /* Direct mouse/pointer forwarding to SceneWallpaper. Coordinates are normalized canvas space. */
 int owe_scene_wallpaper_mouse_input(owe_scene_wallpaper* scene, double x, double y);
 int owe_scene_wallpaper_mouse_button(owe_scene_wallpaper* scene, int button, bool pressed);
 int owe_scene_wallpaper_mouse_enter(owe_scene_wallpaper* scene, bool entered);
+
+/* Reconciles held levels without creating or clearing pending edges. Requires initialization. */
+int owe_scene_wallpaper_set_mouse_button_baseline(owe_scene_wallpaper* scene, uint32_t down);
 
 /* Direct property forwarding to SceneWallpaper::setProperty*. */
 int owe_scene_wallpaper_set_property_bool(owe_scene_wallpaper* scene, const char* name, bool value);

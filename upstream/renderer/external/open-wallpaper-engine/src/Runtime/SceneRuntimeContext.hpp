@@ -4,6 +4,7 @@
 #include "Audio/include/Audio/AudioResponseService.h"
 #include "Runtime/ScalarAnimation.hpp"
 #include "Scene/Parse/WPPuppet.hpp"
+#include "Scene/include/Scene/SceneShader.h"
 #include "Text/TextLayer.hpp"
 #include "Video/VideoTextureSource.hpp"
 
@@ -239,9 +240,20 @@ private:
         SceneNode*    node { nullptr };
         DynamicValue* value { nullptr };
     };
+    struct NodeAlignmentBinding {
+        std::string     alignment;
+        Eigen::Vector3f origin { Eigen::Vector3f::Zero() };
+        Eigen::Vector3f scale { Eigen::Vector3f::Ones() };
+        bool            size_anchor { false };
+        bool transform_dirty { true };
+        Eigen::Vector3f cached_translate { Eigen::Vector3f::Zero() };
+    };
     struct NodeVec3Binding {
         SceneNode*    node { nullptr };
         DynamicValue* value { nullptr };
+        SceneNode* transform_node { nullptr };
+        NodeAlignmentBinding* alignment { nullptr };
+        const Eigen::Vector2f* size { nullptr };
     };
     struct NodeEffectFinalBinding {
         SceneNode*             node { nullptr };
@@ -257,6 +269,9 @@ private:
         std::string                  name;
         DynamicValue*                value { nullptr };
         std::shared_ptr<ScalarAnimationPlayback> animation;
+        uint64_t observed_generation { 0 };
+        bool cached_value_valid { false };
+        ShaderValue cached_value;
     };
     struct TextValueBinding {
         std::string   name;
@@ -265,12 +280,6 @@ private:
     struct DynamicValueListenerBinding {
         DynamicValue*         value { nullptr };
         std::function<void()> deregister;
-    };
-    struct NodeAlignmentBinding {
-        std::string     alignment;
-        Eigen::Vector3f origin { Eigen::Vector3f::Zero() };
-        Eigen::Vector3f scale { Eigen::Vector3f::Ones() };
-        bool            size_anchor { false };
     };
 public:
     struct NodeRegistrationSnapshot {
@@ -293,6 +302,10 @@ public:
         bool                                    has_sound_layer { false };
         std::size_t                             owned_values_size { 0 };
         std::size_t                             scripted_values_size { 0 };
+        std::size_t material_constants_size { 0 };
+        std::size_t dynamic_value_listeners_size { 0 };
+        std::size_t material_alpha_size { 0 };
+        std::size_t scalar_animations_size { 0 };
     };
 
 private:
@@ -342,6 +355,9 @@ private:
     std::shared_ptr<WPSoundStream> LockSoundLayer(std::string_view name) const;
     void DispatchMediaPlaybackChanged(std::string_view name, bool playing);
     void ApplyNodeTransform(std::string_view name);
+    void RefreshNodeTransformBindings(const std::string& name);
+    void ApplyNodeTransform(SceneNode& node, NodeAlignmentBinding& binding, const Eigen::Vector2f& size);
+    void ApplyMaterialConstantBinding(MaterialConstantBinding& binding);
     void ApplySceneZoomAnimation();
     bool                           CursorInsidePresentedContent() const;
     bool CursorHitsLayer(std::string_view name) const;

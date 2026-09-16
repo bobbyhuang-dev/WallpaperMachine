@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <map>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string>
@@ -1743,6 +1744,163 @@ TEST(MdlSchema, PuppetAnimationAdvancesOncePerAbsoluteElapsedTime) {
 
     EXPECT_NEAR(first, 5.0f, 1.0e-5f);
     EXPECT_NEAR(second, first, 1.0e-5f);
+}
+
+TEST(MdlSchema, SharedPuppetCopiesApplySameTimeControlsToThePose) {
+    auto layer = BuildAdditiveLayer(BuildOneBonePuppet(WPPuppet::PlayMode::Single, 0, 100));
+    auto copy = layer;
+    EXPECT_FLOAT_EQ(RootTranslationY(layer, 0), 0);
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.5), 50);
+    ASSERT_TRUE(layer.pause(0));
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.5), 50);
+    ASSERT_TRUE(layer.setFrame(0, 0.25));
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.5), 25);
+    ASSERT_TRUE(copy.stop(0));
+    EXPECT_FLOAT_EQ(RootTranslationY(layer, 0.5), 0);
+    ASSERT_TRUE(layer.setFrame(0, 0.75));
+    ASSERT_TRUE(layer.play(0));
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.5), 75);
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.75), 100);
+    EXPECT_FALSE(layer.isPlaying(0));
+    ASSERT_TRUE(layer.play(0));
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.75), 0);
+    EXPECT_TRUE(copy.isPlaying(0));
+    EXPECT_FLOAT_EQ(RootTranslationY(layer, 1), 25);
+}
+
+TEST(MdlSchema, PuppetRateChangesAndRewindsPreserveTheElapsedHighWaterMark) {
+    auto layer = BuildAdditiveLayer(BuildOneBonePuppet(WPPuppet::PlayMode::Single, 0, 100));
+    auto copy = layer;
+    EXPECT_FLOAT_EQ(RootTranslationY(layer, 0), 0);
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.25), 25);
+    ASSERT_TRUE(layer.setRate(0, 2));
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.25), 25);
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.375), 50);
+    EXPECT_FLOAT_EQ(RootTranslationY(layer, 0.125), 50);
+    ASSERT_TRUE(copy.setRate(0, 0.5));
+    EXPECT_FLOAT_EQ(RootTranslationY(layer, 0.375), 50);
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.5), 56.25);
+    ASSERT_TRUE(layer.pause(0));
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.75), 56.25);
+    ASSERT_TRUE(copy.play(0));
+    EXPECT_FLOAT_EQ(RootTranslationY(layer, 0.75), 56.25);
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 1), 68.75);
+}
+
+TEST(MdlSchema, SharedPuppetBlendAndVisibilityChangeAnAlreadySampledPose) {
+    auto layer = BuildAdditiveLayer(BuildOneBonePuppet(WPPuppet::PlayMode::Single, 40, 80));
+    auto copy = layer;
+    EXPECT_FLOAT_EQ(RootTranslationY(layer, 0), 40);
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.5), 60);
+    ASSERT_TRUE(layer.setBlend(0, 0.5));
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.5), 30);
+    ASSERT_TRUE(copy.setVisible(0, false));
+    EXPECT_FLOAT_EQ(RootTranslationY(layer, 0.5), 0);
+    ASSERT_TRUE(layer.setVisible(0, true));
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.5), 30);
+    ASSERT_TRUE(copy.setBlend(0, 1));
+    EXPECT_FLOAT_EQ(RootTranslationY(layer, 0.5), 60);
+    ASSERT_TRUE(layer.setBlend(0, 1));
+    ASSERT_TRUE(layer.setVisible(0, true));
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.5), 60);
+}
+
+TEST(MdlSchema, PuppetReprepareResetsBlendWithoutResettingTheSharedClock) {
+    auto puppet = BuildOneBonePuppet(WPPuppet::PlayMode::Single, 0, 100);
+    WPPuppetLayer layer(puppet);
+    WPPuppetLayer::AnimationLayer authored;
+    authored.id = 1;
+    layer.prepared(std::span(&authored, 1));
+    auto copy = layer;
+    EXPECT_FLOAT_EQ(RootTranslationY(layer, 0), 0);
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.5), 50);
+    authored.blend = 0.5;
+    authored.cur_time = 0.25;
+    layer.prepared(std::span(&authored, 1));
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.5), 12.5);
+    copy.prepared(std::span(&authored, 1));
+    EXPECT_FLOAT_EQ(RootTranslationY(layer, 0.5), 12.5);
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.25), 12.5);
+    EXPECT_FLOAT_EQ(RootTranslationY(layer, 0.75), 25);
+    copy.prepared({});
+    EXPECT_TRUE(layer.genFrame(0.75)[0].matrix().isApprox(Eigen::Matrix4f::Identity()));
+    authored.id = 999;
+    layer.prepared(std::span(&authored, 1));
+    EXPECT_TRUE(copy.genFrame(0.75)[0].matrix().isApprox(Eigen::Matrix4f::Identity()));
+    EXPECT_FALSE(copy.setFrame(0, 0.5));
+}
+
+TEST(MdlSchema, RejectedPuppetControlsPreservePoseAndPlayback) {
+    auto layer = BuildAdditiveLayer(BuildOneBonePuppet(WPPuppet::PlayMode::Single, 0, 100));
+    auto copy = layer;
+    EXPECT_FLOAT_EQ(RootTranslationY(layer, 0), 0);
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.25), 25);
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    EXPECT_FALSE(layer.play(-1));
+    EXPECT_FALSE(layer.pause(1));
+    EXPECT_FALSE(layer.stop(1));
+    EXPECT_FALSE(layer.setFrame(1, 0));
+    EXPECT_FALSE(layer.setFrame(0, nan));
+    EXPECT_FALSE(layer.setFrame(0, inf));
+    EXPECT_FALSE(layer.setRate(1, 1));
+    EXPECT_FALSE(layer.setRate(0, nan));
+    EXPECT_FALSE(layer.setRate(0, inf));
+    EXPECT_FALSE(layer.setBlend(1, 1));
+    EXPECT_FALSE(layer.setBlend(0, nan));
+    EXPECT_FALSE(layer.setBlend(0, inf));
+    EXPECT_FALSE(layer.setVisible(1, false));
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.25), 25);
+    EXPECT_FLOAT_EQ(RootTranslationY(copy, 0.5), 50);
+}
+
+TEST(MdlSchema, IndependentPuppetStatesDoNotOverwriteBorrowedPoses) {
+    auto puppet = BuildOneBonePuppet(WPPuppet::PlayMode::Single, 0, 100);
+    auto first = BuildAdditiveLayer(puppet);
+    auto second = BuildAdditiveLayer(puppet);
+    auto shared = first;
+    first.genFrame(0);
+    second.genFrame(0);
+    const auto first_pose = first.genFrame(0.25);
+    ASSERT_EQ(first_pose.size(), 1u);
+    const Eigen::Matrix4f saved = first_pose[0].matrix();
+    EXPECT_FLOAT_EQ(RootTranslationY(second, 0.75), 75);
+    EXPECT_TRUE(first_pose[0].matrix().isApprox(saved));
+    ASSERT_TRUE(shared.setFrame(0, 0.5));
+    EXPECT_FLOAT_EQ(RootTranslationY(first, 0.25), 50);
+    EXPECT_FLOAT_EQ(RootTranslationY(second, 0.75), 75);
+    ASSERT_TRUE(second.stop(0));
+    EXPECT_FLOAT_EQ(RootTranslationY(second, 0.75), 0);
+    EXPECT_FLOAT_EQ(RootTranslationY(shared, 0.25), 50);
+}
+
+TEST(MdlSchema, EmptyPuppetLayersRemainSafeAndZeroBonesKeepPlaybackState) {
+    WPPuppetLayer empty;
+    WPPuppetLayer null_layer(nullptr);
+    WPPuppetLayer::AnimationLayer authored;
+    authored.id = 1;
+    for (auto* layer : { &empty, &null_layer }) {
+        layer->prepared(std::span(&authored, 1));
+        EXPECT_FALSE(layer->hasPuppet());
+        EXPECT_TRUE(layer->genFrame(0).empty());
+        EXPECT_EQ(layer->layerCount(), 0u);
+        EXPECT_FALSE(layer->play(0));
+        EXPECT_FALSE(layer->setFrame(0, 0));
+    }
+    auto puppet = BuildOneBonePuppet(WPPuppet::PlayMode::Single, 0, 100);
+    puppet->bones.clear();
+    puppet->prepared();
+    auto layer = BuildAdditiveLayer(puppet);
+    auto copy = layer;
+    EXPECT_TRUE(layer.hasPuppet());
+    EXPECT_TRUE(layer.genFrame(0).empty());
+    EXPECT_TRUE(copy.genFrame(0.5).empty());
+    EXPECT_DOUBLE_EQ(layer.frame(0), 0.5);
+    EXPECT_TRUE(layer.genFrame(1).empty());
+    EXPECT_FALSE(copy.isPlaying(0));
+    ASSERT_TRUE(copy.play(0));
+    EXPECT_TRUE(layer.genFrame(1).empty());
+    EXPECT_DOUBLE_EQ(layer.frame(0), 0);
 }
 
 TEST(MdlSchema, VertexCentroidOffsetOnlyBracketsWorldAnchoredRoots) {

@@ -12,6 +12,7 @@ CopyPass::CopyPass(const Desc& desc): m_desc(desc) {}
 CopyPass::~CopyPass() {};
 
 void CopyPass::prepare(Scene& scene, const Device& device, RenderingResources& rr) {
+    setPrepared(false);
     const std::string src_name = scene.ResolveRenderTargetName(m_desc.src);
     const std::string dst_name = scene.ResolveRenderTargetName(m_desc.dst);
     if (!scene.HasRenderTarget(src_name)) {
@@ -30,14 +31,16 @@ void CopyPass::prepare(Scene& scene, const Device& device, RenderingResources& r
         auto& tex_name = textures[i];
         if (tex_name.empty()) continue;
 
-        ImageParameters img;
+        ImageParameters img {};
         if (IsSpecTex(tex_name)) {
             auto& rt  = *scene.FindRenderTarget(tex_name);
             auto  opt = device.tex_cache().Query(tex_name, ToTexKey(rt), ! rt.allowReuse);
-            if (opt.has_value())
+            if (opt.has_value()) {
                 img = opt.value();
-            else
+            } else {
                 LOG_ERROR("query image from cache failed");
+                return;
+            }
         } else {
             LOG_ERROR("can't copy image source");
             return;
@@ -51,14 +54,13 @@ void CopyPass::prepare(Scene& scene, const Device& device, RenderingResources& r
 
     setPrepared();
 };
-void CopyPass::execute(const Device& device, RenderingResources& rr) {
+VkResult CopyPass::execute(const Device& device, RenderingResources& rr) {
     auto& cmd = rr.command;
     auto& src = m_desc.vk_src;
     auto& dst = m_desc.vk_dst;
 
     if (! (src.handle && dst.handle)) {
-        assert(src.handle && dst.handle);
-        return;
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
 
     VkImageSubresourceRange srang {
@@ -90,27 +92,35 @@ void CopyPass::execute(const Device& device, RenderingResources& rr) {
         VkImageMemoryBarrier in_bar {
             .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext            = nullptr,
-            .srcAccessMask    = VK_ACCESS_MEMORY_READ_BIT,
+            .srcAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT |
+                                VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT,
             .dstAccessMask    = VK_ACCESS_TRANSFER_READ_BIT,
             .oldLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image            = src.handle,
             .subresourceRange = srang,
         };
         VkImageMemoryBarrier out_bar {
             .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext            = nullptr,
-            .srcAccessMask    = VK_ACCESS_MEMORY_READ_BIT,
+            .srcAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT |
+                                VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT,
             .dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
             .oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED,
             .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image            = dst.handle,
             .subresourceRange = srang,
         };
 
-        cmd.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        cmd.PipelineBarrier(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                             VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            VK_DEPENDENCY_BY_REGION_BIT,
+                            0,
                             {},
                             {},
                             std::array { in_bar, out_bar });
@@ -125,9 +135,11 @@ void CopyPass::execute(const Device& device, RenderingResources& rr) {
             .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext            = nullptr,
             .srcAccessMask    = VK_ACCESS_TRANSFER_READ_BIT,
-            .dstAccessMask    = VK_ACCESS_MEMORY_READ_BIT,
+            .dstAccessMask    = VK_ACCESS_SHADER_READ_BIT,
             .oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             .newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image            = src.handle,
             .subresourceRange = srang,
         };
@@ -138,13 +150,15 @@ void CopyPass::execute(const Device& device, RenderingResources& rr) {
             .dstAccessMask    = VK_ACCESS_SHADER_READ_BIT,
             .oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             .newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image            = dst.handle,
             .subresourceRange = srang,
         };
 
         cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                            VK_DEPENDENCY_BY_REGION_BIT,
+                            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                            0,
                             {},
                             {},
                             std::array { in_bar, out_bar });
@@ -153,5 +167,6 @@ void CopyPass::execute(const Device& device, RenderingResources& rr) {
     if (dst.mipmap_level > 1) {
         device.tex_cache().RecGenerateMipmaps(cmd, dst);
     }
+    return VK_SUCCESS;
 };
 void CopyPass::destory(const Device&, RenderingResources&) {}

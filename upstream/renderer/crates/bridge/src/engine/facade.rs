@@ -52,6 +52,10 @@ pub trait EngineFacade: Send + Sync + 'static {
         assignment: WallpaperAssignment,
     ) -> EngineFuture<Option<SceneHandle>>;
     fn set_first_frame_callback(&self, callback: FirstFrameCallback);
+    fn set_pointer_consumer_callback(
+        &self,
+        callback: Option<wallpaper_core::PointerConsumerCallback>,
+    );
     /// Globally suspends or resumes system-audio capture. Per-scene audio
     /// response settings are preserved across the transition.
     fn set_audio_capture_suspended(&self, suspended: bool) -> EngineFuture<()> {
@@ -304,6 +308,13 @@ impl EngineFacade for RealEngineFacade {
                 callback(handle);
             }));
     }
+
+    fn set_pointer_consumer_callback(
+        &self,
+        callback: Option<wallpaper_core::PointerConsumerCallback>,
+    ) {
+        self.engine.set_pointer_consumer_callback(callback);
+    }
 }
 
 #[derive(Clone)]
@@ -424,7 +435,9 @@ pub struct FakeEngineFacade {
     calls: Arc<ArcSwap<Vec<Vec<SceneDesc>>>>,
     rendered_scenes: Arc<ArcSwap<Vec<SceneDesc>>>,
     snapshot: Arc<ArcSwap<Vec<DisplaySnapshotEntry>>>,
+    pointer_consumer: Arc<std::sync::Mutex<PointerConsumerObserver>>,
     snapshot_after_refresh: Arc<ArcSwap<Option<Vec<DisplaySnapshotEntry>>>>,
+    refresh_failure: Arc<ArcSwap<Option<String>>>,
     paused_calls: Arc<ArcSwap<Vec<bool>>>,
     pause_failure: Arc<ArcSwap<Option<String>>>,
     suspend_failure: Arc<ArcSwap<Option<String>>>,
@@ -454,6 +467,13 @@ pub struct FakeEngineFacade {
     reconcile_block: Arc<SegQueue<ReconcileBlockGate>>,
     reconcile_done: Arc<SegQueue<Sender<()>>>,
     first_frame_callback: Arc<ArcSwap<Option<FirstFrameCallback>>>,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct PointerConsumerObserver {
+    callback: Option<wallpaper_core::PointerConsumerCallback>,
+    has_consumers: bool,
 }
 
 #[cfg(test)]
@@ -532,7 +552,22 @@ impl FakeEngineFacade {
     }
 
     pub fn set_snapshot(&self, snapshot: Vec<DisplaySnapshotEntry>) {
-        self.snapshot.store(Arc::new(snapshot));
+        self.publish_snapshot(|_| snapshot);
+    }
+
+    fn publish_snapshot(&self, update: impl FnOnce(&[DisplaySnapshotEntry]) -> Vec<DisplaySnapshotEntry>) {
+        let mut observer = self.pointer_consumer.lock().unwrap_or_else(|error| error.into_inner());
+        let snapshot = Arc::new(update(self.snapshot.load().as_ref()));
+        let has_consumers = snapshot.iter().any(|display| {
+            display.handle.is_some() && display.accepts_pointer_input
+        });
+        self.snapshot.store(snapshot);
+        if observer.has_consumers != has_consumers {
+            observer.has_consumers = has_consumers;
+            if let Some(callback) = &observer.callback {
+                callback(has_consumers);
+            }
+        }
     }
 
     pub fn set_snapshot_after_refresh(&self, snapshot: Vec<DisplaySnapshotEntry>) {
@@ -615,6 +650,11 @@ impl FakeEngineFacade {
     pub fn fail_next_close(&self) {
         self.close_failure
             .store(Arc::new(Some("close failed".into())));
+    }
+
+    pub fn fail_next_refresh(&self) {
+        self.refresh_failure
+            .store(Arc::new(Some("refresh failed after partial commit".into())));
     }
 
     #[must_use]
@@ -786,7 +826,10 @@ impl EngineFacade for FakeEngineFacade {
         async move {
             let refresh_snapshot = fake.snapshot_after_refresh.load_full().as_ref().clone();
             if let Some(snapshot) = refresh_snapshot {
-                fake.snapshot.store(Arc::new(snapshot));
+                fake.set_snapshot(snapshot);
+            }
+            if let Some(message) = fake.refresh_failure.swap(Arc::new(None)).as_ref() {
+                return Err(EngineError::Platform(message.clone()));
             }
             Ok(())
         }
@@ -803,10 +846,11 @@ impl EngineFacade for FakeEngineFacade {
             if let Some(message) = fake.close_failure.swap(Arc::new(None)).as_ref() {
                 return Err(EngineError::Platform(message.clone()));
             }
-            fake.snapshot.rcu(|current| {
-                let mut next = current.as_ref().clone();
+            fake.publish_snapshot(|current| {
+                let mut next = current.to_vec();
                 for display in &mut next {
                     display.handle = None;
+                    display.accepts_pointer_input = false;
                     display.assignment = None;
                 }
                 next
@@ -1057,5 +1101,16 @@ impl EngineFacade for FakeEngineFacade {
 
     fn set_first_frame_callback(&self, callback: FirstFrameCallback) {
         self.first_frame_callback.store(Arc::new(Some(callback)));
+    }
+
+    fn set_pointer_consumer_callback(
+        &self,
+        callback: Option<wallpaper_core::PointerConsumerCallback>,
+    ) {
+        let mut observer = self.pointer_consumer.lock().unwrap_or_else(|error| error.into_inner());
+        observer.callback = callback;
+        if let Some(callback) = &observer.callback {
+            callback(observer.has_consumers);
+        }
     }
 }

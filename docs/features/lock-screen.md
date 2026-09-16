@@ -34,6 +34,23 @@ acknowledge a rendered frame.
 Disabling the feature or quitting the app restores the native selections that
 are still owned by this app. Wallpaper changes made elsewhere are preserved.
 
+## Background checks and recovery
+
+The service keeps one two-second monitor only while animation is requested,
+recovery is complete, shutdown has not begun, and no error is pending. Busy
+refreshes keep that timer but skip its work. An active request with no scenes
+still checks for a later wallpaper; disabling or shutting down cancels the timer
+immediately. An error stops automatic monitoring until an explicit retry or
+another existing refresh path succeeds.
+
+Recovery entries represent the last successful journal commit. Repeated checks
+do not rewrite an unchanged journal, but still read the actual system store to
+detect new Spaces and external selections. A revision-only store update may
+still require a wallpaper-service reload without rewriting the journal. The
+recovery union is persisted before changing the store, and pruned only after a
+successful reload; failed writes, reloads or journal removal retain recovery
+information for retry.
+
 ## Storage
 
 Lock-screen assets are isolated copies, using APFS clones where available. They

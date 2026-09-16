@@ -57,6 +57,24 @@ final class LockScreenWallpaperTests: XCTestCase {
   }
 
   @MainActor
+  private func assertDiskRecovery(restores original: [String: Any]) throws {
+    let copy = root.appendingPathComponent("recovery-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
+    let copiedStore = copy.appendingPathComponent("Index.plist")
+    let copiedJournal = copy.appendingPathComponent("journal.plist")
+    try FileManager.default.copyItem(at: store, to: copiedStore)
+    try FileManager.default.copyItem(at: journal, to: copiedJournal)
+    let recovered = LockScreenWallpaperSelection(
+      storeURL: copiedStore, journalURL: copiedJournal, reload: {})
+    try recovered.recover()
+    let restored = try XCTUnwrap(
+      PropertyListSerialization.propertyList(from: Data(contentsOf: copiedStore), format: nil)
+        as? [String: Any])
+    XCTAssertEqual(restored as NSDictionary, original as NSDictionary)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: copiedJournal.path))
+  }
+
+  @MainActor
   func testNativeSelectionTargetsOnlyOwnedDisplaysAndRestoresIndependentOriginals() throws {
     let original = fixture()
     try write(original)
@@ -265,6 +283,248 @@ final class LockScreenWallpaperTests: XCTestCase {
     XCTAssertThrowsError(try selection.synchronize(displays: ["one"]))
     XCTAssertEqual(try readStore() as NSDictionary, original as NSDictionary)
     XCTAssertFalse(FileManager.default.fileExists(atPath: journal.path))
+  }
+
+  @MainActor
+  func testUnchangedJournalIsNotRewrittenForRepeatedOrRevisionOnlySynchronization() throws {
+    let original = fixture()
+    try write(original)
+    var writes = 0
+    var removes = 0
+    var reloads = 0
+    let selection = LockScreenWallpaperSelection(
+      storeURL: store, journalURL: journal, reload: { reloads += 1 },
+      persistJournal: { url, data in
+        try LockScreenWallpaperSelection.persistJournalFile(url, data)
+        if data == nil { removes += 1 } else { writes += 1 }
+      })
+    try selection.synchronize(displays: ["one"], revision: "first")
+    let journalBytes = try Data(contentsOf: journal)
+    let firstStore = try Data(contentsOf: store)
+    try selection.synchronize(displays: ["one"], revision: "first")
+    XCTAssertEqual(try Data(contentsOf: store), firstStore)
+    try selection.synchronize(displays: ["one"], revision: "second")
+    XCTAssertNotEqual(try Data(contentsOf: store), firstStore)
+    XCTAssertEqual(try Data(contentsOf: journal), journalBytes)
+    XCTAssertEqual(writes, 1)
+    XCTAssertEqual(reloads, 2)
+    try selection.synchronize(displays: [])
+    try selection.synchronize(displays: [])
+    XCTAssertEqual(writes, 1)
+    XCTAssertEqual(removes, 1)
+    XCTAssertEqual(try readStore() as NSDictionary, original as NSDictionary)
+  }
+
+  @MainActor
+  func testExpansionFailureCannotCommitStoreAndRetryKeepsBothOriginals() throws {
+    let original = fixture()
+    try write(original)
+    var failExpansion = false
+    var writes = 0
+    var reloads = 0
+    var storeBeforeCommit = try Data(contentsOf: store)
+    let selection = LockScreenWallpaperSelection(
+      storeURL: store, journalURL: journal,
+      reload: {
+        XCTAssertTrue(FileManager.default.fileExists(atPath: self.journal.path))
+        XCTAssertNotEqual(try Data(contentsOf: self.store), storeBeforeCommit)
+        reloads += 1
+      },
+      persistJournal: { url, data in
+        XCTAssertEqual(try Data(contentsOf: self.store), storeBeforeCommit)
+        if failExpansion { throw CocoaError(.fileWriteOutOfSpace) }
+        try LockScreenWallpaperSelection.persistJournalFile(url, data)
+        writes += 1
+      })
+    try selection.synchronize(displays: ["one"])
+    storeBeforeCommit = try Data(contentsOf: store)
+    let firstJournal = try Data(contentsOf: journal)
+    failExpansion = true
+    XCTAssertThrowsError(try selection.synchronize(displays: ["one", "two"]))
+    XCTAssertEqual(try Data(contentsOf: store), storeBeforeCommit)
+    XCTAssertEqual(try Data(contentsOf: journal), firstJournal)
+    XCTAssertEqual(reloads, 1)
+    try assertDiskRecovery(restores: original)
+    failExpansion = false
+    try selection.synchronize(displays: ["one", "two"])
+    XCTAssertEqual(writes, 2)
+    XCTAssertEqual(reloads, 2)
+    let recovered = LockScreenWallpaperSelection(storeURL: store, journalURL: journal, reload: {})
+    try recovered.recover()
+    XCTAssertEqual(try readStore() as NSDictionary, original as NSDictionary)
+  }
+
+  @MainActor
+  func testConcurrentStoreChangeRetainsUnionWithoutOverwritingExternalBytes() throws {
+    var external = fixture()
+    try write(external)
+    external["Unrelated"] = "concurrent external update"
+    var reloads = 0
+    let selection = LockScreenWallpaperSelection(
+      storeURL: store, journalURL: journal, reload: { reloads += 1 },
+      persistJournal: { url, data in
+        try LockScreenWallpaperSelection.persistJournalFile(url, data)
+        try self.write(external)
+      })
+    XCTAssertThrowsError(try selection.synchronize(displays: ["one"]))
+    XCTAssertEqual(reloads, 0)
+    XCTAssertEqual(try readStore() as NSDictionary, external as NSDictionary)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: journal.path))
+    let recovered = LockScreenWallpaperSelection(storeURL: store, journalURL: journal, reload: {})
+    try recovered.recover()
+    XCTAssertEqual(try readStore() as NSDictionary, external as NSDictionary)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: journal.path))
+  }
+
+  @MainActor
+  func testReloadRetryUsesPersistedUnionWithoutRewritingIt() throws {
+    let original = fixture()
+    try write(original)
+    var failReload = true
+    var writes = 0
+    var reloads = 0
+    let selection = LockScreenWallpaperSelection(
+      storeURL: store, journalURL: journal,
+      reload: {
+        reloads += 1
+        if failReload { throw CocoaError(.executableRuntimeMismatch) }
+      },
+      persistJournal: { url, data in
+        try LockScreenWallpaperSelection.persistJournalFile(url, data)
+        writes += 1
+      })
+    XCTAssertThrowsError(try selection.synchronize(displays: ["one"]))
+    let committedStore = try Data(contentsOf: store)
+    let committedJournal = try Data(contentsOf: journal)
+    try assertDiskRecovery(restores: original)
+    failReload = false
+    try selection.synchronize(displays: ["one"])
+    XCTAssertEqual(reloads, 2)
+    XCTAssertEqual(writes, 1)
+    XCTAssertEqual(try Data(contentsOf: store), committedStore)
+    XCTAssertEqual(try Data(contentsOf: journal), committedJournal)
+    let recovered = LockScreenWallpaperSelection(storeURL: store, journalURL: journal, reload: {})
+    try recovered.recover()
+    XCTAssertEqual(try readStore() as NSDictionary, original as NSDictionary)
+  }
+
+  @MainActor
+  func testPruneFailureKeepsRecoveryUnionOnDisk() throws {
+    let original = fixture()
+    try write(original)
+    var failPrune = false
+    var reloads = 0
+    let selection = LockScreenWallpaperSelection(
+      storeURL: store, journalURL: journal, reload: { reloads += 1 },
+      persistJournal: { url, data in
+        if failPrune {
+          XCTAssertEqual(reloads, 2, "Prune must follow the successful store reload")
+          throw CocoaError(.fileWriteOutOfSpace)
+        }
+        try LockScreenWallpaperSelection.persistJournalFile(url, data)
+      })
+    try selection.synchronize(displays: ["one", "two"])
+    let union = try Data(contentsOf: journal)
+    failPrune = true
+    XCTAssertThrowsError(try selection.synchronize(displays: ["two"]))
+    XCTAssertEqual(try Data(contentsOf: journal), union)
+    let displays = try XCTUnwrap(try readStore()["Displays"] as? [String: [String: Any]])
+    XCTAssertEqual(provider(try XCTUnwrap(displays["one"]), key: "Idle"), "display-one-idle")
+    XCTAssertEqual(
+      provider(try XCTUnwrap(displays["two"]), key: "Idle"),
+      LockScreenConfiguration.extensionIdentifier)
+    let recovered = LockScreenWallpaperSelection(storeURL: store, journalURL: journal, reload: {})
+    try recovered.recover()
+    XCTAssertEqual(try readStore() as NSDictionary, original as NSDictionary)
+  }
+
+  @MainActor
+  func testRemoveFailureRetainsMemoryAndDiskUntilRetrySucceeds() throws {
+    let original = fixture()
+    try write(original)
+    var failRemove = true
+    var removeAttempts = 0
+    var reloads = 0
+    let selection = LockScreenWallpaperSelection(
+      storeURL: store, journalURL: journal, reload: { reloads += 1 },
+      persistJournal: { url, data in
+        if data == nil {
+          removeAttempts += 1
+          XCTAssertEqual(try self.readStore() as NSDictionary, original as NSDictionary)
+          if failRemove { throw CocoaError(.fileWriteNoPermission) }
+        }
+        try LockScreenWallpaperSelection.persistJournalFile(url, data)
+      })
+    try selection.synchronize(displays: ["one"])
+    let union = try Data(contentsOf: journal)
+    XCTAssertThrowsError(try selection.synchronize(displays: []))
+    XCTAssertEqual(try Data(contentsOf: journal), union)
+    XCTAssertEqual(try readStore() as NSDictionary, original as NSDictionary)
+    try assertDiskRecovery(restores: original)
+    failRemove = false
+    try selection.synchronize(displays: [])
+    XCTAssertEqual(removeAttempts, 2)
+    XCTAssertEqual(reloads, 2, "Retrying journal removal alone must not reload the store")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: journal.path))
+  }
+
+  @MainActor
+  func testNewAndDisappearingSpacesAreReconciledWithUnchangedInputs() throws {
+    try write(fixture())
+    var writes = 0
+    let selection = LockScreenWallpaperSelection(
+      storeURL: store, journalURL: journal, reload: {},
+      persistJournal: { url, data in
+        try LockScreenWallpaperSelection.persistJournalFile(url, data)
+        if data != nil { writes += 1 }
+      })
+    try selection.synchronize(displays: ["one"], revision: "same")
+    var changed = try readStore()
+    var spaces = try XCTUnwrap(changed["Spaces"] as? [String: Any])
+    spaces["space-b"] = ["Default": node("new-default"), "Displays": [String: Any]()]
+    changed["Spaces"] = spaces
+    try write(changed)
+    try selection.synchronize(displays: ["one"], revision: "same")
+    XCTAssertEqual(writes, 2)
+    var selected = try readStore()
+    var selectedSpaces = try XCTUnwrap(selected["Spaces"] as? [String: [String: Any]])
+    let newDisplays = try XCTUnwrap(selectedSpaces["space-b"]?["Displays"] as? [String: [String: Any]])
+    XCTAssertEqual(
+      provider(try XCTUnwrap(newDisplays["one"]), key: "Idle"),
+      LockScreenConfiguration.extensionIdentifier)
+    selectedSpaces.removeValue(forKey: "space-a")
+    selected["Spaces"] = selectedSpaces
+    try write(selected)
+    try selection.synchronize(displays: ["one"], revision: "same")
+    try selection.synchronize(displays: [])
+    let restoredSpaces = try XCTUnwrap(try readStore()["Spaces"] as? [String: [String: Any]])
+    XCTAssertNil(restoredSpaces["space-a"])
+    XCTAssertEqual(
+      restoredSpaces["space-b"]?["Default"] as? NSDictionary, node("new-default") as NSDictionary)
+    XCTAssertTrue(
+      try XCTUnwrap(restoredSpaces["space-b"]?["Displays"] as? [String: Any]).isEmpty)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: journal.path))
+  }
+
+  @MainActor
+  func testDecodedEmptyJournalIsRemovedAndMalformedJournalIsPreserved() throws {
+    try write(fixture())
+    try PropertyListEncoder().encode([String]()).write(to: journal)
+    var removes = 0
+    let selection = LockScreenWallpaperSelection(
+      storeURL: store, journalURL: journal, reload: {},
+      persistJournal: { url, data in
+        if data == nil { removes += 1 }
+        try LockScreenWallpaperSelection.persistJournalFile(url, data)
+      })
+    try selection.recover()
+    XCTAssertEqual(removes, 1)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: journal.path))
+    let malformed = Data("not a property list".utf8)
+    try malformed.write(to: journal)
+    XCTAssertThrowsError(try selection.recover())
+    XCTAssertEqual(try Data(contentsOf: journal), malformed)
+    XCTAssertEqual(removes, 1)
   }
 
 }

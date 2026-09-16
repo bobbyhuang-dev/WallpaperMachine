@@ -183,6 +183,7 @@ async fn display_snapshots_are_built_from_engine_state() {
             identity: internal.clone(),
             desc: DisplayDesc::with_identity(1, internal.clone(), 0, 0, 3024, 1964, 2.0),
             handle: None,
+            accepts_pointer_input: false,
             window_active: true,
             assignment: Some(WallpaperAssignment::Direct(template)),
         },
@@ -190,6 +191,7 @@ async fn display_snapshots_are_built_from_engine_state() {
             identity: external.clone(),
             desc: DisplayDesc::with_identity(2, external, 3024, 0, 5120, 2880, 2.0),
             handle: None,
+            accepts_pointer_input: false,
             window_active: false,
             assignment: Some(WallpaperAssignment::Mirror(DisplaySelector::LiveDisplayId(
                 1,
@@ -380,6 +382,7 @@ async fn refresh_displays_skips_reconcile_when_configured_scenes_are_unchanged()
         identity: display.identity,
         desc: display.desc,
         handle: Some(wallpaper_core::project::SceneHandle::new(1)),
+        accepts_pointer_input: true,
         window_active: true,
         assignment: Some(WallpaperAssignment::Direct(SceneTemplate::from_scene_desc(
             &rendered_scene,
@@ -432,6 +435,7 @@ async fn refresh_displays_skips_reconcile_when_existing_window_is_temporarily_in
         identity: display.identity,
         desc: display.desc,
         handle: Some(wallpaper_core::project::SceneHandle::new(1)),
+        accepts_pointer_input: true,
         window_active: false,
         assignment: Some(WallpaperAssignment::Direct(SceneTemplate::from_scene_desc(
             &rendered_scene,
@@ -541,6 +545,7 @@ fn display_snapshot(display_id: u32, refresh_rate_hz: u32) -> DisplaySnapshotEnt
         identity: DisplayIdentity::default(),
         desc,
         handle: None,
+        accepts_pointer_input: false,
         window_active: true,
         assignment: None,
     }
@@ -559,6 +564,7 @@ fn identified_display(uuid: &str, display_id: u32) -> DisplaySnapshotEntry {
         identity: identity.clone(),
         desc: DisplayDesc::with_identity(display_id, identity, 0, 0, 1920, 1080, 2.0),
         handle: None,
+        accepts_pointer_input: false,
         window_active: true,
         assignment: None,
     }

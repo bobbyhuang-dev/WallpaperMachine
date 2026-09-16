@@ -2,6 +2,7 @@
 
 #include <Eigen/Dense>
 
+#include <cstdint>
 #include <functional>
 #include <list>
 #include <memory>
@@ -61,6 +62,7 @@ public:
     [[nodiscard]] const std::string&     getString() const;
     [[nodiscard]] UnderlyingType         getType() const;
     [[nodiscard]] virtual std::string    toString() const;
+    uint64_t Generation() const noexcept { return m_generation; }
 
     virtual void update(float new_value);
     virtual void update(int new_value);
@@ -83,6 +85,7 @@ public:
 
 private:
     void propagate() const;
+    mutable uint64_t m_generation { 0 };
 
     std::shared_ptr<bool>                            m_alive_flag = std::make_shared<bool>(true);
     std::list<std::function<void(const DynamicValue&)>> m_listeners {};

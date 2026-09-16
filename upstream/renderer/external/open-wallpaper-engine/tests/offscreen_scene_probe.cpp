@@ -55,6 +55,16 @@ void Ppm(const std::filesystem::path& path, const uint8_t* rgba, int w, int h) {
     file << "P6\n" << w << ' ' << h << "\n255\n";
     for (int i = 0; i < w * h; ++i) file.write(reinterpret_cast<const char*>(rgba + i * 4), 3);
 }
+void CheckRecording(Device& device, RenderingResources& rr, VkResult result) {
+    if (result == VK_SUCCESS) return;
+    // No draw submission happened. A reset failure must retain pins/uploads
+    // rather than unwinding owners while the command still references them.
+    if (rr.command.Reset() != VK_SUCCESS) std::terminate();
+    device.tex_cache().AbandonVideoFrameRecording();
+    rr.vertex_buf->finishUpload(false);
+    rr.dyn_buf->finishUpload(false);
+    throw std::runtime_error(std::string("record passes: ") + vvk::ToString(result));
+}
 void Submit(Device& device, RenderingResources& rr) {
     const auto end_result = rr.command.End();
     VkResult submit_result = end_result;
@@ -386,11 +396,11 @@ int main() {
             Check(vertices.recordUpload(rr.command), "upload vertices");
             Check(dynamic.recordUpload(rr.command), "upload dynamic data");
             if (!std::getenv("WE_TEST_DUMP_PASSES"))
-                ExecutePreparedPasses(device, rr, passes, scratch);
+                CheckRecording(device, rr, ExecutePreparedPasses(device, rr, passes, scratch));
             else {
                 int pass_index = 0;
                 for (auto* pass : passes) {
-                    pass->execute(device, rr);
+                    CheckRecording(device, rr, pass->execute(device, rr));
                     if (auto* custom = dynamic_cast<CustomShaderPass*>(pass)) {
                         Submit(device, rr);
                         // Sequence-indexed so every pass survives; node ids repeat.

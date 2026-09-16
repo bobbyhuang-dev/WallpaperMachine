@@ -13,8 +13,7 @@ ScriptedDynamicValue::ScriptedDynamicValue(
     : m_runtime(&runtime),
       m_current_layer_name(std::move(current_layer_name)),
       m_script_properties(std::move(script_properties)),
-      m_semantic(semantic),
-      m_has_update(script_source.find("export function update") != std::string::npos) {
+      m_semantic(semantic) {
     DynamicValue::update(base_value);
 
     std::map<std::string, DynamicValue*> raw_properties;
@@ -50,7 +49,11 @@ void ScriptedDynamicValue::reevaluate() {
 
     // update(value) continues from the previous result, including explicit property writes.
     auto result = m_program->Evaluate(m_runtime->hostContext(), *this);
-    if (m_has_update && result != nullptr) DynamicValue::update(*result);
+    if (m_program->Capabilities().update && result != nullptr) DynamicValue::update(*result);
+}
+
+uint8_t ScriptedDynamicValue::CursorHandlerMask() const noexcept {
+    return m_program != nullptr && m_program->Valid() ? m_program->Capabilities().cursor_handlers : 0;
 }
 
 void ScriptedDynamicValue::DispatchCursorClick(const ScriptHostContext& host_context) {

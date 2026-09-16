@@ -10,7 +10,7 @@ struct LockScreenWallpaperFailure: LocalizedError {
 /// other displays belong to the user, even when they currently show our wallpaper.
 @MainActor
 final class LockScreenWallpaperSelection {
-  private struct Entry: Codable {
+  private struct Entry: Codable, Equatable {
     var path: [String]
     var original: Data
     var created: Bool
@@ -22,7 +22,9 @@ final class LockScreenWallpaperSelection {
   private let storeURL: URL
   private let journalURL: URL
   private let reload: @MainActor () throws -> Void
+  private let persistJournal: @MainActor (URL, Data?) throws -> Void
   private var entries: [Entry] = []
+  private var hasPersistedJournal = false
   private var restartPending = false
 
   convenience init(folder: URL) {
@@ -33,15 +35,22 @@ final class LockScreenWallpaperSelection {
       reload: { try Self.reloadWallpaperAgent() })
   }
 
-  init(storeURL: URL, journalURL: URL, reload: @escaping @MainActor () throws -> Void) {
+  init(
+    storeURL: URL, journalURL: URL, reload: @escaping @MainActor () throws -> Void,
+    persistJournal: @escaping @MainActor (URL, Data?) throws -> Void =
+      LockScreenWallpaperSelection.persistJournalFile
+  ) {
     self.storeURL = storeURL
     self.journalURL = journalURL
     self.reload = reload
+    self.persistJournal = persistJournal
   }
 
   func recover() throws {
     guard FileManager.default.fileExists(atPath: journalURL.path) else { return }
-    entries = try PropertyListDecoder().decode([Entry].self, from: Data(contentsOf: journalURL))
+    let recovered = try PropertyListDecoder().decode([Entry].self, from: Data(contentsOf: journalURL))
+    entries = recovered
+    hasPersistedJournal = true
     // A crash may occur after the store write but before its service reload.
     restartPending = true
     try synchronize(displays: [])
@@ -186,10 +195,7 @@ final class LockScreenWallpaperSelection {
       // Journal the union first: recovery works both before and after the store commit.
       let recovery =
         entries + retained.filter { new in !entries.contains(where: { $0.path == new.path }) }
-      try FileManager.default.createDirectory(
-        at: journalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-      try PropertyListEncoder().encode(recovery).write(to: journalURL, options: .atomic)
-      entries = recovery
+      try persistEntries(recovery)
       guard try Data(contentsOf: storeURL) == bytes else {
         throw LockScreenWallpaperFailure(
           message:
@@ -203,13 +209,24 @@ final class LockScreenWallpaperSelection {
       try reload()
       restartPending = false
     }
-    entries = retained
-    if entries.isEmpty {
-      if FileManager.default.fileExists(atPath: journalURL.path) {
-        try FileManager.default.removeItem(at: journalURL)
-      }
-    } else {
-      try PropertyListEncoder().encode(entries).write(to: journalURL, options: .atomic)
+    try persistEntries(retained)
+  }
+
+  private func persistEntries(_ next: [Entry]) throws {
+    guard next != entries || hasPersistedJournal != !next.isEmpty else { return }
+    let data = try (next.isEmpty ? nil : PropertyListEncoder().encode(next))
+    try persistJournal(journalURL, data)
+    entries = next
+    hasPersistedJournal = !next.isEmpty
+  }
+
+  static func persistJournalFile(_ url: URL, _ data: Data?) throws {
+    if let data {
+      try FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try data.write(to: url, options: .atomic)
+    } else if FileManager.default.fileExists(atPath: url.path) {
+      try FileManager.default.removeItem(at: url)
     }
   }
 

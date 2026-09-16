@@ -283,6 +283,13 @@ void ResetAudioResponseServiceForTesting()
 }
 
 #ifdef WESCENE_BUILD_TESTS
+void SetAudioSpectrumSnapshotForTesting(const AudioSpectrumSnapshot& snapshot)
+{
+    ResetAudioResponseServiceForTesting();
+    std::lock_guard<std::mutex> lock(g_state.mutex);
+    g_state.snapshot = snapshot;
+}
+
 void StopAudioResponseWorkerAndMarkInputStaleForTesting()
 {
     std::jthread worker;

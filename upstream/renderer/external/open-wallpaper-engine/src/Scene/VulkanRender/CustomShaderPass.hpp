@@ -1,5 +1,6 @@
 #pragma once
 #include "VulkanPass.hpp"
+#include "PassCommon.hpp"
 #include <string>
 #include <vector>
 
@@ -47,6 +48,7 @@ public:
         bool                     write_alpha { true };
         bool                     alpha_to_coverage { false };
         VkSampleCountFlagBits    sample_count { VK_SAMPLE_COUNT_1_BIT };
+        VkFormat                 presentation_format { VK_FORMAT_UNDEFINED };
         sprite_map_t             sprites_map;
 
         // -----prepared
@@ -87,7 +89,7 @@ public:
 
     void prepare(Scene&, const Device&, RenderingResources&) override;
     bool updateFrame(const Device&, RenderingResources&) override;
-    void execute(const Device&, RenderingResources&) override;
+    VkResult execute(const Device&, RenderingResources&) override;
     void destory(const Device&, RenderingResources&) override;
 
     CustomPassBatchCandidate batchCandidate() const;
@@ -97,11 +99,19 @@ public:
     void recordTextureBarriers(const Device&, RenderingResources&) const;
 
     bool textureDescriptorsReady() const;
+    bool canPresentDirectly(const RenderingResources&, VkExtent2D target_extent,
+                            VkFormat target_format) const;
+    VkResult executePresentation(const Device&, RenderingResources&, const ImageParameters& target,
+                                 VkFormat target_format);
 
 private:
-    void recordDescriptors(RenderingResources&) const;
+    void recordDescriptors(RenderingResources&, VkPipelineLayout) const;
+    void recordDrawWithPipeline(const Device&, RenderingResources&, const PipelineParameters&,
+                                VkExtent3D);
 
-    Desc m_desc;
+    Desc m_desc {};
+    PipelineParameters m_presentation_pipeline;
+    std::vector<CachedColorFramebuffer> m_presentation_framebuffers;
     bool m_frame_visible { false };
     bool m_frame_clear_only { false };
 };

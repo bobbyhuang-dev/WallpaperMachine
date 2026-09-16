@@ -339,6 +339,7 @@ void DynamicValue::attachCondition(const ConditionInfo& condition)
 
 void DynamicValue::propagate() const
 {
+    ++m_generation;
     for (const auto& callback : m_listeners) {
         callback(*this);
     }

@@ -150,6 +150,19 @@ then CMake-builds the `wescene-renderer` target of Open Wallpaper Engine with `B
 static link flags. Open Wallpaper Engine stays a statically linked renderer backend: its Rust
 wrapper module (`core/src/owe/`) must not own scene registries or display maps.
 
+Pointer polling follows committed native scene capability, not a manifest or a
+first-frame notification. Pure video projects publish no pointer consumer;
+ordinary and not-yet-committed scenes remain conservative. A bounded, event-driven
+relay carries a retained renderer-instance identity into the core actor. Snapshot
+publication serializes consumer notifications with button-edge activation, while
+the bridge combines consumer presence with pause policy for its existing 16 ms,
+single-in-flight poller. One sample delivers enter, position and ordered button
+transitions in one actor turn. Successful identical position/enter writes are
+deduplicated; native per-frame camera/content mapping and hit dispatch still run.
+A level-only button baseline reconciles a newly committed consumer without
+inventing presses or replaying video-period taps. These are Rust/native runtime
+contracts, not persisted or uniffi snapshot fields.
+
 ### Lock-screen extension
 
 `Extension/` builds `MacWallpaperExtension`, an `extensionkit-extension` target for the

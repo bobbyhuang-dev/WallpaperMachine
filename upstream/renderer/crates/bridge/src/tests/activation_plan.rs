@@ -37,6 +37,7 @@ fn activation_plan_marks_scenes_paused_when_global_playback_is_paused() {
         identity: DisplayIdentity::default(),
         desc: display,
         handle: None,
+        accepts_pointer_input: false,
         window_active: true,
         assignment: None,
     }];
@@ -318,6 +319,7 @@ fn identified_display(uuid: &str, display_id: u32) -> DisplaySnapshotEntry {
         identity: identity.clone(),
         desc: DisplayDesc::with_identity(display_id, identity, 0, 0, 1920, 1080, 2.0),
         handle: None,
+        accepts_pointer_input: false,
         window_active: true,
         assignment: None,
     }
@@ -336,6 +338,7 @@ fn display_snapshot(display_id: u32) -> DisplaySnapshotEntry {
             2.0,
         ),
         handle: None,
+        accepts_pointer_input: false,
         window_active: true,
         assignment: None,
     }

@@ -301,6 +301,52 @@ remain included in the elapsed delivered-frame delta; restarting excludes paused
 time. `timer_tests` covers dropped ticks, restart, FPS changes and long gaps
 without desktop surfaces or audio devices.
 
+### Continuous-playback work contracts
+
+- `playback_gpu_test` uses real private images for producer/consumer and
+  overwrite synchronization, every generated mip, and recording/pipeline/
+  framebuffer failures. The executor returns the first `VkResult` failure;
+  failed recordings are reset and abandoned rather than submitted or waited on.
+  Shader-read barriers are outside render passes and include vertex consumers.
+- A prepared `PrePass` is skipped only when a same-image, same-view, single-mip,
+  single-sample clear with bit-identical color is reached before any reader or
+  non-custom pass. Visibility and actual active descriptors are reconsidered
+  each frame. The standalone pass loop remains the reference path.
+- Direct presentation requires exactly one graph shader pass writing the
+  default target, a first clear, no depth/mip/MSAA or feedback, UNORM RGBA/BGRA,
+  and identical graphics/present queue families. Each frame also requires the
+  exact full-target viewport/scissor, matching extent, ready descriptors and no
+  flip. Other frames render the normal intermediate plus `FinPass`. Both
+  pipelines are prepared once; all paths retain frame/presentation waits.
+  Private-target tests compare complete same-format bytes over poisoned target
+  rotation, graph resize, transparency, fallback and error recovery; they never
+  transition private images to `PRESENT_SRC_KHR`.
+- Compiled script exports suppress only absent handlers. Initialization,
+  scheduled callbacks, shared scene callbacks, live-value fallback and live
+  alpha/geometry hit order remain covered by `script_runtime_compat_test` and
+  `mouse_input_test`. Transform/material caches avoid recomputing sources but
+  still repair changed destinations in the original phases; failed registration
+  releases only its new subscriptions/values and restores existing mask/puppet
+  identity.
+- Puppet copies reuse a result buffer in their existing shared playback State
+  for the exact same finite time until a control mutation. Fresh layers sharing
+  an asset have independent results. Attachments still apply each frame. Audio
+  uniforms borrow an owning packing buffer synchronously and read a fresh
+  spectrum on every call; particle mouse inverses are skipped only when all
+  current controlpoint link flags are off.
+
+Core/bridge tests additionally cover bounded capability relay delivery,
+renderer-instance replacement, serialized observer replay/publication, retained
+held-button levels and discarded inactive taps, level-only native reconciliation,
+single-turn samples and exact-success input deduplication. Native capability and
+button tests initialize loopers only, not Vulkan, playback or audio hardware.
+
+Performance probes remain disposable, with fixed simulation time, full output
+checks outside timing, raw samples and per-block median/p95. C++ `new` counters
+do not measure QuickJS `malloc`, worker-thread allocations or whole-process
+memory. Pixel equality and Vulkan command traces are not synchronization-layer
+validation, desktop equivalence, GPU residency or power measurements.
+
 ### Shader pipeline
 
 The shader repair handles undersized cross-stage varying declarations,

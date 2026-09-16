@@ -2566,10 +2566,6 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
                 // attachment group and the runtime take copies of this one.
                 auto layer = WPPuppetLayer(puppet->puppet);
                 layer.prepared(wpimgobj.puppet_layers);
-                if (context.scene->runtime != nullptr) {
-                    context.scene->runtime->RegisterPuppetLayer(runtime_name, layer);
-                    BindPuppetAnimationLayerSettings(context, runtime_name, wpimgobj, layer);
-                }
                 context.layer_puppet_animations.emplace(wpimgobj.id, std::move(layer));
             }
         }
@@ -2614,6 +2610,11 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
         context.scene->runtime != nullptr && AlignmentHasAnchorOffset(wpimgobj.alignment);
     if (context.scene->runtime != nullptr) {
         context.scene->runtime->RegisterNode(runtime_name, spImgNode.get());
+        if (const auto layer = context.layer_puppet_animations.find(wpimgobj.id);
+            layer != context.layer_puppet_animations.end()) {
+            context.scene->runtime->RegisterPuppetLayer(runtime_name, layer->second);
+            BindPuppetAnimationLayerSettings(context, runtime_name, wpimgobj, layer->second);
+        }
         context.scene->runtime->RegisterNodeSize(
             runtime_name,
             Eigen::Vector2f(static_cast<float>(wpimgobj.size[0]),

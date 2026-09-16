@@ -8,10 +8,15 @@
 #include "Type.hpp"
 #include "Swapchain/ExSwapchain.hpp"
 
+#if defined(WESCENE_BUILD_TESTS) && defined(__APPLE__)
+struct owe_scene_wallpaper;
+#endif
+
 namespace wallpaper
 {
 
 using FirstFrameCallback = std::function<void()>;
+using PointerInputCallback = std::function<void(bool)>;
 
 constexpr std::string_view PROPERTY_SOURCE                    = "source";
 constexpr std::string_view PROPERTY_ASSETS                    = "assets";
@@ -33,6 +38,7 @@ constexpr std::string_view PROPERTY_PROJECT_PROPERTY_RESET = "project_property_r
 constexpr std::string_view PROPERTY_CACHE_PATH             = "cache_path";
 constexpr std::string_view PROPERTY_FORCE_SHADER_REFRESH   = "force_shader_refresh";
 constexpr std::string_view PROPERTY_FIRST_FRAME_CALLBACK   = "first_frame_callback";
+constexpr std::string_view PROPERTY_POINTER_INPUT_CALLBACK = "pointer_input_callback";
 
 #include "Core/NoCopyMove.hpp"
 class MainHandler;
@@ -81,6 +87,7 @@ public:
     void setTargetFps(uint32_t fps);
     void mouseInput(double x, double y);
     void mouseButton(int button, bool pressed);
+    void mouseButtonBaseline(uint32_t down);
     void mouseEnter(bool entered);
     void applySystemMediaArtwork(uint32_t width, uint32_t height, const uint8_t* rgba,
                                  std::size_t rgba_len);
@@ -104,8 +111,27 @@ private:
 
 private:
     friend class MainHandler;
+#ifdef WESCENE_BUILD_TESTS
+    friend struct SceneWallpaperInputTestAccess;
+#endif
 
     bool                         m_offscreen { false };
     std::shared_ptr<MainHandler> m_main_handler;
 };
+
+#ifdef WESCENE_BUILD_TESTS
+class Scene;
+struct SceneWallpaperInputTestAccess {
+    struct MouseButtonSnapshot {
+        uint32_t down;
+        uint32_t pressed;
+        uint32_t released;
+    };
+    static void PostScene(SceneWallpaper&, std::shared_ptr<Scene>);
+    static MouseButtonSnapshot ConsumeMouseButtons(SceneWallpaper&);
+#if defined(__APPLE__)
+    static SceneWallpaper& FromNative(owe_scene_wallpaper&);
+#endif
+};
+#endif
 } // namespace wallpaper

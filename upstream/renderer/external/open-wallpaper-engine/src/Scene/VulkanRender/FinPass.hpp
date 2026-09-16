@@ -1,5 +1,6 @@
 #pragma once
 #include "VulkanPass.hpp"
+#include "PassCommon.hpp"
 #include <string>
 
 #include "Vulkan/Device.hpp"
@@ -45,7 +46,7 @@ public:
     void setPresentQueueIndex(uint32_t);
 
     void prepare(Scene&, const Device&, RenderingResources&) override;
-    void execute(const Device&, RenderingResources&) override;
+    VkResult execute(const Device&, RenderingResources&) override;
     void destory(const Device&, RenderingResources&) override;
 
 #ifdef WESCENE_BUILD_TESTS
@@ -56,18 +57,8 @@ public:
 private:
     void resetPreparedState(RenderingResources&);
 
-    struct CachedFramebuffer {
-        VkImageView      view {};
-        VkRenderPass     render_pass {};
-        uint32_t         width { 0 };
-        uint32_t         height { 0 };
-        vvk::Framebuffer framebuffer;
-    };
-
-    vvk::Framebuffer* framebufferForPresent(const Device&, RenderingResources&);
-
-    Desc                           m_desc;
-    std::vector<CachedFramebuffer> m_framebuffers;
+    Desc                                m_desc {};
+    std::vector<CachedColorFramebuffer> m_framebuffers;
 };
 
 } // namespace vulkan

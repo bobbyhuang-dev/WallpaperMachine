@@ -27,6 +27,7 @@ use crate::{
 pub struct OweBackend;
 
 pub type FirstFrameCallback = Arc<dyn Fn() + Send + Sync + 'static>;
+pub type PointerInputCallback = Arc<dyn Fn(bool) + Send + Sync + 'static>;
 
 impl OweBackend {
     /// Initializes access to the statically linked backend.
@@ -65,6 +66,7 @@ impl OweBackend {
         scaling_factor: f64,
         render_resolution: Option<(u32, u32)>,
         first_frame_callback: Option<FirstFrameCallback>,
+        pointer_input_callback: Option<PointerInputCallback>,
     ) -> Result<OweScene, EngineError> {
         let mut raw = std::ptr::null_mut();
         call_status("owe_scene_wallpaper_new", || unsafe {
@@ -80,6 +82,7 @@ impl OweBackend {
         };
         scene.initialize_renderer(desc, metal_layer, render_resolution)?;
         scene.set_first_frame_callback(first_frame_callback)?;
+        scene.set_pointer_input_callback(pointer_input_callback)?;
         scene.apply_scene_config(desc)?;
         scene.set_scaling_mode(scaling_mode)?;
         scene.set_scaling_factor(scaling_factor)?;
@@ -445,6 +448,29 @@ impl OweScene {
         result
     }
 
+    pub fn set_pointer_input_callback(
+        &mut self,
+        callback: Option<PointerInputCallback>,
+    ) -> Result<(), EngineError> {
+        let raw = self.raw_ptr()?;
+        let user_data = callback.map_or(std::ptr::null_mut(), |callback| {
+            Box::into_raw(Box::new(callback)).cast::<c_void>()
+        });
+        let result = call_status("owe_scene_wallpaper_set_pointer_input_callback", || unsafe {
+            sys::owe_scene_wallpaper_set_pointer_input_callback(
+                raw.as_ptr(),
+                if user_data.is_null() { None } else { Some(owe_pointer_input_callback) },
+                user_data,
+                if user_data.is_null() { None } else { Some(owe_pointer_input_callback_drop) },
+            )
+        });
+        if result.is_err() && !user_data.is_null() {
+            // Failed registration never consumes the caller's userdata.
+            drop(unsafe { Box::<PointerInputCallback>::from_raw(user_data.cast()) });
+        }
+        result
+    }
+
     /// Sends normalized mouse coordinates to the renderer.
     ///
     /// # Errors
@@ -481,6 +507,14 @@ impl OweScene {
         let raw = self.raw_ptr()?;
         call_status("owe_scene_wallpaper_mouse_button", || unsafe {
             sys::owe_scene_wallpaper_mouse_button(raw.as_ptr(), button, pressed)
+        })
+    }
+
+    /// Reconciles sampled button levels without producing or clearing edges.
+    pub(crate) fn set_mouse_button_baseline(&mut self, down: u32) -> Result<(), EngineError> {
+        let raw = self.raw_ptr()?;
+        call_status("owe_scene_wallpaper_set_mouse_button_baseline", || unsafe {
+            sys::owe_scene_wallpaper_set_mouse_button_baseline(raw.as_ptr(), down)
         })
     }
 
@@ -788,6 +822,26 @@ unsafe extern "C-unwind" fn owe_first_frame_callback_drop(user_data: *mut c_void
     }));
 }
 
+unsafe extern "C-unwind" fn owe_pointer_input_callback(
+    user_data: *mut c_void,
+    accepts_pointer_input: bool,
+) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if !user_data.is_null() {
+            let callback = unsafe { &*user_data.cast::<PointerInputCallback>() };
+            callback(accepts_pointer_input);
+        }
+    }));
+}
+
+unsafe extern "C-unwind" fn owe_pointer_input_callback_drop(user_data: *mut c_void) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if !user_data.is_null() {
+            drop(unsafe { Box::<PointerInputCallback>::from_raw(user_data.cast()) });
+        }
+    }));
+}
+
 fn copy_c_string(value: *const c_char) -> Option<String> {
     if value.is_null() {
         return None;
@@ -798,4 +852,48 @@ fn copy_c_string(value: *const c_char) -> Option<String> {
             .to_string_lossy()
             .into_owned(),
     )
+}
+
+#[cfg(test)]
+mod pointer_callback_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct DropWitness(Arc<AtomicUsize>);
+
+    impl Drop for DropWitness {
+        fn drop(&mut self) { self.0.fetch_add(1, Ordering::SeqCst); }
+    }
+
+    #[test]
+    fn closed_registration_does_not_leak_callback_userdata() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let witness = DropWitness(dropped.clone());
+        let callback: PointerInputCallback = Arc::new(move |_| { let _ = &witness; });
+        let mut scene = OweScene { raw: None, render_initialized: false };
+        assert!(scene.set_pointer_input_callback(Some(callback)).is_err());
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn native_callback_contains_panics_and_drop_releases_userdata_once() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::new(AtomicUsize::new(0));
+        let witness = DropWitness(dropped.clone());
+        let callback: PointerInputCallback = Arc::new({
+            let observed = observed.clone();
+            move |accepts| {
+                let _ = &witness;
+                observed.fetch_add(usize::from(accepts), Ordering::SeqCst);
+                panic!("consumer panic must not cross the ABI");
+            }
+        });
+        let raw = Box::into_raw(Box::new(callback)).cast::<c_void>();
+        unsafe {
+            owe_pointer_input_callback(raw, true);
+            owe_pointer_input_callback_drop(raw);
+        }
+        assert_eq!(observed.load(Ordering::SeqCst), 1);
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    }
 }

@@ -2,6 +2,7 @@
 #include "WPPuppet.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 
 using namespace wallpaper;
@@ -63,33 +64,29 @@ void WPPuppet::prepared() {
             }
         }
     }
-
-    m_final_affines.resize(bones.size());
 }
 
-std::span<const Eigen::Affine3f> WPPuppet::genFrame(WPPuppetLayer& puppet_layer,
-                                                    double         time) noexcept {
-    auto&  state        = *puppet_layer.m_state;
+void WPPuppet::evaluatePose(const WPPuppetLayer& puppet_layer,
+                            std::span<Eigen::Affine3f> final_affines) const noexcept {
+    const auto& state = *puppet_layer.m_state;
     double global_blend = state.m_global_blend;
-
-    puppet_layer.updateInterpolation(time);
 
     // TRS skinning is required: WE puppets animate scale (e.g. blink uses
     // frame.scale.y -> ~0). A pure-translation g_Bones would shift the whole
     // sprite as a unit; intra-sprite compression needs non-identity linear so
     // vertices within the sprite get differential treatment.
-    for (uint i = 0; i < m_final_affines.size(); i++) {
+    for (uint i = 0; i < final_affines.size(); i++) {
         const auto& bone   = bones[i];
-        auto&       affine = m_final_affines[i];
+        auto&       affine = final_affines[i];
 
         // Local safety adapter: upstream asserts anim_parent ordering. Invalid
-        // asset data can otherwise index outside m_final_affines and crash.
+        // asset data can otherwise index outside final_affines and crash.
         const bool has_valid_anim_parent = ! bone.noAnimParent() && bone.anim_parent < i;
         if (!bone.noAnimParent() && !has_valid_anim_parent) {
             LOG_ERROR("puppet invalid anim parent index %u for bone %u", bone.anim_parent, i);
         }
         const Affine3f parent =
-            has_valid_anim_parent ? m_final_affines[bone.anim_parent] : Affine3f::Identity();
+            has_valid_anim_parent ? final_affines[bone.anim_parent] : Affine3f::Identity();
 
         // Bind state. vco is a fixed render-time pivot offset for root sprite
         // bones and is added to trans after layer blending below.
@@ -151,10 +148,9 @@ std::span<const Eigen::Affine3f> WPPuppet::genFrame(WPPuppetLayer& puppet_layer,
         affine = parent * affine;
     }
 
-    for (uint i = 0; i < m_final_affines.size(); i++) {
-        m_final_affines[i] *= bones[i].inv_bind.matrix();
+    for (uint i = 0; i < final_affines.size(); i++) {
+        final_affines[i] *= bones[i].inv_bind.matrix();
     }
-    return m_final_affines;
 }
 
 static constexpr void genInterpolationInfo(WPPuppet::Animation::InterpolationInfo& info,
@@ -226,7 +222,8 @@ WPPuppet::Animation::getInterpolationInfo(double* cur_time) const {
 }
 
 void WPPuppetLayer::prepared(std::span<AnimationLayer> alayers) {
-    if (! m_state) m_state = std::make_shared<State>();
+    if (! m_puppet || ! m_state) return;
+    invalidatePose();
     auto& layers = m_state->m_layers;
     layers.resize(alayers.size());
     const auto& anims = m_puppet->anims;
@@ -280,7 +277,31 @@ void WPPuppetLayer::rebuildBlend() noexcept {
 }
 
 std::span<const Eigen::Affine3f> WPPuppetLayer::genFrame(double time) noexcept {
-    return m_puppet->genFrame(*this, time);
+    if (! m_puppet || ! m_state) return {};
+    auto& state = *m_state;
+    const auto time_bits = std::bit_cast<uint64_t>(time);
+    if (state.m_pose_valid && std::isfinite(time) && state.m_pose_time_bits == time_bits) {
+        return state.m_final_affines;
+    }
+
+    state.m_pose_valid = false;
+    updateInterpolation(time);
+    m_puppet->evaluatePose(*this, state.m_final_affines);
+    state.m_pose_time_bits = time_bits;
+    state.m_pose_valid =
+        std::isfinite(time) && std::isfinite(state.m_last_elapsed) &&
+        std::isfinite(state.m_global_blend) && std::isfinite(state.m_total_blend) &&
+        std::all_of(state.m_layers.begin(), state.m_layers.end(), [](const Layer& layer) {
+            const auto& authored = layer.anim_layer;
+            return std::isfinite(authored.rate) && std::isfinite(authored.blend) &&
+                   std::isfinite(authored.cur_time) && std::isfinite(layer.blend) &&
+                   std::isfinite(layer.interp_info.t);
+        });
+    return state.m_final_affines;
+}
+
+void WPPuppetLayer::invalidatePose() noexcept {
+    if (m_state) m_state->m_pose_valid = false;
 }
 
 void WPPuppetLayer::updateInterpolation(double time) noexcept {
@@ -340,6 +361,7 @@ usize WPPuppetLayer::layerCount() const noexcept {
 bool WPPuppetLayer::play(i32 index) noexcept {
     auto* layer = layerAt(index);
     if (layer == nullptr) return false;
+    invalidatePose();
     auto& alayer = layer->anim_layer;
     if (! alayer.playing && layer->anim != nullptr &&
         layer->anim->mode == WPPuppet::PlayMode::Single &&
@@ -353,6 +375,7 @@ bool WPPuppetLayer::play(i32 index) noexcept {
 bool WPPuppetLayer::pause(i32 index) noexcept {
     auto* layer = layerAt(index);
     if (layer == nullptr) return false;
+    invalidatePose();
     layer->anim_layer.playing = false;
     return true;
 }
@@ -360,6 +383,7 @@ bool WPPuppetLayer::pause(i32 index) noexcept {
 bool WPPuppetLayer::stop(i32 index) noexcept {
     auto* layer = layerAt(index);
     if (layer == nullptr) return false;
+    invalidatePose();
     layer->anim_layer.playing  = false;
     layer->anim_layer.cur_time = 0.0;
     if (layer->anim != nullptr) {
@@ -376,6 +400,7 @@ bool WPPuppetLayer::isPlaying(i32 index) const noexcept {
 bool WPPuppetLayer::setFrame(i32 index, double frame) noexcept {
     auto* layer = layerAt(index);
     if (layer == nullptr || layer->anim == nullptr || ! std::isfinite(frame)) return false;
+    invalidatePose();
     const double frames = static_cast<double>(layer->anim->length);
     if (frame < 0.0) frame = 0.0;
     if (frame > frames) frame = frames;
@@ -405,6 +430,7 @@ double WPPuppetLayer::fps(i32 index) const noexcept {
 bool WPPuppetLayer::setRate(i32 index, double rate) noexcept {
     auto* layer = layerAt(index);
     if (layer == nullptr || ! std::isfinite(rate)) return false;
+    invalidatePose();
     layer->anim_layer.rate = rate;
     return true;
 }
@@ -418,6 +444,7 @@ bool WPPuppetLayer::setBlend(i32 index, double blend) noexcept {
     auto* layer = layerAt(index);
     if (layer == nullptr || ! std::isfinite(blend)) return false;
     if (layer->anim_layer.blend == blend) return true;
+    invalidatePose();
     layer->anim_layer.blend = blend;
     rebuildBlend();
     return true;
@@ -432,6 +459,7 @@ bool WPPuppetLayer::setVisible(i32 index, bool visible) noexcept {
     auto* layer = layerAt(index);
     if (layer == nullptr) return false;
     if (layer->anim_layer.visible == visible) return true;
+    invalidatePose();
     layer->anim_layer.visible = visible;
     rebuildBlend();
     return true;
@@ -443,6 +471,8 @@ bool WPPuppetLayer::visible(i32 index) const noexcept {
 }
 
 WPPuppetLayer::WPPuppetLayer(std::shared_ptr<WPPuppet> pup)
-    : m_state(std::make_shared<State>()), m_puppet(std::move(pup)) {}
+    : m_state(pup ? std::make_shared<State>() : nullptr), m_puppet(std::move(pup)) {
+    if (m_state) m_state->m_final_affines.resize(m_puppet->bones.size());
+}
 WPPuppetLayer::WPPuppetLayer()  = default;
 WPPuppetLayer::~WPPuppetLayer() = default;

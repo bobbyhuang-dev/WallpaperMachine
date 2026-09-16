@@ -39,7 +39,7 @@ pub use display::{
     watcher::{DisplayEvent, DisplayWatcher},
 };
 pub use engine::{
-    DisplayConfig, DisplaySelector, DisplaySnapshotEntry, FirstFrameCallback, WallpaperAssignment,
+    DisplayConfig, DisplaySelector, DisplaySnapshotEntry, FirstFrameCallback, PointerConsumerCallback, WallpaperAssignment,
     WallpaperEngine, WallpaperEngineConfig,
 };
 pub use error::EngineError;

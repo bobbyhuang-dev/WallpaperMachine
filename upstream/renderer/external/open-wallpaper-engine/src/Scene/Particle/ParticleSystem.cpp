@@ -95,6 +95,10 @@ ParticleRenderScale ParticleSubSystem::RenderScale() const {
 }
 
 void ParticleSubSystem::UpdateMouseControlpoints() {
+    if (std::none_of(m_controlpoints.begin(), m_controlpoints.end(),
+                     [](const auto& cp) { return cp.link_mouse; })) {
+        return;
+    }
     const auto            pointer = m_sys.scene.pointerPosition;
     const Eigen::Vector3d mouse_world {
         static_cast<double>(pointer[0]) * static_cast<double>(m_sys.scene.ortho[0]),

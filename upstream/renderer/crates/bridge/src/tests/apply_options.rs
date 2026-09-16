@@ -1403,6 +1403,7 @@ fn display_snapshot(display_id: u32, refresh_rate_hz: u32) -> DisplaySnapshotEnt
         identity: DisplayIdentity::default(),
         desc,
         handle: None,
+        accepts_pointer_input: false,
         window_active: false,
         assignment: None,
     }
@@ -1424,6 +1425,7 @@ fn active_display_snapshot_for_wallpaper(
 ) -> DisplaySnapshotEntry {
     DisplaySnapshotEntry {
         handle: Some(SceneHandle::new(handle)),
+        accepts_pointer_input: true,
         window_active: true,
         assignment: Some(WallpaperAssignment::Direct(
             SceneTemplate::builder(format!(

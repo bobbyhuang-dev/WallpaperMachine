@@ -48,6 +48,7 @@
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -353,6 +354,7 @@ CreateVideoProjectScene(std::unique_ptr<wallpaper::fs::VFS> vfs,
     if (! BuildVideoCopyShader(*vfs, scene_id, &shader, error)) return nullptr;
 
     auto scene                = std::make_shared<wallpaper::Scene>();
+    scene->accepts_pointer_input = false;
     scene->scene_id           = scene_id;
     scene->clearColor         = { 0.0f, 0.0f, 0.0f };
     scene->shaderValueUpdater = std::make_unique<NoOpShaderValueUpdater>();
@@ -389,6 +391,7 @@ public:
         CMD_SET_PROPERTY,
         CMD_STOP,
         CMD_FIRST_FRAME,
+        CMD_POINTER_INPUT_CHANGED,
         CMD_NO
     };
 
@@ -412,6 +415,7 @@ public:
                 CASE_CMD(LOAD_SCENE);
                 CASE_CMD(STOP);
                 CASE_CMD(FIRST_FRAME);
+                CASE_CMD(POINTER_INPUT_CHANGED);
             default: break;
             }
         }
@@ -419,6 +423,7 @@ public:
 
     void sendCmdLoadScene();
     void sendFirstFrameOk();
+    void sendPointerInputCapability(bool accepts_pointer_input);
     bool isGenGraphviz() const { return m_gen_graphviz; }
 
 private:
@@ -434,6 +439,7 @@ private:
     MHANDLER_CMD(SET_PROPERTY);
     MHANDLER_CMD(STOP);
     MHANDLER_CMD(FIRST_FRAME);
+    MHANDLER_CMD(POINTER_INPUT_CHANGED);
 
 private:
     bool m_inited { false };
@@ -450,6 +456,8 @@ private:
     WPSceneParser                        m_scene_parser;
     std::unique_ptr<audio::SoundManager> m_sound_manager;
     FirstFrameCallback                   m_first_frame_callback;
+    PointerInputCallback                 m_pointer_input_callback;
+    bool                                 m_accepts_pointer_input { true };
 
 private:
     std::shared_ptr<looper::Looper> m_main_loop;
@@ -547,9 +555,16 @@ public:
             m_mouse_buttons.released |= mask;
         }
     }
+    void setMouseButtonBaseline(uint32_t down) {
+        std::scoped_lock lock(m_mouse_buttons_mutex);
+        m_mouse_buttons.down = down;
+    }
     void setMouseInWindow(bool entered) { m_cursor_in_window.store(entered); }
 
 private:
+#ifdef WESCENE_BUILD_TESTS
+    friend struct SceneWallpaperInputTestAccess;
+#endif
     MouseButtonSnapshot consumeMouseButtonSnapshot() {
         std::scoped_lock    lock(m_mouse_buttons_mutex);
         MouseButtonSnapshot snapshot = m_mouse_buttons;
@@ -767,7 +782,18 @@ private:
                 return;
             }
             m_rg.reset();
-            m_scene          = std::move(scene);
+            const bool previous_accepts_pointer_input =
+                m_scene == nullptr || m_scene->accepts_pointer_input;
+            const bool accepts_pointer_input = scene == nullptr || scene->accepts_pointer_input;
+            {
+                std::scoped_lock lock(m_mouse_buttons_mutex);
+                m_scene = std::move(scene);
+                if (!previous_accepts_pointer_input || !accepts_pointer_input) {
+                    m_mouse_buttons.pressed  = 0;
+                    m_mouse_buttons.released = 0;
+                }
+            }
+            main_handler.sendPointerInputCapability(accepts_pointer_input);
             m_render_blocked = false;
             if (m_scene != nullptr && m_scene->runtime != nullptr) {
                 m_scene->runtime->SetMediaIntegrationEnabled(m_media_integration_enabled);
@@ -887,6 +913,23 @@ void SceneWallpaper::shutdown() {
     }
 }
 
+#ifdef WESCENE_BUILD_TESTS
+void SceneWallpaperInputTestAccess::PostScene(SceneWallpaper& wallpaper,
+                                             std::shared_ptr<Scene> scene) {
+    auto msg = CreateMsgWithCmd(wallpaper.m_main_handler->renderHandler(),
+                               RenderHandler::CMD::CMD_SET_SCENE);
+    msg->setObject("scene", std::move(scene));
+    msg->post();
+}
+
+SceneWallpaperInputTestAccess::MouseButtonSnapshot
+SceneWallpaperInputTestAccess::ConsumeMouseButtons(SceneWallpaper& wallpaper) {
+    const auto snapshot =
+        wallpaper.m_main_handler->renderHandler()->consumeMouseButtonSnapshot();
+    return { snapshot.down, snapshot.pressed, snapshot.released };
+}
+#endif
+
 void SceneWallpaper::initVulkan(const RenderInitInfo& info) {
     m_offscreen                             = info.offscreen;
     std::shared_ptr<RenderInitInfo> sp_info = std::make_shared<RenderInitInfo>(info);
@@ -973,6 +1016,10 @@ void SceneWallpaper::mouseButton(int button, bool pressed) {
     m_main_handler->renderHandler()->setMouseButton(button, pressed);
 }
 
+void SceneWallpaper::mouseButtonBaseline(uint32_t down) {
+    m_main_handler->renderHandler()->setMouseButtonBaseline(down);
+}
+
 void SceneWallpaper::mouseEnter(bool entered) {
     m_main_handler->renderHandler()->setMouseInWindow(entered);
 }
@@ -1013,7 +1060,15 @@ BASIC_TYPE(Bool, bool);
 BASIC_TYPE(Int32, int32_t);
 BASIC_TYPE(Float, float);
 BASIC_TYPE(String, std::string);
-BASIC_TYPE(Object, std::shared_ptr<void>);
+void SceneWallpaper::setPropertyObject(std::string_view name, std::shared_ptr<void> value) {
+    auto msg = CreateMsgWithCmd(m_main_handler, MainHandler::CMD::CMD_SET_PROPERTY);
+    if (! msg->setString("property", std::string(name)) || ! msg->setObject("value", value)) {
+        throw std::runtime_error("failed to prepare object property message");
+    }
+    if (msg->post() != looper::status_t::OK) {
+        throw std::runtime_error("failed to enqueue object property message");
+    }
+}
 
 int SceneWallpaper::takeLastFrameSyncFd() {
     return m_main_handler->renderHandler()->takeLastFrameSyncFd();
@@ -1146,6 +1201,12 @@ MHANDLER_CMD_IMPL(MainHandler, SET_PROPERTY) {
             std::shared_ptr<FirstFrameCallback> cb;
             msg->findObject("value", &cb);
             m_first_frame_callback = *cb;
+        } else if (property == PROPERTY_POINTER_INPUT_CALLBACK) {
+            std::shared_ptr<PointerInputCallback> cb;
+            if (msg->findObject("value", &cb) && cb != nullptr) {
+                m_pointer_input_callback = std::move(*cb);
+                if (m_pointer_input_callback) m_pointer_input_callback(m_accepts_pointer_input);
+            }
         } else if (property == PROPERTY_SPEED) {
             float speed { 1.0f };
             if (msg->findFloat("value", &speed)) {
@@ -1166,6 +1227,13 @@ MHANDLER_CMD_IMPL(MainHandler, STOP) {
 
 MHANDLER_CMD_IMPL(MainHandler, FIRST_FRAME) {
     if (m_first_frame_callback) m_first_frame_callback();
+}
+
+MHANDLER_CMD_IMPL(MainHandler, POINTER_INPUT_CHANGED) {
+    if (msg->findBool("accepts_pointer_input", &m_accepts_pointer_input) &&
+        m_pointer_input_callback) {
+        m_pointer_input_callback(m_accepts_pointer_input);
+    }
 }
 
 bool MainHandler::applyConfig(SceneWallpaperConfig config) {
@@ -1410,6 +1478,14 @@ void MainHandler::sendFirstFrameOk() {
         return;
     }
     auto msg = CreateMsgWithCmd(self, MainHandler::CMD::CMD_FIRST_FRAME);
+    msg->post();
+}
+
+void MainHandler::sendPointerInputCapability(bool accepts_pointer_input) {
+    auto self = weak_from_this().lock();
+    if (self == nullptr) return;
+    auto msg = CreateMsgWithCmd(self, MainHandler::CMD::CMD_POINTER_INPUT_CHANGED);
+    msg->setBool("accepts_pointer_input", accepts_pointer_input);
     msg->post();
 }
 

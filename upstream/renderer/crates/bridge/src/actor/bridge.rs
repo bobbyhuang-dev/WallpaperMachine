@@ -135,7 +135,7 @@ impl<E: EngineFacade> BridgeActorHandle<E> {
             paths,
             mouse_polling,
         };
-        actor.refresh_mouse_polling();
+        actor.refresh_mouse_polling_policy();
 
         let runtime = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
@@ -201,15 +201,9 @@ impl<E: EngineFacade> BridgeActor<E> {
             || self.state.playback_state == crate::api::BridgePlaybackState::Paused
     }
 
-    fn refresh_mouse_polling(&self) {
-        self.mouse_polling.set_enabled(
-            !self.playback_paused()
-                && self
-                    .engine
-                    .display_snapshot()
-                    .iter()
-                    .any(|display| display.handle.is_some()),
-        );
+    fn refresh_mouse_polling_policy(&self) {
+        self.mouse_polling
+            .set_policy_enabled(!self.playback_paused());
     }
 }
 
@@ -328,7 +322,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
 
     fn bump_generation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
-        self.refresh_mouse_polling();
+        self.refresh_mouse_polling_policy();
     }
 
     fn reserve_reconcile(&mut self) -> u64 {
@@ -340,7 +334,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
 
     fn finish_reconcile(&mut self, generation: u64, actor: ActorRef<BridgeActor<E>>) {
         self.reconciled_generation = generation;
-        self.refresh_mouse_polling();
+        self.refresh_mouse_polling_policy();
         if self.active_restore_generation == Some(generation) {
             self.active_restore_generation = None;
             if self.restore_requested_after_active {
@@ -359,7 +353,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
     }
 
     fn stale_reconcile(&mut self, generation: u64, actor: ActorRef<BridgeActor<E>>) {
-        self.refresh_mouse_polling();
+        self.refresh_mouse_polling_policy();
         if self.active_restore_generation == Some(generation) {
             self.active_restore_generation = None;
             if self.restore_requested_after_active {
@@ -388,7 +382,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         error: BridgeError,
         actor: ActorRef<BridgeActor<E>>,
     ) {
-        self.refresh_mouse_polling();
+        self.refresh_mouse_polling_policy();
         self.state.errors.push(error.message().to_string());
 
         if self.reconcile_current(generation) {
@@ -616,7 +610,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             .refresh_displays()
             .await
             .map_err(|error| BridgeError::engine(error.to_string()))?;
-        self.refresh_mouse_polling();
+        self.refresh_mouse_polling_policy();
         self.sync_displays()
     }
 
@@ -640,12 +634,12 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         let has_configured_wallpapers = !self.state.configured_ids().is_empty();
         let displays = self.engine.display_snapshot();
         if !has_configured_wallpapers || displays.is_empty() {
-            self.refresh_mouse_polling();
+            self.refresh_mouse_polling_policy();
             return Ok(());
         }
         if let Some(scenes) = self.unchanged_configured_scenes(&displays)? {
             self.state.set_active_ids_from_scenes(&scenes);
-            self.refresh_mouse_polling();
+            self.refresh_mouse_polling_policy();
             return Ok(());
         }
 
@@ -654,7 +648,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         let result = self
             .reconcile_engine(app_config.clone(), wallpaper_configs)
             .await;
-        self.refresh_mouse_polling();
+        self.refresh_mouse_polling_policy();
         let scenes = result?;
         self.state.set_active_ids_from_scenes(&scenes);
         Ok(())
@@ -864,7 +858,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             }
             return Err(BridgeError::engine(message));
         }
-        self.refresh_mouse_polling();
+        self.refresh_mouse_polling_policy();
         Ok(())
     }
 
@@ -905,9 +899,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         display_settings: BTreeMap<String, BridgeDisplaySettingsRow>,
         scenes: Vec<SceneDesc>,
     ) -> Result<(), BridgeError> {
-        // Reconciliation already changed the live handles, even if saving
-        // fails.
-        self.refresh_mouse_polling();
+        self.refresh_mouse_polling_policy();
         if let Some(store) = &self.config_store {
             store.save_app_config(&app_config)?;
         }
@@ -915,7 +907,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         self.state.display_settings = display_settings;
         self.state.set_active_ids_from_scenes(&scenes);
         self.state.rebase_drafts();
-        self.refresh_mouse_polling();
+        self.refresh_mouse_polling_policy();
         Ok(())
     }
 
@@ -1513,7 +1505,7 @@ impl<E: EngineFacade + Clone> Message<ClearShaderCache> for BridgeActor<E> {
             true,
         )
         .await;
-        self.refresh_mouse_polling();
+        self.refresh_mouse_polling_policy();
         let scenes = result?;
         self.state.set_active_ids_from_scenes(&scenes);
         self.bump_generation();
@@ -2371,7 +2363,7 @@ impl<E: EngineFacade + Clone> Message<Shutdown> for BridgeActor<E> {
         _msg: Shutdown,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.mouse_polling.set_enabled(false);
+        self.mouse_polling.set_policy_enabled(false);
         let mut active_handles = Vec::new();
         for display in self.engine.display_snapshot() {
             let Some(handle) = display.handle else {
@@ -2391,7 +2383,7 @@ impl<E: EngineFacade + Clone> Message<Shutdown> for BridgeActor<E> {
         }
         .await;
         if result.is_err() {
-            self.refresh_mouse_polling();
+            self.refresh_mouse_polling_policy();
         }
         result.map_err(|error| BridgeError::engine(error.to_string()))
     }
@@ -2910,7 +2902,7 @@ impl<E: EngineFacade + Clone> Message<CompleteRestoreAfterReconcile> for BridgeA
                 Ok(())
             }
             Err(error) => {
-                self.refresh_mouse_polling();
+                self.refresh_mouse_polling_policy();
                 self.state.errors.push(error.message().to_string());
                 Err(error)
             }

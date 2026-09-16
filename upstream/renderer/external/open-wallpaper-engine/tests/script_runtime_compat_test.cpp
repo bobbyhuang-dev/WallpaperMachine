@@ -1,9 +1,12 @@
 #include "Presentation/WallpaperScaling.hpp"
 #include "Runtime/DynamicValue.hpp"
 #include "Runtime/SceneRuntimeContext.hpp"
+#include "Runtime/ScriptedDynamicValue.hpp"
+#include "Scene/include/Scene/SceneImageEffectLayer.h"
 #include "Runtime/SceneSettingResolver.hpp"
 #include "Scene/Scene.h"
 #include "Scene/SceneNode.h"
+#include "SpecTexs.hpp"
 #include "WPShaderValueUpdater.hpp"
 #include "Scene/include/Scene/SceneMesh.h"
 #include "Scripting/ScriptEngine.hpp"
@@ -17,6 +20,10 @@
 #include <memory>
 #include <thread>
 #include <unordered_map>
+
+namespace wallpaper::audio {
+void SetAudioSpectrumSnapshotForTesting(const AudioSpectrumSnapshot&);
+}
 
 namespace wallpaper
 {
@@ -334,10 +341,13 @@ export function cursorClick(event) { thisLayer.getAnimationLayer("siche").play()
     render_copy.genFrame(2.0);
     EXPECT_FALSE(render_copy.isPlaying(0));
     EXPECT_DOUBLE_EQ(render_copy.frame(0), 5.0);
+    EXPECT_FLOAT_EQ(render_copy.genFrame(2.0)[0].translation().x(), 5.0f);
 
     runtime->DispatchCursorClick();
     EXPECT_TRUE(render_copy.isPlaying(0));
     EXPECT_DOUBLE_EQ(render_copy.frame(0), 0.0);
+    EXPECT_FLOAT_EQ(render_copy.genFrame(2.0)[0].translation().x(), 0.0f);
+    EXPECT_FLOAT_EQ(layer.genFrame(2.0)[0].translation().x(), 0.0f);
     render_copy.genFrame(2.1);
     EXPECT_NEAR(render_copy.frame(0), 1.0, 1e-9);
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
@@ -358,8 +368,13 @@ TEST(ScriptRuntimeCompat, PuppetAnimationLayerVisibilityFollowsUserProperty) {
         ResolveBoolSetting(*runtime, {{"value", true}, {"user", {{"name", "outfit"}, {"condition", "0"}}}}),
         [layer](const DynamicValue& value) mutable { layer.setVisible(0, value.getBool()); });
     EXPECT_FALSE(copy.visible(0));
+    ASSERT_TRUE(layer.setFrame(0, 2.5));
+    EXPECT_FLOAT_EQ(copy.genFrame(0.0)[0].translation().x(), 0.0f);
     runtime->ApplyProjectPropertyOverride({{"outfit", RuntimeScalarValue::String("0")}});
     EXPECT_TRUE(copy.visible(0));
+    EXPECT_FLOAT_EQ(copy.genFrame(0.0)[0].translation().x(), 2.5f);
+    runtime->ApplyProjectPropertyOverride({{"outfit", RuntimeScalarValue::String("1")}});
+    EXPECT_FLOAT_EQ(copy.genFrame(0.0)[0].translation().x(), 0.0f);
 }
 
 // Two interlocking triangle buttons share a bounding box; the cursor must only
@@ -449,7 +464,7 @@ TEST(ScriptRuntimeCompat, ComposeBackgroundUsesScreenCameraAndParentTransform) {
     });
     sprite_map_t sprites;
     ShaderValue actual;
-    updater.UpdateUniforms(node.get(), sprites, [&](std::string_view n, ShaderValue v) {
+    updater.UpdateUniforms(node.get(), sprites, [&](std::string_view n, const ShaderValue& v) {
         if (n == "g_ModelViewProjectionMatrix") actual = v;
     });
     const auto expected = ShaderValue::fromMatrix(screen->GetViewProjectionMatrix() * node->ModelTrans());
@@ -461,7 +476,7 @@ TEST(ScriptRuntimeCompat, ComposeBackgroundUsesScreenCameraAndParentTransform) {
     screen_node->SetTranslate(Eigen::Vector3f(30, 0, 0));
     screen->AttatchNode(screen_node);
     actual = ShaderValue {};
-    updater.UpdateUniforms(node.get(), sprites, [&](std::string_view n, ShaderValue v) {
+    updater.UpdateUniforms(node.get(), sprites, [&](std::string_view n, const ShaderValue& v) {
         if (n == "g_ModelViewProjectionMatrix") actual = v;
     });
     const auto second_expected =
@@ -1414,77 +1429,97 @@ export function update(value) {
 }
 
 TEST(AudioResponseCompat, ShaderSpectrumUniformsUseVec4ArrayStride) {
-    audio::ResetAudioResponseServiceForTesting();
-
-    std::array<float, 200> samples {};
-    for (std::size_t index = 0; index < samples.size(); ++index) {
-        samples[index] = std::sin(static_cast<float>(index) * 0.05f);
-    }
-
-    std::string error;
-    for (uint32_t submit = 0; submit < 6u; ++submit) {
-        ASSERT_TRUE(audio::SubmitMonoAudioFrames(
-            12000u,
-            static_cast<uint32_t>(samples.size()),
-            samples.data(),
-            &error))
-            << error;
-    }
-
-    audio::AudioSpectrumSnapshot snapshot {};
-    for (int attempt = 0; attempt < 100; ++attempt) {
-        snapshot = audio::CurrentAudioSpectrumSnapshot();
-        if (snapshot.generation > 0u) break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    ASSERT_GT(snapshot.generation, 0u);
-
+    struct ResetAudioOnExit {
+        ~ResetAudioOnExit() { audio::ResetAudioResponseServiceForTesting(); }
+    } reset_audio;
+    audio::AudioSpectrumSnapshot snapshot;
+    snapshot.generation = 17;
+    const auto fill = [](auto& values, float offset) {
+        for (std::size_t i = 0; i < values.size(); ++i) values[i] = offset + float(i) / 128.0f;
+    };
+    fill(snapshot.left16, 0.125f);
+    fill(snapshot.right16, 0.25f);
+    fill(snapshot.left32, 0.375f);
+    fill(snapshot.right32, 0.5f);
+    fill(snapshot.left64, 0.625f);
+    fill(snapshot.right64, 0.75f);
+    audio::SetAudioSpectrumSnapshotForTesting(snapshot);
     Scene scene;
+    SceneCamera camera(1920, 1080, 0.01f, 1000.0f);
+    scene.activeCamera = &camera;
     scene.runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
     ASSERT_NE(scene.runtime, nullptr);
     scene.runtime->AttachScene(&scene);
-    scene.runtime->MarkSceneRequiresAudioResponse();
     scene.runtime->SetAudioResponseEnabled(true);
-    scene.activeCamera = new SceneCamera(1920, 1080, 0.01f, 1000.0f);
-
     auto node = std::make_shared<SceneNode>();
     auto mesh = std::make_shared<SceneMesh>();
     mesh->AddMaterial(SceneMaterial {});
+    mesh->AddMaterial(SceneMaterial {});
     node->AddMesh(mesh);
-
     WPShaderValueUpdater updater(&scene);
-    updater.InitUniforms(node.get(), [](std::string_view name) {
+    const ExistsUniformOp has_spectrum = [](std::string_view name) {
         return name == "g_AudioSpectrum16Left" || name == "g_AudioSpectrum16Right" ||
                name == "g_AudioSpectrum32Left" || name == "g_AudioSpectrum32Right" ||
                name == "g_AudioSpectrum64Left" || name == "g_AudioSpectrum64Right";
-    });
-
-    sprite_map_t values;
-    std::unordered_map<std::string, ShaderValue> updates;
-    updater.UpdateUniforms(node.get(), values, [&](std::string_view name, ShaderValue value) {
-        updates.emplace(std::string(name), std::move(value));
-    });
-
-    auto expect_packed = [&](const char* name, const auto& source, std::size_t count) {
-        const auto it = updates.find(name);
-        ASSERT_NE(it, updates.end()) << name;
-        ASSERT_EQ(it->second.size(), count * 4u) << name;
-        for (std::size_t index = 0; index < count; ++index) {
-            EXPECT_FLOAT_EQ(it->second[index * 4u], source[index]) << name << "[" << index << "]";
-            EXPECT_FLOAT_EQ(it->second[index * 4u + 1u], 0.0f) << name << "[" << index << "].y";
-            EXPECT_FLOAT_EQ(it->second[index * 4u + 2u], 0.0f) << name << "[" << index << "].z";
-            EXPECT_FLOAT_EQ(it->second[index * 4u + 3u], 0.0f) << name << "[" << index << "].w";
-        }
     };
-
-    expect_packed("g_AudioSpectrum16Left", snapshot.left16, snapshot.left16.size());
-    expect_packed("g_AudioSpectrum16Right", snapshot.right16, snapshot.right16.size());
-    expect_packed("g_AudioSpectrum32Left", snapshot.left32, snapshot.left32.size());
-    expect_packed("g_AudioSpectrum32Right", snapshot.right32, snapshot.right32.size());
-    expect_packed("g_AudioSpectrum64Left", snapshot.left64, snapshot.left64.size());
-    expect_packed("g_AudioSpectrum64Right", snapshot.right64, snapshot.right64.size());
-
-    delete scene.activeCamera;
+    updater.InitUniforms(node.get(), 0, has_spectrum);
+    updater.InitUniforms(node.get(), 1, has_spectrum);
+    sprite_map_t sprites;
+    std::unordered_map<std::string, ShaderValue> updates;
+    const UpdateUniformOp capture = [&](std::string_view name, const ShaderValue& value) {
+        updates.insert_or_assign(std::string(name), value);
+    };
+    const auto expect_snapshot = [&](const audio::AudioSpectrumSnapshot& expected) {
+        ASSERT_EQ(updates.size(), 6u);
+        const auto expect_packed = [&](const char* name, const auto& source) {
+            const auto it = updates.find(name);
+            ASSERT_NE(it, updates.end()) << name;
+            ASSERT_EQ(it->second.size(), source.size() * 4u) << name;
+            for (std::size_t i = 0; i < source.size(); ++i) {
+                EXPECT_FLOAT_EQ(it->second[i * 4u], source[i]);
+                EXPECT_FLOAT_EQ(it->second[i * 4u + 1u], 0.0f);
+                EXPECT_FLOAT_EQ(it->second[i * 4u + 2u], 0.0f);
+                EXPECT_FLOAT_EQ(it->second[i * 4u + 3u], 0.0f);
+            }
+        };
+        expect_packed("g_AudioSpectrum16Left", expected.left16);
+        expect_packed("g_AudioSpectrum16Right", expected.right16);
+        expect_packed("g_AudioSpectrum32Left", expected.left32);
+        expect_packed("g_AudioSpectrum32Right", expected.right32);
+        expect_packed("g_AudioSpectrum64Left", expected.left64);
+        expect_packed("g_AudioSpectrum64Right", expected.right64);
+    };
+    updater.UpdateUniforms(node.get(), 0, sprites, capture);
+    expect_snapshot(snapshot);
+    // Same generation and elapsed time, with no intervening FrameBegin.
+    fill(snapshot.left16, -0.125f);
+    fill(snapshot.right16, -0.25f);
+    fill(snapshot.left32, -0.375f);
+    fill(snapshot.right32, -0.5f);
+    fill(snapshot.left64, -0.625f);
+    fill(snapshot.right64, -0.75f);
+    audio::SetAudioSpectrumSnapshotForTesting(snapshot);
+    updates.clear();
+    updater.UpdateUniforms(node.get(), 1, sprites, capture);
+    expect_snapshot(snapshot);
+    updater.InitUniforms(node.get(), 0, has_spectrum);
+    updates.clear();
+    updater.UpdateUniforms(node.get(), 0, sprites, capture);
+    expect_snapshot(snapshot);
+    scene.runtime->SetAudioResponseEnabled(false);
+    updates.clear();
+    updater.UpdateUniforms(node.get(), 1, sprites, capture);
+    expect_snapshot({});
+    scene.runtime->SetAudioResponseEnabled(true);
+    audio::SetAudioSpectrumSnapshotForTesting({});
+    updates.clear();
+    updater.UpdateUniforms(node.get(), 0, sprites, capture);
+    expect_snapshot({});
+    audio::SetAudioSpectrumSnapshotForTesting(snapshot);
+    scene.runtime.reset();
+    updates.clear();
+    updater.UpdateUniforms(node.get(), 1, sprites, capture);
+    expect_snapshot({});
     scene.activeCamera = nullptr;
 }
 
@@ -1515,8 +1550,8 @@ TEST(ShaderValueUpdaterCompat, UniformMetadataIsIsolatedPerMaterialSlot) {
         node.get(),
         0,
         slot_zero_sprites,
-        [&](std::string_view name, ShaderValue value) {
-            slot_zero_updates.emplace(std::string(name), std::move(value));
+        [&](std::string_view name, const ShaderValue& value) {
+            slot_zero_updates.emplace(std::string(name), value);
         });
 
     sprite_map_t slot_one_sprites;
@@ -1525,8 +1560,8 @@ TEST(ShaderValueUpdaterCompat, UniformMetadataIsIsolatedPerMaterialSlot) {
         node.get(),
         1,
         slot_one_sprites,
-        [&](std::string_view name, ShaderValue value) {
-            slot_one_updates.emplace(std::string(name), std::move(value));
+        [&](std::string_view name, const ShaderValue& value) {
+            slot_one_updates.emplace(std::string(name), value);
         });
 
     EXPECT_TRUE(slot_zero_updates.contains("g_ModelMatrix"));
@@ -1558,8 +1593,8 @@ TEST(ShaderValueUpdaterCompat, SlotUniformsUpdateWhenSlotZeroMaterialIsMissing) 
 
     sprite_map_t sprites;
     std::unordered_map<std::string, ShaderValue> updates;
-    updater.UpdateUniforms(node.get(), 1, sprites, [&](std::string_view name, ShaderValue value) {
-        updates.emplace(std::string(name), std::move(value));
+    updater.UpdateUniforms(node.get(), 1, sprites, [&](std::string_view name, const ShaderValue& value) {
+        updates.emplace(std::string(name), value);
     });
 
     EXPECT_TRUE(updates.contains("g_Time"));
@@ -1612,8 +1647,8 @@ TEST(ShaderValueUpdaterCompat, SlotRenderTargetUniformsUseSlotShaderValueData) {
         node.get(),
         0,
         slot_zero_sprites,
-        [&](std::string_view name, ShaderValue value) {
-            slot_zero_updates.emplace(std::string(name), std::move(value));
+        [&](std::string_view name, const ShaderValue& value) {
+            slot_zero_updates.emplace(std::string(name), value);
         });
 
     sprite_map_t slot_one_sprites;
@@ -1622,8 +1657,8 @@ TEST(ShaderValueUpdaterCompat, SlotRenderTargetUniformsUseSlotShaderValueData) {
         node.get(),
         1,
         slot_one_sprites,
-        [&](std::string_view name, ShaderValue value) {
-            slot_one_updates.emplace(std::string(name), std::move(value));
+        [&](std::string_view name, const ShaderValue& value) {
+            slot_one_updates.emplace(std::string(name), value);
         });
 
     ASSERT_TRUE(slot_zero_updates.contains("g_Texture0Resolution"));
@@ -1635,6 +1670,640 @@ TEST(ShaderValueUpdaterCompat, SlotRenderTargetUniformsUseSlotShaderValueData) {
 
     delete scene.activeCamera;
     scene.activeCamera = nullptr;
+}
+
+TEST(ScriptRuntimeCompat, CompiledExportsIgnoreSourceTextAndRecognizePlainFunctions) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto node = std::make_shared<SceneNode>();
+    runtime->RegisterNode("plain", node.get());
+    runtime->RegisterNodeTranslate("plain", node.get(), ResolveVec3Setting(*runtime, {
+        {"value", "1 2 3"},
+        {"script", "function update(value) { value.x += 2; return value; }"},
+    }, "plain"));
+    runtime->Tick(0.0);
+    EXPECT_FLOAT_EQ(node->Translate().x(), 3.0f);
+    runtime->Tick(0.0);
+    EXPECT_FLOAT_EQ(node->Translate().x(), 5.0f);
+
+    auto callback = ResolveBoolSetting(*runtime, {
+        {"value", true},
+        {"script", R"JS(
+// export function update(value) { return false; }
+const notAnExport = 'export function update';
+function init() { thisLayer.visible = false; }
+function cursorClick() { thisLayer.visible = !thisLayer.visible; }
+)JS"},
+    }, "plain");
+    int notifications = 0;
+    callback->listen([&](const DynamicValue&) { ++notifications; });
+    runtime->RegisterNodeVisibility("plain", node.get(), std::move(callback));
+    runtime->Tick(0.0);
+    EXPECT_FALSE(node->Visible());
+    EXPECT_EQ(notifications, 1);
+    runtime->Tick(0.0);
+    EXPECT_EQ(notifications, 1);
+    runtime->DispatchCursorClick();
+    runtime->Tick(0.0);
+    EXPECT_TRUE(node->Visible());
+    EXPECT_EQ(notifications, 2);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, InitOnlyProgramsStillRunTimersAndConvenienceInitialization) {
+    ScriptEngine engine;
+    const auto initial = engine.Evaluate(R"JS(
+function init() { localStorage.set('init-only-proof', 17); }
+)JS", {}, DynamicValue(9.0f), {});
+    ASSERT_NE(initial, nullptr);
+    EXPECT_FLOAT_EQ(initial->getFloat(), 9.0f);
+    EXPECT_FLOAT_EQ(EvaluateScalar(engine,
+        "function update() { return Number(localStorage.get('init-only-proof')); }").getFloat(), 17.0f);
+
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto node = std::make_shared<SceneNode>();
+    runtime->RegisterNode("timer", node.get());
+    runtime->RegisterNodeVisibility("timer", node.get(), ResolveBoolSetting(*runtime, {
+        {"value", true}, {"script", R"JS(
+function init() {
+    thisLayer.visible = false;
+    setTimeout(function() { thisLayer.visible = true; }, 100);
+}
+)JS"},
+    }, "timer"));
+    runtime->Tick(0.0);
+    EXPECT_FALSE(node->Visible());
+    runtime->Tick(0.2);
+    EXPECT_TRUE(node->Visible());
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, UpdateExceptionAndBooleanObjectKeepLiveNativeWrites) {
+    for (const auto& ending : { std::string("throw new Error('expected update failure');"),
+                               std::string("return new Boolean(false);") }) {
+        auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+        auto node = std::make_shared<SceneNode>();
+        runtime->RegisterNode("live", node.get());
+        runtime->RegisterNodeVisibility("live", node.get(), ResolveBoolSetting(*runtime, {
+            {"value", false},
+            {"script", "function update() { thisLayer.visible = true; " + ending + " }"},
+        }, "live"));
+        for (int index = 0; index < 3; ++index) {
+            runtime->SetNodeVisible("live", false);
+            runtime->Tick(0.01);
+            EXPECT_TRUE(node->Visible());
+            EXPECT_EQ(runtime->scriptErrorCount(), ending.starts_with("throw") ? index + 1u : 0u);
+        }
+    }
+}
+
+TEST(ScriptRuntimeCompat, SharedCallbacksRetainPerProgramDispatchAndDynamicRegistration) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto marker = std::make_shared<SceneNode>();
+    runtime->RegisterNode("marker", marker.get());
+    runtime->RegisterSceneScript(R"JS(
+let registered = false;
+scene.on('update', function() {
+    const marker = thisScene.getLayer('marker');
+    const origin = marker.origin;
+    origin.x += 1;
+    marker.origin = origin;
+    if (!registered) {
+        registered = true;
+        scene.on('cursorClick', function() {
+            const marker = thisScene.getLayer('marker');
+            const origin = marker.origin;
+            origin.y += 1;
+            marker.origin = origin;
+        });
+    }
+});
+)JS", "");
+    runtime->RegisterSceneScript("const noExports = true;", "");
+    runtime->Tick(0.0);
+    EXPECT_FLOAT_EQ(marker->Translate().x(), 2.0f);
+    runtime->DispatchCursorClick();
+    EXPECT_FLOAT_EQ(marker->Translate().y(), 2.0f);
+    runtime->Tick(0.0);
+    EXPECT_FLOAT_EQ(marker->Translate().x(), 4.0f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, TransformBindingsRepairDestinationsAndRefreshIdentityAndSize) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto original = std::make_shared<SceneNode>();
+    runtime->RegisterNodeTranslate("anchor", original.get(),
+        std::make_unique<DynamicValue>(Eigen::Vector3f(10, 20, 0)));
+    runtime->RegisterNodeScale("anchor", original.get(),
+        std::make_unique<DynamicValue>(Eigen::Vector3f(2, 3, 1)));
+    runtime->SetNodeAnchorAlignment("anchor", "left bottom", Eigen::Vector3f(10, 20, 0));
+    runtime->Tick(0.0);
+    EXPECT_TRUE(original->Translate().isApprox(Eigen::Vector3f(10, 20, 0)));
+    runtime->RegisterNodeSize("anchor", Eigen::Vector2f(20, 10));
+    runtime->Tick(0.0);
+    EXPECT_TRUE(original->Translate().isApprox(Eigen::Vector3f(30, 35, 0)));
+    original->SetTranslate(Eigen::Vector3f(-99, -99, 0));
+    original->SetScale(Eigen::Vector3f::Ones());
+    runtime->Tick(0.0);
+    EXPECT_TRUE(original->Translate().isApprox(Eigen::Vector3f(30, 35, 0)));
+    EXPECT_TRUE(original->Scale().isApprox(Eigen::Vector3f(2, 3, 1)));
+    runtime->RegisterNode("anchor", original.get());
+    runtime->Tick(0.0);
+    EXPECT_TRUE(original->Translate().isApprox(Eigen::Vector3f(30, 35, 0)));
+    runtime->RegisterNodeSize("anchor", Eigen::Vector2f(40, 20));
+    runtime->Tick(0.0);
+    EXPECT_TRUE(original->Translate().isApprox(Eigen::Vector3f(50, 50, 0)));
+
+    auto replacement = std::make_shared<SceneNode>();
+    runtime->RegisterNode("anchor", replacement.get());
+    runtime->SetNodeAnchorAlignment("anchor", "left bottom", Eigen::Vector3f(10, 20, 0));
+    runtime->Tick(0.0);
+    EXPECT_TRUE(replacement->Translate().isApprox(Eigen::Vector3f(50, 50, 0)));
+    EXPECT_TRUE(replacement->Scale().isApprox(Eigen::Vector3f(2, 3, 1)));
+}
+
+TEST(ScriptRuntimeCompat, TextReflowInvalidatesAnchoredTranslationWithoutSourceChanges) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto node = std::make_shared<SceneNode>();
+    runtime->RegisterNodeTranslate("caption", node.get(),
+        std::make_unique<DynamicValue>(Eigen::Vector3f(10, 20, 0)));
+    runtime->RegisterTextLayer("caption", TextLayerState {
+        .text = "a", .font_key = "Arial", .point_size = 10.0f,
+    });
+    runtime->SetNodeAnchorAlignment("caption", "left top", Eigen::Vector3f(10, 20, 0));
+    runtime->Tick(0.0);
+    const auto before = runtime->NodeSize("caption");
+    ASSERT_TRUE(runtime->SetNodeText("caption", "a substantially longer caption"));
+    for (int attempt = 0; attempt < 200 && runtime->NodeTextDirty("caption"); ++attempt) {
+        runtime->PumpTextLayerCache();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_FALSE(runtime->NodeTextDirty("caption"));
+    const auto size = runtime->NodeSize("caption");
+    ASSERT_GT(size.x(), before.x());
+    EXPECT_TRUE(node->Translate().isApprox(Eigen::Vector3f(10 + size.x() * 0.5f, 20 - size.y() * 0.5f, 0)));
+    node->SetTranslate(Eigen::Vector3f::Zero());
+    runtime->Tick(0.0);
+    EXPECT_TRUE(node->Translate().isApprox(Eigen::Vector3f(10 + size.x() * 0.5f, 20 - size.y() * 0.5f, 0)));
+}
+
+TEST(ScriptRuntimeCompat, EffectFinalRepairUsesCurrentParentAttachmentAndResolvedTarget) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto parent = std::make_shared<SceneNode>();
+    auto source = std::make_shared<SceneNode>();
+    parent->AppendChild(source);
+    SceneImageEffectLayer layer(source.get(), 40, 20, "a", "b");
+    runtime->RegisterNodeEffectFinal("effect", source.get(), &layer);
+    runtime->Tick(0.0);
+    layer.FinalNode().ClearRenderTransformOverride();
+    parent->SetTranslate(Eigen::Vector3f(7, 8, 0));
+    Eigen::Affine3d attachment = Eigen::Affine3d::Identity();
+    attachment.translate(Eigen::Vector3d(3, 4, 0));
+    source->SetAttachmentTransform(attachment.matrix());
+    runtime->Tick(0.0);
+    EXPECT_TRUE(layer.FinalNode().HasRenderTransformOverride());
+    EXPECT_TRUE(layer.FinalNode().RenderTrans().isApprox(source->ModelTrans(), 1e-12));
+    layer.FinalNode().SetRenderTransformOverride(Eigen::Matrix4d::Identity());
+    runtime->Tick(0.0);
+    EXPECT_TRUE(layer.FinalNode().RenderTrans().isApprox(source->ModelTrans(), 1e-12));
+    layer.SetFinalBlend(BlendMode::Normal);
+    SceneMesh default_mesh;
+    auto effect = std::make_shared<SceneImageEffect>();
+    auto first = std::make_shared<SceneNode>();
+    auto mesh = std::make_shared<SceneMesh>();
+    mesh->AddMaterial(SceneMaterial {});
+    first->AddMesh(mesh);
+    effect->nodes.push_back({ std::string(SpecTex_Default), first });
+    layer.AddEffect(effect);
+    layer.ResolveEffect(default_mesh, "effect");
+    runtime->Tick(0.0);
+    EXPECT_TRUE(first->RenderTrans().isApprox(source->ModelTrans(), 1e-12));
+    auto second = std::make_shared<SceneNode>();
+    auto second_mesh = std::make_shared<SceneMesh>();
+    second_mesh->AddMaterial(SceneMaterial {});
+    second->AddMesh(second_mesh);
+    effect->nodes.back().sceneNode = second;
+    layer.ResolveEffect(default_mesh, "effect");
+    runtime->Tick(0.0);
+    EXPECT_TRUE(second->HasRenderTransformOverride());
+    EXPECT_TRUE(second->RenderTrans().isApprox(source->ModelTrans(), 1e-12));
+}
+
+TEST(ScriptRuntimeCompat, MaterialBindingsRepairCurrentMapsAndPreserveSecondPhasePrecedence) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto material = std::make_shared<SceneMaterial>();
+    auto value = std::make_unique<DynamicValue>(std::string("1 2 3"));
+    auto* source = value.get();
+    runtime->RegisterMaterialConstant(material, "u_Value", std::move(value));
+    runtime->RegisterMaterialConstant(material, "u_Null", std::make_unique<DynamicValue>());
+    auto alpha = std::make_shared<ScalarAnimationPlayback>();
+    runtime->RegisterMaterialAlphaAnimation(material, alpha);
+    runtime->RegisterMaterialConstant(material, "g_Alpha", std::make_unique<DynamicValue>(0.75f));
+    runtime->RegisterMaterialConstant(material, "u_Duplicate", std::make_unique<DynamicValue>(1.0f));
+    runtime->RegisterMaterialConstant(material, "u_Duplicate", std::make_unique<DynamicValue>(2.0f));
+    for (int index = 0; index < 3; ++index) {
+        material->customShader.constValues.clear();
+        runtime->Tick(0.0);
+        ASSERT_EQ(material->customShader.constValues.at("u_Value").size(), 3u);
+        EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Value")[2], 3.0f);
+        EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Null")[0], 0.0f);
+        EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Duplicate")[0], 2.0f);
+        EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_Alpha")[0], 0.75f);
+    }
+    source->update(std::string("4 5"));
+    runtime->Tick(0.0);
+    ASSERT_EQ(material->customShader.constValues.at("u_Value").size(), 2u);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Value")[1], 5.0f);
+    material->customShader.constValues["u_Value"] = ShaderValue(9.0f);
+    runtime->Tick(0.0);
+    EXPECT_EQ(material->customShader.constValues.at("u_Value").size(), 2u);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Value")[0], 4.0f);
+}
+
+TEST(ScriptRuntimeCompat, FailedRegistrationReleasesListenersAndMaterialTargetsOnlyInItsTail) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {
+        .project_properties = {{"amount", RuntimeScalarValue::Float(1.0f)}},
+    });
+    auto survivor = std::make_shared<SceneMaterial>();
+    runtime->RegisterMaterialConstant(survivor, "u_Value",
+        ResolveFloatSetting(*runtime, {{"value", 0.0f}, {"user", "amount"}}));
+    int survivor_calls = 0;
+    runtime->RegisterDynamicValueListener(
+        ResolveFloatSetting(*runtime, {{"value", 0.0f}, {"user", "amount"}}),
+        [&](const DynamicValue&) { ++survivor_calls; });
+    auto old_node = std::make_shared<SceneNode>();
+    runtime->RegisterNode("transaction", old_node.get());
+    const auto snapshot = runtime->CaptureNodeRegistration("transaction");
+    auto failed_node = std::make_shared<SceneNode>();
+    runtime->RegisterNode("transaction", failed_node.get());
+    auto failed_material = std::make_shared<SceneMaterial>();
+    runtime->RegisterMaterialConstant(failed_material, "u_Value",
+        ResolveFloatSetting(*runtime, {{"value", 0.0f}, {"user", "amount"}}));
+    int failed_calls = 0;
+    auto held = std::make_shared<int>(42);
+    std::weak_ptr<int> resource = held;
+    runtime->RegisterDynamicValueListener(
+        ResolveFloatSetting(*runtime, {{"value", 0.0f}, {"user", "amount"}}),
+        [held, &failed_calls](const DynamicValue&) { ++failed_calls; });
+    held.reset();
+    ASSERT_FALSE(resource.expired());
+    runtime->RollbackNodeRegistration("transaction", failed_node.get(), snapshot);
+    EXPECT_TRUE(resource.expired());
+    failed_material->customShader.constValues["u_Value"] = ShaderValue(91.0f);
+    runtime->ApplyProjectPropertyOverride({{"amount", RuntimeScalarValue::Float(7.0f)}});
+    runtime->Tick(0.0);
+    EXPECT_EQ(failed_calls, 1);
+    EXPECT_EQ(survivor_calls, 2);
+    EXPECT_FLOAT_EQ(failed_material->customShader.constValues.at("u_Value")[0], 91.0f);
+    EXPECT_FLOAT_EQ(survivor->customShader.constValues.at("u_Value")[0], 7.0f);
+    EXPECT_TRUE(runtime->HasNodeNamed("transaction"));
+    runtime->SetNodeTranslate("transaction", Eigen::Vector3f(4, 5, 0));
+    EXPECT_TRUE(old_node->Translate().isApprox(Eigen::Vector3f(4, 5, 0)));
+}
+
+TEST(ShaderValueUpdaterCompat, AudioDiscoveryDoesNotAffectUnrelatedMaterialSlots) {
+    struct ResetAudioOnExit {
+        ~ResetAudioOnExit() { audio::ResetAudioResponseServiceForTesting(); }
+    } reset_audio;
+    audio::AudioSpectrumSnapshot snapshot;
+    snapshot.left64.fill(0.5f);
+    audio::SetAudioSpectrumSnapshotForTesting(snapshot);
+    Scene scene;
+    SceneCamera camera(1920, 1080, 0.01f, 1000.0f);
+    scene.activeCamera = &camera;
+    scene.runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    scene.runtime->AttachScene(&scene);
+    scene.runtime->SetAudioResponseEnabled(true);
+    scene.elapsingTime = 2.0;
+    auto node = std::make_shared<SceneNode>();
+    auto mesh = std::make_shared<SceneMesh>();
+    mesh->AddMaterial(SceneMaterial {});
+    mesh->AddMaterial(SceneMaterial {});
+    node->AddMesh(mesh);
+    WPShaderValueUpdater updater(&scene);
+    const ExistsUniformOp time_only = [](std::string_view name) { return name == "g_Time"; };
+    updater.InitUniforms(node.get(), 0, time_only);
+    updater.InitUniforms(node.get(), 0, time_only);
+    EXPECT_FALSE(scene.runtime->AudioResponseActive());
+    sprite_map_t sprites;
+    std::vector<std::string> names;
+    const UpdateUniformOp capture = [&](std::string_view name, const ShaderValue& value) {
+        names.emplace_back(name);
+        if (name == "g_Time") {
+            ASSERT_EQ(value.size(), 1u);
+            EXPECT_FLOAT_EQ(value[0], 2.0f);
+        }
+    };
+    updater.UpdateUniforms(node.get(), 0, sprites, capture);
+    EXPECT_EQ(names, std::vector<std::string> { "g_Time" });
+    updater.InitUniforms(node.get(), 1, [](std::string_view name) {
+        return name == "g_AudioSpectrum64Left";
+    });
+    EXPECT_TRUE(scene.runtime->AudioResponseActive());
+    names.clear();
+    updater.UpdateUniforms(node.get(), 0, sprites, capture);
+    EXPECT_EQ(names, std::vector<std::string> { "g_Time" });
+    updater.UpdateUniforms(node.get(), 1, sprites, [&](std::string_view name, const ShaderValue& value) {
+        EXPECT_EQ(name, "g_AudioSpectrum64Left");
+        ASSERT_EQ(value.size(), 256u);
+        for (std::size_t i = 0; i < value.size(); ++i) {
+            EXPECT_FLOAT_EQ(value[i], i % 4 == 0 ? 0.5f : 0.0f);
+        }
+    });
+    scene.activeCamera = nullptr;
+}
+
+TEST(ShaderValueUpdaterCompat, EmptyPuppetPosesDoNotEmitBoneUniforms) {
+    Scene scene;
+    SceneCamera camera(1920, 1080, 0.01f, 1000.0f);
+    scene.activeCamera = &camera;
+    scene.elapsingTime = 2.0;
+    auto node = std::make_shared<SceneNode>();
+    auto mesh = std::make_shared<SceneMesh>();
+    mesh->AddMaterial(SceneMaterial {});
+    node->AddMesh(mesh);
+    WPShaderValueUpdater updater(&scene);
+    updater.InitUniforms(node.get(), [](std::string_view name) {
+        return name == "g_Bones" || name == "g_Time";
+    });
+    auto empty_asset = std::make_shared<WPPuppet>();
+    empty_asset->prepared();
+    const std::array<WPPuppetLayer, 3> empty_layers {
+        WPPuppetLayer {}, WPPuppetLayer { std::shared_ptr<WPPuppet> {} }, WPPuppetLayer { empty_asset }
+    };
+    sprite_map_t sprites;
+    for (const auto& layer : empty_layers) {
+        WPShaderValueData data;
+        data.puppet_layer = layer;
+        updater.SetNodeData(node.get(), data);
+        std::vector<std::string> names;
+        updater.UpdateUniforms(node.get(), sprites, [&](std::string_view name, const ShaderValue& value) {
+            names.emplace_back(name);
+            if (name == "g_Time") {
+                ASSERT_EQ(value.size(), 1u);
+                EXPECT_FLOAT_EQ(value[0], 2.0f);
+            }
+        });
+        EXPECT_EQ(names, std::vector<std::string> { "g_Time" });
+    }
+    auto asset = std::make_shared<WPPuppet>();
+    asset->bones.emplace_back();
+    asset->prepared();
+    WPShaderValueData data;
+    data.puppet_layer = WPPuppetLayer { asset };
+    updater.SetNodeData(node.get(), data);
+    std::vector<std::string> names;
+    updater.UpdateUniforms(node.get(), sprites, [&](std::string_view name, const ShaderValue& value) {
+        names.emplace_back(name);
+        if (name == "g_Bones") {
+            ASSERT_EQ(value.size(), 16u);
+            for (std::size_t i = 0; i < value.size(); ++i) {
+                EXPECT_FLOAT_EQ(value[i], i % 5 == 0 ? 1.0f : 0.0f);
+            }
+        }
+    });
+    EXPECT_EQ(names, (std::vector<std::string> { "g_Bones", "g_Time" }));
+    scene.activeCamera = nullptr;
+}
+
+TEST(ScriptRuntimeCompat, CursorCoveragePreservesAllPhasesThresholdsAndLiveTransforms) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto target = std::make_shared<SceneNode>();
+    auto marker = std::make_shared<SceneNode>();
+    target->SetTranslate(Eigen::Vector3f(100, 100, 0));
+    target->SetRotation(Eigen::Vector3f(0, 0, 0.5f));
+    target->SetScale(Eigen::Vector3f(-2, 1, 1));
+    runtime->RegisterNode("target", target.get());
+    runtime->RegisterNodeSize("target", Eigen::Vector2f(40, 20));
+    runtime->RegisterNodeHitMask("target", NodeHitMask { .width = 2, .height = 1, .alpha = {15, 16} });
+    runtime->RegisterNode("marker", marker.get());
+    runtime->RegisterNodeVisibility("target", target.get(), ResolveBoolSetting(*runtime, {
+        {"value", true}, {"script", R"JS(
+function emit(n) {
+    const marker = thisScene.getLayer('marker');
+    const origin = marker.origin;
+    origin.x = origin.x * 10 + n;
+    marker.origin = origin;
+}
+function cursorEnter() { emit(1); }
+function cursorMove() { emit(2); }
+function cursorDown() { emit(3); }
+function cursorClick() { emit(4); }
+function cursorUp() { emit(5); }
+function cursorLeave() { emit(6); }
+)JS"},
+    }, "target"));
+    runtime->RegisterSceneScript(
+        R"JS(scene.on('cursorClick', function() {
+    const marker = thisScene.getLayer('marker');
+    const origin = marker.origin;
+    origin.y += 1;
+    marker.origin = origin;
+});)JS",
+        "target");
+    runtime->Tick(0.0);
+    runtime->SetCursorEnter(true);
+    const auto point = [&](float local_x) {
+        target->UpdateTrans();
+        const Eigen::Vector4d world = target->ModelTrans() * Eigen::Vector4d(local_x, 0, 0, 1);
+        runtime->SetCursorWorldPosition(world.head<3>().cast<float>());
+    };
+    point(-10);
+    runtime->SetCursorButtons(0, 1, 1);
+    runtime->DispatchCursorFrameEvents(false);
+    EXPECT_FLOAT_EQ(marker->Translate().x(), 0);
+    EXPECT_FLOAT_EQ(marker->Translate().y(), 0);
+    point(10);
+    runtime->DispatchCursorFrameEvents(true);
+    EXPECT_FLOAT_EQ(marker->Translate().x(), 12345);
+    EXPECT_FLOAT_EQ(marker->Translate().y(), 1);
+    runtime->BeginFrame();
+    runtime->DispatchCursorFrameEvents(true);
+    EXPECT_FLOAT_EQ(marker->Translate().x(), 123452);
+    point(-10);
+    runtime->DispatchCursorFrameEvents(true);
+    EXPECT_FLOAT_EQ(marker->Translate().x(), 1234526);
+    runtime->SetNodeTranslate("marker", Eigen::Vector3f::Zero());
+    target->SetRotation(Eigen::Vector3f::Zero());
+    target->SetScale(Eigen::Vector3f(-1, 1, 1));
+    point(20);
+    runtime->DispatchCursorFrameEvents(true);
+    EXPECT_FLOAT_EQ(marker->Translate().x(), 12);
+    runtime->SetCursorEnter(false);
+    runtime->SetCursorButtons(0, 0, 1);
+    runtime->DispatchCursorFrameEvents(true);
+    EXPECT_FLOAT_EQ(marker->Translate().x(), 126);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, CursorCallbacksRecheckLaterTargetsWithoutAddingVisibilityFiltering) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto first = std::make_shared<SceneNode>();
+    auto second = std::make_shared<SceneNode>();
+    auto marker = std::make_shared<SceneNode>();
+    runtime->RegisterNode("first", first.get());
+    runtime->RegisterNodeSize("first", Eigen::Vector2f(40, 40));
+    runtime->RegisterNode("second", second.get());
+    runtime->RegisterNodeSize("second", Eigen::Vector2f(40, 40));
+    runtime->RegisterNode("marker", marker.get());
+    runtime->RegisterNodeVisibility("first", first.get(), ResolveBoolSetting(*runtime, {
+        {"value", true}, {"script", R"JS(
+let calls = 0;
+function cursorClick() {
+    const next = thisScene.getLayer('second');
+    const origin = next.origin;
+    origin.x = ++calls === 1 ? 100 : 0;
+    next.origin = origin;
+    next.visible = false;
+}
+)JS"},
+    }, "first"));
+    runtime->RegisterNodeVisibility("second", second.get(), ResolveBoolSetting(*runtime, {
+        {"value", true},
+        {"script", R"JS(function cursorClick() {
+    const marker = thisScene.getLayer('marker');
+    const origin = marker.origin;
+    origin.x += 1;
+    marker.origin = origin;
+})JS"},
+    }, "second"));
+    runtime->Tick(0.0);
+    runtime->SetCursorWorldPosition(Eigen::Vector3f::Zero());
+    runtime->SetCursorEnter(true);
+    runtime->SetCursorButtons(0, 1, 1);
+    runtime->DispatchCursorFrameEvents(false);
+    EXPECT_FLOAT_EQ(marker->Translate().x(), 0);
+    EXPECT_FLOAT_EQ(second->Translate().x(), 100);
+    runtime->DispatchCursorFrameEvents(true);
+    EXPECT_FLOAT_EQ(second->Translate().x(), 0);
+    EXPECT_FALSE(second->Visible());
+    EXPECT_FLOAT_EQ(marker->Translate().x(), 1);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, RollbackRestoresCoverageAndSharedPuppetAndHonorsIdentity) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto node = std::make_shared<SceneNode>();
+    runtime->RegisterNode("subject", node.get());
+    runtime->RegisterNodeSize("subject", Eigen::Vector2f(40, 40));
+    runtime->RegisterNodeHitMask("subject", NodeHitMask { .width = 1, .height = 1, .alpha = {0} });
+    WPPuppetLayer layer(MakeSingleShotPuppet());
+    WPPuppetLayer::AnimationLayer authored;
+    authored.id = 7;
+    layer.prepared(std::span(&authored, 1));
+    ASSERT_TRUE(layer.setFrame(0, 2.5));
+    runtime->RegisterPuppetLayer("subject", layer);
+    const auto snapshot = runtime->CaptureNodeRegistration("subject");
+    auto failed = std::make_shared<SceneNode>();
+    runtime->RegisterNode("subject", failed.get());
+    runtime->RegisterNodeHitMask("subject", NodeHitMask { .width = 1, .height = 1, .alpha = {255} });
+    runtime->RegisterPuppetLayer("subject", WPPuppetLayer(MakeSingleShotPuppet()));
+    runtime->RollbackNodeRegistration("subject", failed.get(), snapshot);
+    ASSERT_NE(runtime->FindPuppetLayer("subject"), nullptr);
+    EXPECT_FLOAT_EQ(runtime->FindPuppetLayer("subject")->genFrame(0)[0].translation().x(), 2.5f);
+    ASSERT_TRUE(runtime->FindPuppetLayer("subject")->setFrame(0, 3.5));
+    EXPECT_FLOAT_EQ(layer.genFrame(0)[0].translation().x(), 3.5f);
+    runtime->RegisterSceneScript("function cursorClick() { thisLayer.visible = false; }", "subject");
+    runtime->SetCursorEnter(true);
+    runtime->SetCursorWorldPosition(Eigen::Vector3f::Zero());
+    runtime->SetCursorButtons(0, 1, 1);
+    runtime->DispatchCursorFrameEvents(false);
+    EXPECT_TRUE(node->Visible());
+
+    auto replacement = std::make_shared<SceneNode>();
+    runtime->RegisterNode("subject", replacement.get());
+    runtime->RollbackNodeRegistration("subject", failed.get(), snapshot);
+    runtime->SetNodeTranslate("subject", Eigen::Vector3f(1, 2, 0));
+    EXPECT_TRUE(replacement->Translate().isApprox(Eigen::Vector3f(1, 2, 0)));
+    runtime->RollbackNodeRegistration("subject", replacement.get(), nullptr);
+    EXPECT_EQ(runtime->FindPuppetLayer("subject"), nullptr);
+    auto fresh = std::make_shared<SceneNode>();
+    runtime->RegisterNode("subject", fresh.get());
+    runtime->RegisterNodeSize("subject", Eigen::Vector2f(40, 40));
+    runtime->DispatchCursorFrameEvents(true);
+    EXPECT_FALSE(fresh->Visible());
+}
+
+TEST(ScriptRuntimeCompat, MaterialSecondPhaseRepairsSceneCallbackWrites) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto node = std::make_shared<SceneNode>();
+    auto material = std::make_shared<SceneMaterial>();
+    runtime->RegisterMaterialConstant(material, "u_Value", std::make_unique<DynamicValue>(3.0f));
+    auto visible = std::make_unique<DynamicValue>(true);
+    int writes = 0;
+    visible->listen([&](const DynamicValue&) {
+        material->customShader.constValues["u_Value"] = ShaderValue(91.0f);
+        ++writes;
+    });
+    runtime->RegisterNodeVisibility("subject", node.get(), std::move(visible));
+    runtime->RegisterSceneScript("function update() { thisLayer.visible = !thisLayer.visible; }", "subject");
+    for (int frame = 0; frame < 3; ++frame) {
+        runtime->Tick(0.0);
+        EXPECT_EQ(writes, frame + 1);
+        EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Value")[0], 3.0f);
+    }
+}
+
+TEST(ScriptRuntimeCompat, CloneGrowthSharesSourcesButRepairsIndependentDestinations) {
+    Scene scene;
+    auto runtime = MakeRuntimeWithScene(scene);
+    auto source_node = std::make_shared<SceneNode>(
+        Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero(), "source");
+    auto mesh = std::make_shared<SceneMesh>();
+    mesh->AddMaterial(SceneMaterial {});
+    source_node->AddMesh(mesh);
+    scene.sceneGraph->AppendChild(source_node);
+    runtime->RegisterNode("source", source_node.get());
+    runtime->RegisterLayerTemplate("models/template.json", source_node, Eigen::Vector2f(20, 20));
+    auto value = std::make_unique<DynamicValue>(2.0f);
+    auto* source = value.get();
+    runtime->RegisterMaterialConstant(mesh->MaterialSlotPtr(), "u_Value", std::move(value));
+    for (int index = 0; index < 40; ++index) {
+        ASSERT_FALSE(runtime->CreateLayerFromTemplate("models/template.json", "source").empty());
+    }
+    ASSERT_EQ(scene.sceneGraph->GetChildren().size(), 41u);
+    source->update(7.0f);
+    runtime->Tick(0.0);
+    for (const auto& child : scene.sceneGraph->GetChildren()) {
+        EXPECT_FLOAT_EQ(child->Mesh()->Material()->customShader.constValues.at("u_Value")[0], 7.0f);
+        if (child.get() != source_node.get()) child->Mesh()->Material()->customShader.constValues.clear();
+    }
+    EXPECT_FLOAT_EQ(mesh->Material()->customShader.constValues.at("u_Value")[0], 7.0f);
+    runtime->Tick(0.0);
+    for (const auto& child : scene.sceneGraph->GetChildren()) {
+        EXPECT_FLOAT_EQ(child->Mesh()->Material()->customShader.constValues.at("u_Value")[0], 7.0f);
+    }
+}
+
+TEST(ScriptRuntimeCompat, RollbackDropsNewAnimationsAndAlphaButPreservesReusedPlayback) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto node = std::make_shared<SceneNode>();
+    runtime->RegisterNode("subject", node.get());
+    ScalarAnimation animation {
+        .initial_value = 1.0f, .fps = 10.0, .length_frames = 100.0,
+        .name = "survivor",
+        .keyframes = {{.frame = 0.0, .value = 1.0f}, {.frame = 100.0, .value = 11.0f}},
+    };
+    auto survivor = runtime->RegisterScalarAnimation("subject", animation);
+    runtime->Tick(0.2);
+    const auto snapshot = runtime->CaptureNodeRegistration("subject");
+    auto failed_node = std::make_shared<SceneNode>();
+    runtime->RegisterNode("subject", failed_node.get());
+    auto reused = runtime->RegisterScalarAnimation("subject", animation);
+    reused->SetFrame(5.0);
+    animation.name = "failed";
+    auto failed_playback = runtime->RegisterScalarAnimation("subject", animation);
+    std::weak_ptr<ScalarAnimationPlayback> failed_owner = failed_playback;
+    auto failed_material = std::make_shared<SceneMaterial>();
+    runtime->RegisterMaterialAlphaAnimation(failed_material, failed_playback);
+    failed_playback.reset();
+    runtime->RollbackNodeRegistration("subject", failed_node.get(), snapshot);
+    EXPECT_TRUE(failed_owner.expired());
+    EXPECT_EQ(runtime->FindScalarAnimation("subject", "failed"), nullptr);
+    EXPECT_DOUBLE_EQ(survivor->frame, 5.0);
+    failed_material->customShader.constValues["g_UserAlpha"] = ShaderValue(91.0f);
+    runtime->Tick(0.2);
+    EXPECT_DOUBLE_EQ(survivor->frame, 7.0);
+    EXPECT_FLOAT_EQ(failed_material->customShader.constValues.at("g_UserAlpha")[0], 91.0f);
 }
 
 } // namespace

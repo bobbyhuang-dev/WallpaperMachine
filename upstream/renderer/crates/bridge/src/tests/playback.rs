@@ -138,6 +138,7 @@ fn assert_mouse_polling_after_reconcile_error(path: MouseReconcilePath) {
         let engine = FakeEngineFacade::default();
         let mut display = active_mouse_display();
         display.handle = None;
+        display.accepts_pointer_input = false;
         engine.set_snapshot(vec![display]);
         let mut state = crate::actor::state::BridgeActorState::default();
         state.app_config.monitors = vec![crate::config::MonitorCfg {
@@ -355,6 +356,7 @@ async fn shutdown_disables_audio_capture_before_closing_scenes() {
         identity: wallpaper_core::DisplayIdentity::default(),
         desc: wallpaper_core::DisplayDesc::new(7, 0, 0, 1920, 1080, 1.0),
         handle: Some(SceneHandle::new(42)),
+        accepts_pointer_input: true,
         window_active: true,
         assignment: Some(WallpaperAssignment::Direct(
             wallpaper_core::project::SceneTemplate::builder("/tmp/project.json")
@@ -523,12 +525,21 @@ impl EngineFacade for FailingPlaybackEngine {
     }
 
     fn set_first_frame_callback(&self, _callback: FirstFrameCallback) {}
+
+    fn set_pointer_consumer_callback(
+        &self,
+        callback: Option<wallpaper_core::PointerConsumerCallback>,
+    ) {
+        if let Some(callback) = callback {
+            callback(false);
+        }
+    }
 }
 
 #[derive(Clone, Default)]
 struct ShutdownEngine {
     close_calls: Arc<AtomicUsize>,
-    snapshot: Arc<ArcSwap<Vec<DisplaySnapshotEntry>>>,
+    fake: FakeEngineFacade,
     events: Arc<ArcSwap<Vec<ShutdownEvent>>>,
 }
 
@@ -538,7 +549,7 @@ impl ShutdownEngine {
     }
 
     fn set_snapshot(&self, snapshot: Vec<DisplaySnapshotEntry>) {
-        self.snapshot.store(Arc::new(snapshot));
+        self.fake.set_snapshot(snapshot);
     }
 
     fn events(&self) -> Vec<ShutdownEvent> {
@@ -574,7 +585,7 @@ impl EngineFacade for ShutdownEngine {
     }
 
     fn display_snapshot(&self) -> Vec<DisplaySnapshotEntry> {
-        self.snapshot.load_full().as_ref().clone()
+        self.fake.display_snapshot()
     }
 
     fn close_all_scenes(&self) -> BoxFuture<'static, Result<(), EngineError>> {
@@ -582,7 +593,7 @@ impl EngineFacade for ShutdownEngine {
         async move {
             engine.close_calls.fetch_add(1, Ordering::SeqCst);
             engine.push_event(ShutdownEvent::CloseAll);
-            Ok(())
+            engine.fake.close_all_scenes().await
         }
         .boxed()
     }
@@ -698,4 +709,29 @@ impl EngineFacade for ShutdownEngine {
     }
 
     fn set_first_frame_callback(&self, _callback: FirstFrameCallback) {}
+
+    fn set_pointer_consumer_callback(
+        &self,
+        callback: Option<wallpaper_core::PointerConsumerCallback>,
+    ) {
+        self.fake.set_pointer_consumer_callback(callback);
+    }
+}
+
+#[tokio::test]
+async fn shutdown_facade_retains_live_consumers_on_close_failure() {
+    let engine = ShutdownEngine::default();
+    engine.set_snapshot(vec![active_mouse_display()]);
+    let (send, receive) = std::sync::mpsc::channel();
+    engine.set_pointer_consumer_callback(Some(Arc::new(move |value| {
+        send.send(value).unwrap();
+    })));
+    assert!(receive.recv().unwrap());
+    engine.fake.fail_next_close();
+    assert!(engine.close_all_scenes().await.is_err());
+    assert!(engine.display_snapshot()[0].accepts_pointer_input);
+    assert!(receive.try_recv().is_err());
+    engine.close_all_scenes().await.unwrap();
+    assert!(!receive.recv().unwrap());
+    assert!(engine.display_snapshot()[0].handle.is_none());
 }

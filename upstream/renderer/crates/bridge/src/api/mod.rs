@@ -162,6 +162,12 @@ impl<E: EngineFacade> BridgeBuilder<E> {
 
         let engine = ArcEngineFacade::new(self.engine);
         let mouse_polling = Arc::new(MousePollingControl::new());
+        let weak_polling = Arc::downgrade(&mouse_polling);
+        engine.set_pointer_consumer_callback(Some(Arc::new(move |has_consumers| {
+            if let Some(control) = weak_polling.upgrade() {
+                control.set_has_consumers(has_consumers);
+            }
+        })));
         let actor = BridgeActorHandle::spawn(
             state,
             engine.clone(),
@@ -200,8 +206,15 @@ struct MousePoller {
 }
 
 struct MousePollingState {
-    enabled: bool,
+    policy_enabled: bool,
+    has_consumers: bool,
     stopped: bool,
+}
+
+impl MousePollingState {
+    fn eligible(&self) -> bool {
+        self.policy_enabled && self.has_consumers && !self.stopped
+    }
 }
 
 pub(crate) struct MousePollingControl {
@@ -213,7 +226,8 @@ impl MousePollingControl {
     pub(crate) fn new() -> Self {
         Self {
             state: Mutex::new(MousePollingState {
-                enabled: false,
+                policy_enabled: false,
+                has_consumers: false,
                 stopped: false,
             }),
             changed: Condvar::new(),
@@ -226,9 +240,10 @@ impl MousePollingControl {
     ) -> MutexGuard<'a, MousePollingState> {
         if !state.stopped {
             log::error!("mouse polling control poisoned; stopping worker");
-            state.stopped = true;
-            state.enabled = false;
         }
+        state.stopped = true;
+        state.policy_enabled = false;
+        state.has_consumers = false;
         self.changed.notify_all();
         state
     }
@@ -239,17 +254,32 @@ impl MousePollingControl {
             .unwrap_or_else(|error| self.recover_poison(error.into_inner()))
     }
 
-    pub(crate) fn set_enabled(&self, enabled: bool) {
+    pub(crate) fn set_policy_enabled(&self, enabled: bool) {
         let mut state = self.lock();
-        if !state.stopped && state.enabled != enabled {
-            state.enabled = enabled;
+        if state.stopped {
+            return;
+        }
+        let was_eligible = state.eligible();
+        state.policy_enabled = enabled;
+        if state.eligible() != was_eligible {
+            self.changed.notify_all();
+        }
+    }
+
+    pub(crate) fn set_has_consumers(&self, has_consumers: bool) {
+        let mut state = self.lock();
+        if state.stopped {
+            return;
+        }
+        let was_eligible = state.eligible();
+        state.has_consumers = has_consumers;
+        if state.eligible() != was_eligible {
             self.changed.notify_all();
         }
     }
 
     pub(crate) fn is_enabled(&self) -> bool {
-        let state = self.lock();
-        state.enabled && !state.stopped
+        self.lock().eligible()
     }
 
     pub(crate) fn stop(&self) {
@@ -259,7 +289,7 @@ impl MousePollingControl {
 
     pub(crate) fn wait_until_enabled(&self) -> bool {
         let mut state = self.lock();
-        while !state.enabled && !state.stopped {
+        while !state.eligible() && !state.stopped {
             state = self
                 .changed
                 .wait(state)
@@ -271,7 +301,7 @@ impl MousePollingControl {
     pub(crate) fn wait_interval(&self, interval: std::time::Duration) -> bool {
         let deadline = std::time::Instant::now() + interval;
         let mut state = self.lock();
-        while state.enabled && !state.stopped {
+        while state.eligible() {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
                 break;
@@ -511,6 +541,13 @@ impl EngineFacade for ArcEngineFacade {
 
     fn set_first_frame_callback(&self, callback: FirstFrameCallback) {
         self.0.set_first_frame_callback(callback);
+    }
+
+    fn set_pointer_consumer_callback(
+        &self,
+        callback: Option<wallpaper_core::PointerConsumerCallback>,
+    ) {
+        self.0.set_pointer_consumer_callback(callback);
     }
 }
 
@@ -1301,5 +1338,81 @@ impl From<BridgePropertyValue> for crate::project::PropertyValue {
             }
             BridgePropertyValue::Empty => Self::Null,
         }
+    }
+}
+
+#[cfg(test)]
+mod mouse_polling_tests {
+    use super::MousePollingControl;
+    use std::sync::{Arc, Barrier, mpsc};
+    use std::time::Duration;
+
+    #[test]
+    fn policy_and_consumer_changes_never_overwrite_each_other() {
+        let control = MousePollingControl::new();
+        control.set_policy_enabled(true);
+        assert!(!control.is_enabled());
+        control.set_has_consumers(true);
+        assert!(control.is_enabled());
+        control.set_policy_enabled(false);
+        control.set_has_consumers(false);
+        control.set_has_consumers(true);
+        assert!(!control.is_enabled());
+        control.set_policy_enabled(true);
+        assert!(control.is_enabled());
+        control.set_has_consumers(false);
+        control.set_policy_enabled(false);
+        control.set_policy_enabled(true);
+        assert!(!control.is_enabled());
+        control.stop();
+        control.set_has_consumers(true);
+        control.set_policy_enabled(true);
+        assert!(!control.is_enabled());
+        assert!(!control.wait_until_enabled());
+        assert!(!control.wait_interval(Duration::from_millis(16)));
+    }
+
+    #[test]
+    fn consumer_arrival_wakes_waiter_and_stop_wakes_ineligible_waiter() {
+        for activate in [false, true] {
+            let control = Arc::new(MousePollingControl::new());
+            control.set_policy_enabled(true);
+            let started = Arc::new(Barrier::new(2));
+            let (send, receive) = mpsc::channel();
+            let worker_control = control.clone();
+            let worker_started = started.clone();
+            let worker = std::thread::spawn(move || {
+                worker_started.wait();
+                send.send(worker_control.wait_until_enabled()).unwrap();
+            });
+            started.wait();
+            if activate {
+                control.set_has_consumers(true);
+            } else {
+                control.stop();
+                control.set_has_consumers(true);
+            }
+            assert_eq!(receive.recv_timeout(Duration::from_secs(1)).unwrap(), activate);
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn poisoned_control_fails_closed_and_rejects_late_callbacks() {
+        let control = Arc::new(MousePollingControl::new());
+        control.set_policy_enabled(true);
+        control.set_has_consumers(true);
+        let poisoned = control.clone();
+        assert!(std::thread::spawn(move || {
+            let Ok(_guard) = poisoned.state.lock() else {
+                panic!("control was already poisoned");
+            };
+            panic!("injected control poison");
+        }).join().is_err());
+        assert!(!control.is_enabled());
+        control.set_has_consumers(true);
+        control.set_policy_enabled(true);
+        assert!(!control.wait_until_enabled());
+        assert!(!control.wait_interval(Duration::from_millis(16)));
     }
 }

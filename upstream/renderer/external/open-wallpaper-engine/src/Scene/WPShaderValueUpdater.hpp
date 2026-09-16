@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <cstdint>
 #include <chrono>
+#include <optional>
 
 #include <Eigen/Dense>
 
@@ -13,6 +14,7 @@
 #include "Core/MapSet.hpp"
 #include "SpriteAnimation.hpp"
 #include "WPPuppet.hpp"
+#include "Scene/SceneShader.h"
 
 namespace wallpaper
 {
@@ -117,6 +119,7 @@ private:
     std::chrono::time_point<std::chrono::steady_clock> m_last_mouse_input_time;
 
     std::array<float, 2> m_screen_size { 1920, 1080 };
+    std::optional<ShaderValue> m_audioSpectrumPacked;
 
     Map<void*, Map<uint32_t, WPShaderValueData>> m_nodeDataMap;
     Map<void*, Map<uint32_t, WPUniformInfo>> m_nodeUniformInfoMap;

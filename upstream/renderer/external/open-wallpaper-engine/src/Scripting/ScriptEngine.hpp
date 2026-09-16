@@ -48,6 +48,20 @@ enum class PropertyScriptValueSemantic
     AnglesDegrees,
 };
 
+enum class ScriptCursorEvent : uint8_t {
+    Click = 1u << 0,
+    Down = 1u << 1,
+    Enter = 1u << 2,
+    Leave = 1u << 3,
+    Move = 1u << 4,
+    Up = 1u << 5,
+};
+
+struct ScriptProgramCapabilities {
+    bool update { false };
+    uint8_t cursor_handlers { 0 };
+};
+
 class PropertyScriptProgram {
 public:
     PropertyScriptProgram(
@@ -62,6 +76,7 @@ public:
     PropertyScriptProgram& operator=(const PropertyScriptProgram&) = delete;
 
     bool                  Valid() const;
+    const ScriptProgramCapabilities& Capabilities() const noexcept { return m_capabilities; }
     DynamicValueUniquePtr Evaluate(const ScriptHostContext& host_context,
                                    const DynamicValue&      current_value);
     void                  DispatchCursorClick(const ScriptHostContext& host_context);
@@ -86,6 +101,7 @@ private:
     std::string                          m_exports_object_name;
     std::string                          m_script_properties_name;
     PropertyScriptValueSemantic          m_semantic { PropertyScriptValueSemantic::Generic };
+    ScriptProgramCapabilities             m_capabilities;
     bool                                 m_owns_context = false;
     bool                                 m_valid        = false;
     bool                                 m_init_called  = false;
@@ -103,6 +119,7 @@ public:
     SceneScriptProgram& operator=(const SceneScriptProgram&) = delete;
 
     bool               Valid() const;
+    const ScriptProgramCapabilities& Capabilities() const noexcept { return m_capabilities; }
     const std::string& LayerName() const { return m_current_layer_name; }
     void               Tick(const ScriptHostContext& host_context);
     void               DispatchCursorClick(const ScriptHostContext& host_context);
@@ -127,6 +144,7 @@ private:
     std::string          m_exports_object_name;
     void*                m_impl_runtime = nullptr;
     void*                m_impl_context = nullptr;
+    ScriptProgramCapabilities m_capabilities;
     bool                 m_owns_context = false;
     bool                 m_valid        = false;
 };

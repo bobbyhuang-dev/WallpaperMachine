@@ -2779,6 +2779,26 @@ bool ExecuteScriptFactory(JSContext* context, JSValue factory,
     return true;
 }
 
+ScriptProgramCapabilities ReadCompiledCapabilities(JSContext* context, const char* exports_name) {
+    ScriptProgramCapabilities capabilities;
+    JSValue global = JS_GetGlobalObject(context);
+    JSValue exports = JS_GetPropertyStr(context, global, exports_name);
+    JSValue update = JS_GetPropertyStr(context, exports, "update");
+    capabilities.update = JS_IsFunction(context, update);
+    JS_FreeValue(context, update);
+    constexpr const char* cursor_exports[] = {
+        "cursorClick", "cursorDown", "cursorEnter", "cursorLeave", "cursorMove", "cursorUp",
+    };
+    for (uint8_t index = 0; index < 6; ++index) {
+        JSValue handler = JS_GetPropertyStr(context, exports, cursor_exports[index]);
+        if (JS_IsFunction(context, handler)) capabilities.cursor_handlers |= uint8_t(1u << index);
+        JS_FreeValue(context, handler);
+    }
+    JS_FreeValue(context, exports);
+    JS_FreeValue(context, global);
+    return capabilities;
+}
+
 } // namespace
 
 PropertyScriptProgram::PropertyScriptProgram(
@@ -2840,6 +2860,7 @@ PropertyScriptProgram::PropertyScriptProgram(
     JS_FreeValue(context_handle, factory);
     JS_FreeValue(context_handle, global_object);
 
+    m_capabilities = ReadCompiledCapabilities(context_handle, m_exports_object_name.c_str());
     m_valid = true;
 }
 
@@ -2921,6 +2942,8 @@ DynamicValueUniquePtr PropertyScriptProgram::Evaluate(const ScriptHostContext& h
         m_init_called = true;
     }
 
+    if (! m_capabilities.update) return nullptr;
+
     JSValue      current_value_js = make_script_input();
     JSValueConst argv[]           = { current_value_js };
     JSValue      result =
@@ -2959,7 +2982,7 @@ DynamicValueUniquePtr PropertyScriptProgram::Evaluate(const ScriptHostContext& h
 }
 
 void PropertyScriptProgram::DispatchCursorClick(const ScriptHostContext& host_context) {
-    if (! m_valid) return;
+    if (! m_valid || !(m_capabilities.cursor_handlers & static_cast<uint8_t>(ScriptCursorEvent::Click))) return;
     auto* context_handle = static_cast<JSContext*>(m_impl_context);
     if (context_handle == nullptr) return;
 
@@ -2973,7 +2996,7 @@ void PropertyScriptProgram::DispatchCursorClick(const ScriptHostContext& host_co
 }
 
 void PropertyScriptProgram::DispatchCursorDown(const ScriptHostContext& host_context) {
-    if (! m_valid) return;
+    if (! m_valid || !(m_capabilities.cursor_handlers & static_cast<uint8_t>(ScriptCursorEvent::Down))) return;
     auto* context_handle = static_cast<JSContext*>(m_impl_context);
     if (context_handle == nullptr) return;
 
@@ -2987,7 +3010,7 @@ void PropertyScriptProgram::DispatchCursorDown(const ScriptHostContext& host_con
 }
 
 void PropertyScriptProgram::DispatchCursorEnter(const ScriptHostContext& host_context) {
-    if (! m_valid) return;
+    if (! m_valid || !(m_capabilities.cursor_handlers & static_cast<uint8_t>(ScriptCursorEvent::Enter))) return;
     auto* context_handle = static_cast<JSContext*>(m_impl_context);
     if (context_handle == nullptr) return;
 
@@ -3001,7 +3024,7 @@ void PropertyScriptProgram::DispatchCursorEnter(const ScriptHostContext& host_co
 }
 
 void PropertyScriptProgram::DispatchCursorLeave(const ScriptHostContext& host_context) {
-    if (! m_valid) return;
+    if (! m_valid || !(m_capabilities.cursor_handlers & static_cast<uint8_t>(ScriptCursorEvent::Leave))) return;
     auto* context_handle = static_cast<JSContext*>(m_impl_context);
     if (context_handle == nullptr) return;
 
@@ -3015,7 +3038,7 @@ void PropertyScriptProgram::DispatchCursorLeave(const ScriptHostContext& host_co
 }
 
 void PropertyScriptProgram::DispatchCursorMove(const ScriptHostContext& host_context) {
-    if (! m_valid) return;
+    if (! m_valid || !(m_capabilities.cursor_handlers & static_cast<uint8_t>(ScriptCursorEvent::Move))) return;
     auto* context_handle = static_cast<JSContext*>(m_impl_context);
     if (context_handle == nullptr) return;
 
@@ -3029,7 +3052,7 @@ void PropertyScriptProgram::DispatchCursorMove(const ScriptHostContext& host_con
 }
 
 void PropertyScriptProgram::DispatchCursorUp(const ScriptHostContext& host_context) {
-    if (! m_valid) return;
+    if (! m_valid || !(m_capabilities.cursor_handlers & static_cast<uint8_t>(ScriptCursorEvent::Up))) return;
     auto* context_handle = static_cast<JSContext*>(m_impl_context);
     if (context_handle == nullptr) return;
 
@@ -3127,6 +3150,7 @@ SceneScriptProgram::SceneScriptProgram(SceneRuntimeContext& runtime, std::string
     JS_FreeValue(context_handle, factory);
     JS_FreeValue(context_handle, global_object);
 
+    m_capabilities = ReadCompiledCapabilities(context_handle, m_exports_object_name.c_str());
     UpdateHostContext(host_context);
     JSValue init_result =
         CallStoredExport(context_handle, m_exports_object_name.c_str(), "init", 0, nullptr);
@@ -3191,9 +3215,11 @@ void SceneScriptProgram::Tick(const ScriptHostContext& host_context) {
 
     UpdateHostContext(host_context);
     ProcessScheduledCallbacks(context_handle);
-    JSValue result =
-        CallStoredExport(context_handle, m_exports_object_name.c_str(), "update", 0, nullptr);
-    JS_FreeValue(context_handle, result);
+    if (m_capabilities.update) {
+        JSValue result =
+            CallStoredExport(context_handle, m_exports_object_name.c_str(), "update", 0, nullptr);
+        JS_FreeValue(context_handle, result);
+    }
     RunSceneCallbacks(context_handle, "update");
 }
 
@@ -3366,7 +3392,13 @@ ScriptEngine::Evaluate(const std::string&                          script_source
         return fallback;
     }
 
-    return program->Evaluate(host_context, current_value);
+    auto result = program->Evaluate(host_context, current_value);
+    if (! program->Capabilities().update) {
+        auto fallback = std::make_unique<DynamicValue>();
+        fallback->update(current_value);
+        return fallback;
+    }
+    return result;
 }
 
 std::unique_ptr<PropertyScriptProgram> ScriptEngine::CreatePropertyScriptProgram(

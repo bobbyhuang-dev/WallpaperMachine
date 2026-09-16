@@ -27,7 +27,7 @@ public:
     const Desc& desc() const { return m_desc; }
 
     void prepare(Scene&, const Device&, RenderingResources&) override;
-    void execute(const Device&, RenderingResources&) override;
+    VkResult execute(const Device&, RenderingResources&) override;
     void destory(const Device&, RenderingResources&) override;
 
 private:

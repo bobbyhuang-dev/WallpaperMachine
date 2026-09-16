@@ -207,12 +207,46 @@ struct FirstFrameCallbackRegistration {
         if (callback != nullptr) callback(user_data);
     }
 };
+
+struct PointerInputCallbackRegistration {
+    owe_pointer_input_callback callback { nullptr };
+    void* user_data { nullptr };
+    owe_pointer_input_callback_drop drop_user_data { nullptr };
+
+    PointerInputCallbackRegistration(owe_pointer_input_callback callback, void* user_data)
+        : callback(callback), user_data(user_data) {}
+
+    ~PointerInputCallbackRegistration() {
+        if (drop_user_data != nullptr) drop_user_data(user_data);
+    }
+
+    void operator()(bool accepts_pointer_input) const {
+        if (callback != nullptr) callback(user_data, accepts_pointer_input);
+    }
+};
+
+int finish_with_error_noexcept(const char* message) noexcept {
+    try {
+        return finish_with_error(message);
+    } catch (...) {
+        // Even reporting an allocation failure must not unwind through the C ABI.
+        return 1;
+    }
+}
 } // namespace
 
 struct owe_scene_wallpaper {
     wallpaper::SceneWallpaper scene;
     std::shared_ptr<FirstFrameCallbackRegistration> first_frame_callback;
+    std::shared_ptr<PointerInputCallbackRegistration> pointer_input_callback;
 };
+
+#ifdef WESCENE_BUILD_TESTS
+wallpaper::SceneWallpaper&
+wallpaper::SceneWallpaperInputTestAccess::FromNative(owe_scene_wallpaper& scene) {
+    return scene.scene;
+}
+#endif
 
 extern "C" void owe_set_log_callback(owe_log_callback callback)
 {
@@ -380,17 +414,47 @@ extern "C" int owe_scene_wallpaper_set_first_frame_callback(
     void* user_data,
     owe_first_frame_callback_drop drop_user_data)
 {
-    clear_last_error();
-    if (!valid_scene(scene)) return finish_with_error("scene must not be null");
+    try {
+        clear_last_error();
+        if (!valid_scene(scene)) return finish_with_error("scene must not be null");
 
-    scene->first_frame_callback = std::make_shared<FirstFrameCallbackRegistration>(
-        callback,
-        user_data,
-        drop_user_data);
-    auto forwarder = std::make_shared<wallpaper::FirstFrameCallback>(
-        [registration = scene->first_frame_callback]() { (*registration)(); });
-    scene->scene.setPropertyObject(wallpaper::PROPERTY_FIRST_FRAME_CALLBACK, forwarder);
-    return 0;
+        auto registration = std::make_shared<FirstFrameCallbackRegistration>(
+            callback, user_data, nullptr);
+        auto forwarder = std::make_shared<wallpaper::FirstFrameCallback>(
+            [registration]() { (*registration)(); });
+        scene->scene.setPropertyObject(wallpaper::PROPERTY_FIRST_FRAME_CALLBACK, forwarder);
+        registration->drop_user_data = drop_user_data;
+        scene->first_frame_callback = std::move(registration);
+        return 0;
+    } catch (...) {
+        return finish_with_error_noexcept("failed to register first-frame callback");
+    }
+}
+
+extern "C" int owe_scene_wallpaper_set_pointer_input_callback(
+    owe_scene_wallpaper* scene,
+    owe_pointer_input_callback callback,
+    void* user_data,
+    owe_pointer_input_callback_drop drop_user_data)
+{
+    try {
+        clear_last_error();
+        if (!valid_scene(scene)) return finish_with_error("scene must not be null");
+        if (!scene->scene.inited()) return finish_with_error("scene must be initialized");
+
+        // Keep drop unarmed until enqueue succeeds. The local owner pins the
+        // registration even when the looper executes the replay before return.
+        auto registration =
+            std::make_shared<PointerInputCallbackRegistration>(callback, user_data);
+        auto forwarder = std::make_shared<wallpaper::PointerInputCallback>(
+            [registration](bool accepts) { (*registration)(accepts); });
+        scene->scene.setPropertyObject(wallpaper::PROPERTY_POINTER_INPUT_CALLBACK, forwarder);
+        registration->drop_user_data = drop_user_data;
+        scene->pointer_input_callback = std::move(registration);
+        return 0;
+    } catch (...) {
+        return finish_with_error_noexcept("failed to register pointer-input callback");
+    }
 }
 
 extern "C" int owe_scene_wallpaper_mouse_input(owe_scene_wallpaper* scene, double x, double y)
@@ -411,6 +475,21 @@ extern "C" int owe_scene_wallpaper_mouse_button(owe_scene_wallpaper* scene, int 
 
     scene->scene.mouseButton(button, pressed);
     return 0;
+}
+
+extern "C" int owe_scene_wallpaper_set_mouse_button_baseline(
+    owe_scene_wallpaper* scene, uint32_t down)
+{
+    try {
+        clear_last_error();
+        if (!valid_scene(scene)) return finish_with_error("scene must not be null");
+        if (!scene->scene.inited()) return finish_with_error("scene must be initialized");
+
+        scene->scene.mouseButtonBaseline(down);
+        return 0;
+    } catch (...) {
+        return finish_with_error_noexcept("failed to set mouse-button baseline");
+    }
 }
 
 extern "C" int owe_scene_wallpaper_mouse_enter(owe_scene_wallpaper* scene, bool entered)

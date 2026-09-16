@@ -1,5 +1,9 @@
 #pragma once
 #include "RenderGraph/Pass.hpp"
+#ifndef VK_NO_PROTOTYPES
+#    define VK_NO_PROTOTYPES
+#endif
+#include <vulkan/vulkan.h>
 #include <span>
 #include <vector>
 #include <string>
@@ -24,7 +28,7 @@ public:
     virtual ~VulkanPass()                                            = default;
     virtual void prepare(Scene&, const Device&, RenderingResources&) = 0;
     virtual bool updateFrame(const Device&, RenderingResources&) { return true; }
-    virtual void execute(const Device&, RenderingResources&)         = 0;
+    virtual VkResult execute(const Device&, RenderingResources&)     = 0;
     virtual void destory(const Device&, RenderingResources&)         = 0;
 
     void addReleaseTexs(std::span<const std::string_view> texs) {

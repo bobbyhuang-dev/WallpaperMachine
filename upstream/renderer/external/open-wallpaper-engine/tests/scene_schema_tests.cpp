@@ -1890,6 +1890,7 @@ void main() {
 TEST(SceneSchema, PuppetAttachmentFollowsAnimatedAffineAndPreservesLocalEdits) {
     Scene scene;
     WPShaderValueUpdater updater(&scene);
+    updater.SetCameraParallax({ false, 0.0f, 1.0f, 0.0f });
     auto puppet = std::make_shared<WPPuppet>();
     auto& root = puppet->bones.emplace_back();
     root.local_bind.translate(Eigen::Vector3f(100, 200, 0));
@@ -1936,6 +1937,52 @@ TEST(SceneSchema, PuppetAttachmentFollowsAnimatedAffineAndPreservesLocalEdits) {
     child->UpdateTrans();
     EXPECT_NEAR(child->ModelTrans()(0, 3), 23, 1e-4);
     EXPECT_NEAR(child->ModelTrans()(1, 3), 115, 1e-4);
+    SceneCamera camera(640, 360, 0.01f, 100.0f);
+    scene.activeCamera = &camera;
+    auto mesh = std::make_shared<SceneMesh>();
+    mesh->AddMaterial(SceneMaterial {});
+    parent->AddMesh(mesh);
+    WPShaderValueData shader_data;
+    shader_data.puppet_layer = layer;
+    updater.SetNodeData(parent.get(), shader_data);
+    updater.InitUniforms(parent.get(), [](std::string_view name) { return name == "g_Bones"; });
+    sprite_map_t sprites;
+    Eigen::Matrix4f uniform = Eigen::Matrix4f::Zero();
+    int bone_updates = 0;
+    const auto capture_bones = [&](std::string_view name, const ShaderValue& value) {
+        if (name != "g_Bones") return;
+        ASSERT_EQ(value.size(), 16u);
+        for (int i = 0; i < 16; ++i) uniform.data()[i] = value[i];
+        ++bone_updates;
+    };
+    updater.UpdateUniforms(parent.get(), sprites, capture_bones);
+    ASSERT_EQ(bone_updates, 1);
+    ASSERT_TRUE(layer.setFrame(0, 0.5));
+    updater.FrameBegin();
+    updater.UpdateUniforms(parent.get(), sprites, capture_bones);
+    ASSERT_EQ(bone_updates, 2);
+    Eigen::Affine3f expected = Eigen::Affine3f::Identity();
+    expected.translate(Eigen::Vector3f(20, 30, 0));
+    expected.rotate(Eigen::AngleAxisf(0.785398163395f, Eigen::Vector3f::UnitZ()));
+    expected.scale(Eigen::Vector3f(1.5f, 2.0f, 1.0f));
+    expected = expected * puppet->bones[0].inv_bind;
+    EXPECT_TRUE(uniform.isApprox(expected.matrix(), 1e-5));
+    Eigen::Affine3d local = Eigen::Affine3d::Identity();
+    local.translate(Eigen::Vector3d(3, 2, 0));
+    child->UpdateTrans();
+    EXPECT_TRUE(child->ModelTrans().isApprox(
+        parent->ModelTrans() * (expected * attachment).matrix().cast<double>() * local.matrix(), 1e-5));
+    child->SetTranslate(Eigen::Vector3f(4, 6, 0));
+    updater.FrameBegin();
+    updater.UpdateUniforms(parent.get(), sprites, capture_bones);
+    ASSERT_EQ(bone_updates, 3);
+    EXPECT_TRUE(uniform.isApprox(expected.matrix(), 1e-5));
+    local = Eigen::Affine3d::Identity();
+    local.translate(Eigen::Vector3d(4, 6, 0));
+    child->UpdateTrans();
+    EXPECT_TRUE(child->ModelTrans().isApprox(
+        parent->ModelTrans() * (expected * attachment).matrix().cast<double>() * local.matrix(), 1e-5));
+    scene.activeCamera = nullptr;
 }
 
 TEST(SceneSchema, ParserUsesStableRuntimeNamesForDuplicateGenericLayerNames) {
@@ -2700,8 +2747,8 @@ TEST(SceneSchema, ParserRegistersPuppetSlotShaderValueDataByMaterialSlot) {
 
     sprite_map_t sprites;
     std::unordered_map<std::string, ShaderValue> updates;
-    updater->UpdateUniforms(node.get(), 1, sprites, [&](std::string_view name, ShaderValue value) {
-        updates.emplace(std::string(name), std::move(value));
+    updater->UpdateUniforms(node.get(), 1, sprites, [&](std::string_view name, const ShaderValue& value) {
+        updates.emplace(std::string(name), value);
     });
 
     ASSERT_TRUE(updates.contains("g_Texture0Resolution"));
@@ -2733,8 +2780,8 @@ TEST(SceneSchema, ParserCopiesImageParallaxDepthToPuppetMaterialSlots) {
 
     sprite_map_t sprites;
     std::unordered_map<std::string, ShaderValue> updates;
-    updater->UpdateUniforms(node.get(), 1, sprites, [&](std::string_view name, ShaderValue value) {
-        updates.emplace(std::string(name), std::move(value));
+    updater->UpdateUniforms(node.get(), 1, sprites, [&](std::string_view name, const ShaderValue& value) {
+        updates.emplace(std::string(name), value);
     });
 
     ASSERT_TRUE(updates.contains("g_ModelMatrix"));
@@ -3195,4 +3242,451 @@ TEST(SceneSchema, SchemecolorUserPropertyUpdatesSceneClearColor) {
     EXPECT_FLOAT_EQ(parsed->clearColor[0], 0.5f);
     EXPECT_FLOAT_EQ(parsed->clearColor[1], 0.25f);
     EXPECT_FLOAT_EQ(parsed->clearColor[2], 0.125f);
+}
+
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include "SceneWallpaper.hpp"
+#include "Scene/Scene.h"
+#if defined(__APPLE__)
+#include "Platform/Apple/SceneWallpaperBindings.h"
+#endif
+
+namespace {
+struct NativePointerObservation {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::vector<bool> values;
+    int drops { 0 };
+    int first_frames { 0 };
+    bool block { false };
+    bool released { false };
+
+    void Observe(bool accepts) {
+        std::unique_lock lock(mutex);
+        values.push_back(accepts);
+        changed.notify_all();
+        if (block) changed.wait(lock, [&] { return released; });
+    }
+    void Release() {
+        std::lock_guard lock(mutex);
+        released = true;
+        changed.notify_all();
+    }
+    bool Wait(std::size_t count, int drop_count = 0) {
+        std::unique_lock lock(mutex);
+        return changed.wait_for(lock, std::chrono::seconds(5), [&] {
+            return values.size() >= count && drops >= drop_count;
+        });
+    }
+    std::vector<bool> Values() {
+        std::lock_guard lock(mutex);
+        return values;
+    }
+    int Drops() {
+        std::lock_guard lock(mutex);
+        return drops;
+    }
+};
+
+std::shared_ptr<wallpaper::Scene> MakePointerCommitScene(bool accepts) {
+    auto scene = std::make_shared<wallpaper::Scene>();
+    scene->activeCamera = nullptr;
+    scene->sceneGraph.reset();
+    scene->accepts_pointer_input = accepts;
+    return scene;
+}
+}
+
+TEST(SceneSchema, PointerCapabilityFollowsActualCommitsWithoutFirstFrame) {
+    NativePointerObservation observation;
+    NativePointerObservation replacement;
+    wallpaper::SceneWallpaper wallpaper;
+    ASSERT_TRUE(wallpaper.init());
+    wallpaper.setPropertyObject(wallpaper::PROPERTY_FIRST_FRAME_CALLBACK,
+        std::make_shared<wallpaper::FirstFrameCallback>([&] {
+            std::lock_guard lock(observation.mutex);
+            ++observation.first_frames;
+        }));
+    wallpaper.setPropertyObject(wallpaper::PROPERTY_POINTER_INPUT_CALLBACK,
+        std::make_shared<wallpaper::PointerInputCallback>([&](bool accepts) {
+            observation.Observe(accepts);
+        }));
+    ASSERT_TRUE(observation.Wait(1));
+    EXPECT_EQ(observation.Values(), (std::vector<bool> { true }));
+
+    auto video = MakePointerCommitScene(false);
+    wallpaper::SceneWallpaperInputTestAccess::PostScene(wallpaper, video);
+    ASSERT_TRUE(observation.Wait(2));
+    EXPECT_EQ(observation.Values(), (std::vector<bool> { true, false }));
+
+    // Configuration is not a scene commit; replacement is a main-looper barrier.
+    wallpaper.setPropertyBool(wallpaper::PROPERTY_FORCE_SHADER_REFRESH, true);
+    wallpaper.setPropertyObject(wallpaper::PROPERTY_POINTER_INPUT_CALLBACK,
+        std::make_shared<wallpaper::PointerInputCallback>([&](bool accepts) {
+            replacement.Observe(accepts);
+        }));
+    ASSERT_TRUE(replacement.Wait(1));
+    EXPECT_EQ(observation.Values(), (std::vector<bool> { true, false }));
+    EXPECT_EQ(replacement.Values(), (std::vector<bool> { false }));
+
+    auto scene = std::make_shared<wallpaper::Scene>();
+    scene->activeCamera = nullptr;
+    scene->sceneGraph.reset();
+    scene->textures["video-texture"].isVideo = true;
+    ASSERT_TRUE(scene->accepts_pointer_input);
+    wallpaper::SceneWallpaperInputTestAccess::PostScene(wallpaper, scene);
+    ASSERT_TRUE(replacement.Wait(2));
+    wallpaper::SceneWallpaperInputTestAccess::PostScene(wallpaper, scene);
+    ASSERT_TRUE(replacement.Wait(3));
+    wallpaper::SceneWallpaperInputTestAccess::PostScene(wallpaper, video);
+    ASSERT_TRUE(replacement.Wait(4));
+    wallpaper::SceneWallpaperInputTestAccess::PostScene(wallpaper, nullptr);
+    ASSERT_TRUE(replacement.Wait(5));
+    wallpaper.shutdown();
+    EXPECT_EQ(replacement.Values(), (std::vector<bool> { false, true, true, false, true }));
+    EXPECT_FALSE(video->first_frame_ok);
+    EXPECT_FALSE(scene->first_frame_ok);
+    std::lock_guard lock(observation.mutex);
+    EXPECT_EQ(observation.first_frames, 0);
+}
+
+#if defined(__APPLE__)
+namespace {
+struct NativePointerUserData {
+    NativePointerObservation* observation;
+};
+void NativePointerCallback(void* data, bool accepts) {
+    static_cast<NativePointerUserData*>(data)->observation->Observe(accepts);
+}
+void NativeFirstFrameCallback(void* data) {
+    auto& observation = *static_cast<NativePointerUserData*>(data)->observation;
+    std::lock_guard lock(observation.mutex);
+    ++observation.first_frames;
+    observation.changed.notify_all();
+}
+void NativePointerDrop(void* data) {
+    std::unique_ptr<NativePointerUserData> owner(static_cast<NativePointerUserData*>(data));
+    auto& observation = *owner->observation;
+    std::lock_guard lock(observation.mutex);
+    ++observation.drops;
+    observation.changed.notify_all();
+}
+struct NativePointerSceneDeleter {
+    void operator()(owe_scene_wallpaper* scene) const { owe_scene_wallpaper_delete(scene); }
+};
+using NativePointerSceneOwner = std::unique_ptr<owe_scene_wallpaper, NativePointerSceneDeleter>;
+struct NativePointerReleaseOnExit {
+    NativePointerObservation& observation;
+    ~NativePointerReleaseOnExit() { observation.Release(); }
+};
+int RegisterNativePointer(owe_scene_wallpaper* scene, NativePointerObservation& observation) {
+    auto data = std::make_unique<NativePointerUserData>();
+    data->observation = &observation;
+    const int status = owe_scene_wallpaper_set_pointer_input_callback(
+        scene, NativePointerCallback, data.get(), NativePointerDrop);
+    if (status == 0) data.release();
+    return status;
+}
+int RegisterNativeFirstFrame(owe_scene_wallpaper* scene, NativePointerObservation& observation) {
+    auto data = std::make_unique<NativePointerUserData>();
+    data->observation = &observation;
+    const int status = owe_scene_wallpaper_set_first_frame_callback(
+        scene, NativeFirstFrameCallback, data.get(), NativePointerDrop);
+    if (status == 0) data.release();
+    return status;
+}
+}
+
+TEST(SceneSchema, PointerCallbackReplacementAndClearRetainInflightUserData) {
+    NativePointerObservation first;
+    NativePointerObservation second;
+    first.block = true;
+    owe_scene_wallpaper* raw = nullptr;
+    ASSERT_EQ(owe_scene_wallpaper_new(&raw), 0);
+    NativePointerSceneOwner scene(raw);
+    NativePointerReleaseOnExit release { first };
+    ASSERT_EQ(owe_scene_wallpaper_init(scene.get()), 0);
+    ASSERT_EQ(RegisterNativePointer(scene.get(), first), 0);
+    ASSERT_TRUE(first.Wait(1));
+    ASSERT_EQ(RegisterNativePointer(scene.get(), second), 0);
+    ASSERT_EQ(owe_scene_wallpaper_set_pointer_input_callback(
+        scene.get(), nullptr, nullptr, nullptr), 0);
+    EXPECT_EQ(first.Drops(), 0);
+    EXPECT_EQ(second.Drops(), 0);
+    EXPECT_TRUE(second.Values().empty());
+    first.Release();
+    ASSERT_TRUE(first.Wait(1, 1));
+    ASSERT_TRUE(second.Wait(1, 1));
+    ASSERT_EQ(owe_scene_wallpaper_shutdown(scene.get()), 0);
+    scene.reset();
+    EXPECT_EQ(first.Values(), (std::vector<bool> { true }));
+    EXPECT_EQ(second.Values(), (std::vector<bool> { true }));
+    EXPECT_EQ(first.Drops(), 1);
+    EXPECT_EQ(second.Drops(), 1);
+}
+
+TEST(SceneSchema, PointerCallbackShutdownStopsDeliveryAndReleasesOwnershipOnDelete) {
+    NativePointerObservation observation;
+    NativePointerObservation rejected;
+    owe_scene_wallpaper* raw = nullptr;
+    ASSERT_EQ(owe_scene_wallpaper_new(&raw), 0);
+    NativePointerSceneOwner scene(raw);
+    ASSERT_EQ(owe_scene_wallpaper_init(scene.get()), 0);
+    ASSERT_EQ(RegisterNativePointer(scene.get(), observation), 0);
+    ASSERT_TRUE(observation.Wait(1));
+    ASSERT_EQ(owe_scene_wallpaper_shutdown(scene.get()), 0);
+    EXPECT_NE(RegisterNativePointer(scene.get(), rejected), 0);
+    EXPECT_EQ(rejected.Drops(), 0);
+    EXPECT_TRUE(rejected.Values().empty());
+    scene.reset();
+    EXPECT_EQ(observation.Values(), (std::vector<bool> { true }));
+    EXPECT_EQ(observation.Drops(), 1);
+    EXPECT_EQ(rejected.Drops(), 0);
+}
+
+TEST(SceneSchema, NativeCallbackRegistrationFailureDoesNotConsumeUserData) {
+    NativePointerObservation pointer;
+    NativePointerObservation first_frame;
+    EXPECT_NE(RegisterNativePointer(nullptr, pointer), 0);
+    EXPECT_NE(RegisterNativeFirstFrame(nullptr, first_frame), 0);
+    owe_scene_wallpaper* raw = nullptr;
+    ASSERT_EQ(owe_scene_wallpaper_new(&raw), 0);
+    NativePointerSceneOwner scene(raw);
+    EXPECT_NE(RegisterNativePointer(scene.get(), pointer), 0);
+    EXPECT_NE(RegisterNativeFirstFrame(scene.get(), first_frame), 0);
+    scene.reset();
+    EXPECT_EQ(pointer.Drops(), 0);
+    EXPECT_EQ(first_frame.Drops(), 0);
+    EXPECT_TRUE(pointer.Values().empty());
+    EXPECT_EQ(first_frame.first_frames, 0);
+}
+
+TEST(SceneSchema, FirstFrameCallbackReplacementClearAndShutdownDropExactlyOnce) {
+    NativePointerObservation first;
+    NativePointerObservation second;
+    NativePointerObservation barrier;
+    owe_scene_wallpaper* raw = nullptr;
+    ASSERT_EQ(owe_scene_wallpaper_new(&raw), 0);
+    NativePointerSceneOwner scene(raw);
+    ASSERT_EQ(owe_scene_wallpaper_init(scene.get()), 0);
+    ASSERT_EQ(RegisterNativeFirstFrame(scene.get(), first), 0);
+    ASSERT_EQ(RegisterNativeFirstFrame(scene.get(), second), 0);
+    ASSERT_EQ(owe_scene_wallpaper_set_first_frame_callback(
+        scene.get(), nullptr, nullptr, nullptr), 0);
+    ASSERT_EQ(RegisterNativePointer(scene.get(), barrier), 0);
+    ASSERT_TRUE(barrier.Wait(1));
+    ASSERT_TRUE(first.Wait(0, 1));
+    ASSERT_TRUE(second.Wait(0, 1));
+    ASSERT_EQ(owe_scene_wallpaper_shutdown(scene.get()), 0);
+    scene.reset();
+    EXPECT_EQ(first.Drops(), 1);
+    EXPECT_EQ(second.Drops(), 1);
+    EXPECT_EQ(barrier.Drops(), 1);
+    EXPECT_EQ(first.first_frames, 0);
+    EXPECT_EQ(second.first_frames, 0);
+}
+
+TEST(SceneSchema, MouseButtonBaselineReconcilesLevelsWithoutInventingOrClearingEdges) {
+    using Access = wallpaper::SceneWallpaperInputTestAccess;
+    owe_scene_wallpaper* raw = nullptr;
+    ASSERT_EQ(owe_scene_wallpaper_new(&raw), 0);
+    NativePointerSceneOwner scene(raw);
+    auto& native = Access::FromNative(*scene);
+    const auto expect_buttons = [&](uint32_t down, uint32_t pressed, uint32_t released) {
+        const auto snapshot = Access::ConsumeMouseButtons(native);
+        EXPECT_EQ(snapshot.down, down);
+        EXPECT_EQ(snapshot.pressed, pressed);
+        EXPECT_EQ(snapshot.released, released);
+    };
+
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 31, true), 0);
+    EXPECT_NE(owe_scene_wallpaper_set_mouse_button_baseline(nullptr, 0), 0);
+    EXPECT_NE(owe_scene_wallpaper_set_mouse_button_baseline(scene.get(), 0), 0);
+    expect_buttons(0x80000000u, 0x80000000u, 0);
+    ASSERT_EQ(owe_scene_wallpaper_init(scene.get()), 0);
+    ASSERT_EQ(owe_scene_wallpaper_set_mouse_button_baseline(scene.get(), 0), 0);
+    expect_buttons(0, 0, 0);
+
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 0, true), 0);
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 0, false), 0);
+    ASSERT_EQ(owe_scene_wallpaper_set_mouse_button_baseline(scene.get(), 1), 0);
+    expect_buttons(1, 1, 1);
+    expect_buttons(1, 0, 0);
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 0, false), 0);
+    expect_buttons(0, 0, 1);
+
+    ASSERT_EQ(owe_scene_wallpaper_set_mouse_button_baseline(scene.get(), 1), 0);
+    expect_buttons(1, 0, 0);
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 0, false), 0);
+    expect_buttons(0, 0, 1);
+
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 2, true), 0);
+    ASSERT_EQ(owe_scene_wallpaper_shutdown(scene.get()), 0);
+    EXPECT_NE(owe_scene_wallpaper_set_mouse_button_baseline(scene.get(), 0), 0);
+    expect_buttons(4, 4, 0);
+}
+
+TEST(SceneSchema, MouseButtonCommitBaselineKeepsVideoGatingFromStickingNativeLatch) {
+    using Access = wallpaper::SceneWallpaperInputTestAccess;
+    NativePointerObservation observation;
+    owe_scene_wallpaper* raw = nullptr;
+    ASSERT_EQ(owe_scene_wallpaper_new(&raw), 0);
+    NativePointerSceneOwner scene(raw);
+    auto& native = Access::FromNative(*scene);
+    ASSERT_EQ(owe_scene_wallpaper_init(scene.get()), 0);
+    ASSERT_EQ(RegisterNativePointer(scene.get(), observation), 0);
+    ASSERT_TRUE(observation.Wait(1));
+    const auto expect_buttons = [&](uint32_t down, uint32_t pressed, uint32_t released) {
+        const auto snapshot = Access::ConsumeMouseButtons(native);
+        EXPECT_EQ(snapshot.down, down);
+        EXPECT_EQ(snapshot.pressed, pressed);
+        EXPECT_EQ(snapshot.released, released);
+    };
+    auto interactive = MakePointerCommitScene(true);
+    auto video = MakePointerCommitScene(false);
+
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 0, true), 0);
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 0, false), 0);
+    Access::PostScene(native, interactive);
+    ASSERT_TRUE(observation.Wait(2));
+    expect_buttons(0, 1, 1);
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 0, true), 0);
+    Access::PostScene(native, MakePointerCommitScene(true));
+    ASSERT_TRUE(observation.Wait(3));
+    expect_buttons(1, 1, 0);
+
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 1, true), 0);
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 1, false), 0);
+    Access::PostScene(native, video);
+    ASSERT_TRUE(observation.Wait(4));
+    expect_buttons(1, 0, 0);
+    // The release observed during video was intentionally not sent to native.
+    Access::PostScene(native, interactive);
+    ASSERT_TRUE(observation.Wait(5));
+    expect_buttons(1, 0, 0);
+    ASSERT_EQ(owe_scene_wallpaper_set_mouse_button_baseline(scene.get(), 0), 0);
+    expect_buttons(0, 0, 0);
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 0, true), 0);
+    expect_buttons(1, 1, 0);
+
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 0, false), 0);
+    Access::PostScene(native, video);
+    ASSERT_TRUE(observation.Wait(6));
+    expect_buttons(0, 0, 0);
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 1, true), 0);
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 1, false), 0);
+    Access::PostScene(native, MakePointerCommitScene(true));
+    ASSERT_TRUE(observation.Wait(7));
+    expect_buttons(0, 0, 0);
+    // Post-commit edges survive the held-level seed from the new sample.
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 2, true), 0);
+    ASSERT_EQ(owe_scene_wallpaper_set_mouse_button_baseline(scene.get(), 5), 0);
+    expect_buttons(5, 4, 0);
+    ASSERT_EQ(owe_scene_wallpaper_mouse_button(scene.get(), 0, false), 0);
+    expect_buttons(4, 0, 1);
+    ASSERT_EQ(owe_scene_wallpaper_shutdown(scene.get()), 0);
+    EXPECT_FALSE(interactive->first_frame_ok);
+    EXPECT_FALSE(video->first_frame_ok);
+}
+#endif
+
+TEST(SceneSchema, FailedPuppetMaterialRollsBackDynamicControlsAndSubscriptions) {
+    std::map<std::string, std::string> files;
+    AddPuppetImageSceneFiles(files);
+    files["/shaders/baseimage.frag"] = "this is not valid GLSL";
+    fs::VFS vfs;
+    ASSERT_TRUE(vfs.Mount("/assets", std::make_unique<MemoryFs>(std::move(files))));
+    auto json = nlohmann::json::parse(BasicPuppetSceneJson());
+    json["objects"][0]["animationlayers"] = nlohmann::json::array({
+        {{"animation", 7}, {"name", "gesture"},
+         {"visible", {{"value", true}, {"user", "visible"}}},
+         {"rate", {{"value", 1.0}, {"user", "rate"}}},
+         {"blend", {{"value", 1.0}, {"user", "blend"}}}},
+    });
+    ProjectProperties properties {
+        {"visible", RuntimeScalarValue::Bool(true)},
+        {"rate", RuntimeScalarValue::Float(1.0f)},
+        {"blend", RuntimeScalarValue::Float(1.0f)},
+    };
+    SceneParseRequest request { .scene_id = "failed-puppet-controls", .project_properties = &properties };
+    audio::SoundManager sound;
+    WPSceneParser parser;
+    auto scene = parser.Parse(request, json.dump(), vfs, sound);
+    ASSERT_NE(scene, nullptr);
+    ASSERT_NE(scene->runtime, nullptr);
+    EXPECT_FALSE(scene->runtime->HasNodeNamed("puppet image"));
+    EXPECT_EQ(scene->runtime->FindPuppetLayer("puppet image"), nullptr);
+    scene->runtime->ApplyProjectPropertyOverride({
+        {"visible", RuntimeScalarValue::Bool(false)},
+        {"rate", RuntimeScalarValue::Float(2.0f)},
+        {"blend", RuntimeScalarValue::Float(0.25f)},
+    });
+    scene->runtime->Tick(0.01);
+    EXPECT_EQ(scene->runtime->FindPuppetLayer("puppet image"), nullptr);
+    EXPECT_EQ(scene->runtime->PuppetAnimationControl("puppet image", "gesture", "exists", 0, false), 0.0);
+}
+
+TEST(SceneSchema, ParserCoverageUsesAuthoredRegionOfPaddedRgbaTexture) {
+    Bytes bytes;
+    bytes.Stamp("TEXV", 5);
+    bytes.Stamp("TEXI", 1);
+    bytes.I32(0);
+    bytes.U32(0);
+    // A 4x2 allocation contains a top-left 2x1 authored image.
+    bytes.I32(4);
+    bytes.I32(2);
+    bytes.I32(2);
+    bytes.I32(1);
+    bytes.I32(0);
+    bytes.Stamp("TEXB", 3);
+    bytes.I32(1);
+    bytes.I32(static_cast<int32_t>(ImageType::UNKNOWN));
+    bytes.I32(1);
+    bytes.I32(4);
+    bytes.I32(2);
+    bytes.I32(0);
+    bytes.I32(0);
+    bytes.I32(32);
+    // Only the authored second texel meets the hit threshold; padding is transparent.
+    for (int texel = 0; texel < 8; ++texel) {
+        bytes.U8(255); bytes.U8(255); bytes.U8(255);
+        bytes.U8(texel == 0 ? 15 : texel == 1 ? 16 : 0);
+    }
+    std::map<std::string, std::string> files;
+    AddPuppetImageSceneFiles(files);
+    files["/puppet_image.json"] = R"({"width":40,"height":20,"material":"mat/base.json"})";
+    files["/materials/base.tex.tex"] = bytes.TakeString();
+    auto json = nlohmann::json::parse(BasicPuppetSceneJson());
+    auto& object = json["objects"][0];
+    object["origin"] = {100, 100, 0};
+    object["visible"] = {
+        {"value", true},
+        {"script", "export function cursorClick() { thisLayer.visible = false; }"},
+    };
+    fs::VFS vfs;
+    ASSERT_TRUE(vfs.Mount("/assets", std::make_unique<MemoryFs>(std::move(files))));
+    audio::SoundManager sound;
+    WPSceneParser parser;
+    // Runtime bootstrap is explicit, even when this scene has no user properties.
+    ProjectProperties properties;
+    auto scene = parser.Parse(SceneParseRequest {
+        .scene_id = "padded-alpha-region", .project_properties = &properties,
+    }, json.dump(), vfs, sound);
+    ASSERT_NE(scene, nullptr);
+    ASSERT_NE(scene->runtime, nullptr);
+    auto& runtime = *scene->runtime;
+    runtime.Tick(0.0);
+    EXPECT_EQ(runtime.NodeSize("puppet image"), Eigen::Vector2f(40.0f, 20.0f));
+    EXPECT_TRUE(runtime.NodeVisible("puppet image"));
+    runtime.SetCursorEnter(true);
+    runtime.SetCursorButtons(0, 1, 1);
+    runtime.SetCursorWorldPosition(Eigen::Vector3f(90, 100, 0));
+    runtime.DispatchCursorFrameEvents(false);
+    EXPECT_TRUE(runtime.NodeVisible("puppet image"));
+    runtime.SetCursorWorldPosition(Eigen::Vector3f(110, 100, 0));
+    runtime.DispatchCursorFrameEvents(true);
+    EXPECT_FALSE(runtime.NodeVisible("puppet image"));
+    EXPECT_EQ(runtime.scriptErrorCount(), 0u);
 }

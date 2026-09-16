@@ -28,7 +28,8 @@ void PrePass::prepare(Scene& scene, const Device& device, RenderingResources&) {
     setPrepared();
 }
 
-void PrePass::execute(const Device&, RenderingResources& rr) {
+VkResult PrePass::execute(const Device&, RenderingResources& rr) {
+    if (!m_desc.vk_result.handle) return VK_ERROR_INITIALIZATION_FAILED;
     auto&                   cmd = rr.command;
     VkImageSubresourceRange base_srang {
         .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -42,17 +43,21 @@ void PrePass::execute(const Device&, RenderingResources& rr) {
         VkImageMemoryBarrier imb {
             .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext            = nullptr,
-            .srcAccessMask    = VK_ACCESS_MEMORY_READ_BIT,
+            .srcAccessMask    = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
             .dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
             .oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED,
             .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image            = m_desc.vk_result.handle,
             .subresourceRange = base_srang,
         };
 
-        cmd.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        cmd.PipelineBarrier(VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                             VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            VK_DEPENDENCY_BY_REGION_BIT,
+                            0,
                             imb);
     }
     cmd.ClearColorImage(m_desc.vk_result.handle,
@@ -63,17 +68,20 @@ void PrePass::execute(const Device&, RenderingResources& rr) {
         .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .pNext            = nullptr,
         .srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
-        .dstAccessMask    = VK_ACCESS_MEMORY_READ_BIT,
+        .dstAccessMask    = VK_ACCESS_SHADER_READ_BIT,
         .oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         .newLayout        = m_desc.layout,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .image            = m_desc.vk_result.handle,
         .subresourceRange = base_srang,
     };
 
     cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                        VK_DEPENDENCY_BY_REGION_BIT,
+                        VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                        0,
                         imb);
+    return VK_SUCCESS;
 }
 void PrePass::destory(const Device&, RenderingResources&) {
     setPrepared(false);

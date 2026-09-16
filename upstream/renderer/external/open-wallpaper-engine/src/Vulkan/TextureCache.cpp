@@ -1607,6 +1607,17 @@ void TextureCache::MarkShareReady(std::string_view key) {
 }
 
 void TextureCache::RecGenerateMipmaps(vvk::CommandBuffer& cmd, const ImageParameters& image) const {
+    if (image.mipmap_level <= 1) return;
+
+    constexpr VkPipelineStageFlags prior_stages =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT |
+        VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    constexpr VkAccessFlags prior_access =
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT |
+        VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+    constexpr VkPipelineStageFlags shader_stages =
+        VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+
     VkImageMemoryBarrier barrier {
         .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .pNext               = nullptr,
@@ -1622,12 +1633,6 @@ void TextureCache::RecGenerateMipmaps(vvk::CommandBuffer& cmd, const ImageParame
                 .layerCount     = 1,
             },
     };
-    /*
-    cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                        VK_DEPENDENCY_BY_REGION_BIT,
-                        out_bar);
-        */
 
     i32 mipWidth  = (i32)image.extent.width;
     i32 mipHeight = (i32)image.extent.height;
@@ -1638,21 +1643,23 @@ void TextureCache::RecGenerateMipmaps(vvk::CommandBuffer& cmd, const ImageParame
                                                        : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
         barrier.newLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+        barrier.srcAccessMask = i == 1 ? prior_access : VK_ACCESS_TRANSFER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
 
-        cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+        cmd.PipelineBarrier(i == 1 ? prior_stages : VK_PIPELINE_STAGE_TRANSFER_BIT,
                             VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            VK_DEPENDENCY_BY_REGION_BIT,
+                            0,
                             barrier);
 
         barrier.subresourceRange.baseMipLevel = i;
         barrier.oldLayout                     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         barrier.newLayout                     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.srcAccessMask                 = prior_access;
+        barrier.dstAccessMask                 = VK_ACCESS_TRANSFER_WRITE_BIT;
 
-        cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+        cmd.PipelineBarrier(prior_stages,
                             VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            VK_DEPENDENCY_BY_REGION_BIT,
+                            0,
                             barrier);
 
         VkImageBlit blit {
@@ -1691,8 +1698,8 @@ void TextureCache::RecGenerateMipmaps(vvk::CommandBuffer& cmd, const ImageParame
         barrier.dstAccessMask                 = VK_ACCESS_SHADER_READ_BIT;
 
         cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                            VK_DEPENDENCY_BY_REGION_BIT,
+                            shader_stages,
+                            0,
                             barrier);
 
         if (mipWidth > 1) mipWidth /= 2;
@@ -1702,11 +1709,11 @@ void TextureCache::RecGenerateMipmaps(vvk::CommandBuffer& cmd, const ImageParame
     barrier.subresourceRange.baseMipLevel = image.mipmap_level - 1;
     barrier.oldLayout                     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier.newLayout                     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    barrier.srcAccessMask                 = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.srcAccessMask                 = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask                 = VK_ACCESS_SHADER_READ_BIT;
 
     cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                        VK_DEPENDENCY_BY_REGION_BIT,
+                        shader_stages,
+                        0,
                         barrier);
 }

@@ -755,8 +755,8 @@ TEST(TextObjectRuntime, ParserRoutesTextObjectEffectsThroughImageEffectLayer) {
     scene->PassFrameTime(0.5);
     sprite_map_t sprites;
     std::unordered_map<std::string, ShaderValue> updates;
-    updater->UpdateUniforms(effect_node, sprites, [&](std::string_view name, ShaderValue value) {
-        updates.emplace(std::string(name), std::move(value));
+    updater->UpdateUniforms(effect_node, sprites, [&](std::string_view name, const ShaderValue& value) {
+        updates.emplace(std::string(name), value);
     });
     ASSERT_TRUE(updates.contains("g_Time"));
     EXPECT_FLOAT_EQ(updates.at("g_Time")[0], 0.5f);

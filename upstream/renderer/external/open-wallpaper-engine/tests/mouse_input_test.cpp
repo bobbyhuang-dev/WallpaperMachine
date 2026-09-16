@@ -376,5 +376,81 @@ function cursorLeave() { scene.getObject('marker').visible = false; }
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 
+TEST(MouseInput, StationarySampleRemapsEveryFrameAndRechecksLiveLayerGeometry) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {
+        .canvas_width = 200,
+        .canvas_height = 100,
+    });
+    auto layer = std::make_shared<SceneNode>();
+    auto marker = std::make_shared<SceneNode>();
+    layer->SetTranslate(Eigen::Vector3f(100, 50, 0));
+    runtime->RegisterNode("layer", layer.get());
+    runtime->RegisterNodeSize("layer", Eigen::Vector2f(20, 20));
+    runtime->RegisterNode("marker", marker.get());
+    runtime->RegisterSceneScript(R"JS(
+function emit(component) {
+    const marker = thisScene.getLayer('marker');
+    const origin = marker.origin;
+    origin[component] += 1;
+    marker.origin = origin;
+}
+function cursorEnter() { emit('x'); }
+function cursorLeave() { emit('y'); }
+function cursorMove() { emit('z'); }
+)JS", "layer");
+    // One window-normalized sample, retained by the native renderer even when
+    // the Rust delivery cache suppresses all subsequent identical writes.
+    const Eigen::Vector2f sample(0.5f, 0.5f);
+    bool was_inside = false;
+    const auto frame = [&](const CursorViewport& viewport) {
+        runtime->BeginFrame();
+        runtime->SetCursorViewport(viewport);
+        runtime->SetCursorInput(sample.x(), sample.y());
+        runtime->SetCursorEnter(true);
+        was_inside = runtime->DispatchCursorFrameEvents(was_inside);
+    };
+    frame(CursorViewport { .origin = Eigen::Vector2f::Zero(), .size = Eigen::Vector2f(200, 100) });
+    EXPECT_TRUE(runtime->hostContext().cursor_world_position.isApprox(Eigen::Vector3f(100, 50, 0)));
+    EXPECT_TRUE(marker->Translate().isApprox(Eigen::Vector3f(1, 0, 1)));
+    frame(CursorViewport { .origin = Eigen::Vector2f(100, 0), .size = Eigen::Vector2f(200, 100) });
+    EXPECT_TRUE(runtime->hostContext().cursor_world_position.isApprox(Eigen::Vector3f(200, 50, 0)));
+    EXPECT_TRUE(marker->Translate().isApprox(Eigen::Vector3f(1, 1, 1)));
+    layer->SetTranslate(Eigen::Vector3f(200, 50, 0));
+    frame(CursorViewport { .origin = Eigen::Vector2f(100, 0), .size = Eigen::Vector2f(200, 100) });
+    EXPECT_TRUE(marker->Translate().isApprox(Eigen::Vector3f(2, 1, 2)));
+    frame(CursorViewport {
+        .origin = Eigen::Vector2f(100, 0), .size = Eigen::Vector2f(200, 100),
+        .content_origin = Eigen::Vector2f(0, 0), .content_size = Eigen::Vector2f(100, 100),
+    });
+    EXPECT_TRUE(marker->Translate().isApprox(Eigen::Vector3f(2, 2, 2)));
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(MouseInput, GlobalReleaseRemainsObservableOutsidePresentedContentAndWindow) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto marker = std::make_shared<SceneNode>();
+    runtime->RegisterNode("marker", marker.get());
+    runtime->RegisterSceneScript(
+        R"JS(function cursorUp() {
+    const marker = thisScene.getLayer('marker');
+    const origin = marker.origin;
+    origin.x += 1;
+    marker.origin = origin;
+})JS", "");
+    runtime->SetCursorEnter(false);
+    runtime->SetCursorButtons(0, 0, 1);
+    runtime->DispatchCursorFrameEvents(false);
+    EXPECT_FLOAT_EQ(marker->Translate().x(), 1.0f);
+    runtime->SetCursorViewport(CursorViewport {
+        .origin = Eigen::Vector2f::Zero(), .size = Eigen::Vector2f(200, 100),
+        .content_origin = Eigen::Vector2f::Zero(), .content_size = Eigen::Vector2f(20, 20),
+    });
+    runtime->SetCursorInput(0.5f, 0.5f);
+    runtime->SetCursorEnter(true);
+    runtime->DispatchCursorFrameEvents(false);
+    EXPECT_FLOAT_EQ(marker->Translate().x(), 2.0f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
 } // namespace
 } // namespace wallpaper

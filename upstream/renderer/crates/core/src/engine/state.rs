@@ -120,6 +120,7 @@ impl EngineState {
                         identity: desc.identity.clone(),
                         desc,
                         handle,
+                        accepts_pointer_input: record.runtime.as_ref().is_some_and(|runtime| runtime.accepts_pointer_input()),
                         window_active: record.model.window_active,
                         assignment: record.model.assignment.clone(),
                     })

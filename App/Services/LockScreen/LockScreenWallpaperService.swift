@@ -18,6 +18,8 @@ final class LockScreenWallpaperService {
   @ObservationIgnored private let scenes: () async throws -> [BridgeLockScreenScene]
   @ObservationIgnored private let selection: LockScreenWallpaperSelection
   @ObservationIgnored private let documents: URL
+  @ObservationIgnored private let defaults: UserDefaults
+  @ObservationIgnored private let scheduleMonitor: (@escaping @MainActor () -> Void) -> Timer
   @ObservationIgnored private var work: Task<Void, Never>?
   @ObservationIgnored private var monitor: Timer?
   @ObservationIgnored private var generation: UInt64 = 0
@@ -39,27 +41,26 @@ final class LockScreenWallpaperService {
 
   init(
     scenes: @escaping () async throws -> [BridgeLockScreenScene],
-    selection: LockScreenWallpaperSelection, documents: URL
+    selection: LockScreenWallpaperSelection, documents: URL,
+    defaults: UserDefaults = .standard,
+    scheduleMonitor: @escaping (@escaping @MainActor () -> Void) -> Timer =
+      LockScreenWallpaperService.scheduleMonitorTimer
   ) {
     self.scenes = scenes
     self.selection = selection
     self.documents = documents
+    self.defaults = defaults
+    self.scheduleMonitor = scheduleMonitor
   }
 
   /// Always recover before either native or PNG providers are allowed to start.
   func start() throws {
-    isRequested = UserDefaults.standard.bool(forKey: Self.preference)
+    defer { updateMonitor() }
+    isRequested = defaults.bool(forKey: Self.preference)
     do {
       try selection.recover()
       recovered = true
       if isRequested { status = "Waiting for committed wallpapers…" }
-      monitor = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-        MainActor.assumeIsolated {
-          guard let self, self.isRequested, !self.isBusy, self.errorMessage == nil else { return }
-          // The bridge applies battery policy without opening the control panel.
-          self.refresh()
-        }
-      }
     } catch {
       errorMessage = error.localizedDescription
       status = "Recovery failed — action required"
@@ -70,7 +71,8 @@ final class LockScreenWallpaperService {
   func setEnabled(_ enabled: Bool) {
     guard !stopping else { return }
     isRequested = enabled
-    if !enabled { UserDefaults.standard.set(false, forKey: Self.preference) }
+    updateMonitor()
+    if !enabled { defaults.set(false, forKey: Self.preference) }
     refresh()
   }
 
@@ -88,16 +90,37 @@ final class LockScreenWallpaperService {
     }
   }
 
+  private func updateMonitor() {
+    guard isRequested, recovered, !stopping, errorMessage == nil else {
+      monitor?.invalidate()
+      monitor = nil
+      return
+    }
+    guard monitor == nil else { return }
+    monitor = scheduleMonitor { [weak self] in
+      guard let self, self.isRequested, !self.stopping, !self.isBusy,
+        self.errorMessage == nil
+      else { return }
+      // The bridge applies battery policy without opening the control panel.
+      self.refresh()
+    }
+  }
+
+  static func scheduleMonitorTimer(_ callback: @escaping @MainActor () -> Void) -> Timer {
+    Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+      MainActor.assumeIsolated { callback() }
+    }
+  }
+
   func shutdown() async throws {
     stopping = true
+    updateMonitor()
     generation &+= 1
     work?.cancel()
     await work?.value
     work = nil
     do {
       try restoreNativeSelection()
-      monitor?.invalidate()
-      monitor = nil
       isEnabled = false
       isBusy = false
     } catch {
@@ -110,7 +133,12 @@ final class LockScreenWallpaperService {
   }
 
   private func update(revision: UInt64) async {
-    defer { if generation == revision { isBusy = false } }
+    defer {
+      if generation == revision {
+        isBusy = false
+        updateMonitor()
+      }
+    }
     do {
       if !recovered {
         try selection.recover()
@@ -193,9 +221,11 @@ final class LockScreenWallpaperService {
         displays: Set(inputs.map(\.displayUUID)), revision: configuration.revision)
       status = "Waiting for the system wallpaper renderer…"
       try await awaitReadiness(configuration)
+      try Task.checkCancellation()
+      guard generation == revision, isRequested else { return }
       lastInputs = inputs
       isEnabled = true
-      UserDefaults.standard.set(true, forKey: Self.preference)
+      defaults.set(true, forKey: Self.preference)
       status = "Enabled for \(inputs.count) display(s)"
       errorMessage = nil
     } catch is CancellationError {

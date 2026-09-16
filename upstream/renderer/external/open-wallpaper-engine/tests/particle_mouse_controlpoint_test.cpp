@@ -558,6 +558,94 @@ TEST(ParticleMouseControlpoint, MouseControlpointUsesOwnerNodeLocalSpace) {
     EXPECT_DOUBLE_EQ(controlpoints[0].offset.z(), 3.0);
 }
 
+TEST(ParticleMouseControlpoint, UnlinkedControlpointsKeepEveryAuthoredOffset) {
+    Scene scene;
+    scene.ortho[0] = 200;
+    scene.ortho[1] = 100;
+    scene.pointerPosition = { 0.75f, 0.25f };
+    ParticleSystem system(scene);
+    auto subsystem = MakeTestSubsystem(system, std::make_shared<SceneMesh>(true));
+    auto owner = std::make_shared<SceneNode>();
+    owner->SetTranslate(Eigen::Vector3f(100.0f, 50.0f, 0.0f));
+    subsystem->SetOwnerNode(owner);
+    auto controlpoints = subsystem->Controlpoints();
+    std::array<Eigen::Vector3d, 8> authored;
+    for (std::size_t i = 0; i < controlpoints.size(); ++i) {
+        authored[i] = Eigen::Vector3d(double(i + 1), double(i + 11), double(i + 21));
+        controlpoints[i].base_offset = Eigen::Vector3d::Zero();
+        controlpoints[i].offset = authored[i];
+    }
+    subsystem->UpdateMouseControlpoints();
+    scene.pointerPosition = { 0.0f, 1.0f };
+    owner->SetScale(Eigen::Vector3f(2.0f, 3.0f, 1.0f));
+    subsystem->UpdateMouseControlpoints();
+    for (std::size_t i = 0; i < controlpoints.size(); ++i) {
+        EXPECT_EQ(controlpoints[i].offset, authored[i]) << i;
+    }
+}
+
+TEST(ParticleMouseControlpoint, RuntimeLinksFollowAncestorChangesWithStationaryPointer) {
+    Scene scene;
+    scene.ortho[0] = 200;
+    scene.ortho[1] = 100;
+    scene.pointerPosition = { 0.75f, 0.25f };
+    ParticleSystem system(scene);
+    auto subsystem = MakeTestSubsystem(system, std::make_shared<SceneMesh>(true));
+    auto parent = std::make_shared<SceneNode>();
+    parent->SetTranslate(Eigen::Vector3f(100.0f, 20.0f, 0.0f));
+    parent->SetScale(Eigen::Vector3f(2.0f, 1.0f, 1.0f));
+    auto owner = std::make_shared<SceneNode>();
+    owner->SetTranslate(Eigen::Vector3f(10.0f, 5.0f, 0.0f));
+    owner->SetScale(Eigen::Vector3f(1.0f, 2.0f, 1.0f));
+    parent->AppendChild(owner);
+    subsystem->SetOwnerNode(owner);
+    auto controlpoints = subsystem->Controlpoints();
+    auto& cp = controlpoints.back();
+    cp.base_offset = Eigen::Vector3d(1.0, 2.0, 3.0);
+    cp.offset = Eigen::Vector3d(9.0, 8.0, 7.0);
+    subsystem->UpdateMouseControlpoints();
+    EXPECT_EQ(cp.offset, Eigen::Vector3d(9.0, 8.0, 7.0));
+    cp.link_mouse = true;
+    subsystem->UpdateMouseControlpoints();
+    EXPECT_EQ(cp.offset, Eigen::Vector3d(16.0, 27.0, 3.0));
+    parent->SetTranslate(Eigen::Vector3f(80.0f, 40.0f, 0.0f));
+    subsystem->UpdateMouseControlpoints();
+    EXPECT_EQ(cp.offset, Eigen::Vector3d(26.0, 17.0, 3.0));
+    cp.link_mouse = false;
+    parent->SetTranslate(Eigen::Vector3f::Zero());
+    subsystem->UpdateMouseControlpoints();
+    EXPECT_EQ(cp.offset, Eigen::Vector3d(26.0, 17.0, 3.0));
+    cp.link_mouse = true;
+    subsystem->UpdateMouseControlpoints();
+    EXPECT_EQ(cp.offset, Eigen::Vector3d(66.0, 37.0, 3.0));
+    for (std::size_t i = 0; i + 1 < controlpoints.size(); ++i) {
+        EXPECT_EQ(controlpoints[i].offset, Eigen::Vector3d::Zero());
+    }
+}
+
+TEST(ParticleMouseControlpoint, MissingAndExpiredOwnersUseWorldCoordinates) {
+    Scene scene;
+    scene.ortho[0] = 200;
+    scene.ortho[1] = 100;
+    scene.pointerPosition = { 0.75f, 0.25f };
+    ParticleSystem system(scene);
+    auto subsystem = MakeTestSubsystem(system, std::make_shared<SceneMesh>(true));
+    auto& cp = subsystem->Controlpoints()[3];
+    cp.link_mouse = true;
+    cp.base_offset = Eigen::Vector3d(1.0, 2.0, 3.0);
+    subsystem->UpdateMouseControlpoints();
+    EXPECT_EQ(cp.offset, Eigen::Vector3d(151.0, 77.0, 3.0));
+    {
+        auto owner = std::make_shared<SceneNode>();
+        owner->SetTranslate(Eigen::Vector3f(100.0f, 0.0f, 0.0f));
+        subsystem->SetOwnerNode(owner);
+        subsystem->UpdateMouseControlpoints();
+        EXPECT_EQ(cp.offset, Eigen::Vector3d(51.0, 77.0, 3.0));
+    }
+    subsystem->UpdateMouseControlpoints();
+    EXPECT_EQ(cp.offset, Eigen::Vector3d(151.0, 77.0, 3.0));
+}
+
 TEST(ParticleMouseControlpoint, RawParticleSizeCompensatesOwnerScale) {
     Scene scene;
     scene.frameTime = 1.0;

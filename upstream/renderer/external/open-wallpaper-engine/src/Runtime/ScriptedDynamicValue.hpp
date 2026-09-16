@@ -29,6 +29,7 @@ public:
     ~ScriptedDynamicValue() override;
 
     const std::string& LayerName() const { return m_current_layer_name; }
+    uint8_t CursorHandlerMask() const noexcept;
 
     void reevaluate();
     void DispatchCursorClick(const ScriptHostContext& host_context);
@@ -47,7 +48,6 @@ private:
     std::map<std::string, DynamicValueUniquePtr> m_script_properties;
     std::unique_ptr<PropertyScriptProgram>       m_program;
     ScriptedValueSemantic                        m_semantic { ScriptedValueSemantic::Generic };
-    bool                                        m_has_update { false };
 };
 
 } // namespace wallpaper

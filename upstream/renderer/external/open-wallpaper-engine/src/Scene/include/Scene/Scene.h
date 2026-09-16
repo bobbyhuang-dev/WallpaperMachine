@@ -65,6 +65,7 @@ public:
     std::string scene_id { "unknown_id" };
 
     bool                 first_frame_ok { false };
+    bool                 accepts_pointer_input { true };
     std::array<float, 2> pointerPosition { 0.5f, 0.5f };
 
     SceneMesh default_effect_mesh;

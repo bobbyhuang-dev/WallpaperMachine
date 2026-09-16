@@ -6,6 +6,19 @@ use crate::{
     project::{ScalingMode, SceneDesc, SceneHandle, SceneResult},
 };
 
+pub(super) struct NativePointerInputChanged {
+    pub handle: SceneHandle,
+    pub renderer_instance: std::sync::Arc<()>,
+    pub accepts_pointer_input: bool,
+}
+
+pub(super) struct PollMouseState {
+    pub state: super::MousePollState,
+}
+
+#[cfg(test)]
+pub(super) struct TakePointerNotificationsForTest;
+
 pub struct Ping;
 
 #[cfg(test)]

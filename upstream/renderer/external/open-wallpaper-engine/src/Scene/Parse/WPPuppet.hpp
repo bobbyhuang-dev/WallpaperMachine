@@ -168,11 +168,11 @@ public:
     std::optional<IkConfig> ik_config;
     bool world_anchored_bones { false };
 
-    std::span<const Eigen::Affine3f> genFrame(WPPuppetLayer&, double time) noexcept;
-    void                             prepared();
+    void prepared();
 
 private:
-    std::vector<Eigen::Affine3f> m_final_affines;
+    friend class WPPuppetLayer;
+    void evaluatePose(const WPPuppetLayer&, std::span<Eigen::Affine3f>) const noexcept;
 };
 
 // One puppet's animation-layer stack. Copies share playback state: the image
@@ -209,8 +209,6 @@ public:
 
     std::span<const Eigen::Affine3f> genFrame(double time) noexcept;
 
-    void updateInterpolation(double time) noexcept;
-
     // SceneScript IAnimationLayer surface. Layers resolve by authored name
     // first, then by stack index; -1 means no such layer.
     i32  findLayer(std::string_view name) const noexcept;
@@ -245,9 +243,14 @@ private:
         double m_last_elapsed { -1.0 };
 
         std::vector<Layer> m_layers;
+        std::vector<Eigen::Affine3f> m_final_affines;
+        bool m_pose_valid { false };
+        uint64_t m_pose_time_bits { 0 };
     };
 
     void   rebuildBlend() noexcept;
+    void   updateInterpolation(double time) noexcept;
+    void   invalidatePose() noexcept;
     Layer* layerAt(i32 index) noexcept;
     const Layer* layerAt(i32 index) const noexcept;
 

@@ -1,5 +1,8 @@
 #pragma once
 #include "Vulkan/Instance.hpp"
+#include "Vulkan/Device.hpp"
+#include "Vulkan/Parameters.hpp"
+#include "Resource.hpp"
 #include "Vulkan/SampleCount.hpp"
 #include "Type.hpp"
 #include "Vulkan/TextureCache.hpp"
@@ -9,11 +12,103 @@
 
 #include <algorithm>
 #include <cmath>
+#include <new>
+#include <vector>
 
 namespace wallpaper
 {
 namespace vulkan
 {
+inline void RecordShaderReadBarrier(
+    vvk::CommandBuffer& command, const ImageParameters& image,
+    VkPipelineStageFlags destination_stages =
+        VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT) {
+    VkImageMemoryBarrier barrier {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT |
+                         VK_ACCESS_SHADER_READ_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        .oldLayout = image.layout,
+        .newLayout = image.layout,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = image.handle,
+        .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS,
+                             0, VK_REMAINING_ARRAY_LAYERS },
+    };
+    command.PipelineBarrier(
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT |
+            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        destination_stages, 0, barrier);
+}
+
+struct CachedColorFramebuffer {
+    VkImageView      view {};
+    VkRenderPass     render_pass {};
+    uint32_t         width { 0 };
+    uint32_t         height { 0 };
+    vvk::Framebuffer framebuffer;
+};
+
+inline VkResult GetOrCreateColorFramebuffer(
+    const Device& device, VkRenderPass pass, const ImageParameters& image,
+    std::vector<CachedColorFramebuffer>& cache, VkFramebuffer& out) {
+    out = VK_NULL_HANDLE;
+    if (pass == VK_NULL_HANDLE || image.view == VK_NULL_HANDLE || image.handle == VK_NULL_HANDLE ||
+        image.extent.width == 0 || image.extent.height == 0 || image.extent.depth != 1)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    for (const auto& cached : cache) {
+        if (cached.view == image.view && cached.render_pass == pass &&
+            cached.width == image.extent.width && cached.height == image.extent.height) {
+            out = *cached.framebuffer;
+            return VK_SUCCESS;
+        }
+    }
+    CachedColorFramebuffer cached {
+        .view = image.view,
+        .render_pass = pass,
+        .width = image.extent.width,
+        .height = image.extent.height,
+    };
+    VkFramebufferCreateInfo info {
+        .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+        .renderPass = pass,
+        .attachmentCount = 1,
+        .pAttachments = &image.view,
+        .width = image.extent.width,
+        .height = image.extent.height,
+        .layers = 1,
+    };
+    const auto result = device.handle().CreateFramebuffer(info, cached.framebuffer);
+    if (result != VK_SUCCESS) return result;
+    try {
+        cache.push_back(std::move(cached));
+    } catch (const std::bad_alloc&) {
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    out = *cache.back().framebuffer;
+    return VK_SUCCESS;
+}
+
+inline VkViewport ResolvePresentationViewport(const RenderingResources& rr, VkExtent2D extent) {
+    if (rr.wallpaper_viewport.width > 0.0f && rr.wallpaper_viewport.height != 0.0f)
+        return rr.wallpaper_viewport;
+    return VkViewport {
+        .x = 0.0f,
+        .y = static_cast<float>(extent.height),
+        .width = static_cast<float>(extent.width),
+        .height = -static_cast<float>(extent.height),
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f,
+    };
+}
+
+inline VkRect2D ResolvePresentationScissor(const RenderingResources& rr, VkExtent2D extent) {
+    if (rr.wallpaper_scissor.extent.width > 0 && rr.wallpaper_scissor.extent.height > 0)
+        return rr.wallpaper_scissor;
+    return VkRect2D { { 0, 0 }, extent };
+}
+
 inline void SetBlend(BlendMode bm, VkPipelineColorBlendAttachmentState& state) {
     state.blendEnable  = true;
     state.colorBlendOp = VK_BLEND_OP_ADD;

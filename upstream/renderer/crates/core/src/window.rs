@@ -157,6 +157,12 @@ impl MouseButtonEdges {
         }
     }
 
+    /// Restores the level immediately before our press-then-release transitions.
+    #[must_use]
+    pub(crate) fn pre_transition_down_mask(self) -> u32 {
+        ((self.down.mask | self.released.mask) & !self.pressed.mask & u64::from(u32::MAX)) as u32
+    }
+
     #[cfg(test)]
     #[must_use]
     pub(crate) fn down(self) -> MouseButtons {
@@ -199,26 +205,27 @@ impl MouseButtonEdges {
     }
 
     #[must_use]
-    pub(crate) fn transitions(self) -> Vec<MouseButtonState> {
-        (0..32)
-            .flat_map(|button| {
-                let mask = 1u64 << button;
-                let mut states = Vec::with_capacity(2);
-                if (self.pressed.mask & mask) != 0 {
-                    states.push(MouseButtonState {
-                        button,
-                        pressed: true,
-                    });
-                }
-                if (self.released.mask & mask) != 0 {
-                    states.push(MouseButtonState {
-                        button,
-                        pressed: false,
-                    });
-                }
-                states
-            })
-            .collect()
+    pub(crate) fn transitions(self) -> impl Iterator<Item = MouseButtonState> {
+        let pressed = self.pressed.mask;
+        let released = self.released.mask;
+        let mut remaining = (pressed | released) & u64::from(u32::MAX);
+        let mut pending_release = None;
+        std::iter::from_fn(move || {
+            if let Some(button) = pending_release.take() {
+                return Some(MouseButtonState { button, pressed: false });
+            }
+            if remaining == 0 {
+                return None;
+            }
+            let button = remaining.trailing_zeros();
+            let mask = 1u64 << button;
+            remaining &= !mask;
+            let is_pressed = pressed & mask != 0;
+            if is_pressed && released & mask != 0 {
+                pending_release = Some(button);
+            }
+            Some(MouseButtonState { button, pressed: is_pressed })
+        })
     }
 }
 
@@ -947,6 +954,38 @@ mod tests {
     };
 
     #[test]
+    fn mouse_edge_iterator_preserves_button_and_press_release_order() {
+        assert!(MouseButtonEdges::from_masks(0, 0, 0).transitions().next().is_none());
+        let edges = MouseButtonEdges::from_masks(0, 0x8000_0005, 0x8000_0003);
+        let received: Vec<_> = edges.transitions().map(|edge| (edge.button, edge.pressed)).collect();
+        assert_eq!(received, vec![(0, true), (0, false), (1, false), (2, true), (31, true), (31, false)]);
+        assert!(MouseButtonEdges::from_masks(0, 1u64 << 40, 1u64 << 40).transitions().next().is_none());
+    }
+
+    #[test]
+    fn mouse_button_baseline_seeds_levels_before_ordered_transitions() {
+        let edges = MouseButtonEdges::from_masks(
+            (1 << 3) | (1 << 31) | (1 << 40),
+            (1 << 0) | (1 << 3),
+            (1 << 0) | (1 << 1) | (1 << 40),
+        );
+        // Button 31 was already held, 1 is about to release, 0 taps and 3
+        // presses. Unsupported high bits cannot reach the native ABI.
+        assert_eq!(edges.pre_transition_down_mask(), (1 << 1) | (1 << 31));
+        let mut native = MouseButtonTracker::new();
+        native.sync_down_mask(u64::from(edges.pre_transition_down_mask()));
+        let _ = native.consume_edges();
+        for edge in edges.transitions() {
+            native.set_button(edge.button, edge.pressed);
+        }
+        assert_eq!(native.consume_edges(), MouseButtonEdges::from_masks(
+            (1 << 3) | (1 << 31),
+            (1 << 0) | (1 << 3),
+            (1 << 0) | (1 << 1),
+        ));
+    }
+
+    #[test]
     fn mouse_buttons_reports_current_state_for_all_owe_buttons() {
         let states = MouseButtons::from_mask(0b101).states();
 
@@ -1028,13 +1067,13 @@ mod tests {
         tracker.sync_down_mask(1);
         let held = tracker.consume_edges();
         assert_eq!(held.down().mask(), 1);
-        assert!(held.transitions().is_empty());
+        assert!(held.transitions().next().is_none());
 
         tracker.sync_down_mask(0);
         let release = tracker.consume_edges();
         assert_eq!(release.down().mask(), 0);
         assert_eq!(
-            release.transitions()[0],
+            release.transitions().next().unwrap(),
             MouseButtonState {
                 button: 0,
                 pressed: false,

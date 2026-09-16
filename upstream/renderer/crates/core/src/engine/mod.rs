@@ -51,6 +51,8 @@ pub struct DisplaySnapshotEntry {
     pub desc: DisplayDesc,
     /// Live scene handle for this display, if the engine has opened one.
     pub handle: Option<SceneHandle>,
+    /// Capability committed by the currently live native renderer.
+    pub accepts_pointer_input: bool,
     /// Whether this display currently has a wallpaper window.
     pub window_active: bool,
     /// The wallpaper assigned to this display, if any.
@@ -80,6 +82,7 @@ pub struct WallpaperEngine {
 }
 
 pub type FirstFrameCallback = Arc<dyn Fn(SceneHandle) + Send + Sync + 'static>;
+pub type PointerConsumerCallback = Arc<dyn Fn(bool) + Send + Sync + 'static>;
 
 #[derive(Clone)]
 struct FirstFrameCallbackCell {
@@ -188,14 +191,14 @@ impl WallpaperEngine {
         let model = DisplayStateModel::from_config(config)?;
         let actor_state = EngineState::with_display_model(model);
         let initial_snapshot = actor_state.snapshot();
-        let snapshots = Arc::new(EngineSnapshotPublisher::new(initial_snapshot));
+        let mouse_buttons = Arc::new(Mutex::new(MouseButtonTracker::new()));
+        let snapshots = Arc::new(EngineSnapshotPublisher::new(initial_snapshot, mouse_buttons.clone()));
         let actor = EngineActorHandle::spawn(
             backend,
             first_frame_callback.callback(),
             actor_state,
             Arc::clone(&snapshots),
         )?;
-        let mouse_buttons = Arc::new(Mutex::new(MouseButtonTracker::new()));
         let mouse_event_monitor = Arc::new(Self::install_mouse_event_monitor(&mouse_buttons));
         let lifecycle = Arc::new(EngineLifecycle::new(&actor)?);
         let engine = Self {
@@ -217,6 +220,12 @@ impl WallpaperEngine {
         self.first_frame_callback.set(callback);
     }
 
+    /// Installs an observer and synchronously replays current consumer presence.
+    /// The callback must only update polling control and must not reenter the engine.
+    pub fn set_pointer_consumer_callback(&self, callback: Option<PointerConsumerCallback>) {
+        self.snapshots.set_pointer_consumer_callback(callback);
+    }
+
     #[cfg(test)]
     #[allow(clippy::single_call_fn)]
     fn install_mouse_event_monitor(
@@ -234,9 +243,8 @@ impl WallpaperEngine {
         let tracker = Arc::clone(mouse_buttons);
         crate::window::run_on_main_thread(move || {
             crate::window::MouseEventMonitor::new(move |state| {
-                if let Ok(mut tracker) = tracker.lock() {
-                    tracker.set_button(state.button, state.pressed);
-                }
+                tracker.lock().unwrap_or_else(|error| error.into_inner())
+                    .set_button(state.button, state.pressed);
             })
         })
     }
@@ -321,6 +329,7 @@ impl WallpaperEngine {
     pub async fn actor_closed_error_for_test() -> EngineError {
         let snapshots = Arc::new(EngineSnapshotPublisher::new(
             EngineState::default().snapshot(),
+            Arc::new(Mutex::new(MouseButtonTracker::new())),
         ));
         let actor_handle = EngineActorHandle::spawn(
             OweBackend,
@@ -559,18 +568,21 @@ impl WallpaperEngine {
     ///
     /// Returns an error if forwarding to the renderer fails.
     pub async fn poll_mouse_position(&self) -> Result<(), EngineError> {
+        if !self.snapshots.load().has_pointer_consumers() {
+            return Ok(());
+        }
         let state = crate::window::run_on_main_thread(|| {
+            let mut tracker = self.mouse_buttons.lock().unwrap_or_else(|error| error.into_inner());
+            if !self.snapshots.load().has_pointer_consumers() {
+                return None;
+            }
             let point = NSEvent::mouseLocation();
-            let level_buttons = MouseButtons::from_mask(NSEvent::pressedMouseButtons() as u64);
-            let buttons = if let Ok(mut tracker) = self.mouse_buttons.lock() {
-                tracker.sync_down_mask(level_buttons.mask());
-                tracker.consume_edges()
-            } else {
-                MouseButtonEdges::from_level_state(level_buttons)
-            };
-            MousePollState { point, buttons }
+            tracker.sync_down_mask(NSEvent::pressedMouseButtons() as u64);
+            let buttons = tracker.consume_edges();
+            Some(MousePollState { point, buttons })
         });
-        self.poll_mouse_state(state).await
+        if let Some(state) = state { self.poll_mouse_state(state).await?; }
+        Ok(())
     }
 
     /// Overrides the scene render resolution.
@@ -681,26 +693,7 @@ impl WallpaperEngine {
     }
 
     async fn poll_mouse_state(&self, state: MousePollState) -> Result<(), EngineError> {
-        let snapshot = self.snapshots.load();
-        let snapshot = DisplaySnapshot {
-            entries: &snapshot.displays,
-        };
-        for entry in snapshot.entries {
-            let Some(handle) = entry.handle else {
-                continue;
-            };
-            let update = snapshot.mouse_update_for_entry(state, entry);
-            self.set_mouse_entered(handle, update.entered).await?;
-            if let Some(position) = update.position {
-                self.set_mouse_position(handle, position.x, position.y)
-                    .await?;
-            }
-            for button in update.buttons.transitions() {
-                self.set_mouse_button(handle, button.button, button.pressed)
-                    .await?;
-            }
-        }
-        Ok(())
+        self.ask_actor(messages::PollMouseState { state }).await
     }
 }
 
@@ -768,7 +761,7 @@ impl<'a> DisplaySnapshot<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct MousePollState {
+pub(super) struct MousePollState {
     point: NSPoint,
     buttons: MouseButtonEdges,
 }
@@ -862,10 +855,32 @@ mod tests {
         window::MouseButtonState,
     };
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn polling_without_consumers_never_asks_even_a_closed_actor() {
+        let engine = engine_with_display_records(Vec::new());
+        engine.mouse_buttons.lock().unwrap().set_button(0, true);
+        engine.actor.actor().stop_gracefully().await.unwrap();
+        engine.actor.actor().wait_for_shutdown().await;
+        engine.poll_mouse_position().await.unwrap();
+        let desc = DisplayDesc::new(1, 0, 0, 1920, 1080, 1.0);
+        engine.snapshots.publish(snapshot::EngineSnapshot { displays: vec![DisplaySnapshotEntry {
+            identity: desc.identity.clone(),
+            desc,
+            handle: Some(SceneHandle::new(1)),
+            accepts_pointer_input: false,
+            window_active: true,
+            assignment: None,
+        }] });
+        engine.poll_mouse_position().await.unwrap();
+        let edges = engine.mouse_buttons.lock().unwrap().consume_edges();
+        assert_eq!(edges.transitions().map(|edge| (edge.button, edge.pressed)).collect::<Vec<_>>(), vec![(0, true)]);
+    }
+
     fn engine_with_display_records(records: Vec<DisplayRecord>) -> WallpaperEngine {
         let state = EngineState::with_display_model(DisplayStateModel { records });
         let snapshot = state.snapshot();
-        let snapshots = Arc::new(EngineSnapshotPublisher::new(snapshot));
+        let mouse_buttons = Arc::new(Mutex::new(MouseButtonTracker::new()));
+        let snapshots = Arc::new(EngineSnapshotPublisher::new(snapshot, mouse_buttons.clone()));
         let first_frame_callback = FirstFrameCallbackCell::default();
         let actor = EngineActorHandle::spawn(
             OweBackend,
@@ -888,7 +903,7 @@ mod tests {
             audio_response_resampler: Arc::new(
                 std::sync::Mutex::new(AudioResponseResampler::new()),
             ),
-            mouse_buttons: Arc::new(Mutex::new(MouseButtonTracker::new())),
+            mouse_buttons,
             mouse_event_monitor: Arc::new(None),
             actor,
             lifecycle,
@@ -1565,8 +1580,9 @@ mod tests {
             handle
         };
 
-        let snapshots = Arc::new(EngineSnapshotPublisher::new(state.snapshot()));
-        let mut actor = EngineActor::new(OweBackend, Arc::new(|_handle| {}), state, snapshots);
+        let snapshots = Arc::new(EngineSnapshotPublisher::new(state.snapshot(), Arc::new(Mutex::new(MouseButtonTracker::new()))));
+        let prepared = <EngineActor as kameo::actor::Spawn>::prepare();
+        let mut actor = EngineActor::new(OweBackend, Arc::new(|_handle| {}), state, snapshots, prepared.actor_ref().downgrade());
 
         actor
             .reconcile_display_descriptors(primary.clone(), vec![primary])
@@ -1653,6 +1669,7 @@ mod tests {
             identity: crate::DisplayIdentity::default(),
             desc: crate::DisplayDesc::new(1, 0, 0, 1920, 1080, 1.0),
             handle: Some(crate::project::SceneHandle::new(1)),
+            accepts_pointer_input: true,
             window_active: true,
             assignment: Some(crate::WallpaperAssignment::Direct(
                 crate::project::SceneTemplate::builder("/tmp/project.json")
@@ -1664,6 +1681,7 @@ mod tests {
             identity: crate::DisplayIdentity::default(),
             desc: crate::DisplayDesc::new(2, 1920, 0, 1920, 1080, 1.0),
             handle: Some(crate::project::SceneHandle::new(2)),
+            accepts_pointer_input: true,
             window_active: true,
             assignment: Some(crate::WallpaperAssignment::Mirror(
                 crate::DisplaySelector::Primary,
@@ -1687,7 +1705,7 @@ mod tests {
             )
         );
         assert_eq!(
-            update.buttons.transitions(),
+            update.buttons.transitions().collect::<Vec<_>>(),
             vec![MouseButtonState {
                 button: 0,
                 pressed: true,
@@ -1701,6 +1719,7 @@ mod tests {
             identity: crate::DisplayIdentity::default(),
             desc: crate::DisplayDesc::new(1, 0, 0, 1920, 1080, 1.0),
             handle: Some(crate::project::SceneHandle::new(1)),
+            accepts_pointer_input: true,
             window_active: true,
             assignment: Some(crate::WallpaperAssignment::Direct(
                 crate::project::SceneTemplate::builder("/tmp/project.json")
@@ -1712,6 +1731,7 @@ mod tests {
             identity: crate::DisplayIdentity::default(),
             desc: crate::DisplayDesc::new(2, 1920, 0, 2560, 1440, 1.0),
             handle: Some(crate::project::SceneHandle::new(2)),
+            accepts_pointer_input: true,
             window_active: true,
             assignment: Some(crate::WallpaperAssignment::Mirror(
                 crate::DisplaySelector::Primary,
@@ -1735,7 +1755,7 @@ mod tests {
             )
         );
         assert_eq!(
-            update.buttons.transitions(),
+            update.buttons.transitions().collect::<Vec<_>>(),
             vec![MouseButtonState {
                 button: 0,
                 pressed: true,
@@ -1749,6 +1769,7 @@ mod tests {
             identity: crate::DisplayIdentity::default(),
             desc: crate::DisplayDesc::new(1, 0, 0, 1920, 1080, 1.0),
             handle: Some(crate::project::SceneHandle::new(1)),
+            accepts_pointer_input: true,
             window_active: true,
             assignment: Some(crate::WallpaperAssignment::Direct(
                 crate::project::SceneTemplate::builder("/tmp/project.json")
@@ -1760,6 +1781,7 @@ mod tests {
             identity: crate::DisplayIdentity::default(),
             desc: crate::DisplayDesc::new(2, 1920, 0, 1920, 1080, 1.0),
             handle: Some(crate::project::SceneHandle::new(2)),
+            accepts_pointer_input: true,
             window_active: true,
             assignment: Some(crate::WallpaperAssignment::Mirror(
                 crate::DisplaySelector::Primary,
@@ -1769,6 +1791,7 @@ mod tests {
             identity: crate::DisplayIdentity::default(),
             desc: crate::DisplayDesc::new(3, 3840, 0, 1920, 1080, 1.0),
             handle: Some(crate::project::SceneHandle::new(3)),
+            accepts_pointer_input: true,
             window_active: true,
             assignment: Some(crate::WallpaperAssignment::Mirror(
                 crate::DisplaySelector::LiveDisplayId(2),
@@ -1792,7 +1815,7 @@ mod tests {
             )
         );
         assert_eq!(
-            update.buttons.transitions(),
+            update.buttons.transitions().collect::<Vec<_>>(),
             vec![MouseButtonState {
                 button: 0,
                 pressed: true,
@@ -2073,7 +2096,7 @@ mod tests {
         let update = mouse_update_for_display(state, &display);
 
         assert!(update.entered);
-        assert!(update.buttons.transitions().is_empty());
+        assert!(update.buttons.transitions().next().is_none());
         assert_eq!(
             update.buttons.states()[0],
             MouseButtonState {
@@ -2137,8 +2160,9 @@ mod tests {
         record.runtime = None;
         record.model.runtime_open = false;
 
-        let snapshots = Arc::new(EngineSnapshotPublisher::new(state.snapshot()));
-        let mut actor = EngineActor::new(OweBackend, Arc::new(|_handle| {}), state, snapshots);
+        let snapshots = Arc::new(EngineSnapshotPublisher::new(state.snapshot(), Arc::new(Mutex::new(MouseButtonTracker::new()))));
+        let prepared = <EngineActor as kameo::actor::Spawn>::prepare();
+        let mut actor = EngineActor::new(OweBackend, Arc::new(|_handle| {}), state, snapshots, prepared.actor_ref().downgrade());
 
         actor
             .set_all_paused(true)

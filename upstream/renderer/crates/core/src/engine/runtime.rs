@@ -1,15 +1,142 @@
 use std::sync::Arc;
+use kameo::actor::WeakActorRef;
 
 use serde_json::Value;
 
 use crate::{
     DisplayDesc, EngineError, WallpaperWindow,
     display::state::DisplayKey,
-    engine::FirstFrameCallback,
+    engine::{FirstFrameCallback, actor::EngineActor, messages::NativePointerInputChanged},
     media::audio::AudioVolume,
-    owe::backend::{OweBackend, OweScene},
+    owe::backend::{OweBackend, OweScene, PointerInputCallback},
     project::{ScalingMode, SceneDesc, SceneHandle, SerdeValudeExt},
+    window::{MouseButtonEdges, NormalizedMousePosition},
 };
+
+/// The native looper only writes watch state; this task owns bounded delivery.
+struct PointerInputRelay {
+    renderer_instance: Arc<()>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl PointerInputRelay {
+    fn new(actor: WeakActorRef<EngineActor>, handle: SceneHandle) -> Result<(Self, PointerInputCallback), EngineError> {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+            EngineError::Platform(format!("pointer input relay requires actor runtime: {error}"))
+        })?;
+        let renderer_instance = Arc::new(());
+        let instance = renderer_instance.clone();
+        let (sender, mut receiver) = tokio::sync::watch::channel(None);
+        let callback: PointerInputCallback = Arc::new(move |value| { sender.send_replace(Some(value)); });
+        let task = runtime.spawn(async move {
+            while receiver.changed().await.is_ok() {
+                let value = *receiver.borrow_and_update();
+                let Some(accepts_pointer_input) = value else { continue; };
+                let Some(actor) = actor.upgrade() else { break; };
+                let result = actor.tell(NativePointerInputChanged {
+                    handle,
+                    renderer_instance: instance.clone(),
+                    accepts_pointer_input,
+                }).send().await;
+                drop(actor);
+                if result.is_err() { break; }
+            }
+        });
+        Ok((Self { renderer_instance, task }, callback))
+    }
+
+    fn stop(&self) { self.task.abort(); }
+}
+
+impl Drop for PointerInputRelay {
+    fn drop(&mut self) { self.stop(); }
+}
+
+#[derive(Default)]
+struct MouseDeliveryState {
+    position: Option<NormalizedMousePosition>,
+    entered: Option<bool>,
+}
+
+impl MouseDeliveryState {
+    fn set_position(&mut self, x: f64, y: f64, send: impl FnOnce(f64, f64) -> Result<(), EngineError>) -> Result<(), EngineError> {
+        if !x.is_finite() || !y.is_finite() {
+            return Err(EngineError::InvalidInput("mouse coordinates must be finite".to_string()));
+        }
+        let next = NormalizedMousePosition { x, y };
+        if self.position == Some(next) { return Ok(()); }
+        self.position = None;
+        send(x, y)?;
+        self.position = Some(next);
+        Ok(())
+    }
+
+    fn set_entered(&mut self, entered: bool, send: impl FnOnce(bool) -> Result<(), EngineError>) -> Result<(), EngineError> {
+        if !entered { self.position = None; }
+        if self.entered == Some(entered) { return Ok(()); }
+        self.entered = None;
+        send(entered)?;
+        self.entered = Some(entered);
+        Ok(())
+    }
+
+    fn invalidate(&mut self) { self.position = None; self.entered = None; }
+}
+
+struct NativePointerInputState {
+    renderer_instance: Arc<()>,
+    accepts_pointer_input: bool,
+    button_baseline_pending: bool,
+    delivery: MouseDeliveryState,
+}
+
+impl NativePointerInputState {
+    fn new(renderer_instance: Arc<()>) -> Self {
+        Self {
+            renderer_instance,
+            accepts_pointer_input: true,
+            button_baseline_pending: true,
+            delivery: MouseDeliveryState::default(),
+        }
+    }
+
+    fn apply(&mut self, instance: &Arc<()>, accepts: bool) -> bool {
+        if !Arc::ptr_eq(&self.renderer_instance, instance) { return false; }
+        self.delivery.invalidate();
+        self.button_baseline_pending = true;
+        let changed = self.accepts_pointer_input != accepts;
+        self.accepts_pointer_input = accepts;
+        changed
+    }
+
+    fn set_position(&mut self, x: f64, y: f64, send: impl FnOnce(f64, f64) -> Result<(), EngineError>) -> Result<(), EngineError> {
+        if !x.is_finite() || !y.is_finite() {
+            return Err(EngineError::InvalidInput("mouse coordinates must be finite".to_string()));
+        }
+        if !self.accepts_pointer_input { return Ok(()); }
+        self.delivery.set_position(x, y, send)
+    }
+
+    fn set_button(&mut self, button: u32, pressed: bool, send: impl FnOnce(u32, bool) -> Result<(), EngineError>) -> Result<(), EngineError> {
+        if button > 31 {
+            return Err(EngineError::InvalidInput("mouse button must be in range 0..31".to_string()));
+        }
+        if !self.accepts_pointer_input { return Ok(()); }
+        send(button, pressed)
+    }
+
+    fn reconcile_button_baseline(&mut self, buttons: MouseButtonEdges, send: impl FnOnce(u32) -> Result<(), EngineError>) -> Result<(), EngineError> {
+        if !self.accepts_pointer_input || !self.button_baseline_pending { return Ok(()); }
+        send(buttons.pre_transition_down_mask())?;
+        self.button_baseline_pending = false;
+        Ok(())
+    }
+
+    fn set_entered(&mut self, entered: bool, send: impl FnOnce(bool) -> Result<(), EngineError>) -> Result<(), EngineError> {
+        if !self.accepts_pointer_input { return Ok(()); }
+        self.delivery.set_entered(entered, send)
+    }
+}
 
 pub struct SceneRuntime {
     /// Last descriptor used to configure the renderer scene.
@@ -20,6 +147,9 @@ pub struct SceneRuntime {
     first_frame_callback: FirstFrameCallback,
     /// Opaque Open Wallpaper Engine renderer object.
     renderer: OweScene,
+    actor: WeakActorRef<EngineActor>,
+    pointer_relay: PointerInputRelay,
+    pointer_input: NativePointerInputState,
     /// Runtime override applied after descriptor defaults.
     scaling_mode: ScalingMode,
     /// Runtime override applied after descriptor defaults.
@@ -117,10 +247,12 @@ impl SceneRuntime {
         handle: SceneHandle,
         desc: &SceneDesc,
         state: SceneRuntimeState,
+        actor: WeakActorRef<EngineActor>,
     ) -> Result<Self, EngineError> {
         let mut stored_desc = desc.clone();
         stored_desc.mark_shader_refresh_complete();
         let window = WallpaperWindow::builder(desc.display.clone()).open()?;
+        let (pointer_relay, pointer_callback) = PointerInputRelay::new(actor.clone(), handle)?;
         let renderer = backend.open_scene(
             desc,
             window.metal_layer_ptr(),
@@ -131,6 +263,7 @@ impl SceneRuntime {
                 let callback = first_frame_callback.clone();
                 move || callback(handle)
             })),
+            Some(pointer_callback),
         )?;
         let descriptor_state = SceneRuntimeState::try_from(desc)?;
         let mut runtime = Self {
@@ -138,6 +271,9 @@ impl SceneRuntime {
             handle,
             first_frame_callback,
             renderer,
+            pointer_input: NativePointerInputState::new(pointer_relay.renderer_instance.clone()),
+            pointer_relay,
+            actor,
             scaling_mode: state.scaling_mode,
             scaling_factor: state.scaling_factor,
             render_resolution: state.render_resolution,
@@ -154,6 +290,7 @@ impl SceneRuntime {
     }
 
     pub fn set_scaling_mode(&mut self, mode: ScalingMode) -> Result<(), EngineError> {
+        self.pointer_input.delivery.invalidate();
         self.renderer.set_scaling_mode(mode)?;
         self.scaling_mode = mode;
         self.desc.scaling_mode = mode;
@@ -161,6 +298,7 @@ impl SceneRuntime {
     }
 
     pub fn set_scaling_factor(&mut self, factor: f64) -> Result<(), EngineError> {
+        self.pointer_input.delivery.invalidate();
         self.renderer.set_scaling_factor(factor)?;
         self.scaling_factor = factor;
         self.desc.scaling_factor = factor;
@@ -174,21 +312,35 @@ impl SceneRuntime {
     }
 
     pub fn set_paused(&mut self, paused: bool) -> Result<(), EngineError> {
+        if self.paused != paused {
+            self.pointer_input.delivery.invalidate();
+        }
         self.renderer.set_paused(paused)?;
         self.paused = paused;
         Ok(())
     }
 
     pub fn set_mouse_position(&mut self, x: f64, y: f64) -> Result<(), EngineError> {
-        self.renderer.set_mouse_position(x, y)
+        self.pointer_input.set_position(x, y, |x, y| self.renderer.set_mouse_position(x, y))
     }
 
     pub fn set_mouse_button(&mut self, button: u32, pressed: bool) -> Result<(), EngineError> {
-        self.renderer.set_mouse_button(button, pressed)
+        self.pointer_input.set_button(button, pressed, |button, pressed| self.renderer.set_mouse_button(button, pressed))
+    }
+
+    pub fn reconcile_mouse_button_baseline(&mut self, buttons: MouseButtonEdges) -> Result<(), EngineError> {
+        self.pointer_input.reconcile_button_baseline(buttons, |down| self.renderer.set_mouse_button_baseline(down))
     }
 
     pub fn set_mouse_entered(&mut self, entered: bool) -> Result<(), EngineError> {
-        self.renderer.set_mouse_entered(entered)
+        self.pointer_input.set_entered(entered, |entered| self.renderer.set_mouse_entered(entered))
+    }
+
+    pub fn accepts_pointer_input(&self) -> bool { self.pointer_input.accepts_pointer_input }
+
+    pub fn apply_pointer_input_capability(&mut self, instance: &Arc<()>, accepts: bool) -> bool {
+        if self.window.is_none() { return false; }
+        self.pointer_input.apply(instance, accepts)
     }
 
     pub fn set_render_resolution(
@@ -206,6 +358,7 @@ impl SceneRuntime {
         desc: &SceneDesc,
         render_resolution: Option<(u32, u32)>,
     ) -> Result<(), EngineError> {
+        self.pointer_input.delivery.invalidate();
         let mut state = self.runtime_state();
         let current_descriptor_state = SceneRuntimeState::try_from(&self.desc)?;
         let descriptor_state = SceneRuntimeState::try_from(desc)?;
@@ -223,6 +376,7 @@ impl SceneRuntime {
         );
         let old_display = self.desc.display.clone();
         let first_frame_callback = self.renderer_first_frame_callback();
+        let (pointer_relay, pointer_callback) = PointerInputRelay::new(self.actor.clone(), self.handle)?;
         let window = self.window.as_mut().ok_or_else(|| {
             EngineError::Platform("wallpaper window is already closed".to_string())
         })?;
@@ -247,6 +401,7 @@ impl SceneRuntime {
             state.scaling_factor,
             render_resolution,
             Some(first_frame_callback),
+            Some(pointer_callback),
         ) {
             Ok(renderer) => renderer,
             Err(error) => {
@@ -263,6 +418,9 @@ impl SceneRuntime {
             return Err(error);
         }
         let mut old_renderer = std::mem::replace(&mut self.renderer, renderer);
+        let old_relay = std::mem::replace(&mut self.pointer_relay, pointer_relay);
+        self.pointer_input = NativePointerInputState::new(self.pointer_relay.renderer_instance.clone());
+        old_relay.stop();
         self.desc = stored_desc;
         self.scaling_mode = state.scaling_mode;
         self.scaling_factor = state.scaling_factor;
@@ -301,6 +459,7 @@ impl SceneRuntime {
     }
 
     pub fn update_window_display(&mut self, display: DisplayDesc) -> Result<(), EngineError> {
+        self.pointer_input.delivery.invalidate();
         let window = self.window.as_mut().ok_or_else(|| {
             EngineError::Platform("scene runtime has no window during display update".to_string())
         })?;
@@ -320,6 +479,7 @@ impl SceneRuntime {
         backend: OweBackend,
         display: DisplayDesc,
     ) -> Result<(), EngineError> {
+        self.pointer_input.delivery.invalidate();
         let _ = backend; // retained in signature for symmetry with rebuild_for_desc
         let start = std::time::Instant::now();
         let runtime_state = self.runtime_state();
@@ -400,6 +560,7 @@ impl SceneRuntime {
     }
 
     pub fn close(&mut self) -> Result<(), EngineError> {
+        self.pointer_relay.stop();
         let backend_result = self.renderer.close();
         if let Some(mut window) = self.window.take() {
             window.close();
@@ -574,6 +735,318 @@ impl TryFrom<&SceneDesc> for SceneRuntimeState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::window::MouseButtonTracker;
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum ButtonDelivery {
+        Baseline(u32),
+        Transition(u32, bool),
+    }
+
+    fn deliver_sample_buttons(state: &mut NativePointerInputState, buttons: MouseButtonEdges) -> Vec<ButtonDelivery> {
+        let mut sent = Vec::new();
+        state.reconcile_button_baseline(buttons, |down| {
+            sent.push(ButtonDelivery::Baseline(down));
+            Ok(())
+        }).unwrap();
+        for edge in buttons.transitions() {
+            state.set_button(edge.button, edge.pressed, |button, pressed| {
+                sent.push(ButtonDelivery::Transition(button, pressed));
+                Ok(())
+            }).unwrap();
+        }
+        sent
+    }
+
+    #[test]
+    fn released_during_video_reconciles_stale_native_down_without_replaying_release() {
+        let token = Arc::new(());
+        let mut state = NativePointerInputState::new(token.clone());
+        let mut tracker = MouseButtonTracker::new();
+        tracker.set_button(0, true);
+        assert_eq!(deliver_sample_buttons(&mut state, tracker.consume_edges()), vec![
+            ButtonDelivery::Baseline(0), ButtonDelivery::Transition(0, true),
+        ]);
+        assert!(state.apply(&token, false));
+        tracker.set_button(0, false);
+        // The publisher discards all-video edges, retaining only the level.
+        let _ = tracker.consume_edges();
+        assert!(state.apply(&token, true));
+        assert_eq!(deliver_sample_buttons(&mut state, tracker.consume_edges()), vec![
+            ButtonDelivery::Baseline(0),
+        ]);
+    }
+
+    #[test]
+    fn video_held_level_has_no_press_and_its_next_release_survives() {
+        let token = Arc::new(());
+        let mut state = NativePointerInputState::new(token.clone());
+        let mut tracker = MouseButtonTracker::new();
+        assert!(state.apply(&token, false));
+        tracker.set_button(31, true);
+        let _ = tracker.consume_edges();
+        state.reconcile_button_baseline(tracker.consume_edges(), |_| panic!("video baseline")).unwrap();
+        assert!(state.apply(&token, true));
+        let held = tracker.consume_edges();
+        assert!(held.transitions().next().is_none());
+        assert_eq!(deliver_sample_buttons(&mut state, held), vec![ButtonDelivery::Baseline(1 << 31)]);
+        tracker.set_button(31, false);
+        assert_eq!(deliver_sample_buttons(&mut state, tracker.consume_edges()), vec![
+            ButtonDelivery::Transition(31, false),
+        ]);
+    }
+
+    #[test]
+    fn activation_tap_and_first_sample_release_keep_their_transitions() {
+        let token = Arc::new(());
+        let mut state = NativePointerInputState::new(token.clone());
+        let mut tracker = MouseButtonTracker::new();
+        assert!(state.apply(&token, false));
+        tracker.set_button(1, true);
+        let _ = tracker.consume_edges();
+        assert!(state.apply(&token, true));
+        // Both changes are after activation but before the first sample.
+        tracker.set_button(1, false);
+        tracker.set_button(0, true);
+        tracker.set_button(0, false);
+        assert_eq!(deliver_sample_buttons(&mut state, tracker.consume_edges()), vec![
+            ButtonDelivery::Baseline(2),
+            ButtonDelivery::Transition(0, true),
+            ButtonDelivery::Transition(0, false),
+            ButtonDelivery::Transition(1, false),
+        ]);
+    }
+
+    #[test]
+    fn same_bool_commit_reconciles_once_and_old_token_or_delivery_reset_does_not() {
+        let token = Arc::new(());
+        let mut state = NativePointerInputState::new(token.clone());
+        let held = MouseButtonEdges::from_masks(1, 0, 0);
+        assert_eq!(deliver_sample_buttons(&mut state, held), vec![ButtonDelivery::Baseline(1)]);
+        assert!(!state.apply(&Arc::new(()), false));
+        state.delivery.invalidate();
+        assert!(deliver_sample_buttons(&mut state, held).is_empty());
+        assert!(!state.apply(&token, true));
+        assert_eq!(deliver_sample_buttons(&mut state, held), vec![ButtonDelivery::Baseline(1)]);
+        // An already accepted press must not cause another same-scene baseline
+        // before a later release; native retains both until its next draw.
+        assert_eq!(deliver_sample_buttons(&mut state, MouseButtonEdges::from_masks(3, 2, 0)), vec![
+            ButtonDelivery::Transition(1, true),
+        ]);
+        assert_eq!(deliver_sample_buttons(&mut state, MouseButtonEdges::from_masks(1, 0, 2)), vec![
+            ButtonDelivery::Transition(1, false),
+        ]);
+        let mut replacement = NativePointerInputState::new(Arc::new(()));
+        assert_eq!(deliver_sample_buttons(&mut replacement, held), vec![ButtonDelivery::Baseline(1)]);
+    }
+
+    #[test]
+    fn failed_baseline_retries_using_latest_sample_and_preserves_direct_delivery() {
+        let token = Arc::new(());
+        let mut state = NativePointerInputState::new(token);
+        let held = MouseButtonEdges::from_masks(1, 0, 0);
+        assert!(state.reconcile_button_baseline(held, |_| Err(EngineError::Platform("baseline".into()))).is_err());
+        // Direct setters remain direct even while sampled reconciliation is
+        // pending. The later baseline must not clear this accepted native edge.
+        let mut sent = Vec::new();
+        state.set_button(2, true, |button, pressed| {
+            sent.push(ButtonDelivery::Transition(button, pressed));
+            Ok(())
+        }).unwrap();
+        sent.extend(deliver_sample_buttons(&mut state, MouseButtonEdges::from_masks(4, 0, 1)));
+        assert_eq!(sent, vec![
+            ButtonDelivery::Transition(2, true),
+            ButtonDelivery::Baseline(5),
+            ButtonDelivery::Transition(0, false),
+        ]);
+        assert!(deliver_sample_buttons(&mut state, MouseButtonEdges::from_masks(4, 0, 0)).is_empty());
+    }
+
+    #[test]
+    fn video_gate_validates_input_and_never_deduplicates_buttons() {
+        let token = Arc::new(());
+        let mut state = NativePointerInputState::new(token.clone());
+        assert!(state.apply(&token, false));
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(matches!(state.set_position(invalid, 0.0, |_, _| panic!("video native call")), Err(EngineError::InvalidInput(_))));
+        }
+        for invalid in [32, u32::MAX] {
+            assert!(matches!(state.set_button(invalid, true, |_, _| panic!("video native call")), Err(EngineError::InvalidInput(_))));
+        }
+        state.set_position(0.5, 0.5, |_, _| panic!("video native call")).unwrap();
+        state.set_button(0, true, |_, _| panic!("video native call")).unwrap();
+        state.set_entered(true, |_| panic!("video native call")).unwrap();
+        assert!(state.apply(&token, true));
+        let mut positions = Vec::new();
+        state.set_position(0.5, 0.5, |x, y| { positions.push((x, y)); Ok(()) }).unwrap();
+        state.set_position(0.5, 0.5, |_, _| panic!("duplicate position")).unwrap();
+        assert_eq!(positions, vec![(0.5, 0.5)]);
+        let mut buttons = Vec::new();
+        for pressed in [true, true, false, false] {
+            state.set_button(0, pressed, |button, pressed| { buttons.push((button, pressed)); Ok(()) }).unwrap();
+        }
+        assert_eq!(buttons, vec![(0, true), (0, true), (0, false), (0, false)]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn replacement_ignores_delayed_same_handle_instance() {
+        let (prepared, actor) = prepared_empty_actor();
+        let actor_ref = prepared.actor_ref().clone();
+        let handle = SceneHandle::new(9);
+        let (old_relay, old_callback) = PointerInputRelay::new(actor_ref.downgrade(), handle).unwrap();
+        let (new_relay, new_callback) = PointerInputRelay::new(actor_ref.downgrade(), handle).unwrap();
+        let mut state = NativePointerInputState::new(new_relay.renderer_instance.clone());
+        let join = prepared.spawn(actor);
+        new_callback(false);
+        let token = wait_pointer_notification(&actor_ref, false).await;
+        assert!(state.apply(&token, false));
+        old_callback(true);
+        let stale_token = wait_pointer_notification(&actor_ref, true).await;
+        assert!(!state.apply(&stale_token, true));
+        assert!(!state.accepts_pointer_input);
+        new_callback(true);
+        let token = wait_pointer_notification(&actor_ref, true).await;
+        assert!(state.apply(&token, true));
+        new_callback(false);
+        let token = wait_pointer_notification(&actor_ref, false).await;
+        assert!(state.apply(&token, false));
+        drop(old_relay);
+        drop(new_relay);
+        actor_ref.stop_gracefully().await.unwrap();
+        actor_ref.wait_for_shutdown().await;
+        drop(join.await.unwrap().unwrap());
+    }
+
+    #[test]
+    fn delivery_retries_failures_and_reentry_without_rounding() {
+        let mut delivery = MouseDeliveryState::default();
+        let mut received = Vec::new();
+        delivery.set_position(0.5, 0.5, |x, y| { received.push((x, y)); Ok(()) }).unwrap();
+        delivery.set_position(0.5, 0.5, |_, _| panic!("duplicate delivery")).unwrap();
+        let tiny = f64::from_bits(0.5f64.to_bits() + 1);
+        delivery.set_position(tiny, 0.5, |x, y| { received.push((x, y)); Ok(()) }).unwrap();
+        assert!(delivery.set_position(0.2, 0.5, |_, _| Err(EngineError::Platform("send".into()))).is_err());
+        delivery.set_position(tiny, 0.5, |x, y| { received.push((x, y)); Ok(()) }).unwrap();
+        delivery.set_entered(true, |_| Ok(())).unwrap();
+        delivery.set_entered(true, |_| panic!("duplicate enter")).unwrap();
+        assert!(delivery.set_entered(false, |_| Err(EngineError::Platform("leave".into()))).is_err());
+        delivery.set_entered(true, |_| Ok(())).unwrap();
+        delivery.set_position(tiny, 0.5, |x, y| { received.push((x, y)); Ok(()) }).unwrap();
+        assert_eq!(received, vec![(0.5, 0.5), (tiny, 0.5), (tiny, 0.5), (tiny, 0.5)]);
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(delivery.set_position(invalid, 0.0, |_, _| panic!("invalid native input")).is_err());
+        }
+    }
+
+    #[test]
+    fn native_commit_identity_and_same_value_invalidate_delivery() {
+        let token = Arc::new(());
+        let mut state = NativePointerInputState::new(token.clone());
+        state.delivery.set_position(0.2, 0.3, |_, _| Ok(())).unwrap();
+        let old = Arc::new(());
+        assert!(!state.apply(&old, false));
+        state.delivery.set_position(0.2, 0.3, |_, _| panic!("stale commit changed cache")).unwrap();
+        assert!(!state.apply(&token, true));
+        let mut sent = false;
+        state.delivery.set_position(0.2, 0.3, |_, _| { sent = true; Ok(()) }).unwrap();
+        assert!(sent);
+        assert!(state.apply(&token, false));
+        assert!(!state.accepts_pointer_input);
+        assert!(state.apply(&token, true));
+        assert!(state.accepts_pointer_input);
+        state.delivery.set_entered(true, |_| Ok(())).unwrap();
+        state.delivery.invalidate();
+        let mut entered_sent = false;
+        state.delivery.set_entered(true, |_| { entered_sent = true; Ok(()) }).unwrap();
+        assert!(entered_sent);
+    }
+
+    fn prepared_empty_actor() -> (kameo::actor::PreparedActor<EngineActor>, EngineActor) {
+        use kameo::actor::Spawn;
+        let prepared = EngineActor::prepare();
+        let state = crate::engine::state::EngineState::default();
+        let snapshots = Arc::new(crate::engine::EngineSnapshotPublisher::new(
+            state.snapshot(),
+            Arc::new(std::sync::Mutex::new(crate::window::MouseButtonTracker::new())),
+        ));
+        let actor = EngineActor::new(OweBackend, Arc::new(|_| {}), state, snapshots, prepared.actor_ref().downgrade());
+        (prepared, actor)
+    }
+
+    async fn wait_pointer_notification(actor: &kameo::actor::ActorRef<EngineActor>, value: bool) -> Arc<()> {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let notifications = actor.ask(crate::engine::messages::TakePointerNotificationsForTest).await.unwrap();
+                if let Some((instance, _)) = notifications.into_iter().find(|(_, accepts)| *accepts == value) {
+                    return instance;
+                }
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("relay should deliver without mailbox loss")
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn relay_replays_before_commit_and_survives_full_bounded_mailbox() {
+        let (prepared, actor) = prepared_empty_actor();
+        let actor_ref = prepared.actor_ref().clone();
+        let (relay, callback) = PointerInputRelay::new(actor_ref.downgrade(), SceneHandle::new(7)).unwrap();
+        // Fill the real default mailbox before the actor has started.
+        let mut count = 0;
+        loop {
+            match actor_ref.tell(crate::engine::messages::Ping).try_send() {
+                Ok(()) => count += 1,
+                Err(kameo::error::SendError::MailboxFull(_)) => break,
+                Err(error) => panic!("unexpected mailbox error: {error}"),
+            }
+        }
+        assert_eq!(count, 64);
+        callback(true);
+        tokio::task::yield_now().await;
+        // The first notification is blocked; the native callback remains synchronous.
+        callback(false);
+        callback(true);
+        callback(false);
+        let join = prepared.spawn(actor);
+        let delivered = wait_pointer_notification(&actor_ref, false).await;
+        assert!(Arc::ptr_eq(&delivered, &relay.renderer_instance));
+        callback(true);
+        let delivered = wait_pointer_notification(&actor_ref, true).await;
+        assert!(Arc::ptr_eq(&delivered, &relay.renderer_instance));
+        relay.stop();
+        actor_ref.stop_gracefully().await.unwrap();
+        actor_ref.wait_for_shutdown().await;
+        drop(join.await.unwrap().unwrap());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn relay_drop_aborts_full_mailbox_and_releases_actor_owner() {
+        let (prepared, actor) = prepared_empty_actor();
+        let actor_ref = prepared.actor_ref().clone();
+        let weak = actor_ref.downgrade();
+        let (relay, callback) = PointerInputRelay::new(weak.clone(), SceneHandle::new(1)).unwrap();
+        while actor_ref.tell(crate::engine::messages::Ping).try_send().is_ok() {}
+        callback(false);
+        tokio::task::yield_now().await;
+        let aborted = relay.task.abort_handle();
+        drop(relay);
+        callback(true);
+        tokio::task::yield_now().await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !aborted.is_finished() { tokio::task::yield_now().await; }
+        }).await.expect("aborted relay should release its pending mailbox send");
+        drop(actor_ref);
+        drop(actor);
+        drop(prepared);
+        assert!(weak.upgrade().is_none());
+        // The native forwarder holds only the watch sender, not an engine owner.
+        callback(false);
+    }
+
+    #[test]
+    fn relay_without_runtime_returns_error() {
+        let (prepared, _actor) = prepared_empty_actor();
+        assert!(PointerInputRelay::new(prepared.actor_ref().downgrade(), SceneHandle::new(1)).is_err());
+    }
 
     #[test]
     fn scene_runtime_state_initial_uses_descriptor_pause_state() {

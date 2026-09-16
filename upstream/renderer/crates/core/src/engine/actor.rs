@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use kameo::{
-    actor::{ActorRef, Spawn},
+    actor::{ActorRef, Spawn, WeakActorRef},
     message::{Context, Message},
 };
 
@@ -27,6 +27,7 @@ pub struct EngineActor {
     first_frame_callback: FirstFrameCallback,
     pub state: EngineState,
     snapshots: Arc<EngineSnapshotPublisher>,
+    weak_self: WeakActorRef<EngineActor>,
     #[allow(dead_code)]
     display_callback: Option<()>,
     #[allow(dead_code)]
@@ -37,6 +38,8 @@ pub struct EngineActor {
     pub test_sequence: u64,
     #[cfg(test)]
     fail_next_refresh_displays: bool,
+    #[cfg(test)]
+    pointer_notifications: Vec<(Arc<()>, bool)>,
 }
 
 #[derive(Clone)]
@@ -55,22 +58,26 @@ impl EngineActorHandle {
         state: EngineState,
         snapshots: Arc<EngineSnapshotPublisher>,
     ) -> Result<Self, EngineError> {
-        let actor = EngineActor::new(backend, first_frame_callback, state, snapshots);
+        let prepared = EngineActor::prepare();
+        let actor_ref = prepared.actor_ref().clone();
+        let actor = EngineActor::new(backend, first_frame_callback, state, snapshots, actor_ref.downgrade());
 
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             if matches!(
                 handle.runtime_flavor(),
                 tokio::runtime::RuntimeFlavor::CurrentThread
             ) {
+                prepared.spawn(actor);
                 return Ok(Self {
-                    actor: EngineActor::spawn(actor),
+                    actor: actor_ref,
                     _runtime: None,
                 });
             }
 
             let _guard = handle.enter();
+            prepared.spawn_in_thread(actor);
             return Ok(Self {
-                actor: EngineActor::spawn_in_thread(actor),
+                actor: actor_ref,
                 _runtime: None,
             });
         }
@@ -84,13 +91,13 @@ impl EngineActorHandle {
                     EngineError::Platform(format!("failed to start engine actor runtime: {error}"))
                 })?,
         );
-        let actor = {
+        {
             let _guard = runtime.enter();
-            EngineActor::spawn_in_thread(actor)
-        };
+            prepared.spawn_in_thread(actor);
+        }
 
         Ok(Self {
-            actor,
+            actor: actor_ref,
             _runtime: Some(runtime),
         })
     }
@@ -107,12 +114,14 @@ impl EngineActor {
         first_frame_callback: FirstFrameCallback,
         state: EngineState,
         snapshots: Arc<EngineSnapshotPublisher>,
+        weak_self: WeakActorRef<EngineActor>,
     ) -> Self {
         Self {
             backend,
             first_frame_callback,
             state,
             snapshots,
+            weak_self,
             display_callback: None,
             refresh_running: false,
             refresh_pending: false,
@@ -120,11 +129,22 @@ impl EngineActor {
             test_sequence: 0,
             #[cfg(test)]
             fail_next_refresh_displays: false,
+            #[cfg(test)]
+            pointer_notifications: Vec::new(),
         }
     }
 
     pub fn publish_snapshot(&self) {
         self.snapshots.publish(self.state.snapshot());
+    }
+
+    fn with_snapshot_update<T>(
+        &mut self,
+        update: impl FnOnce(&mut Self) -> Result<T, EngineError>,
+    ) -> Result<T, EngineError> {
+        let result = update(self);
+        self.publish_snapshot();
+        result
     }
 
     pub fn refresh_displays_now(&mut self) -> Result<(), EngineError> {
@@ -222,7 +242,7 @@ impl EngineActor {
         x: f64,
         y: f64,
     ) -> Result<(), EngineError> {
-        self.with_scene_mut(handle, |scene| scene.set_mouse_position(x, y))
+        self.state.scene_mut(handle)?.set_mouse_position(x, y)
     }
 
     pub fn set_mouse_button(
@@ -231,7 +251,7 @@ impl EngineActor {
         button: u32,
         pressed: bool,
     ) -> Result<(), EngineError> {
-        self.with_scene_mut(handle, |scene| scene.set_mouse_button(button, pressed))
+        self.state.scene_mut(handle)?.set_mouse_button(button, pressed)
     }
 
     pub fn set_mouse_entered(
@@ -239,7 +259,7 @@ impl EngineActor {
         handle: SceneHandle,
         entered: bool,
     ) -> Result<(), EngineError> {
-        self.with_scene_mut(handle, |scene| scene.set_mouse_entered(entered))
+        self.state.scene_mut(handle)?.set_mouse_entered(entered)
     }
 
     pub fn set_all_paused(&mut self, paused: bool) -> Result<(), EngineError> {
@@ -483,6 +503,7 @@ impl EngineActor {
                                     handle,
                                     &desc,
                                     runtime_state,
+                                    self.weak_self.clone(),
                                 ) {
                                     Ok(replacement) => {
                                         if let Err(error) = runtime.close() {
@@ -525,6 +546,7 @@ impl EngineActor {
                 handle,
                 &desc,
                 runtime_state,
+                self.weak_self.clone(),
             ) {
                 Ok(runtime) => runtime,
                 Err(error) => {
@@ -592,16 +614,14 @@ impl Message<messages::RefreshDisplays> for EngineActor {
         _msg: messages::RefreshDisplays,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        #[cfg(test)]
-        if self.fail_next_refresh_displays {
-            self.fail_next_refresh_displays = false;
-            return Err(EngineError::Platform(
-                "test display refresh failure".to_string(),
-            ));
-        }
-        self.refresh_displays_now()?;
-        self.publish_snapshot();
-        Ok(())
+        self.with_snapshot_update(|actor| {
+            #[cfg(test)]
+            if actor.fail_next_refresh_displays {
+                actor.fail_next_refresh_displays = false;
+                return Err(EngineError::Platform("test display refresh failure".to_string()));
+            }
+            actor.refresh_displays_now()
+        })
     }
 }
 
@@ -613,9 +633,7 @@ impl Message<messages::RefreshDisplayDescriptors> for EngineActor {
         msg: messages::RefreshDisplayDescriptors,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.reconcile_display_descriptors(msg.primary, msg.displays)?;
-        self.publish_snapshot();
-        Ok(())
+        self.with_snapshot_update(|actor| actor.reconcile_display_descriptors(msg.primary, msg.displays))
     }
 }
 
@@ -627,9 +645,7 @@ impl Message<messages::ReconcileScenes> for EngineActor {
         msg: messages::ReconcileScenes,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let result = self.reconcile_scenes(msg.scenes)?;
-        self.publish_snapshot();
-        Ok(result)
+        self.with_snapshot_update(|actor| actor.reconcile_scenes(msg.scenes))
     }
 }
 
@@ -641,9 +657,7 @@ impl Message<messages::CreateWindowForDisplay> for EngineActor {
         msg: messages::CreateWindowForDisplay,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let result = self.create_window_for(msg.selector)?;
-        self.publish_snapshot();
-        Ok(result)
+        self.with_snapshot_update(|actor| actor.create_window_for(msg.selector))
     }
 }
 
@@ -655,9 +669,7 @@ impl Message<messages::DestroyWindowForDisplay> for EngineActor {
         msg: messages::DestroyWindowForDisplay,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.destroy_window_for(msg.selector)?;
-        self.publish_snapshot();
-        Ok(())
+        self.with_snapshot_update(|actor| actor.destroy_window_for(msg.selector))
     }
 }
 
@@ -669,9 +681,7 @@ impl Message<messages::SetWallpaperForDisplay> for EngineActor {
         msg: messages::SetWallpaperForDisplay,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let result = self.set_wallpaper_for(msg.selector, msg.wallpaper)?;
-        self.publish_snapshot();
-        Ok(result)
+        self.with_snapshot_update(|actor| actor.set_wallpaper_for(msg.selector, msg.wallpaper))
     }
 }
 
@@ -683,9 +693,7 @@ impl Message<messages::SetScalingMode> for EngineActor {
         msg: messages::SetScalingMode,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.set_scaling_mode(msg.handle, msg.mode)?;
-        self.publish_snapshot();
-        Ok(())
+        self.with_snapshot_update(|actor| actor.set_scaling_mode(msg.handle, msg.mode))
     }
 }
 
@@ -697,9 +705,7 @@ impl Message<messages::SetScalingFactor> for EngineActor {
         msg: messages::SetScalingFactor,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.set_scaling_factor(msg.handle, msg.factor)?;
-        self.publish_snapshot();
-        Ok(())
+        self.with_snapshot_update(|actor| actor.set_scaling_factor(msg.handle, msg.factor))
     }
 }
 
@@ -711,9 +717,7 @@ impl Message<messages::SetFps> for EngineActor {
         msg: messages::SetFps,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.set_fps(msg.handle, msg.fps)?;
-        self.publish_snapshot();
-        Ok(())
+        self.with_snapshot_update(|actor| actor.set_fps(msg.handle, msg.fps))
     }
 }
 
@@ -725,9 +729,7 @@ impl Message<messages::SetPaused> for EngineActor {
         msg: messages::SetPaused,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.set_paused(msg.handle, msg.paused)?;
-        self.publish_snapshot();
-        Ok(())
+        self.with_snapshot_update(|actor| actor.set_paused(msg.handle, msg.paused))
     }
 }
 
@@ -739,9 +741,7 @@ impl Message<messages::SetAllPaused> for EngineActor {
         msg: messages::SetAllPaused,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.set_all_paused(msg.paused)?;
-        self.publish_snapshot();
-        Ok(())
+        self.with_snapshot_update(|actor| actor.set_all_paused(msg.paused))
     }
 }
 
@@ -792,9 +792,7 @@ impl Message<messages::SetRenderResolution> for EngineActor {
         msg: messages::SetRenderResolution,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.set_render_resolution(msg.handle, msg.width, msg.height)?;
-        self.publish_snapshot();
-        Ok(())
+        self.with_snapshot_update(|actor| actor.set_render_resolution(msg.handle, msg.width, msg.height))
     }
 }
 
@@ -806,9 +804,7 @@ impl Message<messages::SetAudioResponseEnabled> for EngineActor {
         msg: messages::SetAudioResponseEnabled,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.set_audio_response_enabled(msg.handle, msg.enabled)?;
-        self.publish_snapshot();
-        Ok(())
+        self.with_snapshot_update(|actor| actor.set_audio_response_enabled(msg.handle, msg.enabled))
     }
 }
 
@@ -820,9 +816,7 @@ impl Message<messages::SetAudioVolume> for EngineActor {
         msg: messages::SetAudioVolume,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.set_audio_volume(msg.handle, msg.volume)?;
-        self.publish_snapshot();
-        Ok(())
+        self.with_snapshot_update(|actor| actor.set_audio_volume(msg.handle, msg.volume))
     }
 }
 
@@ -834,9 +828,7 @@ impl Message<messages::SetAudioMuted> for EngineActor {
         msg: messages::SetAudioMuted,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.set_audio_muted(msg.handle, msg.muted)?;
-        self.publish_snapshot();
-        Ok(())
+        self.with_snapshot_update(|actor| actor.set_audio_muted(msg.handle, msg.muted))
     }
 }
 
@@ -848,9 +840,7 @@ impl Message<messages::SetPropertyOverride> for EngineActor {
         msg: messages::SetPropertyOverride,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.set_property_override(msg.handle, msg.flat_json)?;
-        self.publish_snapshot();
-        Ok(())
+        self.with_snapshot_update(|actor| actor.set_property_override(msg.handle, msg.flat_json))
     }
 }
 
@@ -862,9 +852,7 @@ impl Message<messages::ResetPropertyOverride> for EngineActor {
         msg: messages::ResetPropertyOverride,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.reset_property_override(msg.handle)?;
-        self.publish_snapshot();
-        Ok(())
+        self.with_snapshot_update(|actor| actor.reset_property_override(msg.handle))
     }
 }
 
@@ -876,8 +864,47 @@ impl Message<messages::CloseAllScenes> for EngineActor {
         _msg: messages::CloseAllScenes,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.close_all_scenes()?;
-        self.publish_snapshot();
+        self.with_snapshot_update(|actor| actor.close_all_scenes())
+    }
+}
+
+impl Message<messages::NativePointerInputChanged> for EngineActor {
+    type Reply = ();
+
+    async fn handle(&mut self, msg: messages::NativePointerInputChanged, _ctx: &mut Context<Self, Self::Reply>) {
+        #[cfg(test)]
+        self.pointer_notifications.push((msg.renderer_instance.clone(), msg.accepts_pointer_input));
+        let changed = self.state.scene_mut(msg.handle).is_ok_and(|runtime| {
+            runtime.apply_pointer_input_capability(&msg.renderer_instance, msg.accepts_pointer_input)
+        });
+        if changed { self.publish_snapshot(); }
+    }
+}
+
+impl Message<messages::PollMouseState> for EngineActor {
+    type Reply = Result<(), EngineError>;
+
+    async fn handle(&mut self, msg: messages::PollMouseState, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        if !msg.state.point.x.is_finite() || !msg.state.point.y.is_finite() {
+            return Err(EngineError::InvalidInput("mouse coordinates must be finite".to_string()));
+        }
+        let current = self.snapshots.load();
+        let snapshot = super::DisplaySnapshot { entries: &current.displays };
+        for entry in snapshot.entries {
+            let Some(handle) = entry.handle else { continue; };
+            // Keep the complete snapshot available while resolving mirror geometry.
+            let update = snapshot.mouse_update_for_entry(msg.state, entry);
+            let Ok(runtime) = self.state.scene_mut(handle) else { continue; };
+            if !runtime.accepts_pointer_input() { continue; }
+            runtime.set_mouse_entered(update.entered)?;
+            if let Some(position) = update.position {
+                runtime.set_mouse_position(position.x, position.y)?;
+            }
+            runtime.reconcile_mouse_button_baseline(update.buttons)?;
+            for button in update.buttons.transitions() {
+                runtime.set_mouse_button(button.button, button.pressed)?;
+            }
+        }
         Ok(())
     }
 }
@@ -925,6 +952,15 @@ impl Message<messages::FailNextRefreshDisplaysForTest> for EngineActor {
 }
 
 #[cfg(test)]
+impl Message<messages::TakePointerNotificationsForTest> for EngineActor {
+    type Reply = Vec<(Arc<()>, bool)>;
+
+    async fn handle(&mut self, _msg: messages::TakePointerNotificationsForTest, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        std::mem::take(&mut self.pointer_notifications)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
@@ -937,6 +973,27 @@ mod tests {
         },
         project::{ScalingMode, SceneDesc, SceneTemplate},
     };
+
+    #[test]
+    fn failed_partial_update_still_publishes_committed_state() {
+        let prepared = EngineActor::prepare();
+        let state = EngineState::with_display_model(DisplayStateModel { records: vec![DisplayRecord {
+            key: DisplayKey::Primary,
+            live_display: Some(DisplayDesc::new(1, 0, 0, 1920, 1080, 1.0)),
+            assignment: None,
+            window_active: true,
+            runtime_open: false,
+            primary_inheritance_consumed: false,
+        }] });
+        let snapshots = Arc::new(EngineSnapshotPublisher::new(state.snapshot(), Arc::new(std::sync::Mutex::new(crate::window::MouseButtonTracker::new()))));
+        let mut actor = EngineActor::new(OweBackend, Arc::new(|_| {}), state, snapshots.clone(), prepared.actor_ref().downgrade());
+        let result: Result<(), EngineError> = actor.with_snapshot_update(|actor| {
+            actor.state.display_records[0].model.window_active = false;
+            Err(EngineError::Platform("later operation failed".into()))
+        });
+        assert!(matches!(result, Err(EngineError::Platform(message)) if message == "later operation failed"));
+        assert!(!snapshots.load().displays[0].window_active);
+    }
 
     #[test]
     fn runtime_refresh_job_for_new_wallpaper_uses_descriptor_scaling_defaults() {
@@ -965,8 +1022,9 @@ mod tests {
             previous_desc.clone(),
             SceneRuntimeState::try_from(&previous_desc).expect("previous state should build"),
         ));
-        let snapshots = Arc::new(EngineSnapshotPublisher::new(state.snapshot()));
-        let actor = EngineActor::new(OweBackend, Arc::new(|_handle| {}), state, snapshots);
+        let snapshots = Arc::new(EngineSnapshotPublisher::new(state.snapshot(), Arc::new(std::sync::Mutex::new(crate::window::MouseButtonTracker::new()))));
+        let prepared = EngineActor::prepare();
+        let actor = EngineActor::new(OweBackend, Arc::new(|_handle| {}), state, snapshots, prepared.actor_ref().downgrade());
         let runtime_state = actor
             .state
             .display_records

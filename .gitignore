@@ -1,25 +1,43 @@
+# Build output and Xcode derived data. `build/Build/Products/Release` is the
+# locally delivered app; everything under build/ is regenerable.
 build/
 DerivedData/
-.DS_Store
 *.xcuserstate
 **/xcuserdata/
-__pycache__/
-*.pyc
-.env
-.env.*
+
+# Test and verification evidence. Disposable; clear it with scripts/clean.py.
+artifacts/
 *.xcresult
 *.trace
-MacWallpaperEngine-*.zip
-wallpaper-corpus/
-docs/wallpaper-corpus.local.md
+*.log
 
-# Local agent harness settings
+# Release archives produced by scripts/package.py
+MacWallpaperEngine-*.zip
+
+# Local private wallpaper corpus and its notes; see docs/testing/wallpaper-corpus.md
+wallpaper-corpus/
+docs/testing/wallpaper-corpus.local.md
+
+# Python
+__pycache__/
+*.pyc
+
+# Credentials
+.env
+.env.*
+
+# macOS
+.DS_Store
+
+# Agent harness state. Local settings only; the rules themselves are tracked
+# in AGENTS.md and .agents/README.md.
 .pi/
+.omp/
 
 # Vendored agent skills: third-party copies stay local. Restore them from the
 # upstream commits pinned in .agents/skills/sources.json.
 .agents/*
+!.agents/README.md
 !.agents/skills/
 .agents/skills/*
-!.agents/skills/README.md
 !.agents/skills/sources.json

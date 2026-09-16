@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Build MacWallpaperEngine's Rust/C++ renderer and SwiftUI application with Homebrew."""
+"""Build MacWallpaperEngine's Rust/C++ renderer and SwiftUI application with Homebrew.
+
+Stages, in order: cargo builds the renderer workspace, `uniffi-bindgen` regenerates
+the Swift bridge into `App/Bridge/Generated`, `xcodegen` regenerates the Xcode project
+from `project.yml`, and `xcodebuild` builds the app. See docs/build.md.
+"""
 import argparse
 import os
 from pathlib import Path
 import subprocess
 import sys
 
-from glyphs import markers
+from lib.glyphs import markers
+from lib.paths import BUILD, GENERATED_BRIDGE, PRODUCTS, RENDERER, ROOT, XCODEPROJ
 
-ROOT = Path(__file__).resolve().parents[1]
-RENDERER = ROOT / "upstream/renderer"
 MARK = markers()
 
 
@@ -45,12 +49,12 @@ def main():
     env = build_environment()
     if not args.swift_only:
         run(["cargo", "build", "--workspace", "--release"], RENDERER, env)
-        run([RENDERER / "target/release/uniffi-bindgen", "generate", "--library", RENDERER / "target/release/libwallpaper_bridge.a", "--language", "swift", "--no-format", "--out-dir", RENDERER / "app/WallpaperEngine/Bridge/Generated"], cwd=RENDERER, env=env)
+        run([RENDERER / "target/release/uniffi-bindgen", "generate", "--library", RENDERER / "target/release/libwallpaper_bridge.a", "--language", "swift", "--no-format", "--out-dir", GENERATED_BRIDGE], cwd=RENDERER, env=env)
     if args.renderer_only:
         return
     run(["xcodegen", "generate"], env=env)
-    run(["xcodebuild", "-project", "mac-wallpaper-engine.xcodeproj", "-scheme", "MacWallpaperEngine", "-configuration", args.configuration, "-derivedDataPath", ROOT / "build", "build"], env=env)
-    print(f"Built {ROOT}/build/Build/Products/{args.configuration}/MacWallpaperEngine.app")
+    run(["xcodebuild", "-project", XCODEPROJ.name, "-scheme", "MacWallpaperEngine", "-configuration", args.configuration, "-derivedDataPath", BUILD, "build"], env=env)
+    print(f"{MARK.ok} Built {PRODUCTS / args.configuration / 'MacWallpaperEngine.app'}")
 
 
 if __name__ == "__main__":

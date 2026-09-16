@@ -1,19 +1,33 @@
 {
   "application": "MacWallpaperEngine",
   "project": "mac-wallpaper-engine",
-  "recorded": "2026-09-14",
+  "recorded": "2026-09-16",
   "renderer": {
     "repository": "https://github.com/bigsaltyfishes/wallpaper-engine-for-macos",
     "revision": "8c19c002ff37930c68117dd591dfe3f44792e25e",
     "license": "GPL-2.0-only",
     "directory": "upstream/renderer",
-    "modified": true
+    "modified": true,
+    "note": "Vendored directly rather than as a submodule. Only the Rust crates, the C++ scene engine and their build files remain here."
   },
   "sceneEngine": {
     "repository": "https://github.com/bigsaltyfishes/open-wallpaper-engine",
     "revision": "c4c36357a40c363f7f9e03e624f3c8820b620ef6",
     "directory": "upstream/renderer/external/open-wallpaper-engine",
     "modified": true
+  },
+  "applicationShell": {
+    "derivedFrom": "upstream/renderer at revision 8c19c002ff37930c68117dd591dfe3f44792e25e, path app/WallpaperEngine",
+    "license": "GPL-2.0-only",
+    "directory": "App",
+    "modified": true,
+    "note": "Relocated out of upstream/renderer/app on 2026-09-16 so the application sources this project actively develops are not mixed into vendored third-party code. The relocation moves files only: the GPL-2.0-only terms and upstream copyright notices continue to apply. upstream/renderer/app/InfoPlist.xcstrings moved to App/Resources/InfoPlist.xcstrings and is excluded from the build in project.yml. Upstream's own app/WallpaperEngine.xcodeproj was removed because project.yml plus xcodegen generate the Xcode project for this repository; restore it from the revision above if an upstream comparison needs it."
+  },
+  "lockScreenExtension": {
+    "implementation": "Written for this application.",
+    "directory": "Extension",
+    "license": "GPL-2.0-only",
+    "note": "Extension/Phosphene-LICENSE.txt records the third-party notice for the private wallpaper-extension ABI reference used while implementing it."
   },
   "workshopBrowser": {
     "implementation": "Independently implemented for this application; no Unayung GPLv3 source copied.",

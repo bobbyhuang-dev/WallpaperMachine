@@ -1,3 +1,6 @@
+# Single source of truth for the Xcode project. Regenerate with `xcodegen generate`
+# (scripts/build.py and scripts/test.py do this automatically) and commit the result.
+# Directory layout and the meaning of each source path: docs/repository-layout.md.
 name: mac-wallpaper-engine
 options:
   bundleIdPrefix: app.mac-wallpaper-engine
@@ -19,16 +22,20 @@ targets:
     type: application
     platform: macOS
     sources:
-      - path: upstream/renderer/app/WallpaperEngine
+      - path: App
         excludes:
           - Resources/Info.plist
+          # Vendored upstream localization of NSAudioCaptureUsageDescription. Info.plist
+          # already supplies that key, so the catalog stays out of the build until the app
+          # ships localized permission strings deliberately.
+          - Resources/InfoPlist.xcstrings
           - Bridge/Generated/WallpaperBridgeFFI.h
           - Bridge/Generated/WallpaperBridgeFFI.modulemap
       - path: Shared
-      - path: Resources/StarterWallpaper
+      - path: WebUI
         type: folder
         buildPhase: resources
-      - path: Resources/WebUI
+      - path: Resources/StarterWallpaper
         type: folder
         buildPhase: resources
     dependencies:
@@ -38,20 +45,20 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.mac-wallpaper-engine
         PRODUCT_NAME: MacWallpaperEngine
-        INFOPLIST_FILE: upstream/renderer/app/WallpaperEngine/Resources/Info.plist
+        INFOPLIST_FILE: App/Resources/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         MARKETING_VERSION: "0.3.0"
         CURRENT_PROJECT_VERSION: "12"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated"
-        HEADER_SEARCH_PATHS: "$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated"
+        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/App/Bridge/Generated"
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/App/Bridge/Generated"
         LIBRARY_SEARCH_PATHS: &rendererLibraryPaths
           - "$(SRCROOT)/upstream/renderer/target/release"
           - /opt/homebrew/opt/ffmpeg@8/lib
           - /opt/homebrew/lib
           - /opt/homebrew/opt/quickjs-ng/lib
           - /opt/homebrew/opt/glslang/lib
-        OTHER_SWIFT_FLAGS: "-Xcc -fmodule-map-file=$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated/WallpaperBridgeFFI.modulemap"
+        OTHER_SWIFT_FLAGS: "-Xcc -fmodule-map-file=$(SRCROOT)/App/Bridge/Generated/WallpaperBridgeFFI.modulemap"
         LD_RUNPATH_SEARCH_PATHS:
           - "@executable_path/../Frameworks"
           - /opt/homebrew/opt/ffmpeg@8/lib
@@ -95,7 +102,7 @@ targets:
     type: extensionkit-extension
     platform: macOS
     sources:
-      - path: WallpaperExtension
+      - path: Extension
         excludes:
           - Info.plist
           - WallpaperExtension.entitlements
@@ -106,15 +113,15 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.mac-wallpaper-engine.wallpaper-extension
         PRODUCT_NAME: MacWallpaperExtension
-        INFOPLIST_FILE: WallpaperExtension/Info.plist
+        INFOPLIST_FILE: Extension/Info.plist
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: MacWallpaperEngine Lock Screen
         MARKETING_VERSION: "0.3.0"
         CURRENT_PROJECT_VERSION: "12"
         ENABLE_APP_SANDBOX: YES
-        CODE_SIGN_ENTITLEMENTS: WallpaperExtension/WallpaperExtension.entitlements
+        CODE_SIGN_ENTITLEMENTS: Extension/WallpaperExtension.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
-        SWIFT_OBJC_BRIDGING_HEADER: WallpaperExtension/WallpaperExtensionBridge.h
+        SWIFT_OBJC_BRIDGING_HEADER: Extension/WallpaperExtensionBridge.h
         HEADER_SEARCH_PATHS: "$(SRCROOT)/upstream/renderer/external/open-wallpaper-engine/src/Platform/Apple"
         LIBRARY_SEARCH_PATHS: *rendererLibraryPaths
         OTHER_LDFLAGS: *rendererLinkerFlags
@@ -129,7 +136,7 @@ targets:
     type: bundle.unit-test
     platform: macOS
     sources:
-      - Tests
+      - Tests/Unit
     dependencies:
       - target: MacWallpaperEngine
     settings:
@@ -138,14 +145,14 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/MacWallpaperEngine.app/Contents/MacOS/MacWallpaperEngine"
         BUNDLE_LOADER: "$(TEST_HOST)"
-        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated"
-        HEADER_SEARCH_PATHS: "$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated"
-        OTHER_SWIFT_FLAGS: "-Xcc -fmodule-map-file=$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated/WallpaperBridgeFFI.modulemap"
+        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/App/Bridge/Generated"
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/App/Bridge/Generated"
+        OTHER_SWIFT_FLAGS: "-Xcc -fmodule-map-file=$(SRCROOT)/App/Bridge/Generated/WallpaperBridgeFFI.modulemap"
   MacWallpaperEngineUITests:
     type: bundle.ui-testing
     platform: macOS
     sources:
-      - UITests
+      - Tests/UI
     dependencies:
       - target: MacWallpaperEngine
     settings:

@@ -28,6 +28,7 @@
 		46E510998779A19A4BE55194 /* AppUpdateModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6945E7C6001A28EF0DCAE299 /* AppUpdateModels.swift */; };
 		4843490F35A0530EBFDD6BB5 /* DesktopWallpaperLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2B1F3E3BAB769E257175234 /* DesktopWallpaperLedger.swift */; };
 		4D17D84F7D5479530A19135A /* WallpaperEditorStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 818D9B5E620483D163B4FDD6 /* WallpaperEditorStateTests.swift */; };
+		4E0349032A22D1B2A86F6E75 /* AppThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 830FEE80CE32D5FF7862276A /* AppThemeTests.swift */; };
 		4FC0B864BD6BEBF19765BC8A /* preview.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 4E7ED8A3B84229CDEEB599D0 /* preview.jpg */; };
 		50794B62BF8BBEFE8A38414A /* SteamCMDSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA335B781AEB0FDF2C91D661 /* SteamCMDSetupTests.swift */; };
 		50B96240A6F3FD599B9B4622 /* WorkshopStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BA4708005FF9431734F2277 /* WorkshopStoreTests.swift */; };
@@ -47,6 +48,7 @@
 		94933895C4DC63810CA64367 /* WallpaperSettingsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3EFE2CEB976E297F9118D18 /* WallpaperSettingsProvider.swift */; };
 		9721B43EB5E9C04F1664B3DE /* WallpaperRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC65184F9DB05A51BA752935 /* WallpaperRuntime.swift */; };
 		9B27F69EF9B7501A9E3A02E0 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7775880566591443E11B677C /* AppDelegate.swift */; };
+		9DD803405EADDD134F3448F9 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DA40E0F0DB1CF0D46787624 /* AppTheme.swift */; };
 		A5CA24DA288368B76A53B2C0 /* WebUI in Resources */ = {isa = PBXBuildFile; fileRef = 84A8DB9AADD5BA83B4D28710 /* WebUI */; };
 		A7AD29878A9BC454DF0DA90F /* MacWallpaperEngineUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 895701D661842E2A25275BF2 /* MacWallpaperEngineUITests.swift */; };
 		B00892C25B6C28728BC413E0 /* MacWallpaperExtension.appex in Embed ExtensionKit Extensions */ = {isa = PBXBuildFile; fileRef = 1E00CD4B7027185BF2C95E5C /* MacWallpaperExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -114,6 +116,7 @@
 		0E3DF9792E4CF164BC650B7C /* WallpaperSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WallpaperSurface.swift; sourceTree = "<group>"; };
 		12987521DB3CB274C02388DC /* GitHubReleaseClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubReleaseClient.swift; sourceTree = "<group>"; };
 		16839C8A30A3EBA7F4EE5A0E /* SteamCMDApprovalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamCMDApprovalTests.swift; sourceTree = "<group>"; };
+		1DA40E0F0DB1CF0D46787624 /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
 		1E00CD4B7027185BF2C95E5C /* MacWallpaperExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.extensionkit-extension"; includeInIndex = 0; path = MacWallpaperExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		25FF43D5372081978F7FB8B2 /* ClientPaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientPaths.swift; sourceTree = "<group>"; };
 		2AB54422E1E3C338540760A0 /* WorkshopDownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkshopDownloadManager.swift; sourceTree = "<group>"; };
@@ -146,6 +149,7 @@
 		7FCB3D9A15E8468F9B2428E1 /* AppUpdateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateTests.swift; sourceTree = "<group>"; };
 		818D9B5E620483D163B4FDD6 /* WallpaperEditorStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WallpaperEditorStateTests.swift; sourceTree = "<group>"; };
 		830822D6067D4192C0C0F413 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		830FEE80CE32D5FF7862276A /* AppThemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppThemeTests.swift; sourceTree = "<group>"; };
 		84A8DB9AADD5BA83B4D28710 /* WebUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = WebUI; path = Resources/WebUI; sourceTree = SOURCE_ROOT; };
 		885F48842373E254CDA847C0 /* SteamCMDRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamCMDRuntime.swift; sourceTree = "<group>"; };
 		895701D661842E2A25275BF2 /* MacWallpaperEngineUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWallpaperEngineUITests.swift; sourceTree = "<group>"; };
@@ -227,6 +231,7 @@
 		4579102B8B4B4D76F6E0A019 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				830FEE80CE32D5FF7862276A /* AppThemeTests.swift */,
 				7FCB3D9A15E8468F9B2428E1 /* AppUpdateTests.swift */,
 				89B903D88E15C8CA4E8F6E34 /* ControlPanelLayoutTests.swift */,
 				7B5E7A470D401A18B32D1041 /* DeletionTests.swift */,
@@ -257,6 +262,7 @@
 		68817CCFC8C9ACA6FF8ED761 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				1DA40E0F0DB1CF0D46787624 /* AppTheme.swift */,
 				25FF43D5372081978F7FB8B2 /* ClientPaths.swift */,
 				ACFBF4DF20E2DEDFF34D4F2A /* DesktopSpaceWallpaperAPI.swift */,
 				F2B1F3E3BAB769E257175234 /* DesktopWallpaperLedger.swift */,
@@ -533,6 +539,7 @@
 			files = (
 				9B27F69EF9B7501A9E3A02E0 /* AppDelegate.swift in Sources */,
 				7BDA26DE361F7CEA23B4C3DD /* AppLog.swift in Sources */,
+				9DD803405EADDD134F3448F9 /* AppTheme.swift in Sources */,
 				89215A62A1243D18BBCA3638 /* AppUpdateInstaller.swift in Sources */,
 				46E510998779A19A4BE55194 /* AppUpdateModels.swift in Sources */,
 				CAC8DB19AB64A184D39202A9 /* AppUpdateStore.swift in Sources */,
@@ -582,6 +589,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4E0349032A22D1B2A86F6E75 /* AppThemeTests.swift in Sources */,
 				6B1AAA9FB326CA6189129DA7 /* AppUpdateTests.swift in Sources */,
 				53550EAE9EF2D65200ADF8B1 /* ControlPanelLayoutTests.swift in Sources */,
 				CE7064D9EE21CB3A4836D3D1 /* DeletionTests.swift in Sources */,

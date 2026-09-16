@@ -105,11 +105,34 @@ Control-panel layout tests measure offscreen NSHostingController proposals at
 each window width without forcing a taller window. A companion offscreen WKWebView
 regression loads the bundled interface under its custom scheme, waits for the
 native reply bridge, routes a `navigate` message to Settings (checking the returned
-page, the visible settings panel, the Discover/Installed/Settings tabs, and the
-native navigation selection), and asserts a non-allowlisted external URL is
+page, the visible settings panel, and native navigation selection), and asserts a
+non-allowlisted external URL is
 rejected. Both open no window, take no screenshot, and start no renderer.
 They establish layout and bridge bounds, not visual or desktop-integration
 correctness.
+
+Theme coverage in `AppThemeTests` checks preference recreation, rejection of invalid
+changes without overwriting saved values, recovery from a damaged saved accent,
+and reset isolation. The offscreen appearance regression in `ControlPanelLayoutTests`
+commits the actual Appearance controls through the native bridge, checks the white
+canvas, changes accent/tone, resets, simulates live native appearance changes on
+the detached view, verifies explicit Light wins over Dark, and reloads through the
+WebContent recovery path with saved customizations intact. It never changes the
+system appearance, creates a window, captures a screenshot, or alters wallpapers.
+
+Theme verification (2026-09-16): `python3 scripts/test.py` passed 215 native tests
+and 34 script tests; evidence: `build/Tests-20260916-172417-035420.xcresult`.
+After the final contrast adjustments, the 10 `AppThemeTests` and
+`ControlPanelLayoutTests` passed again; evidence:
+`build/Logs/Test/Test-MacWallpaperEngine-2026.09.16_17-26-53-+0800.xcresult`.
+A throwaway, scheme-matched offscreen WebKit probe exercised 48 light/dark,
+surface-tone, and extreme-accent combinations at 760/960/1240px, then 768 combinations
+using deterministic sampled accent colors. Computed text and primary-label contrast
+exceeded 4.5:1; focus, custom primary boundaries, and progress indicators cleared
+3:1 in the checked combinations. Appearance content did not overflow horizontally.
+The probe was removed. These are non-visual checks; desktop presentation, native
+color-picker interaction, and titlebar appearance remain visually unverified.
+No Release build was requested or delivered.
 
 A third regression drives the reply bridge's `dismissError` command directly: a
 library-refresh failure and a download failure raised through the real download
@@ -214,6 +237,13 @@ upstream camera-zoom, callback-only script, MDLS3 hierarchy, and text-centering
 regressions passed. Script runtime now has **32 passed and the same 1 pre-existing
 Vector-constructor failure**. Evidence: `build/verification/playback-push-merge/`
 and `build/Tests-20260916-174512-553927.xcresult`.
+
+The concurrent appearance commit `07ba75e` was subsequently integrated without
+dropping the theme injection or visibility/minimization notifications. Newly
+added transfer telemetry fields participate in the existing snapshot observation.
+The final merged tree passed **223 native and 34 Python tests**:
+`build/Tests-20260916-175320-234320.xcresult`. Renderer sources were unchanged
+by this second merge; the post-merge renderer results above still apply.
 
 No Release application was built or delivered, and neither app installation was
 replaced or restarted. Real screen playback, surface/acquire/present failure
@@ -642,10 +672,14 @@ Perform these checks yourself when preparing a release, using disposable imports
 where needed. Note any checks skipped for unavailable hardware or assets.
 
 - Launch: one library window, starter wallpaper visible, no blank floating panels.
-- Switch between the Discover, Installed, and Settings tabs, and through the five
-  Settings categories (General, Displays, Library & Steam, Storage, About).
+- Switch between the Discover, Installed, and Settings tabs, and through the six
+  Settings categories (General, Appearance, Displays, Library & Steam, Storage, About).
   Command-comma should reuse the existing window. Close and reopen the window
   without quitting or crashing.
+- In Appearance, choose Light and Dark, then System and change macOS appearance.
+  Check the titlebar, menus, controls, dialogs, inspector, and download popover.
+  Set an accent and surface tone; relaunch and confirm both persist. Try white and
+  black accents, then Reset appearance; wallpapers and playback must not change.
 - Open and cancel Import. Search for a nonexistent local title, clear the search,
   and confirm the collection returns. Select a wallpaper and refresh:
   selection should survive. Selecting must not activate a wallpaper; Apply/Reapply

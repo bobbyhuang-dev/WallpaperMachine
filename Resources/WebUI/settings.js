@@ -1,5 +1,5 @@
 const views = new WeakMap();
-const sections = [['general', 'General'], ['displays', 'Displays'], ['library', 'Library & Steam'], ['storage', 'Storage'], ['about', 'About']];
+const sections = [['general', 'General'], ['appearance', 'Appearance'], ['displays', 'Displays'], ['library', 'Library & Steam'], ['storage', 'Storage'], ['about', 'About']];
 
 export function renderSettings(container, state, helpers) {
   let view = views.get(container);
@@ -55,6 +55,19 @@ function draw(view) {
     + row('lock-status', 'Lock screen status', `<span class="settings-status" role="status">${e(lockUnavailable ? 'Unavailable' : settings.lockScreenBusy ? `${settings.lockScreenStatus || 'Updating'}…` : settings.lockScreenStatus)}</span>${settings.lockScreenError ? button('Retry', 'lockScreenRetry', {}, busy || settings.lockScreenBusy) : ''}`)
     + error('lock-error', settings.lockScreenError)
     + disclosure('lock-context', 'Compatibility & permissions', '<p>Lock-screen animation uses private macOS wallpaper APIs and may stop working after an OS update. It replaces the Desktop and Idle provider on active wallpaper displays and reloads the wallpaper service. Disabling or quitting restores choices still owned by this app; other wallpaper changes are preserved.</p><p>Isolated asset copies need additional disk space. Rendering is not guaranteed on every macOS release. Playback respects pause and battery settings.</p>');
+
+  // Theme preferences live natively and stay usable even when renderer settings are unavailable.
+  const theme = { mode: 'system', accent: '#80bbff', tone: 'neutral', ...(window.__appTheme || {}), ...(state.theme || {}) };
+  const themeKey = name => `theme-${name}`;
+  const themeBusy = name => view.pending.has(themeKey(name)) || view.pending.has(themeKey('reset'));
+  const themePending = ['mode', 'accent', 'tone', 'reset'].some(themeBusy);
+  const themeValue = name => draft(themeKey(name), theme[name]);
+  const accent = /^#[0-9a-f]{6}$/i.test(String(themeValue('accent'))) ? String(themeValue('accent')) : '#80bbff';
+  const appearance = row(themeKey('mode-row'), 'Appearance', select(themeKey('mode'), 'Appearance', themeValue('mode'), [['system', 'System (Auto)'], ['light', 'Light'], ['dark', 'Dark']], 'data-theme-setting="mode"', themeBusy('mode')), 'System follows the macOS light and dark setting.')
+    + row(themeKey('accent-row'), 'Accent color', `<input data-key="${e(themeKey('accent'))}" type="color" aria-label="Accent color" value="${e(accent)}" data-theme-setting="accent"${disabled(themeBusy('accent'))}><output class="settings-hex" data-value-for="${e(themeKey('accent'))}">${e(accent.toUpperCase())}</output>`, 'Colors buttons, links and focus rings.')
+    + row(themeKey('tone-row'), 'Surface tone', select(themeKey('tone'), 'Surface tone', themeValue('tone'), [['neutral', 'Neutral'], ['warm', 'Warm'], ['cool', 'Cool']], 'data-theme-setting="tone"', themeBusy('tone')), 'Warms or cools the window background.')
+    + row(themeKey('reset-row'), 'Theme defaults', button('Reset appearance', 'resetTheme', {}, themePending), 'Restores System, the default accent and Neutral tone.')
+    + `<p class="settings-footnote">Appearance changes apply immediately and are remembered for next launch. They style this app’s interface only — wallpaper colors, playback and display settings are untouched.</p>`;
 
   const displays = (state.displays || []).map(display => {
     const id = display.id;
@@ -131,7 +144,7 @@ function draw(view) {
     + row('renderer-source', 'Scene renderer', button('bigsaltyfishes / Wallpaper Engine for macOS', 'openExternal', { url: 'https://github.com/bigsaltyfishes/wallpaper-engine-for-macos.git' }))
     + `<div class="settings-attribution">Not affiliated with Wallpaper Engine or Valve. Built on the GPLv2-only open-source renderer. Workshop browsing is independently implemented. No warranty is provided.</div>`
     + button('GNU General Public License v2', 'openExternal', { url: 'https://www.gnu.org/licenses/old-licenses/gpl-2.0.html' });
-  const html = `<div class="settings-layout" data-key="settings-layout"><nav class="settings-nav" aria-label="Settings categories" role="tablist" aria-orientation="vertical" data-key="settings-nav">${sections.map(([id, title]) => `<button type="button" id="settings-tab-${id}" role="tab" aria-selected="${id === view.section}" aria-controls="settings-${id}" tabindex="${id === view.section ? '0' : '-1'}" data-key="nav-${id}" data-section="${id}">${e(title)}</button>`).join('')}</nav><div class="settings-scroll" data-key="settings-scroll">${error('settings-action-error', view.error || state.error)}${unavailable ? '<div class="settings-notice" role="status">Settings are unavailable. Try refreshing the library.</div>' : ''}${section('general', 'General', general)}${section('displays', 'Displays', displays, button('Refresh', 'refreshDisplays', {}, busy))}${section('library', 'Library & Steam', library)}${section('storage', 'Storage', storage)}${section('about', 'About', about)}</div></div>`;
+  const html = `<div class="settings-layout" data-key="settings-layout"><nav class="settings-nav" aria-label="Settings categories" role="tablist" aria-orientation="vertical" data-key="settings-nav">${sections.map(([id, title]) => `<button type="button" id="settings-tab-${id}" role="tab" aria-selected="${id === view.section}" aria-controls="settings-${id}" tabindex="${id === view.section ? '0' : '-1'}" data-key="nav-${id}" data-section="${id}">${e(title)}</button>`).join('')}</nav><div class="settings-scroll" data-key="settings-scroll">${error('settings-action-error', view.error || state.error)}${unavailable ? '<div class="settings-notice" role="status">Settings are unavailable. Try refreshing the library.</div>' : ''}${section('general', 'General', general)}${section('appearance', 'Appearance', appearance)}${section('displays', 'Displays', displays, button('Refresh', 'refreshDisplays', {}, busy))}${section('library', 'Library & Steam', library)}${section('storage', 'Storage', storage)}${section('about', 'About', about)}</div></div>`;
   const template = document.createElement('template');
   template.innerHTML = html;
   reconcile(view.container, template.content);
@@ -181,9 +194,10 @@ function onInput(view, event) {
   const key = input.dataset.key;
   view.drafts.set(key, input.type === 'checkbox' ? input.checked : input.value);
   if (input.dataset.local) draw(view);
-  if (input.type === 'range') {
+  // Color pickers stream input events while the macOS picker is open; only the readout follows, never a redraw or a save.
+  if (input.type === 'range' || input.type === 'color') {
     const output = Array.from(view.container.querySelectorAll('[data-value-for]')).find(node => node.dataset.valueFor === key);
-    if (output) output.textContent = `${Math.round(Number(input.value) * 100)}%`;
+    if (output) output.textContent = input.type === 'color' ? String(input.value).toUpperCase() : `${Math.round(Number(input.value) * 100)}%`;
   }
 }
 
@@ -191,6 +205,14 @@ async function onChange(view, event) {
   const input = event.target;
   if (input.dataset.local) {
     view.drafts.set(input.dataset.key, input.type === 'checkbox' ? input.checked : input.value);
+    draw(view);
+    return;
+  }
+  if (input.dataset.themeSetting) {
+    const themeDraft = input.dataset.key;
+    view.drafts.set(themeDraft, input.value);
+    await perform(view, themeDraft, 'themeSetting', { key: input.dataset.themeSetting, value: String(input.value) });
+    view.drafts.delete(themeDraft);
     draw(view);
     return;
   }
@@ -223,6 +245,11 @@ async function onClick(view, event) {
   if (!button || button.disabled) return;
   const action = button.dataset.action;
   const args = JSON.parse(button.dataset.args || '{}');
+  if (action === 'resetTheme') {
+    for (const draftKey of [...view.drafts.keys()]) if (draftKey.startsWith('theme-')) view.drafts.delete(draftKey);
+    await perform(view, 'theme-reset', 'resetTheme', {});
+    return;
+  }
   if (action === 'chooseDisplayWallpaper') {
     await perform(view, 'choose-display', 'target', { id: args.displayID }, async () => {
       await view.helpers.send('navigate', { page: 'installed' });

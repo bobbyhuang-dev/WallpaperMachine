@@ -14,6 +14,12 @@ extension WebPanelController {
       isReady = true
       Task { await workshop.steamCMDSetup.refresh() }
       return
+    case "themeSetting":
+      try theme.set(try request.string("key"), value: try request.string("value"))
+      return
+    case "resetTheme":
+      theme.reset()
+      return
     case "dismissError":
       actionError = nil
       dismissedErrorRevision = store.latestBridgeErrorRevision

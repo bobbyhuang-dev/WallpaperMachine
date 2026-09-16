@@ -127,6 +127,7 @@ async function send(action, args = {}) {
 function receive(snapshot) {
   if (!snapshot || typeof snapshot !== 'object') return;
   state = snapshot;
+  window.appTheme.apply(snapshot.theme);
   if (!workshopDraft) workshopDraft = { text: snapshot.workshop?.text || '', kind: snapshot.workshop?.kind || 'Scene', sort: snapshot.workshop?.sort || 'trend', tags: [...(snapshot.workshop?.tags || [])] };
   render();
 }

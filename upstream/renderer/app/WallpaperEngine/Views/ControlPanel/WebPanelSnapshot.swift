@@ -49,6 +49,9 @@ extension WebPanelController {
     for job in downloader.downloads {
       _ = job.status
       _ = job.progress
+      _ = job.bytesReceived
+      _ = job.bytesExpected
+      _ = job.bytesPerSecond
       _ = job.isPending
       _ = job.isQueued
       _ = job.isCancelled
@@ -203,6 +206,7 @@ extension WebPanelController {
       "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         ?? "",
       "page": page, "targetDisplayID": navigation.targetDisplayID,
+      "theme": theme.preferences.snapshot,
       "selectedID": store.appSnapshot.selectedWallpaperId as Any? ?? null,
       "paused": store.appSnapshot.playbackState == .paused,
       "busy": commandBusy || store.activatingWallpaperID != nil || store.applyingWallpaperID != nil,

@@ -28,6 +28,7 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
   let store: BridgeStore
   let navigation: ControlPanelNavigation
   let workshop: WorkshopStore
+  let theme: AppThemeStore
   weak var webView: WKWebView?
   let assets = WebPanelAssets()
   var subscriptions = Set<AnyCancellable>()
@@ -57,12 +58,14 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
 
   init(
     store: BridgeStore, navigation: ControlPanelNavigation, workshop: WorkshopStore,
-    isPresentationVisible: (@MainActor () -> Bool)? = nil
+    isPresentationVisible: (@MainActor () -> Bool)? = nil,
+    theme: AppThemeStore? = nil
   ) {
     self.store = store
     self.navigation = navigation
     self.workshop = workshop
     self.isPresentationVisible = isPresentationVisible
+    self.theme = theme ?? .shared
     favoriteIDs = Set(
       (try? JSONDecoder().decode(
         [String].self, from: UserDefaults.standard.data(forKey: Self.favoriteKey) ?? Data())) ?? [])
@@ -79,12 +82,15 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
     configuration.setURLSchemeHandler(assets, forURLScheme: "mwe-ui")
     let view = WKWebView(frame: .zero, configuration: configuration)
     view.navigationDelegate = self
-    view.underPageBackgroundColor = NSColor(srgbRed: 0.09, green: 0.10, blue: 0.12, alpha: 1)
+    view.underPageBackgroundColor = .windowBackgroundColor
     view.allowsBackForwardNavigationGestures = false
     #if DEBUG
       view.isInspectable = true
     #endif
     webView = view
+    theme.$preferences.sink { [weak self] preferences in
+      self?.applyTheme(preferences)
+    }.store(in: &subscriptions)
     for name in [
       NSWindow.didChangeOcclusionStateNotification, NSWindow.didBecomeKeyNotification,
       NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification,
@@ -106,6 +112,33 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
     view.load(URLRequest(url: WebPanelAssets.indexURL))
     observeState()
     return view
+  }
+
+  private func applyTheme(_ preferences: AppThemePreferences) {
+    guard let view = webView else { return }
+    view.appearance = preferences.mode.appearance
+    // This is the panel's only user script. Replace it so every reload, including
+    // WebContent recovery, starts with the latest saved theme before first paint.
+    let content = view.configuration.userContentController
+    content.removeAllUserScripts()
+    // Mode/tone are closed enums and accent is validated as six hexadecimal digits.
+    content.addUserScript(
+      WKUserScript(
+        source:
+          "window.__appTheme = {mode:'\(preferences.mode.rawValue)',accent:'\(preferences.accent)',tone:'\(preferences.tone.rawValue)'};",
+        injectionTime: .atDocumentStart, forMainFrameOnly: true))
+    guard isReady, !stopped else { return }
+    Task { @MainActor [weak self, weak view] in
+      guard let self, !self.stopped, let view else { return }
+      do {
+        _ = try await view.callAsyncJavaScript(
+          "window.appTheme?.apply(theme)", arguments: ["theme": self.theme.preferences.snapshot],
+          in: nil, contentWorld: .page)
+      } catch {
+        self.actionError = "The appearance could not update: \(error.localizedDescription)"
+      }
+      self.scheduleUpdate()
+    }
   }
 
   func stop() {
@@ -350,7 +383,7 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
   var previews: [String: URL] = [:]
   private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
   private static let files: Set<String> = [
-    "index.html", "panel.js", "panel.css", "settings.js", "settings.css",
+    "index.html", "panel.js", "panel.css", "settings.js", "settings.css", "theme.js",
   ]
 
   func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {

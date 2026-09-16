@@ -914,70 +914,6 @@ void ConsumeTrailingBody(fs::MemBinaryStream& f, const int32_t mdlv) {
     }
 }
 
-void ApplyMDLS3CentroidPivot(WPMdl& mdl) {
-    if (! mdl.puppet || mdl.meshes.empty()) return;
-    if (mdl.puppet->world_anchored_bones) {
-        for (auto& bone : mdl.puppet->bones) {
-            bone.bind_parent = WPPuppet::Bone::NO_PARENT;
-            bone.anim_parent = WPPuppet::Bone::NO_PARENT;
-        }
-    }
-
-    const std::size_t nbones = mdl.puppet->bones.size();
-    std::vector<Eigen::Vector3d> sum_pos(nbones, Eigen::Vector3d::Zero());
-    std::vector<double>          sum_w(nbones, 0.0);
-    auto to_vec = [](const std::array<float, 3>& p) {
-        return Eigen::Vector3d { p[0], p[1], p[2] };
-    };
-    for (const auto& mesh : mdl.meshes) {
-        if (mesh.blend_indices.empty()) continue;
-        const bool has_weights = ! mesh.blend_weights.empty();
-        auto weight = [&](std::size_t vi, int slot) -> float {
-            if (! has_weights) return slot == 0 ? 1.0f : 0.0f;
-            return mesh.blend_weights[vi][slot];
-        };
-        if (! mesh.indices.empty()) {
-            for (const auto& tri : mesh.indices) {
-                if (tri[0] >= mesh.positions.size() || tri[1] >= mesh.positions.size() ||
-                    tri[2] >= mesh.positions.size()) {
-                    continue;
-                }
-                const Eigen::Vector3d p0 = to_vec(mesh.positions[tri[0]]);
-                const Eigen::Vector3d p1 = to_vec(mesh.positions[tri[1]]);
-                const Eigen::Vector3d p2 = to_vec(mesh.positions[tri[2]]);
-                const Eigen::Vector3d centroid = (p0 + p1 + p2) / 3.0;
-                const double area = 0.5 * (p1 - p0).cross(p2 - p0).norm();
-                if (area <= 0.0) continue;
-                for (int corner = 0; corner < 3; ++corner) {
-                    if (weight(tri[corner], 0) <= 0.0f) continue;
-                    const uint32_t bone_index = mesh.blend_indices[tri[corner]][0];
-                    if (bone_index >= nbones) continue;
-                    sum_pos[bone_index] += centroid * (area / 3.0);
-                    sum_w[bone_index] += area / 3.0;
-                }
-            }
-        } else {
-            const int slots = has_weights ? 4 : 1;
-            for (std::size_t vi = 0; vi < mesh.positions.size(); ++vi) {
-                for (int slot = 0; slot < slots; ++slot) {
-                    const float w = weight(vi, slot);
-                    const uint32_t bone_index = mesh.blend_indices[vi][slot];
-                    if (w <= 0.0f || bone_index >= nbones) continue;
-                    sum_pos[bone_index] += to_vec(mesh.positions[vi]) * static_cast<double>(w);
-                    sum_w[bone_index] += static_cast<double>(w);
-                }
-            }
-        }
-    }
-
-    for (std::size_t i = 0; i < nbones; ++i) {
-        if (sum_w[i] <= 0.0) continue;
-        const Eigen::Vector3f centroid = (sum_pos[i] / sum_w[i]).cast<float>();
-        mdl.puppet->bones[i].vertex_centroid_offset =
-            centroid - mdl.puppet->bones[i].local_bind.translation();
-    }
-}
-
 void MirrorFirstMeshToLegacyFields(WPMdl& mdl) {
     if (mdl.meshes.empty()) return;
     const auto& mesh = mdl.meshes.front();
@@ -1203,9 +1139,6 @@ bool WPMdlParser::Parse(std::string_view path, fs::VFS& vfs, WPMdl& mdl) {
     }
 
     if (! ParseMDLS(f, mdl, str_path)) return false;
-    if (mdl.puppet) {
-        mdl.puppet->world_anchored_bones = (mdl.mdlv == 21);
-    }
 
     SkipZeroPadding(f);
     if (PeekBlockMagic(f, "MDAT")) {
@@ -1237,7 +1170,6 @@ bool WPMdlParser::Parse(std::string_view path, fs::VFS& vfs, WPMdl& mdl) {
 
     ConsumeTrailingBody(f, mdl.mdlv);
 
-    if (mdl.mdls >= 3) ApplyMDLS3CentroidPivot(mdl);
     if (mdl.puppet) mdl.puppet->prepared();
 
     LOG_INFO("read puppet: mdlv: %d, nmdls: %d, mdla: %d, bones: %zu, anims: %zu",

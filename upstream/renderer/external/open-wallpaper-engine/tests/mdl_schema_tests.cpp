@@ -473,14 +473,14 @@ std::vector<uint8_t> BuildMdlv21TranslatedBonesFixture() {
     return b.Take();
 }
 
-std::vector<uint8_t> BuildMdlv23ParentChainFixture() {
+std::vector<uint8_t> BuildMdlv23ParentChainFixture(int version = 23) {
     Bytes b;
-    b.Stamp("MDL", 23);
+    b.Stamp("MDL", version);
     b.U32(kSkinUvFlag);
     b.U32(1);
     b.U32(1);
     WriteMesh(b, "mat/head.json", 10);
-    b.U32(0);
+    if (version > 21) b.U32(0);
 
     b.Stamp("MDLS", 3);
     const auto mdls_end_offset_pos = b.Size();
@@ -1828,6 +1828,48 @@ TEST(MdlSchema, UsesChainedBindHierarchyWithoutMdls3Pivot) {
     EXPECT_NEAR(frame[0].translation().x(), 0.0f, 1.0e-5f);
     EXPECT_NEAR(frame[1].translation().x(), 0.0f, 1.0e-5f);
     EXPECT_NEAR(frame[2].translation().x(), 0.0f, 1.0e-5f);
+}
+
+TEST(MdlSchema, Mdls3SkinningPreservesAuthoredHierarchyAndPivotsAcrossMeshVersions) {
+    for (int version : {21, 23}) {
+        SCOPED_TRACE(version);
+        fs::VFS vfs;
+        MountMdlFixture(vfs, BuildMdlv23ParentChainFixture(version));
+        WPMdl mdl;
+        ASSERT_TRUE(WPMdlParser::Parse("sample.mdl", vfs, mdl));
+        auto puppet = mdl.puppet;
+        ASSERT_NE(puppet, nullptr);
+        EXPECT_FALSE(puppet->world_anchored_bones);
+        EXPECT_EQ(puppet->bones[2].bind_parent, 1u);
+        EXPECT_EQ(puppet->bones[2].anim_parent, 1u);
+        EXPECT_NEAR(puppet->bones[2].world_bind.translation().x(), 15, 1e-5);
+        WPPuppet::Animation animation;
+        animation.id = 1;
+        animation.fps = 1;
+        animation.length = 1;
+        animation.mode = WPPuppet::PlayMode::Loop;
+        for (const auto& bone : puppet->bones) {
+            auto& track = animation.bone_tracks.emplace_back();
+            for (int sample = 0; sample < 2; ++sample) {
+                auto& frame = track.frames.emplace_back();
+                frame.position = bone.local_bind.translation();
+                frame.scale = Eigen::Vector3f::Ones();
+                frame.angle = Eigen::Vector3f::Zero();
+            }
+        }
+        for (auto& frame : animation.bone_tracks[0].frames) {
+            frame.angle.z() = std::acos(-1.0f) / 2;
+        }
+        for (auto& frame : animation.bone_tracks[2].frames) frame.scale.y() = 0;
+        puppet->anims.push_back(std::move(animation));
+        puppet->prepared();
+        auto layer = BuildAdditiveLayer(puppet);
+        const Eigen::Vector3f point(17, 3, 0);
+        for (double time : {0.0, 0.5, 0.5, 1.0}) {
+            const Eigen::Vector3f actual = layer.genFrame(time)[2] * point;
+            EXPECT_TRUE(actual.isApprox(Eigen::Vector3f(10, 7, 0), 1e-5)) << actual.transpose();
+        }
+    }
 }
 
 TEST(MdlSchema, Mdlv23PreservesChainedPuppetHierarchy) {

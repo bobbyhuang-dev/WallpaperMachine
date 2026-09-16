@@ -643,7 +643,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = WallpaperExtension/WallpaperExtension.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 				ENABLE_APP_SANDBOX = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/upstream/renderer/external/open-wallpaper-engine/src/Platform/Apple";
@@ -663,7 +663,7 @@
 					"/opt/homebrew/opt/quickjs-ng/lib",
 					/opt/homebrew/opt/glslang/lib,
 				);
-				MARKETING_VERSION = 0.2.1;
+				MARKETING_VERSION = 0.3.0;
 				OTHER_LDFLAGS = (
 					"-lwallpaper_bridge",
 					"-lc++",
@@ -730,7 +730,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = WallpaperExtension/WallpaperExtension.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 				ENABLE_APP_SANDBOX = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/upstream/renderer/external/open-wallpaper-engine/src/Platform/Apple";
@@ -750,7 +750,7 @@
 					"/opt/homebrew/opt/quickjs-ng/lib",
 					/opt/homebrew/opt/glslang/lib,
 				);
-				MARKETING_VERSION = 0.2.1;
+				MARKETING_VERSION = 0.3.0;
 				OTHER_LDFLAGS = (
 					"-lwallpaper_bridge",
 					"-lc++",
@@ -819,7 +819,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated";
 				INFOPLIST_FILE = upstream/renderer/app/WallpaperEngine/Resources/Info.plist;
@@ -836,7 +836,7 @@
 					"/opt/homebrew/opt/quickjs-ng/lib",
 					/opt/homebrew/opt/glslang/lib,
 				);
-				MARKETING_VERSION = 0.2.1;
+				MARKETING_VERSION = 0.3.0;
 				OTHER_LDFLAGS = (
 					"-lwallpaper_bridge",
 					"-lc++",
@@ -1054,7 +1054,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/upstream/renderer/app/WallpaperEngine/Bridge/Generated";
 				INFOPLIST_FILE = upstream/renderer/app/WallpaperEngine/Resources/Info.plist;
@@ -1071,7 +1071,7 @@
 					"/opt/homebrew/opt/quickjs-ng/lib",
 					/opt/homebrew/opt/glslang/lib,
 				);
-				MARKETING_VERSION = 0.2.1;
+				MARKETING_VERSION = 0.3.0;
 				OTHER_LDFLAGS = (
 					"-lwallpaper_bridge",
 					"-lc++",

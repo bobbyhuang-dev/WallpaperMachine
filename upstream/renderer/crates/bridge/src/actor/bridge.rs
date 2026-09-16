@@ -422,8 +422,9 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         origin: PlaybackChangeOrigin,
     ) -> Result<(), BridgeError> {
         let previous = self.state.playback_state;
+        let previous_paused = self.playback_paused();
         self.state.playback_state = playback_state;
-        if let Err(error) = self.apply_engine_pause().await {
+        if let Err(error) = self.apply_engine_pause(previous_paused).await {
             self.state.playback_state = previous;
             return Err(error);
         }
@@ -633,7 +634,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             app_config: &self.state.app_config,
             wallpapers: &self.state.wallpaper_configs,
             displays: &displays,
-            paused: self.playback_paused(),
+            paused: self.state.playback_state == BridgePlaybackState::Paused,
             paths: &self.paths,
             force_shader_refresh: false,
         }
@@ -766,16 +767,30 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             || self.state.playback_state == crate::api::BridgePlaybackState::Paused
     }
 
-    async fn apply_engine_pause(&self) -> Result<(), BridgeError> {
+    async fn apply_engine_pause(&self, previous_paused: bool) -> Result<(), BridgeError> {
         let paused = self.playback_paused();
-        self.engine
-            .set_all_paused(paused)
-            .await
-            .map_err(|error| BridgeError::engine(error.to_string()))?;
-        self.engine
-            .set_audio_capture_suspended(paused)
-            .await
-            .map_err(|error| BridgeError::engine(error.to_string()))
+        let result = async {
+            self.engine.set_all_paused(paused).await?;
+            self.engine.set_audio_capture_suspended(paused).await
+        }
+        .await;
+        if let Err(error) = result {
+            let mut message = error.to_string();
+            // Either operation may have changed live state before failing.
+            // Restore both sides before the caller rolls back its actor state.
+            if let Err(rollback) = self.engine.set_all_paused(previous_paused).await {
+                message.push_str(&format!("; renderer pause rollback failed: {rollback}"));
+            }
+            if let Err(rollback) = self
+                .engine
+                .set_audio_capture_suspended(previous_paused)
+                .await
+            {
+                message.push_str(&format!("; audio capture rollback failed: {rollback}"));
+            }
+            return Err(BridgeError::engine(message));
+        }
+        Ok(())
     }
 
     fn spawn_restore(&mut self, actor: ActorRef<BridgeActor<E>>) {
@@ -2099,11 +2114,13 @@ impl<E: EngineFacade + Clone> Message<SetPresentationSuspended> for BridgeActor<
         if self.state.presentation_suspended == msg.suspended {
             return Ok(());
         }
+        let previous_paused = self.playback_paused();
         self.state.presentation_suspended = msg.suspended;
-        if let Err(error) = self.apply_engine_pause().await {
+        if let Err(error) = self.apply_engine_pause(previous_paused).await {
             self.state.presentation_suspended = !msg.suspended;
             return Err(error);
         }
+        self.bump_generation();
         log::info!(
             "presentation {}",
             if msg.suspended { "suspended" } else { "resumed" }

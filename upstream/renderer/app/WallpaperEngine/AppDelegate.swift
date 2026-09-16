@@ -82,12 +82,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     self.desktopWallpaperSync?.refresh()
                 }
             }
-            let policy = WallpaperPresentationPolicy { [weak self] suspended in
+            let policy = WallpaperPresentationPolicy { [weak self] suspended, completion in
                 guard let self, let store = self.store,
-                      !self.shutdownInProgress, !self.shutdownComplete else { return }
+                      !self.shutdownInProgress, !self.shutdownComplete else {
+                    completion(.failure(CancellationError()))
+                    return
+                }
                 Task {
-                    do { try await store.setPresentationSuspendedAsync(suspended) }
-                    catch { AppLog.error("presentation suspend failed: \(error.localizedDescription)") }
+                    do {
+                        try await store.setPresentationSuspendedAsync(suspended)
+                        completion(.success(()))
+                    } catch {
+                        AppLog.error("presentation suspend failed: \(error.localizedDescription)")
+                        completion(.failure(error))
+                    }
                 }
             }
             presentationPolicy = policy
@@ -149,6 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             } catch {
                 lastError = error
                 shutdownInProgress = false
+                presentationPolicy?.evaluate()
                 rebuildMenu()
                 sender.reply(toApplicationShouldTerminate: false)
                 return

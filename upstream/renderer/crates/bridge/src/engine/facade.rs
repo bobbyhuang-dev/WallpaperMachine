@@ -422,6 +422,7 @@ impl AudioCaptureWorker {
 #[derive(Clone, Default)]
 pub struct FakeEngineFacade {
     calls: Arc<ArcSwap<Vec<Vec<SceneDesc>>>>,
+    rendered_scenes: Arc<ArcSwap<Vec<SceneDesc>>>,
     snapshot: Arc<ArcSwap<Vec<DisplaySnapshotEntry>>>,
     snapshot_after_refresh: Arc<ArcSwap<Option<Vec<DisplaySnapshotEntry>>>>,
     paused_calls: Arc<ArcSwap<Vec<bool>>>,
@@ -430,6 +431,7 @@ pub struct FakeEngineFacade {
     audio_response_calls: Arc<ArcSwap<Vec<(SceneHandle, bool)>>>,
     audio_capture_calls: Arc<ArcSwap<Vec<(SceneHandle, bool)>>>,
     audio_capture_suspend_calls: Arc<ArcSwap<Vec<bool>>>,
+    audio_capture_suspended: Arc<ArcSwap<bool>>,
     audio_capture_block: Arc<SegQueue<ReconcileBlockGate>>,
     audio_capture_failure: Arc<ArcSwap<Option<String>>>,
     scaling_mode_calls: Arc<ArcSwap<Vec<(SceneHandle, ScalingMode)>>>,
@@ -511,6 +513,16 @@ impl FakeEngineFacade {
     #[must_use]
     pub fn calls(&self) -> Vec<Vec<SceneDesc>> {
         load_log(&self.calls)
+    }
+
+    #[must_use]
+    pub fn rendered_scenes(&self) -> Vec<SceneDesc> {
+        self.rendered_scenes.load_full().as_ref().clone()
+    }
+
+    #[must_use]
+    pub fn audio_capture_suspended(&self) -> bool {
+        **self.audio_capture_suspended.load()
     }
 
     pub fn set_snapshot(&self, snapshot: Vec<DisplaySnapshotEntry>) {
@@ -728,6 +740,7 @@ impl EngineFacade for FakeEngineFacade {
                     )
                 })
                 .collect();
+            fake.rendered_scenes.store(Arc::new(scenes));
             complete_reconcile_waiters(&fake.reconcile_done);
             Ok(results)
         }
@@ -758,6 +771,13 @@ impl EngineFacade for FakeEngineFacade {
         let fake = self.clone();
         async move {
             push_log(&fake.paused_calls, paused);
+            fake.rendered_scenes.rcu(|scenes| {
+                let mut scenes = scenes.as_ref().clone();
+                for scene in &mut scenes {
+                    scene.paused = paused;
+                }
+                scenes
+            });
             Ok(())
         }
         .boxed()
@@ -837,6 +857,12 @@ impl EngineFacade for FakeEngineFacade {
         let fake = self.clone();
         async move {
             push_log(&fake.audio_capture_suspend_calls, suspended);
+            if !suspended {
+                if let Some(message) = fake.audio_capture_failure.load_full().as_ref() {
+                    return Err(EngineError::Platform(message.clone()));
+                }
+            }
+            fake.audio_capture_suspended.store(Arc::new(suspended));
             Ok(())
         }
         .boxed()

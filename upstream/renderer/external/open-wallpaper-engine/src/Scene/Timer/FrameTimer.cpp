@@ -29,6 +29,7 @@ FrameTimer::FrameTimer(std::function<void()> cb)
           }
       }) {
     SetRequiredFps(DEFAULT_REQUIRED_FPS);
+    ResetFrameTiming();
 }
 
 FrameTimer::~FrameTimer() {};
@@ -40,10 +41,7 @@ double FrameTimer::FrameTime() const {
 }
 
 double FrameTimer::IdeaTime() const {
-    auto frametime = m_frametime.load();
-    auto ideatime  = m_ideatime.load();
-    auto time      = frametime > ideatime ? frametime : ideatime;
-    return duration_cast<duration<double>>(time).count();
+    return duration_cast<duration<double>>(m_elapsed_frametime.load()).count();
 }
 
 void FrameTimer::UpdateFrametime() {
@@ -59,13 +57,15 @@ void FrameTimer::ResetFrameTiming() {
         AddFrametime(m_ideatime.load());
     }
     UpdateFrametime();
-    m_frame_busy_count.store(0);
+    m_elapsed_frametime.store(m_ideatime.load());
+    m_reset_frame_clock.store(true);
 }
 
 void FrameTimer::SetRequiredFps(u16 value) {
     m_req_fps  = value > 0 ? value : DEFAULT_REQUIRED_FPS;
-    m_ideatime = microseconds(1'000'000 / m_req_fps);
-    ResetFrameTiming();
+    m_ideatime = microseconds(1'000'000 / m_req_fps.load());
+    // An FPS change must not discard an in-flight draw or its elapsed time.
+    m_timer.SetInterval(m_ideatime.load());
 }
 
 void FrameTimer::AddFrametime(micros t) {
@@ -75,9 +75,19 @@ void FrameTimer::AddFrametime(micros t) {
     }
 }
 
-void FrameTimer::FrameBegin() { m_clock = steady_clock::now(); }
-void FrameTimer::FrameEnd() {
-    auto now = steady_clock::now();
+void FrameTimer::FrameBegin() { FrameBegin(steady_clock::now()); }
+void FrameTimer::FrameBegin(steady_clock::time_point now) {
+    const auto elapsed = duration_cast<microseconds>(now - m_clock);
+    // The first frame after Run has no active predecessor. Treat very long
+    // gaps as suspension too, rather than feeding hours into scene simulation.
+    const bool reset = m_reset_frame_clock.exchange(false);
+    m_elapsed_frametime.store(reset || elapsed > MAX_FRAME_DURATION
+                                 ? m_ideatime.load()
+                                 : elapsed);
+    m_clock = now;
+}
+void FrameTimer::FrameEnd() { FrameEnd(steady_clock::now()); }
+void FrameTimer::FrameEnd(steady_clock::time_point now) {
     auto elapsed = duration_cast<microseconds>(now - m_clock);
     if (elapsed > MAX_FRAME_DURATION) {
         ResetFrameTiming();
@@ -100,6 +110,8 @@ void FrameTimer::SetCallback(const std::function<void()>& cb) {
 void FrameTimer::Run() {
     if (! Running()) {
         ResetFrameTiming();
+        m_frame_busy_count.store(0);
+        m_timer.SetInterval(m_ideatime.load());
     }
     m_timer.Start();
 }

@@ -476,11 +476,18 @@ impl<B: AudioCaptureBackend> AudioCaptureController<B> {
     ///
     /// Returns [`AudioCaptureError`] when starting or stopping capture fails.
     pub fn set_suspended(&mut self, suspended: bool) -> Result<(), AudioCaptureError> {
-        if self.suspended == suspended {
-            return Ok(());
-        }
+        let previous = self.suspended;
         self.suspended = suspended;
-        self.sync_capture_state()
+        if let Err(error) = self.sync_capture_state() {
+            self.suspended = previous;
+            if let Err(rollback) = self.sync_capture_state() {
+                return Err(AudioCaptureError::Platform(format!(
+                    "{error}; audio capture rollback failed: {rollback}"
+                )));
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -775,6 +782,53 @@ mod capture_controller_tests {
         assert!(!controller.is_capturing());
         assert_eq!(controller.active_scene_count(), 1);
 
+        controller.set_suspended(false).unwrap();
+        assert!(controller.is_capturing());
+    }
+
+    #[test]
+    fn failed_resume_preserves_suspension_across_capture_updates() {
+        let mut controller =
+            AudioCaptureController::new(Arc::new(TestConsumer), TestBackend::default());
+        controller
+            .set_scene_capturing(SceneHandle::new(1), true)
+            .unwrap();
+        controller.set_suspended(true).unwrap();
+        controller.backend.fail_start = true;
+
+        let error = controller.set_suspended(false).unwrap_err();
+        assert_eq!(error, AudioCaptureError::Platform("start failed".into()));
+        assert!(!controller.is_capturing());
+        controller
+            .set_scene_capturing(SceneHandle::new(2), true)
+            .unwrap();
+        assert!(!controller.is_capturing());
+
+        controller.set_suspended(true).unwrap();
+        controller.set_suspended(false).unwrap();
+        assert!(controller.is_capturing());
+        controller.set_suspended(true).unwrap();
+        assert!(!controller.is_capturing());
+        assert_eq!(controller.active_scene_count(), 2);
+    }
+
+    #[test]
+    fn failed_suspend_preserves_running_capture_intent() {
+        let mut controller =
+            AudioCaptureController::new(Arc::new(TestConsumer), TestBackend::default());
+        controller
+            .set_scene_capturing(SceneHandle::new(1), true)
+            .unwrap();
+        controller.backend.fail_stop = true;
+
+        let error = controller.set_suspended(true).unwrap_err();
+        assert_eq!(error, AudioCaptureError::Platform("stop failed".into()));
+        controller
+            .set_scene_capturing(SceneHandle::new(2), true)
+            .unwrap();
+        assert!(controller.is_capturing());
+        controller.set_suspended(true).unwrap();
+        assert!(!controller.is_capturing());
         controller.set_suspended(false).unwrap();
         assert!(controller.is_capturing());
     }

@@ -26,7 +26,10 @@ final class WallpaperPresentationPolicyTests: XCTestCase {
             isDesktopVisible: { probe.desktopVisible },
             isSessionLocked: { probe.sessionLocked },
             occlusionSettleDelay: settle,
-            apply: { probe.applied.append($0) }
+            apply: { suspended, completion in
+                probe.applied.append(suspended)
+                completion(.success(()))
+            }
         )
     }
 
@@ -82,6 +85,121 @@ final class WallpaperPresentationPolicyTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(80))
         XCTAssertEqual(probe.applied, [], "Mission Control passes must never reach the engine")
         XCTAssertFalse(policy.isSuspended)
+    }
+
+    func testReapplyingAfterCanceledShutdownResumesRenderer() {
+        let probe = PolicyProbe()
+        var acceptingUpdates = true
+        var rendererSuspended = false
+        let policy = WallpaperPresentationPolicy(
+            workspaceCenter: workspaceCenter,
+            lockCenter: lockCenter,
+            windowCenter: windowCenter,
+            isDesktopVisible: { probe.desktopVisible },
+            isSessionLocked: { probe.sessionLocked },
+            occlusionSettleDelay: .zero,
+            apply: { suspended, completion in
+                guard acceptingUpdates else {
+                    completion(.failure(CancellationError()))
+                    return
+                }
+                rendererSuspended = suspended
+                completion(.success(()))
+            }
+        )
+        policy.start()
+        defer { policy.stop() }
+
+        probe.desktopVisible = false
+        policy.evaluate()
+        XCTAssertTrue(rendererSuspended)
+
+        acceptingUpdates = false
+        probe.desktopVisible = true
+        policy.evaluate()
+        XCTAssertTrue(rendererSuspended, "Shutdown temporarily withholds bridge updates")
+
+        acceptingUpdates = true
+        policy.evaluate()
+        XCTAssertFalse(rendererSuspended, "Canceling shutdown must deliver the withheld resume")
+    }
+
+    func testFailedResumeRetriesWithUnchangedVisibility() {
+        let probe = PolicyProbe()
+        var rendererSuspended = false
+        var failResume = true
+        var resumeAttempts = 0
+        let policy = WallpaperPresentationPolicy(
+            workspaceCenter: workspaceCenter,
+            lockCenter: lockCenter,
+            windowCenter: windowCenter,
+            isDesktopVisible: { probe.desktopVisible },
+            isSessionLocked: { probe.sessionLocked },
+            occlusionSettleDelay: .zero,
+            apply: { suspended, completion in
+                if !suspended {
+                    resumeAttempts += 1
+                    if failResume {
+                        completion(.failure(NSError(domain: "AudioCapture", code: 1)))
+                        return
+                    }
+                }
+                rendererSuspended = suspended
+                completion(.success(()))
+            }
+        )
+        policy.start()
+        defer { policy.stop() }
+
+        probe.desktopVisible = false
+        policy.evaluate()
+        XCTAssertTrue(rendererSuspended)
+
+        probe.desktopVisible = true
+        policy.evaluate()
+        XCTAssertTrue(rendererSuspended, "A failed audio restart leaves the renderer rolled back")
+        XCTAssertEqual(resumeAttempts, 1, "A failed delivery must not retry in a busy loop")
+
+        failResume = false
+        policy.evaluate()
+        XCTAssertFalse(rendererSuspended, "Unchanged visibility must retry the unacknowledged resume")
+        XCTAssertEqual(resumeAttempts, 2)
+        policy.evaluate()
+        XCTAssertEqual(resumeAttempts, 2, "An acknowledged state must not be sent again")
+    }
+
+    func testVisibilityChangesWaitForInFlightAcknowledgement() {
+        let probe = PolicyProbe()
+        var requests: [Bool] = []
+        var completions: [WallpaperPresentationPolicy.ApplyCompletion] = []
+        let policy = WallpaperPresentationPolicy(
+            workspaceCenter: workspaceCenter,
+            lockCenter: lockCenter,
+            windowCenter: windowCenter,
+            isDesktopVisible: { probe.desktopVisible },
+            isSessionLocked: { probe.sessionLocked },
+            occlusionSettleDelay: .zero,
+            apply: { suspended, completion in
+                requests.append(suspended)
+                completions.append(completion)
+            }
+        )
+        policy.start()
+        defer { policy.stop() }
+
+        probe.desktopVisible = false
+        policy.evaluate()
+        probe.desktopVisible = true
+        policy.evaluate()
+        policy.evaluate()
+        XCTAssertEqual(requests, [true], "Only one transition may be outstanding")
+
+        completions.removeFirst()(.success(()))
+        XCTAssertEqual(requests, [true, false], "The newest visibility decision follows the acknowledgement")
+        completions.removeFirst()(.success(()))
+        policy.evaluate()
+        XCTAssertEqual(requests, [true, false])
+        XCTAssertTrue(completions.isEmpty)
     }
 
     func testStopResumesASuspendedEngine() {

@@ -5,17 +5,21 @@ import AppKit
 /// this signal with the playback state and restores playback when it clears.
 @MainActor
 final class WallpaperPresentationPolicy {
+    typealias ApplyCompletion = @MainActor (Result<Void, Error>) -> Void
+
     private let workspaceCenter: NotificationCenter
     private let lockCenter: NotificationCenter
     private let windowCenter: NotificationCenter
     private let isDesktopVisible: @MainActor () -> Bool
     private let isSessionLocked: @MainActor () -> Bool
     private let occlusionSettleDelay: Duration
-    private let apply: @MainActor (Bool) -> Void
+    private let apply: @MainActor (Bool, @escaping ApplyCompletion) -> Void
 
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var displaysAsleep = false
     private var settle: Task<Void, Never>?
+    private var appliedSuspension: Bool? = false
+    private var deliveryInFlight = false
     private(set) var isSuspended = false
 
     /// Closures are optional so their `@MainActor` defaults are built inside
@@ -28,7 +32,7 @@ final class WallpaperPresentationPolicy {
         isDesktopVisible: (@MainActor () -> Bool)? = nil,
         isSessionLocked: (@MainActor () -> Bool)? = nil,
         occlusionSettleDelay: Duration = .seconds(1),
-        apply: @escaping @MainActor (Bool) -> Void
+        apply: @escaping @MainActor (Bool, @escaping ApplyCompletion) -> Void
     ) {
         self.workspaceCenter = workspaceCenter
         self.lockCenter = lockCenter
@@ -92,13 +96,17 @@ final class WallpaperPresentationPolicy {
             ?? false
     }
 
+    /// Retry unacknowledged delivery even when desktop visibility is unchanged.
     func evaluate() {
         let blocking = displaysAsleep || isSessionLocked()
         let hidden = !isDesktopVisible()
         let target = blocking || hidden
         settle?.cancel()
         settle = nil
-        guard target != isSuspended else { return }
+        guard target != isSuspended else {
+            deliverPending()
+            return
+        }
         // Resume instantly; delay only occlusion-driven suspension so a Space
         // switch or a Mission Control pass does not freeze a visible wallpaper.
         guard target, !blocking, occlusionSettleDelay > .zero else {
@@ -114,9 +122,29 @@ final class WallpaperPresentationPolicy {
     }
 
     private func commit(_ suspended: Bool) {
-        guard suspended != isSuspended else { return }
-        isSuspended = suspended
-        AppLog.info("presentation policy \(suspended ? "suspended" : "resumed")")
-        apply(suspended)
+        if suspended != isSuspended {
+            isSuspended = suspended
+            AppLog.info("presentation policy \(suspended ? "suspended" : "resumed")")
+        }
+        deliverPending()
+    }
+
+    private func deliverPending() {
+        guard !deliveryInFlight, appliedSuspension != isSuspended else { return }
+        let suspended = isSuspended
+        deliveryInFlight = true
+        apply(suspended) { [self] result in
+            deliveryInFlight = false
+            if case .success = result {
+                appliedSuspension = suspended
+            } else {
+                // A failed bridge transaction may have rolled rendering back.
+                // Keep it pending until a later evaluation retries delivery.
+                appliedSuspension = nil
+            }
+            // Serialize transitions so a late acknowledgement cannot overwrite
+            // a newer visibility decision. Do not spin on a failed same-state call.
+            if isSuspended != suspended { deliverPending() }
+        }
     }
 }

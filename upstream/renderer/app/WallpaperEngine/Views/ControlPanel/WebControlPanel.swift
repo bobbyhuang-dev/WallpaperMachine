@@ -34,6 +34,7 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
   var isReady = false
   var stopped = false
   var updateScheduled = false
+  var deferredWhileHidden = false
   var observationInstalled = false
   var commandBusy = false
   var actionError: String?
@@ -77,6 +78,19 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
       view.isInspectable = true
     #endif
     webView = view
+    for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didBecomeKeyNotification] {
+      NotificationCenter.default.publisher(for: name)
+        .sink { [weak self] note in
+          MainActor.assumeIsolated {
+            guard let self, let window = note.object as? NSWindow,
+              window === self.webView?.window, window.isVisible, self.deferredWhileHidden
+            else { return }
+            self.deferredWhileHidden = false
+            self.scheduleUpdate()
+          }
+        }
+        .store(in: &subscriptions)
+    }
     navigation.objectWillChange.sink { [weak self] _ in self?.scheduleUpdate() }.store(
       in: &subscriptions)
     view.load(URLRequest(url: WebPanelAssets.indexURL))
@@ -117,11 +131,15 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
       guard let self else { return }
       self.updateScheduled = false
       guard self.isReady, !self.stopped, let view = self.webView else { return }
-      self.refreshDisplayOptions()
       // Observation, not the snapshot, drives continuation: a retained intent starts as soon
       // as SteamCMD finishes installing or a saved sign-in appears.
       self.workshop.resumeDownloadRequests(bridge: self.store)
       self.reconcileDismissedErrors()
+      guard view.window?.isVisible == true else {
+        self.deferredWhileHidden = true
+        return
+      }
+      self.refreshDisplayOptions()
       let state = self.snapshot()
       do {
         _ = try await view.callAsyncJavaScript(

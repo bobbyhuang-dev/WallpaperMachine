@@ -52,6 +52,12 @@ pub trait EngineFacade: Send + Sync + 'static {
         assignment: WallpaperAssignment,
     ) -> EngineFuture<Option<SceneHandle>>;
     fn set_first_frame_callback(&self, callback: FirstFrameCallback);
+    /// Globally suspends or resumes system-audio capture. Per-scene audio
+    /// response settings are preserved across the transition.
+    fn set_audio_capture_suspended(&self, suspended: bool) -> EngineFuture<()> {
+        let _ = suspended;
+        async move { Ok(()) }.boxed()
+    }
 }
 
 #[derive(Clone)]
@@ -205,6 +211,19 @@ impl EngineFacade for RealEngineFacade {
         .boxed()
     }
 
+    fn set_audio_capture_suspended(&self, suspended: bool) -> EngineFuture<()> {
+        let audio_capture = self.audio_capture.clone();
+        let audio_mutation = self.audio_mutation.clone();
+        async move {
+            let _audio_guard = audio_mutation.lock().await;
+            audio_capture
+                .set_suspended(suspended)
+                .await
+                .map_err(EngineError::Platform)
+        }
+        .boxed()
+    }
+
     fn set_scaling_mode(&self, handle: SceneHandle, mode: ScalingMode) -> EngineFuture<()> {
         let engine = self.engine.clone();
         async move { engine.set_scaling_mode(handle, mode).await }.boxed()
@@ -298,9 +317,18 @@ enum AudioCaptureCommand {
         enabled: bool,
         reply: tokio::sync::oneshot::Sender<Result<(), String>>,
     },
+    SetSuspended {
+        suspended: bool,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
     RetainScenes {
         reply: tokio::sync::oneshot::Sender<Result<(), String>>,
     },
+}
+
+enum AudioCaptureRequest {
+    Scene { handle: SceneHandle, enabled: bool },
+    Suspend { suspended: bool },
 }
 
 impl AudioCaptureWorker {
@@ -315,7 +343,9 @@ impl AudioCaptureWorker {
                 while let Ok(command) = receiver.recv() {
                     let (request, reply) = match command {
                         AudioCaptureCommand::SetEnabled { handle, enabled, reply } =>
-                            (Some((handle, enabled)), reply),
+                            (Some(AudioCaptureRequest::Scene { handle, enabled }), reply),
+                        AudioCaptureCommand::SetSuspended { suspended, reply } =>
+                            (Some(AudioCaptureRequest::Suspend { suspended }), reply),
                         AudioCaptureCommand::RetainScenes { reply } => (None, reply),
                     };
                     let result = (|| {
@@ -323,19 +353,26 @@ impl AudioCaptureWorker {
                         let handles: Vec<_> = engine.display_snapshot().iter()
                             .filter_map(|display| display.handle).collect();
                         controller.retain_scenes(&handles).map_err(|error| error.to_string())?;
-                        if let Some((handle, enabled)) = request {
-                            if enabled {
-                                if !handles.contains(&handle) {
-                                    return Err("The wallpaper is no longer active.".to_string());
-                                }
-                                // Core Audio performs the system authorization at capture startup.
-                                if !controller.has_permission().map_err(|error| error.to_string())?
-                                    && !controller.request_permission().map_err(|error| error.to_string())? {
-                                    return Err("System audio capture permission was not granted.".to_string());
-                                }
+                        match request {
+                            Some(AudioCaptureRequest::Suspend { suspended }) => {
+                                controller.set_suspended(suspended)
+                                    .map_err(|error| error.to_string())?;
                             }
-                            controller.set_scene_capturing(handle, enabled)
-                                .map_err(|error| format!("Audio response could not {}: {error}. Check MacWallpaperEngine in System Settings > Privacy & Security > Screen & System Audio Recording.", if enabled { "start" } else { "stop" }))?;
+                            Some(AudioCaptureRequest::Scene { handle, enabled }) => {
+                                if enabled {
+                                    if !handles.contains(&handle) {
+                                        return Err("The wallpaper is no longer active.".to_string());
+                                    }
+                                    // Core Audio performs the system authorization at capture startup.
+                                    if !controller.has_permission().map_err(|error| error.to_string())?
+                                        && !controller.request_permission().map_err(|error| error.to_string())? {
+                                        return Err("System audio capture permission was not granted.".to_string());
+                                    }
+                                }
+                                controller.set_scene_capturing(handle, enabled)
+                                    .map_err(|error| format!("Audio response could not {}: {error}. Check MacWallpaperEngine in System Settings > Privacy & Security > Screen & System Audio Recording.", if enabled { "start" } else { "stop" }))?;
+                            }
+                            None => {}
                         }
                         Ok(())
                     })();
@@ -369,6 +406,16 @@ impl AudioCaptureWorker {
             .await
             .map_err(|error| format!("audio capture worker did not reply: {error}"))?
     }
+
+    async fn set_suspended(&self, suspended: bool) -> Result<(), String> {
+        let (reply, response) = tokio::sync::oneshot::channel();
+        self.sender
+            .send(AudioCaptureCommand::SetSuspended { suspended, reply })
+            .map_err(|error| format!("audio capture worker stopped: {error}"))?;
+        response
+            .await
+            .map_err(|error| format!("audio capture worker did not reply: {error}"))?
+    }
 }
 
 #[cfg(test)]
@@ -382,6 +429,7 @@ pub struct FakeEngineFacade {
     audio_muted_calls: Arc<ArcSwap<Vec<(SceneHandle, bool)>>>,
     audio_response_calls: Arc<ArcSwap<Vec<(SceneHandle, bool)>>>,
     audio_capture_calls: Arc<ArcSwap<Vec<(SceneHandle, bool)>>>,
+    audio_capture_suspend_calls: Arc<ArcSwap<Vec<bool>>>,
     audio_capture_block: Arc<SegQueue<ReconcileBlockGate>>,
     audio_capture_failure: Arc<ArcSwap<Option<String>>>,
     scaling_mode_calls: Arc<ArcSwap<Vec<(SceneHandle, ScalingMode)>>>,
@@ -496,6 +544,11 @@ impl FakeEngineFacade {
     #[must_use]
     pub fn audio_capture_calls(&self) -> Vec<(SceneHandle, bool)> {
         load_log(&self.audio_capture_calls)
+    }
+
+    #[must_use]
+    pub fn audio_capture_suspend_calls(&self) -> Vec<bool> {
+        load_log(&self.audio_capture_suspend_calls)
     }
 
     #[must_use]
@@ -775,6 +828,15 @@ impl EngineFacade for FakeEngineFacade {
             fake.update_direct_assignment_after_refresh(handle, |template| {
                 template.audio_response_enabled = enabled;
             });
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn set_audio_capture_suspended(&self, suspended: bool) -> EngineFuture<()> {
+        let fake = self.clone();
+        async move {
+            push_log(&fake.audio_capture_suspend_calls, suspended);
             Ok(())
         }
         .boxed()

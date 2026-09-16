@@ -47,8 +47,8 @@ use crate::{
             SetAudioResponseEnabled, SetDisplayConfigEnabled, SetDisplayEnabled, SetDisplayMode,
             SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMirrorMuted, SetMirrorScalingFactor,
             SetMirrorScalingMode, SetMirrorTarget, SetMirrorTargetFps, SetMirrorVolume, SetMuted,
-            SetPauseOnBatteryPower, SetScalingFactor, SetScalingMode, SetTargetFps, SetVolume,
-            Shutdown,
+            SetPauseOnBatteryPower, SetPresentationSuspended, SetScalingFactor, SetScalingMode,
+            SetTargetFps, SetVolume, Shutdown,
         },
         state::BridgeActorState,
     },
@@ -337,6 +337,13 @@ impl EngineFacade for ArcEngineFacade {
         enabled: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), wallpaper_core::EngineError>> + Send>> {
         self.0.set_audio_capture_enabled(handle, enabled)
+    }
+
+    fn set_audio_capture_suspended(
+        &self,
+        suspended: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<(), wallpaper_core::EngineError>> + Send>> {
+        self.0.set_audio_capture_suspended(suspended)
     }
 
     fn set_scaling_mode(
@@ -854,6 +861,19 @@ impl WallpaperBridge {
         self.actor.ask(SetPauseOnBatteryPower { enabled }).await
     }
 
+    /// Suspends or resumes rendering and system-audio capture for every
+    /// wallpaper without changing the user-visible playback state. Used for
+    /// conditions where no wallpaper pixel can reach a display: screens asleep,
+    /// session locked, or every wallpaper window fully occluded.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the actor rejects the update or the engine fails
+    /// to apply the pause.
+    pub async fn set_presentation_suspended(&self, suspended: bool) -> Result<(), BridgeError> {
+        self.actor.ask(SetPresentationSuspended { suspended }).await
+    }
+
     /// # Errors
     ///
     /// Returns an error when the wallpaper id, property id, or value is
@@ -928,7 +948,6 @@ impl WallpaperBridge {
         self.actor
             .ask(SetGlobalPlayback {
                 playback_state: BridgePlaybackState::Paused,
-                paused: true,
             })
             .await
     }
@@ -940,7 +959,6 @@ impl WallpaperBridge {
         self.actor
             .ask(SetGlobalPlayback {
                 playback_state: BridgePlaybackState::Playing,
-                paused: false,
             })
             .await
     }

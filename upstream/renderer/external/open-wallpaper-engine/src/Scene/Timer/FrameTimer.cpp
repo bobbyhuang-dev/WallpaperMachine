@@ -10,21 +10,25 @@ using namespace std::chrono;
 namespace
 {
 constexpr auto MAX_FRAME_DURATION = seconds(5);
+constexpr u16  DEFAULT_REQUIRED_FPS { 30 };
 }
 
 FrameTimer::FrameTimer(std::function<void()> cb)
     : m_callback(cb), m_frame_busy_count(0), m_timer([this]() {
-          microseconds wait_time = m_frametime.load();
-          auto         ideatime  = m_ideatime.load();
-          wait_time              = wait_time > ideatime ? wait_time / 2 : ideatime;
-          m_timer.SetInterval(wait_time);
+          // Fixed-rate clock. The callback only posts CMD_DRAW to the render
+          // looper, so the tick period must be the ideal frame time; halving it
+          // when a frame runs long makes a slow scene render flat out instead of
+          // degrading to its achievable rate.
+          m_timer.SetInterval(m_ideatime.load());
 
-          if (m_callback && m_frame_busy_count <= 3) {
+          // At most one DRAW may be in flight. A slow frame drops ticks rather
+          // than queueing work the display will never show.
+          if (m_callback && m_frame_busy_count.load() < 1) {
               m_frame_busy_count++;
               m_callback();
           }
       }) {
-    SetRequiredFps(15);
+    SetRequiredFps(DEFAULT_REQUIRED_FPS);
 }
 
 FrameTimer::~FrameTimer() {};
@@ -59,9 +63,8 @@ void FrameTimer::ResetFrameTiming() {
 }
 
 void FrameTimer::SetRequiredFps(u16 value) {
-    m_req_fps             = value;
-    microseconds ideatime = milliseconds(1000 / m_req_fps);
-    m_ideatime            = ideatime;
+    m_req_fps  = value > 0 ? value : DEFAULT_REQUIRED_FPS;
+    m_ideatime = microseconds(1'000'000 / m_req_fps);
     ResetFrameTiming();
 }
 

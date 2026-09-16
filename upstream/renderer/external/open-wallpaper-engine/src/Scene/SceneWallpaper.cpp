@@ -37,8 +37,10 @@
 #include "VulkanRender/SceneToRenderGraph.hpp"
 #include "VulkanRender/VulkanRender.hpp"
 #include "Runtime/VirtualAssetRegistry.hpp"
+#include <algorithm>
 #include <atomic>
 #include <charconv>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -1000,10 +1002,11 @@ MHANDLER_CMD_IMPL(MainHandler, SET_PROPERTY) {
             msg->findString("value", &m_assets);
             CALL_MHANDLER_CMD(LOAD_SCENE, msg);
         } else if (property == PROPERTY_FPS) {
-            int32_t fps { 15 };
+            int32_t fps { 0 };
             msg->findInt32("value", &fps);
-            if (fps >= 5) {
-                m_render_handler->frame_timer.SetRequiredFps((uint8_t)fps);
+            if (fps > 0) {
+                m_render_handler->frame_timer.SetRequiredFps(
+                    (u16)std::min<int32_t>(fps, UINT16_MAX));
             }
         } else if (property == PROPERTY_FILLMODE) {
             int32_t value;
@@ -1145,8 +1148,9 @@ bool MainHandler::applyConfig(SceneWallpaperConfig config) {
     m_force_shader_refresh = config.force_shader_refresh;
     if (m_force_shader_refresh) should_load = true;
 
-    if (config.fps >= 5) {
-        m_render_handler->frame_timer.SetRequiredFps((uint8_t)config.fps);
+    if (config.fps > 0) {
+        m_render_handler->frame_timer.SetRequiredFps(
+            (u16)std::min<uint32_t>(config.fps, UINT16_MAX));
     }
 
     return should_load;
@@ -1396,7 +1400,7 @@ bool MainHandler::init() {
         frameTimer.SetCallback([msg]() {
             msg->post();
         });
-        frameTimer.SetRequiredFps(15);
+        frameTimer.SetRequiredFps(30);
         frameTimer.Run();
     }
 

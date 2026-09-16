@@ -20,6 +20,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct BridgeActorState {
     pub playback_state: BridgePlaybackState,
+    pub presentation_suspended: bool,
     pub selected_wallpaper_id: Option<String>,
     pub active_wallpaper_ids: Vec<String>,
     pub errors: Vec<String>,
@@ -45,6 +46,7 @@ impl Default for BridgeActorState {
     fn default() -> Self {
         Self {
             playback_state: BridgePlaybackState::Playing,
+            presentation_suspended: false,
             selected_wallpaper_id: None,
             active_wallpaper_ids: Vec::new(),
             errors: Vec::new(),

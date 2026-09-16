@@ -20,6 +20,21 @@ Select additional assets you own or have permission to use. Record local paths
 and hashes in a local inventory under `build/verification/`, not this public
 document. Do not reuse real imports for destructive/invalid-input tests; use copies.
 
+## Pointing the tests at your local corpus
+
+Corpus-dependent tests resolve their roots from the environment and **skip with a
+printed reason** when the assets are absent, so a clean checkout runs green on any
+machine. Never hardcode a home directory in a test.
+
+| Variable | Default | Used by |
+| --- | --- | --- |
+| `MAC_WALLPAPER_ENGINE_ASSETS_ROOT` | `~/Library/Application Support/Steam/steamapps/common/wallpaper_engine/assets` | Wallpaper Engine's shipped `assets/shaders` (`crates/shader/tests/pipeline.rs`, and the bridge at runtime) |
+| `MAC_WALLPAPER_ENGINE_UNPACK_ROOT` | `upstream/renderer/unpack` | shaders unpacked from workshop packages |
+
+A skipped case is **not** a passing case. Run `cargo test -p shader --test pipeline
+-- --nocapture` and read the `skipping …` lines to see exactly which files are
+missing before claiming shader coverage.
+
 | Case | Asset to select | Expected checks | Status |
 | --- | --- | --- | --- |
 | video-basic | Short ordinary video, known dimensions and colors | Playback, fill/match/stretch, orientation, pause/resume | Needs asset |

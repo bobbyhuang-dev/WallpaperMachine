@@ -12,12 +12,15 @@ enum DesktopPosterEncoder {
               let provider = CGDataProvider(data: pixels as CFData) else {
             throw CocoaError(.fileReadCorruptFile)
         }
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
         let info = bgra
             ? CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.noneSkipFirst.rawValue
             : CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.noneSkipLast.rawValue
         guard let image = CGImage(width: width, height: height, bitsPerComponent: 8,
                                   bitsPerPixel: 32, bytesPerRow: width * 4,
-                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  space: space,
                                   bitmapInfo: CGBitmapInfo(rawValue: info), provider: provider,
                                   decode: nil, shouldInterpolate: false, intent: .defaultIntent) else {
             throw CocoaError(.fileReadCorruptFile)
@@ -59,6 +62,9 @@ final class DesktopWallpaperSync {
     private let workspaceCenter: NotificationCenter?
     private let encode: @Sendable (DesktopPosterFrame) async throws -> Data
     private var retry: Task<Void, Never>?
+    private var lastRefresh: ContinuousClock.Instant?
+    private var coalesced: Task<Void, Never>?
+    private static let refreshInterval: Duration = .milliseconds(500)
     private var stopped = false
 
     convenience init(folder: URL) throws {
@@ -106,6 +112,25 @@ final class DesktopWallpaperSync {
 
     func refresh() {
         guard !stopped else { return }
+        let now = ContinuousClock.now
+        if let last = lastRefresh, now - last < Self.refreshInterval {
+            guard coalesced == nil else { return }
+            let wait = Self.refreshInterval - (now - last)
+            coalesced = Task { [weak self] in
+                do { try await Task.sleep(for: wait) } catch { return }
+                guard let self, !self.stopped else { return }
+                self.coalesced = nil
+                self.lastRefresh = ContinuousClock.now
+                self.performRefresh()
+            }
+            return
+        }
+        lastRefresh = now
+        performRefresh()
+    }
+
+    private func performRefresh() {
+        guard !stopped else { return }
         // Request GPU pixels before potentially slow native Space enumeration
         // and journal I/O, so readback can overlap synchronization.
         // No debounce: an Apply must not wait for a 400 ms timer, another
@@ -126,6 +151,9 @@ final class DesktopWallpaperSync {
     func suspendForNativeProvider() {
         stopped = true
         retry?.cancel()
+        coalesced?.cancel()
+        coalesced = nil
+        lastRefresh = nil
         if let frameObserver { frameCenter.removeObserver(frameObserver) }
         frameObserver = nil
         for observer in workspaceObservers { workspaceCenter?.removeObserver(observer) }

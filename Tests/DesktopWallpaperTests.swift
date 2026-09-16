@@ -317,7 +317,7 @@ final class DesktopWallpaperTests: XCTestCase {
     }
 
     @MainActor
-    func testRefreshRequestsFrameSynchronouslyWithoutDebounce() throws {
+    func testRefreshRequestsFirstFrameSynchronouslyAndCoalescesABurst() async throws {
         let workspace = MemoryDesktopWorkspace()
         let layer = CAMetalLayer() // unattached: never creates a window or renderer
         let center = NotificationCenter()
@@ -329,9 +329,14 @@ final class DesktopWallpaperTests: XCTestCase {
         sync.start()
         workspace.didEnumerate = { XCTAssertGreaterThan(requests, 0, "Request pixels before native synchronization") }
         sync.refresh()
-        XCTAssertEqual(requests, 1, "Apply must request a frame before refresh returns")
-        sync.refresh()
-        XCTAssertEqual(requests, 2, "A second Apply must not be held by the previous request")
+        XCTAssertEqual(requests, 1, "Apply must request a frame before refresh returns, never behind a timer")
+
+        // Snapshot churn (menu opening, volume changes, display refreshes) must
+        // not multiply GPU readbacks: the burst collapses into one trailing fire.
+        for _ in 0..<5 { sync.refresh() }
+        XCTAssertEqual(requests, 1, "A burst inside the throttle window must not re-read the swapchain")
+        try await Task.sleep(for: .milliseconds(900))
+        XCTAssertEqual(requests, 2, "The coalesced refresh must still land so the poster matches final state")
     }
 
     @MainActor

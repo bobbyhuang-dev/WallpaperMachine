@@ -12,7 +12,8 @@
   "sceneEngine": {
     "repository": "https://github.com/bigsaltyfishes/open-wallpaper-engine",
     "revision": "c4c36357a40c363f7f9e03e624f3c8820b620ef6",
-    "directory": "upstream/renderer/external/open-wallpaper-engine"
+    "directory": "upstream/renderer/external/open-wallpaper-engine",
+    "modified": true
   },
   "workshopBrowser": {
     "implementation": "Independently implemented for this application; no Unayung GPLv3 source copied.",

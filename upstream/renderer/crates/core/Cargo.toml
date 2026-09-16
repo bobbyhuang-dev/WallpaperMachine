@@ -6,7 +6,6 @@ license.workspace = true
 
 [dependencies]
 arc-swap = "1.9.1"
-ash = { version = "0.38", features = ["linked"] }
 ffmpeg-next = "8.1.0"
 kameo = "0.20.0"
 libc = "0.2"

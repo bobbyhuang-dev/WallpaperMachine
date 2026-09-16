@@ -389,6 +389,7 @@ pub struct AudioCaptureController<B: AudioCaptureBackend> {
     consumer: Arc<dyn AudioFrameConsumer>,
     backend: B,
     enabled_handles: HashSet<SceneHandle>,
+    suspended: bool,
 }
 
 impl<B: AudioCaptureBackend> AudioCaptureController<B> {
@@ -398,6 +399,7 @@ impl<B: AudioCaptureBackend> AudioCaptureController<B> {
             consumer,
             backend,
             enabled_handles: HashSet::new(),
+            suspended: false,
         }
     }
 
@@ -467,6 +469,20 @@ impl<B: AudioCaptureBackend> AudioCaptureController<B> {
         self.sync_capture_state()
     }
 
+    /// Globally stops capture without forgetting which scenes requested it.
+    /// Resuming restores capture for every scene still enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioCaptureError`] when starting or stopping capture fails.
+    pub fn set_suspended(&mut self, suspended: bool) -> Result<(), AudioCaptureError> {
+        if self.suspended == suspended {
+            return Ok(());
+        }
+        self.suspended = suspended;
+        self.sync_capture_state()
+    }
+
     #[must_use]
     pub fn is_capturing(&self) -> bool {
         self.backend.is_running()
@@ -483,7 +499,7 @@ impl<B: AudioCaptureBackend> AudioCaptureController<B> {
     }
 
     fn sync_capture_state(&mut self) -> Result<(), AudioCaptureError> {
-        let should_run = !self.enabled_handles.is_empty();
+        let should_run = !self.suspended && !self.enabled_handles.is_empty();
         if should_run {
             if !self.backend.is_running() && self.backend.has_permission()? {
                 self.backend.start(Arc::clone(&self.consumer))?;
@@ -744,5 +760,22 @@ mod capture_controller_tests {
             controller.retain_scenes(&[]).unwrap();
             assert!(!controller.is_capturing());
         }
+    }
+
+    #[test]
+    fn suspending_stops_capture_and_resuming_restores_enabled_scenes() {
+        let backend = TestBackend::default();
+        let mut controller = AudioCaptureController::new(Arc::new(TestConsumer), backend);
+        controller
+            .set_scene_capturing(SceneHandle::new(1), true)
+            .unwrap();
+        assert!(controller.is_capturing());
+
+        controller.set_suspended(true).unwrap();
+        assert!(!controller.is_capturing());
+        assert_eq!(controller.active_scene_count(), 1);
+
+        controller.set_suspended(false).unwrap();
+        assert!(controller.is_capturing());
     }
 }

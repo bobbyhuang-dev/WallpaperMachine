@@ -11,6 +11,9 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
     private(set) var wasCancelled = false
     private(set) var status = "Ready to download"
     private(set) var progress: Double?
+    private(set) var bytesReceived: Int64?
+    private(set) var bytesExpected: Int64?
+    private(set) var bytesPerSecond: Double?
     private(set) var prompt: Prompt?
     private(set) var steamGuardChallenge: SteamGuardChallenge?
     var canRetryAuthentication: Bool { authenticationFailed && !isRunning }
@@ -22,6 +25,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
     private(set) var sessionWarning: String?
     @ObservationIgnored private let sessionDirectory: URL
     @ObservationIgnored private let runtimeProvider: any SteamCMDRuntimeProviding
+    @ObservationIgnored private let networkMonitor: any ProcessNetworkMonitoring
     @ObservationIgnored private var cachedCredentialsRejected = false
     @ObservationIgnored private var assetsDownloadCompleted = false
     @ObservationIgnored private var workshopDownloadCompleted = false
@@ -35,15 +39,19 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
     nonisolated private static let ownerName = "owner"
     @ObservationIgnored private var lastActivity = Date()
     @ObservationIgnored private var failure: String?
+    @ObservationIgnored private var receivesNetwork = false
+    @ObservationIgnored private var networkStarted = false
     private(set) var isAuthenticating = true
     private static let failurePattern = try! NSRegularExpression(pattern: #"(?:failed|error!?)\s*\(([^)\r\n]+)\)"#)
-    private static let progressPattern = try! NSRegularExpression(pattern: #"(\d{1,3}(?:\.\d+)?)\s*%"#)
+    private static let appProgressPattern = try! NSRegularExpression(pattern: #"progress:\s*(\d+(?:\.\d+)?)\s*\((\d+)\s*/\s*(\d+)\)"#)
     nonisolated private static let sessionLock = NSLock()
 
     init(sessionDirectory: URL = ClientPaths.supportURL.appendingPathComponent("SteamSession", isDirectory: true),
-         runtimeProvider: any SteamCMDRuntimeProviding = SteamCMDRuntimeService()) {
+         runtimeProvider: any SteamCMDRuntimeProviding = SteamCMDRuntimeService(),
+         networkMonitor: (any ProcessNetworkMonitoring)? = nil) {
         self.sessionDirectory = sessionDirectory
         self.runtimeProvider = runtimeProvider
+        self.networkMonitor = networkMonitor ?? ProcessNetworkMonitor()
         savedAccount = Self.readSavedAccount(at: sessionDirectory)
     }
 
@@ -107,6 +115,11 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         steamGuardChallenge = nil
         if itemID != nil { downloadedID = nil }
         progress = nil
+        bytesReceived = nil
+        bytesExpected = nil
+        bytesPerSecond = nil
+        receivesNetwork = false
+        networkStarted = false
         prompt = nil
         recentOutput = ""
         isRunning = true
@@ -123,6 +136,11 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                 process = nil
                 prompt = nil
                 recentOutput = ""
+                receivesNetwork = false
+                bytesPerSecond = nil
+                bytesReceived = nil
+                bytesExpected = nil
+                progress = nil
                 isRunning = false
                 task = nil
                 onFinished?()
@@ -148,6 +166,15 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                     while let process, process.isRunning {
                         try Task.checkCancellation()
                         try readTerminalOutput()
+                        if receivesNetwork {
+                            if !networkStarted {
+                                networkMonitor.start(processID: process.processIdentifier)
+                                networkStarted = true
+                            }
+                            bytesPerSecond = networkMonitor.rate(at: ProcessInfo.processInfo.systemUptime)
+                        } else {
+                            bytesPerSecond = nil
+                        }
                         if failure != nil || Date().timeIntervalSince(started) > 1800 || Date().timeIntervalSince(lastActivity) > 300 {
                             if failure == nil {
                                 authenticationFailed = isAuthenticating
@@ -173,6 +200,8 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                     throw WorkshopFailure(message: "SteamCMD exited before completing the download. Confirm this account owns Wallpaper Engine, approve Steam Guard, and retry. On Apple silicon, SteamCMD may require Rosetta 2.")
                 }
                 progress = nil
+                receivesNetwork = false
+                bytesPerSecond = nil
                 if isInstallingAssets && !assetsDownloadCompleted {
                     throw WorkshopFailure(message: "Steam exited without confirming a complete Wallpaper Engine installation. Retry installing scene assets; existing assets have not been changed.")
                 }
@@ -238,6 +267,11 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
 
     func cancel() {
         guard isRunning else { return }
+        receivesNetwork = false
+        bytesPerSecond = nil
+        progress = nil
+        bytesReceived = nil
+        bytesExpected = nil
         task?.cancel()
         status = "Cancelling…"
         // The task stops the child before staging cleanup; the importer checks cancellation before its atomic move.
@@ -245,6 +279,11 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
 
     func shutdown() async {
         guard let current = task else { return }
+        receivesNetwork = false
+        bytesPerSecond = nil
+        progress = nil
+        bytesReceived = nil
+        bytesExpected = nil
         current.cancel()
         await current.value
     }
@@ -282,6 +321,8 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         prompt = nil
         steamGuardChallenge = nil
         isAuthenticating = true
+        receivesNetwork = false
+        networkStarted = false
         lastActivity = Date()
         do {
             process = try SteamCMDTerminalProcess(executable: executable, arguments: arguments,
@@ -370,48 +411,79 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             prompt = .password
             steamGuardChallenge = nil
             progress = nil
+            receivesNetwork = false
+            bytesPerSecond = nil
             status = "Enter your Steam password below"
         } else if output.hasSuffix("auth code:") || output.hasSuffix("steam guard code:") || output.hasSuffix("two-factor code:") || output.hasSuffix("enter the code:") || output.hasSuffix("enter code:") {
             prompt = .guardCode
             steamGuardChallenge = output.hasSuffix("steam guard code:") ? .emailCode : .authenticatorCode
             progress = nil
+            receivesNetwork = false
+            bytesPerSecond = nil
             status = "Enter the code from Steam Guard or your email"
         } else if isInstallingAssets && (output.contains("update state") || output.contains("success! app")) {
             prompt = nil
             steamGuardChallenge = nil
             isAuthenticating = false
-            status = output.contains("success! app") ? "Download finished; validating scene assets…" : "Downloading and validating Wallpaper Engine files…"
-            if output.contains("success! app '431960' fully installed") { assetsDownloadCompleted = true }
+            receivesNetwork = output.contains("update state") && output.contains("downloading")
+            if !receivesNetwork { bytesPerSecond = nil }
+            if output.contains("success! app '431960' fully installed") {
+                assetsDownloadCompleted = true
+                receivesNetwork = false
+                bytesPerSecond = nil
+                bytesReceived = nil
+                bytesExpected = nil
+                progress = 1
+                status = "Download finished; validating scene assets…"
+            } else {
+                status = receivesNetwork ? "Downloading Wallpaper Engine files…" : "Processing Wallpaper Engine files…"
+            }
         } else if output.contains("success. downloaded item") {
             workshopDownloadCompleted = true
             prompt = nil
             steamGuardChallenge = nil
             isAuthenticating = false
+            receivesNetwork = false
+            bytesPerSecond = nil
+            bytesReceived = nil
+            bytesExpected = nil
             status = "Download finished; waiting for SteamCMD to close…"
             progress = 1
         } else if output.contains("downloading item") {
             prompt = nil
             steamGuardChallenge = nil
             isAuthenticating = false
+            receivesNetwork = true
+            bytesReceived = nil
+            bytesExpected = nil
+            progress = nil
             status = "Downloading Workshop files…"
         } else if output.contains("logged in ok") || output.contains("waiting for user info...ok") {
             prompt = nil
             steamGuardChallenge = nil
             isAuthenticating = false
             progress = nil
+            receivesNetwork = false
+            bytesPerSecond = nil
             status = isInstallingAssets ? "Signed in; requesting Wallpaper Engine’s shared assets…" : "Signed in; requesting your Workshop download…"
         } else if output.contains("confirm") && (output.contains("mobile") || output.contains("steam guard")) {
             prompt = nil
             steamGuardChallenge = .mobileApproval
             progress = nil
+            receivesNetwork = false
+            bytesPerSecond = nil
             status = "Approve the sign-in in the Steam mobile app"
         } else if output.contains("logging in using cached credentials") {
             prompt = nil
             progress = nil
+            receivesNetwork = false
+            bytesPerSecond = nil
             status = String(localized: "Using your saved Steam sign-in…")
         } else if output.contains("logging in") || output.contains("waiting for client config") || output.contains("waiting for user info") {
             prompt = nil
             progress = nil
+            receivesNetwork = false
+            bytesPerSecond = nil
             status = "Waiting for Steam authentication…"
         } else if output.contains("update") || output.contains("verifying installation") {
             status = "Updating the private SteamCMD runtime…"
@@ -419,15 +491,35 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         if failure != nil {
             prompt = nil
             progress = nil
+            receivesNetwork = false
+            bytesPerSecond = nil
+            bytesReceived = nil
+            bytesExpected = nil
             return
         }
-        if let match = Self.progressPattern.matches(in: output, range: NSRange(output.startIndex..., in: output)).last,
-           let range = Range(match.range(at: 1), in: output), let percent = Double(output[range]), percent <= 100 {
-            progress = percent / 100
+        if isInstallingAssets && output.hasPrefix("update state") {
+            progress = nil
+            bytesReceived = nil
+            bytesExpected = nil
+            if let match = Self.appProgressPattern.firstMatch(in: output, range: NSRange(output.startIndex..., in: output)),
+               let receivedRange = Range(match.range(at: 2), in: output),
+               let totalRange = Range(match.range(at: 3), in: output),
+               let received = Int64(output[receivedRange]), let total = Int64(output[totalRange]),
+               total > 0, received >= 0, received <= total {
+                progress = Double(received) / Double(total)
+                if receivesNetwork {
+                    bytesReceived = received
+                    bytesExpected = total
+                }
+            }
         }
     }
 
     private func stopProcess() async {
+        receivesNetwork = false
+        bytesPerSecond = nil
+        networkStarted = false
+        await networkMonitor.stop()
         await process?.stop()
     }
 
@@ -495,6 +587,24 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                   Double(entry.st_mtimespec.tv_sec) <= deadline.timeIntervalSince1970 else { return false }
         }
         return readable
+    }
+
+    /// Steam moves a download between workshop/downloads, workshop/temp, and workshop/content, so
+    /// the whole steamapps/workshop tree is summed; the min keeps sparse pre-allocated files from
+    /// reporting their full logical size before the blocks exist.
+    nonisolated private static func bytesOnDisk(under root: URL) -> Int64 {
+        var total: Int64 = 0
+        var visited = 0
+        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil,
+                                                          options: []) else { return 0 }
+        for case let url as URL in walker {
+            visited += 1
+            guard visited <= 200_000 else { break }
+            var entry = stat()
+            guard lstat(url.path, &entry) == 0, entry.st_mode & S_IFMT == S_IFREG else { continue }
+            total += min(entry.st_size, entry.st_blocks * 512)
+        }
+        return total
     }
 
     nonisolated static func readSavedAccount(at directory: URL) -> String? {
@@ -623,6 +733,8 @@ private final class SteamCMDTerminalProcess {
     private var leaderExited = false
     private var cleaned = false
 
+    var processIdentifier: pid_t { pid }
+
     var isRunning: Bool {
         guard !cleaned, !leaderExited else { return false }
         // Keep the zombie leader until every group signal has been sent; its PID cannot be reused.
@@ -711,5 +823,172 @@ private final class SteamCMDTerminalProcess {
         }
         try check(result)
         pid = child
+    }
+}
+
+@MainActor
+protocol ProcessNetworkMonitoring: AnyObject {
+    func start(processID: Int32)
+    func rate(at time: TimeInterval) -> Double?
+    func stop() async
+}
+
+struct NetworkReceiveMeter {
+    let processID: Int32
+    private var pending = ""
+    private var byteColumn: Int?
+    private var lastSample: TimeInterval?
+    private var intervals: [(bytes: Double, duration: TimeInterval)] = []
+    private var currentRate: Double?
+
+    mutating func append(_ data: Data, at time: TimeInterval) {
+        guard time.isFinite else { return }
+        pending += String(decoding: data, as: UTF8.self)
+        guard pending.utf8.count <= 65_536 else {
+            self = NetworkReceiveMeter(processID: processID)
+            return
+        }
+        while let newline = pending.firstIndex(where: { $0.isNewline }) {
+            let line = String(pending[..<newline]).trimmingCharacters(in: .whitespacesAndNewlines)
+            pending.removeSubrange(...newline)
+            guard !line.isEmpty else { continue }
+            let fields = line.split(separator: ",", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+            if fields.first == "" {
+                byteColumn = fields.firstIndex(of: "bytes_in")
+                continue
+            }
+            guard let column = byteColumn, fields.indices.contains(column),
+                  fields.first?.hasSuffix(".\(processID)") == true,
+                  !fields[column].isEmpty,
+                  fields[column].allSatisfy({ $0.isASCII && $0.isNumber }),
+                  let bytes = Int64(fields[column]) else { continue }
+            let previous = lastSample
+            lastSample = time
+            guard let previous, (0.5...2.5).contains(time - previous) else {
+                intervals = []
+                currentRate = nil
+                continue
+            }
+            intervals.append((Double(bytes), time - previous))
+            if intervals.count > 3 { intervals.removeFirst(intervals.count - 3) }
+            currentRate = intervals.reduce(0) { $0 + $1.bytes } / intervals.reduce(0) { $0 + $1.duration }
+        }
+    }
+
+    func rate(at time: TimeInterval) -> Double? {
+        guard let lastSample, time.isFinite, (0...3).contains(time - lastSample) else { return nil }
+        return currentRate
+    }
+}
+
+private final class NetworkReceiveCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var meter: NetworkReceiveMeter
+    private var finished = false
+
+    init(processID: Int32) { meter = NetworkReceiveMeter(processID: processID) }
+
+    func append(_ data: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !finished else { return }
+        meter.append(data, at: ProcessInfo.processInfo.systemUptime)
+    }
+
+    func rate(at time: TimeInterval) -> Double? {
+        lock.lock()
+        defer { lock.unlock() }
+        return finished ? nil : meter.rate(at: time)
+    }
+
+    func finish() {
+        lock.lock()
+        defer { lock.unlock() }
+        finished = true
+    }
+}
+
+private struct NetworkTerminalRunner: SteamCMDProcessRunning {
+    @MainActor
+    func run(executable: URL, arguments: [String], workingDirectory: URL,
+             environment: [String: String], onOutput: @escaping @Sendable (Data) -> Void) async throws -> Int32 {
+        try Task.checkCancellation()
+        var master: Int32 = -1
+        var slave: Int32 = -1
+        guard openpty(&master, &slave, nil, nil, nil) == 0 else { throw POSIXError(.EIO) }
+        defer { close(master); if slave >= 0 { close(slave) } }
+        var settings = termios()
+        guard tcgetattr(slave, &settings) == 0 else { throw POSIXError(.EIO) }
+        settings.c_lflag &= ~tcflag_t(ECHO | ECHONL)
+        guard tcsetattr(slave, TCSANOW, &settings) == 0 else { throw POSIXError(.EIO) }
+        let flags = fcntl(master, F_GETFL)
+        guard flags >= 0, fcntl(master, F_SETFL, flags | O_NONBLOCK) == 0 else { throw POSIXError(.EIO) }
+        let process = try SteamCMDTerminalProcess(executable: executable, arguments: arguments,
+            workingDirectory: workingDirectory, environment: environment, master: master, slave: slave, claim: -1)
+        close(slave)
+        slave = -1
+        var buffer = [UInt8](repeating: 0, count: 8192)
+        func drain() throws {
+            for _ in 0..<32 {
+                let count = Darwin.read(master, &buffer, buffer.count)
+                if count > 0 {
+                    onOutput(Data(buffer.prefix(count)))
+                } else if count == 0 || errno == EAGAIN || errno == EWOULDBLOCK || errno == EIO {
+                    return
+                } else if errno != EINTR {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+            }
+        }
+        do {
+            while process.isRunning {
+                try Task.checkCancellation()
+                try drain()
+                try await Task.sleep(for: .milliseconds(40))
+            }
+            await process.stop()
+            try drain()
+            try Task.checkCancellation()
+            return process.terminationStatus
+        } catch {
+            await process.stop()
+            throw error
+        }
+    }
+}
+
+@MainActor
+final class ProcessNetworkMonitor: ProcessNetworkMonitoring {
+    private let runner: any SteamCMDProcessRunning
+    private var capture: NetworkReceiveCapture?
+    private var task: Task<Void, Never>?
+
+    init(runner: any SteamCMDProcessRunning = NetworkTerminalRunner()) { self.runner = runner }
+
+    func start(processID: Int32) {
+        guard processID > 0, task == nil else { return }
+        let capture = NetworkReceiveCapture(processID: processID)
+        self.capture = capture
+        let runner = runner
+        task = Task {
+            defer { capture.finish() }
+            _ = try? await runner.run(
+                executable: URL(fileURLWithPath: "/usr/bin/nettop"),
+                arguments: ["-P", "-L", "0", "-p", String(processID), "-n", "-x", "-d", "-s", "1", "-J", "bytes_in"],
+                workingDirectory: URL(fileURLWithPath: "/"),
+                environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"],
+                onOutput: { capture.append($0) })
+        }
+    }
+
+    func rate(at time: TimeInterval) -> Double? { capture?.rate(at: time) }
+
+    func stop() async {
+        capture?.finish()
+        capture = nil
+        let current = task
+        current?.cancel()
+        await current?.value
+        task = nil
     }
 }

@@ -286,6 +286,92 @@ final class ControlPanelLayoutTests: XCTestCase {
     await workshop.steamCMDSetup.shutdown()
   }
 
+  func testDownloadTelemetryShowsIndeterminateProgressAndNetworkUnitsWithoutWindow() async throws {
+    let fixture = makeStore()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "web-telemetry-\(UUID().uuidString)")
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+    defer {
+      defaults.removePersistentDomain(forName: root.lastPathComponent)
+      try? FileManager.default.removeItem(at: root)
+    }
+    let workshop = WorkshopStore(
+      downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
+      defaults: defaults)
+    let controller = WebPanelController(
+      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop)
+    let web = controller.makeWebView()
+    defer { controller.stop() }
+    web.setFrameSize(NSSize(width: 960, height: 640))
+    let deadline = Date().addingTimeInterval(15)
+    while !controller.isReady && Date() < deadline {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    XCTAssertTrue(controller.isReady)
+    guard controller.isReady else { return }
+    let base =
+      try await web.callAsyncJavaScript(
+        "return await window.webkit.messageHandlers.native.postMessage({action:'ready'})",
+        arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+    XCTAssertNotNil(base)
+    guard let base else { return }
+    controller.stop()
+
+    let result =
+      try await web.callAsyncJavaScript(
+        """
+        const waitFor = async predicate => {
+          const deadline = Date.now() + 5000;
+          while (!predicate()) {
+            if (Date.now() > deadline) throw new Error('Download telemetry did not settle');
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+        };
+        const job = {
+          id: 'telemetry-fixture', wallpaperID: 'telemetry-fixture', title: 'Telemetry fixture',
+          status: 'Downloading Workshop files…', preview: null, account: 'fixture',
+          progress: null, pending: true, queued: false,
+          bytesReceived: null, bytesExpected: null, bytesPerSecond: 600000,
+          authenticating: false, cancelled: false, error: null, prompt: null,
+          securePrompt: false, challenge: null, warning: null
+        };
+        const push = extra => window.wallpaperUI.receive(Object.assign({}, base, {
+          downloads: [Object.assign({}, job, extra)], downloadRequests: [] }));
+        const activity = document.getElementById('activity-bar');
+        const queue = document.getElementById('queue-popover');
+        push({});
+        document.querySelector('#top-actions [data-action="openDownloads"]').click();
+        await waitFor(() => !queue.hidden);
+        const indeterminate = {
+          activityProgress: !!activity.querySelector('progress') && !activity.querySelector('progress').hasAttribute('value'),
+          queueProgress: !!queue.querySelector('progress') && !queue.querySelector('progress').hasAttribute('value'),
+          rate: activity.textContent.includes('Network speed: 600 KB/s') && queue.textContent.includes('Network speed: 600 KB/s'),
+          noPercentOrBytes: !queue.textContent.includes('%') && !queue.textContent.includes(' of ')
+        };
+        push({bytesPerSecond: 0});
+        const zeroRate = activity.textContent.includes('Network speed: 0 B/s');
+        push({bytesPerSecond: null});
+        const noRate = !activity.textContent.includes('Network speed:') && !queue.textContent.includes('Network speed:');
+        push({status: 'Validating and adding to your library…', bytesPerSecond: null});
+        const validating = activity.textContent.includes('Validating') && !activity.textContent.includes('Network speed:');
+        push({id: 'scene-assets', wallpaperID: null, status: 'Downloading Wallpaper Engine files…', progress: 0.25, bytesReceived: 250, bytesExpected: 1000, bytesPerSecond: null});
+        await waitFor(() => !!activity.querySelector('progress') && activity.querySelector('progress').value === 0.25);
+        const byteProgress = activity.querySelector('progress').value === 0.25 && activity.textContent.includes('25%');
+        return {indeterminate, zeroRate, noRate, validating, byteProgress};
+        """, arguments: ["base": base], in: nil, contentWorld: .page) as? [String: Any]
+    let indeterminate = result?["indeterminate"] as? [String: Any]
+    XCTAssertEqual(indeterminate?["activityProgress"] as? Bool, true, "Activity bar must render a valueless progress bar while pending")
+    XCTAssertEqual(indeterminate?["queueProgress"] as? Bool, true, "Queue row must render a valueless progress bar while pending")
+    XCTAssertEqual(indeterminate?["rate"] as? Bool, true, "Both surfaces must show the measured network speed")
+    XCTAssertEqual(indeterminate?["noPercentOrBytes"] as? Bool, true, "Workshop downloads must not report percentage or byte totals")
+    XCTAssertEqual(result?["zeroRate"] as? Bool, true, "A measured idle rate must render as 0 B/s")
+    XCTAssertEqual(result?["noRate"] as? Bool, true, "An unavailable rate must be omitted, not shown as zero")
+    XCTAssertEqual(result?["validating"] as? Bool, true, "The validating phase must show its status without a network speed")
+    XCTAssertEqual(result?["byteProgress"] as? Bool, true, "Explicit app-update bytes may still drive determinate progress")
+    XCTAssertNil(web.window, "This regression must not open a desktop window")
+    await workshop.steamCMDSetup.shutdown()
+  }
+
   private func makeStore() -> (store: BridgeStore, bridge: LayoutSnapshotBridge) {
     let bridge = LayoutSnapshotBridge(noPointer: .init())
     let store = BridgeStore(bridge: bridge)

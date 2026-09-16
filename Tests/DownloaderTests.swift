@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 
 @testable import MacWallpaperEngine
@@ -197,7 +198,7 @@ final class DownloaderTests: XCTestCase {
     }
   }
 
-  func testMobileApprovalCanAdvanceToDownloadProgress() async throws {
+  func testMobileApprovalCanAdvanceToIndeterminateDownload() async throws {
     let root = try makeRuntime(
       """
       printf 'Please confirm the login in the Steam Mobile app on your phone.\\n'
@@ -208,9 +209,72 @@ final class DownloaderTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
     let downloader = startDownload(in: root)
     do {
-      try await waitUntil { downloader.progress == 0.25 }
+      try await waitUntil { downloader.status == "Downloading Workshop files…" }
+      XCTAssertNil(downloader.progress)
       XCTAssertNil(downloader.prompt)
       XCTAssertNil(downloader.errorMessage)
+      await downloader.shutdown()
+    } catch {
+      await downloader.shutdown()
+      throw error
+    }
+  }
+
+  func testWorkshopDiskGrowthDoesNotReportTransferProgress() async throws {
+    let root = try makeRuntime("""
+      printf 'Waiting for user info...OK\\nDownloading item 123456 ...\\n'
+      mkdir -p steamapps/workshop/downloads/431960/123456
+      head -c 512 /dev/zero > steamapps/workshop/downloads/431960/123456/part1
+      touch ../first-written
+      while [ ! -f ../release-next ]; do sleep 0.02; done
+      head -c 1024 /dev/zero > steamapps/workshop/downloads/431960/123456/part2
+      touch ../second-written
+      IFS= read -r finish
+      """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let sizedItem = WorkshopItem(id: "123456", title: "Disk fixture", creator: "Test", summary: "", previewURL: nil, tags: ["Video"], size: 2048, subscriptions: 0)
+    let downloader = startDownload(in: root, item: sizedItem)
+    do {
+      try await waitUntil { FileManager.default.fileExists(atPath: root.appendingPathComponent("first-written").path) }
+      try await Task.sleep(for: .milliseconds(1200))
+      XCTAssertNil(downloader.progress)
+      XCTAssertNil(downloader.bytesReceived)
+      XCTAssertNil(downloader.bytesExpected)
+      XCTAssertNil(downloader.bytesPerSecond)
+      try Data().write(to: root.appendingPathComponent("release-next"))
+      try await waitUntil { FileManager.default.fileExists(atPath: root.appendingPathComponent("second-written").path) }
+      try await Task.sleep(for: .milliseconds(1200))
+      XCTAssertNil(downloader.progress)
+      XCTAssertNil(downloader.bytesReceived)
+      XCTAssertNil(downloader.bytesExpected)
+      XCTAssertNil(downloader.bytesPerSecond)
+      await downloader.shutdown()
+    } catch { await downloader.shutdown(); throw error }
+  }
+
+  func testAppUpdateProgressParsesBytes() async throws {
+    let root = try makeRuntime(
+      """
+      mkdir -p wallpaper-engine/assets/shaders
+      printf 'partial' > wallpaper-engine/assets/shaders/genericimage2.vert
+      printf 'Update state (0x61) downloading, progress: 25.00 (250 / 1000)\\n'
+      IFS= read -r finish
+      """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let destination = root.appendingPathComponent("SceneAssets")
+    let downloader = WorkshopDownloader(
+      sessionDirectory: root.appendingPathComponent("SteamSession"),
+      runtimeProvider: ShellRuntimeProvider())
+    downloader.installAssets(
+      username: "localtest", executable: root.appendingPathComponent("runtime/steamcmd"),
+      destination: destination
+    ) {
+      XCTFail("The incomplete install must not publish assets")
+    }
+    do {
+      try await waitUntil { downloader.progress == 0.25 }
+      XCTAssertEqual(downloader.bytesReceived, 250)
+      XCTAssertEqual(downloader.bytesExpected, 1000)
       await downloader.shutdown()
     } catch {
       await downloader.shutdown()
@@ -446,7 +510,7 @@ final class DownloaderTests: XCTestCase {
       """
       mkdir -p wallpaper-engine/assets/shaders
       printf 'partial' > wallpaper-engine/assets/shaders/genericimage2.vert
-      printf 'Update state (0x61) downloading, 25%%\\n'
+      printf 'Update state (0x61) downloading, progress: 25.00 (250 / 1000)\\n'
       IFS= read -r finish
       """)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -630,7 +694,8 @@ final class DownloaderTests: XCTestCase {
     let cancelled = startDownload(in: root)
     try await authenticate(cancelled)
     do {
-      try await waitUntil { cancelled.progress == 0.25 }
+      try await waitUntil { cancelled.status == "Downloading Workshop files…" }
+      XCTAssertNil(cancelled.progress)
       await cancelled.shutdown()
     } catch {
       await cancelled.shutdown()
@@ -754,7 +819,8 @@ final class DownloaderTests: XCTestCase {
       XCTAssertTrue(fourth.isQueued)
       XCTAssertTrue(fifth.isQueued)
       first.worker.submitSecret("secret1")
-      try await waitUntil { first.progress == 0.25 }
+      try await waitUntil { first.worker.status == "Downloading Workshop files…" }
+      XCTAssertNil(first.progress)
       XCTAssertNil(second.worker.prompt)
       XCTAssertNil(third.worker.prompt)
       manager.cancel(second)
@@ -767,11 +833,13 @@ final class DownloaderTests: XCTestCase {
       try await waitUntil { third.worker.prompt == .password }
       XCTAssertNil(fourth.worker.prompt)
       third.worker.submitSecret("secret3")
-      try await waitUntil { third.progress == 0.25 }
+      try await waitUntil { third.worker.status == "Downloading Workshop files…" }
+      XCTAssertNil(third.progress)
       try Data().write(to: root.appendingPathComponent("release-3"))
       try await waitUntil { fourth.worker.prompt == .password }
       fourth.worker.submitSecret("secret4")
-      try await waitUntil { fourth.progress == 0.25 }
+      try await waitUntil { fourth.worker.status == "Downloading Workshop files…" }
+      XCTAssertNil(fourth.progress)
       try Data().write(to: root.appendingPathComponent("release-4"))
       try await waitUntil { !manager.isRunning }
       XCTAssertEqual(imported, ["1", "3", "4"])
@@ -884,7 +952,8 @@ final class DownloaderTests: XCTestCase {
       executable: root.appendingPathComponent("runtime/steamcmd"),
       library: root.appendingPathComponent("OtherLibrary"), onImported: {})
     do {
-      try await waitUntil { manager.download(for: item.id)?.progress == 0.25 }
+      try await waitUntil { manager.download(for: item.id)?.worker.status == "Downloading Workshop files…" }
+      XCTAssertNil(manager.download(for: item.id)?.progress)
       manager.forgetSavedAccount()
       XCTAssertNotNil(manager.errorMessage)
       XCTAssertEqual(manager.savedAccount, "localtest")
@@ -1401,6 +1470,391 @@ final class DownloaderTests: XCTestCase {
     }
   }
 
+  func testNetworkReceiveMeterUsesOnlyFreshPIDScopedDeltaBytes() {
+    var meter = NetworkReceiveMeter(processID: 42)
+    func row(_ bytes: Int64) -> Data { Data(",bytes_in,\nsteamcmd.42,\(bytes),\n".utf8) }
+    meter.append(row(9_000_000), at: 0)
+    XCTAssertNil(meter.rate(at: 0))
+    meter.append(Data(",bytes_in,\nsteamcmd.42,60".utf8), at: 1)
+    XCTAssertNil(meter.rate(at: 1))
+    meter.append(Data("0000,\n".utf8), at: 1)
+    XCTAssertEqual(meter.rate(at: 1), 600_000)
+    meter.append(row(300_000), at: 2)
+    XCTAssertEqual(meter.rate(at: 2), 450_000)
+    meter.append(Data(",bytes_in,\nsteamcmd.142,999999999,\nsteamcmd.42,-1,\nsteamcmd.42,NaN,\n".utf8), at: 2.5)
+    XCTAssertEqual(meter.rate(at: 2.5), 450_000)
+    meter.append(row(0), at: 3)
+    XCTAssertEqual(meter.rate(at: 3), 300_000)
+    meter.append(row(0), at: 4)
+    meter.append(row(0), at: 5)
+    XCTAssertEqual(meter.rate(at: 5), 0)
+    XCTAssertNil(meter.rate(at: 8.1))
+    meter.append(row(50_000_000), at: 20)
+    XCTAssertNil(meter.rate(at: 20))
+    meter.append(row(150_000), at: 21.5)
+    XCTAssertEqual(meter.rate(at: 21.5), 100_000)
+    meter.append(row(900_000_000), at: 21.6)
+    XCTAssertNil(meter.rate(at: 21.6))
+    XCTAssertNil(meter.rate(at: .nan))
+  }
+
+  func testNetworkReceiveMeterAcceptsTerminalCRLFAndSplitLineEndings() {
+    var meter = NetworkReceiveMeter(processID: 42)
+    meter.append(Data(",bytes_in,\r\nMacWallpaperEng.42,1,\r\n".utf8), at: 0)
+    XCTAssertNil(meter.rate(at: 0))
+    meter.append(Data(",bytes_in,\r\nMacWallpaperEng.42,1000,\r\n".utf8), at: 1)
+    XCTAssertEqual(meter.rate(at: 1), 1000)
+    meter.append(Data(",bytes_in,\r".utf8), at: 2)
+    meter.append(Data("\nMacWallpaperEng.42,2000,\r".utf8), at: 2)
+    meter.append(Data("\n".utf8), at: 2)
+    XCTAssertEqual(meter.rate(at: 2), 1500)
+    meter.append(Data("MacWallpaperEng.42,0,\r\n".utf8), at: 3)
+    XCTAssertEqual(meter.rate(at: 3), 1000)
+  }
+
+  func testNetworkReceiveMeterHonoursHeaderColumnOrder() {
+    var meter = NetworkReceiveMeter(processID: 42)
+    meter.append(Data(",bytes_out,bytes_in,\nsteamcmd.42,111,600000,\n".utf8), at: 0)
+    XCTAssertNil(meter.rate(at: 0))
+    meter.append(Data("steamcmd.42,222,300000,\n".utf8), at: 1)
+    XCTAssertEqual(meter.rate(at: 1), 300_000)
+  }
+
+  func testNetworkReceiveMeterRejectsUnscopedMalformedAndOverflowingRows() {
+    var meter = NetworkReceiveMeter(processID: 42)
+    meter.append(Data("steamcmd.42,600000,\nother.42,700000,\n".utf8), at: 0)
+    XCTAssertNil(meter.rate(at: 1))
+    meter.append(Data(",bytes_in,\nsteamcmd.42,99999999999999999999,\n".utf8), at: 0)
+    XCTAssertNil(meter.rate(at: 0.4))
+    meter.append(Data("steamcmd.42,600000,\n".utf8), at: 1)
+    XCTAssertNil(meter.rate(at: 1))
+    meter.append(Data("steamcmd.42,300000,\n".utf8), at: 2)
+    XCTAssertEqual(meter.rate(at: 2), 300_000)
+  }
+
+  func testNetworkReceiveMeterDropsOversizedPartialInput() {
+    var meter = NetworkReceiveMeter(processID: 42)
+    meter.append(Data(",bytes_in,\nsteamcmd.42,600000,\n".utf8), at: 0)
+    meter.append(Data("steamcmd.42,300000,\n".utf8), at: 1)
+    XCTAssertEqual(meter.rate(at: 1), 300_000)
+    meter.append(Data(repeating: 0x61, count: 70_000), at: 2)
+    XCTAssertNil(meter.rate(at: 2))
+    meter.append(Data("steamcmd.42,300000,\n".utf8), at: 3)
+    XCTAssertNil(meter.rate(at: 3))
+    meter.append(Data(",bytes_in,\nsteamcmd.42,600000,\n".utf8), at: 4)
+    XCTAssertNil(meter.rate(at: 4))
+    meter.append(Data("steamcmd.42,300000,\n".utf8), at: 5)
+    XCTAssertEqual(meter.rate(at: 5), 300_000)
+  }
+
+  func testNetworkReceiveMeterResetsOnBatchedSameTimestampSamples() {
+    var meter = NetworkReceiveMeter(processID: 42)
+    meter.append(Data(",bytes_in,\nsteamcmd.42,1000,\nsteamcmd.42,900000000,\n".utf8), at: 1)
+    XCTAssertNil(meter.rate(at: 1))
+    meter.append(Data("steamcmd.42,300000,\n".utf8), at: 2)
+    XCTAssertEqual(meter.rate(at: 2), 300_000)
+  }
+
+  func testNetworkRateIsIndependentOfWorkshopSizeAndClearsOnCancellation() async throws {
+    let root = try makeRuntime("""
+      printf 'password: '
+      IFS= read -r password
+      printf '\\nWaiting for user info...OK\\nDownloading item 123456 ... (75%%)\\n'
+      IFS= read -r finish
+      """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let monitor = FixtureNetworkMonitor()
+    monitor.value = 600_000
+    let downloader = startDownload(in: root, networkMonitor: monitor)
+    do {
+      try await waitUntil { downloader.prompt == .password }
+      XCTAssertNil(downloader.bytesPerSecond)
+      XCTAssertTrue(monitor.startedPIDs.isEmpty)
+      downloader.submitSecret("fixture")
+      try await waitUntil { downloader.bytesPerSecond == 600_000 }
+      XCTAssertNil(downloader.progress)
+      XCTAssertNil(downloader.bytesReceived)
+      XCTAssertNil(downloader.bytesExpected)
+      XCTAssertEqual(monitor.startedPIDs.count, 1)
+      monitor.value = 0
+      try await waitUntil { downloader.bytesPerSecond == 0 }
+      monitor.value = nil
+      try await waitUntil { downloader.bytesPerSecond == nil }
+      monitor.value = 600_000
+      try await waitUntil { downloader.bytesPerSecond == 600_000 }
+      downloader.cancel()
+      XCTAssertNil(downloader.bytesPerSecond)
+      await downloader.shutdown()
+      XCTAssertNil(downloader.progress)
+      XCTAssertNil(downloader.bytesPerSecond)
+      XCTAssertEqual(monitor.stopCount, 1)
+    } catch { await downloader.shutdown(); throw error }
+  }
+
+  func testCompletedDownloadClearsTransferTelemetry() async throws {
+    let root = try makeRuntime("""
+      printf 'password: '
+      IFS= read -r password
+      printf '\\nWaiting for user info...OK\\nDownloading item 123456 ...\\n'
+      while [ ! -f ../release-content ]; do sleep 0.02; done
+      mkdir -p steamapps/workshop/content/431960/123456
+      printf '{"type":"video","file":"movie.mp4"}' > steamapps/workshop/content/431960/123456/project.json
+      printf 'real-content' > steamapps/workshop/content/431960/123456/movie.mp4
+      printf 'Success. Downloaded item 123456\\n'
+      """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let monitor = FixtureNetworkMonitor()
+    monitor.value = 450_000
+    let downloader = WorkshopDownloader(
+      sessionDirectory: root.appendingPathComponent("SteamSession"),
+      runtimeProvider: ShellRuntimeProvider(),
+      networkMonitor: monitor)
+    downloader.start(
+      item: item, username: "localtest",
+      executable: root.appendingPathComponent("runtime/steamcmd"),
+      library: root.appendingPathComponent("Library"), rememberSession: false
+    ) {
+      XCTAssertNil(downloader.bytesPerSecond)
+      XCTAssertNil(downloader.bytesReceived)
+      XCTAssertNil(downloader.bytesExpected)
+      XCTAssertNil(downloader.progress)
+    }
+    do {
+      try await waitUntil { downloader.prompt == .password }
+      downloader.submitSecret("fixture")
+      try await waitUntil { downloader.bytesPerSecond == 450_000 }
+      try Data().write(to: root.appendingPathComponent("release-content"))
+      try await waitUntil { !downloader.isRunning }
+      XCTAssertNil(downloader.errorMessage)
+      XCTAssertEqual(downloader.downloadedID, item.id)
+      XCTAssertNil(downloader.progress)
+      XCTAssertNil(downloader.bytesReceived)
+      XCTAssertNil(downloader.bytesExpected)
+      XCTAssertNil(downloader.bytesPerSecond)
+      XCTAssertEqual(monitor.stopCount, 1)
+      XCTAssertEqual(
+        try String(
+          contentsOf: root.appendingPathComponent("Library/123456/movie.mp4"), encoding: .utf8),
+        "real-content")
+    } catch { await downloader.shutdown(); throw error }
+  }
+
+  func testFailedDownloadClearsTransferTelemetryAndStopsMonitor() async throws {
+    let root = try makeRuntime("""
+      printf 'password: '
+      IFS= read -r password
+      printf '\\nWaiting for user info...OK\\nDownloading item 123456 ...\\n'
+      while [ ! -f ../release-failure ]; do sleep 0.02; done
+      printf 'ERROR! Download item 123456 failed (Access Denied).\\n'
+      exit 1
+      """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let monitor = FixtureNetworkMonitor()
+    monitor.value = 300_000
+    let downloader = startDownload(in: root, networkMonitor: monitor)
+    do {
+      try await waitUntil { downloader.prompt == .password }
+      downloader.submitSecret("fixture")
+      try await waitUntil { downloader.bytesPerSecond == 300_000 }
+      try Data().write(to: root.appendingPathComponent("release-failure"))
+      try await waitUntil { !downloader.isRunning }
+      XCTAssertNotNil(downloader.errorMessage)
+      XCTAssertNil(downloader.downloadedID)
+      XCTAssertNil(downloader.progress)
+      XCTAssertNil(downloader.bytesReceived)
+      XCTAssertNil(downloader.bytesExpected)
+      XCTAssertNil(downloader.bytesPerSecond)
+      XCTAssertEqual(monitor.startedPIDs.count, 1)
+      XCTAssertEqual(monitor.stopCount, 1)
+    } catch { await downloader.shutdown(); throw error }
+  }
+
+  func testMonitorFailureDoesNotDisturbTransfer() async throws {
+    let root = try makeRuntime("""
+      printf 'password: '
+      IFS= read -r password
+      printf '\\nWaiting for user info...OK\\nDownloading item 123456 ...\\n'
+      while [ ! -f ../release-download ]; do sleep 0.02; done
+      mkdir -p steamapps/workshop/content/431960/123456
+      printf '{"type":"video","file":"movie.mp4"}' > steamapps/workshop/content/431960/123456/project.json
+      printf 'monitor-isolated-content' > steamapps/workshop/content/431960/123456/movie.mp4
+      printf 'Success. Downloaded item 123456\\n'
+      """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let runner = FailingNetworkRunner()
+    let downloader = WorkshopDownloader(
+      sessionDirectory: root.appendingPathComponent("SteamSession"),
+      runtimeProvider: ShellRuntimeProvider(),
+      networkMonitor: ProcessNetworkMonitor(runner: runner))
+    downloader.start(
+      item: item, username: "localtest",
+      executable: root.appendingPathComponent("runtime/steamcmd"),
+      library: root.appendingPathComponent("Library"), rememberSession: false, onImported: {})
+    do {
+      try await waitUntil { downloader.prompt == .password }
+      downloader.submitSecret("fixture")
+      try await waitUntil { runner.invocation != nil }
+      let invocation = try XCTUnwrap(runner.invocation)
+      XCTAssertEqual(invocation.0.path, "/usr/bin/nettop")
+      let arguments = invocation.1
+      XCTAssertEqual(arguments.count, 12)
+      let pid = try XCTUnwrap(arguments.count > 4 ? Int32(arguments[4]) : nil)
+      XCTAssertGreaterThan(pid, 0)
+      XCTAssertEqual(arguments, ["-P", "-L", "0", "-p", String(pid), "-n", "-x", "-d", "-s", "1", "-J", "bytes_in"])
+      XCTAssertTrue(downloader.isRunning)
+      XCTAssertNil(downloader.errorMessage)
+      XCTAssertNil(downloader.bytesPerSecond)
+      try Data().write(to: root.appendingPathComponent("release-download"))
+      try await waitUntil { !downloader.isRunning }
+      XCTAssertNil(downloader.errorMessage)
+      XCTAssertEqual(downloader.downloadedID, item.id)
+      XCTAssertNil(downloader.bytesPerSecond)
+      XCTAssertEqual(
+        try String(
+          contentsOf: root.appendingPathComponent("Library/123456/movie.mp4"), encoding: .utf8),
+        "monitor-isolated-content")
+    } catch { await downloader.shutdown(); throw error }
+  }
+
+  func testRestartRestartsMonitorWithFreshProcessAndNoStaleRate() async throws {
+    let root = try makeRuntime("""
+      printf 'password: '
+      IFS= read -r password
+      printf '\\nWaiting for user info...OK\\nDownloading item 123456 ...\\n'
+      if [ -f ../second-pass ]; then
+          touch ../second-launch
+          IFS= read -r finish
+      else
+          touch ../first-launch
+          while [ ! -f ../release-first ]; do sleep 0.02; done
+          exit 42
+      fi
+      """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let monitor = FixtureNetworkMonitor()
+    monitor.value = 500_000
+    let downloader = startDownload(in: root, networkMonitor: monitor)
+    do {
+      try await waitUntil { downloader.prompt == .password }
+      downloader.submitSecret("fixture")
+      try await waitUntil { monitor.startedPIDs.count == 1 }
+      try await waitUntil { downloader.bytesPerSecond == 500_000 }
+      monitor.value = nil
+      try Data().write(to: root.appendingPathComponent("second-pass"))
+      try Data().write(to: root.appendingPathComponent("release-first"))
+      try await waitUntil { downloader.prompt == .password }
+      downloader.submitSecret("fixture")
+      try await waitUntil { monitor.startedPIDs.count == 2 }
+      XCTAssertEqual(monitor.stopCount, 1)
+      XCTAssertNotEqual(monitor.startedPIDs[0], monitor.startedPIDs[1])
+      XCTAssertNil(downloader.bytesPerSecond)
+      monitor.value = 700_000
+      try await waitUntil { downloader.bytesPerSecond == 700_000 }
+      await downloader.shutdown()
+      XCTAssertTrue(downloader.wasCancelled)
+      XCTAssertEqual(monitor.stopCount, 2)
+    } catch { await downloader.shutdown(); throw error }
+  }
+
+  func testAppUpdatePhaseProgressTracksExplicitByteCountersOnly() async throws {
+    let root = try makeRuntime("""
+      mkdir -p wallpaper-engine/assets/shaders
+      printf 'partial' > wallpaper-engine/assets/shaders/genericimage2.vert
+      printf 'Update state (0x61) downloading, progress: 25.00 (250 / 1000)\\n'
+      touch ../phase-one
+      while [ ! -f ../next-phase ]; do sleep 0.02; done
+      printf 'Update state (0x36) verifying, progress: 50.00 (500 / 1000)\\n'
+      touch ../phase-two
+      while [ ! -f ../final-phase ]; do sleep 0.02; done
+      printf 'Update state (0x61) downloading, progress: 0.00 (0 / 0)\\n'
+      touch ../phase-three
+      IFS= read -r finish
+      """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let monitor = FixtureNetworkMonitor()
+    monitor.value = 400_000
+    let downloader = WorkshopDownloader(
+      sessionDirectory: root.appendingPathComponent("SteamSession"),
+      runtimeProvider: ShellRuntimeProvider(),
+      networkMonitor: monitor)
+    downloader.installAssets(
+      username: "localtest", executable: root.appendingPathComponent("runtime/steamcmd"),
+      destination: root.appendingPathComponent("SceneAssets")
+    ) { XCTFail("The incomplete install must not publish assets") }
+    do {
+      try await waitUntil { FileManager.default.fileExists(atPath: root.appendingPathComponent("phase-one").path) }
+      try await waitUntil { downloader.progress == 0.25 }
+      try await waitUntil { downloader.bytesPerSecond == 400_000 }
+      XCTAssertEqual(downloader.bytesReceived, 250)
+      XCTAssertEqual(downloader.bytesExpected, 1000)
+      try Data().write(to: root.appendingPathComponent("next-phase"))
+      try await waitUntil { FileManager.default.fileExists(atPath: root.appendingPathComponent("phase-two").path) }
+      try await waitUntil { downloader.progress == 0.5 }
+      XCTAssertNil(downloader.bytesReceived)
+      XCTAssertNil(downloader.bytesExpected)
+      try await waitUntil { downloader.bytesPerSecond == nil }
+      try Data().write(to: root.appendingPathComponent("final-phase"))
+      try await waitUntil { FileManager.default.fileExists(atPath: root.appendingPathComponent("phase-three").path) }
+      try await waitUntil { downloader.progress == nil }
+      XCTAssertNil(downloader.bytesReceived)
+      XCTAssertNil(downloader.bytesExpected)
+      await downloader.shutdown()
+    } catch { await downloader.shutdown(); throw error }
+  }
+
+  func testNetworkMonitorStreamsSamplesBeforeProcessExits() async throws {
+    let listener = socket(AF_INET, SOCK_STREAM, 0)
+    XCTAssertGreaterThanOrEqual(listener, 0)
+    guard listener >= 0 else { return }
+    defer { close(listener) }
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+    let bound = withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        Darwin.bind(listener, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+      }
+    }
+    XCTAssertEqual(bound, 0)
+    guard bound == 0 else { return }
+    XCTAssertEqual(listen(listener, 1), 0)
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let located = withUnsafeMutablePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &length) }
+    }
+    XCTAssertEqual(located, 0)
+    guard located == 0 else { return }
+    let client = socket(AF_INET, SOCK_STREAM, 0)
+    XCTAssertGreaterThanOrEqual(client, 0)
+    guard client >= 0 else { return }
+    defer { close(client) }
+    let connected = withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, length) }
+    }
+    XCTAssertEqual(connected, 0)
+    guard connected == 0 else { return }
+    let peer = accept(listener, nil, nil)
+    XCTAssertGreaterThanOrEqual(peer, 0)
+    guard peer >= 0 else { return }
+    defer { close(peer) }
+    var byte: UInt8 = 1
+    XCTAssertEqual(send(client, &byte, 1, 0), 1)
+    XCTAssertEqual(recv(peer, &byte, 1, 0), 1)
+    let monitor = ProcessNetworkMonitor()
+    monitor.start(processID: getpid())
+    do {
+      let deadline = ProcessInfo.processInfo.systemUptime + 8
+      while monitor.rate(at: ProcessInfo.processInfo.systemUptime) == nil,
+            ProcessInfo.processInfo.systemUptime < deadline {
+        try await Task.sleep(for: .milliseconds(100))
+      }
+      XCTAssertNotNil(monitor.rate(at: ProcessInfo.processInfo.systemUptime), "nettop output must stream before its process exits")
+      await monitor.stop()
+      XCTAssertNil(monitor.rate(at: ProcessInfo.processInfo.systemUptime))
+    } catch { await monitor.stop(); throw error }
+  }
+
   private func makeRuntime(_ script: String) throws -> URL {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
       "mwe-terminal-tests-\(UUID().uuidString)")
@@ -1414,12 +1868,14 @@ final class DownloaderTests: XCTestCase {
 
   private func startDownload(
     in root: URL, username: String = "localtest", itemID: String = "123456",
-    libraryName: String = "Library", rememberSession: Bool = true
+    libraryName: String = "Library", rememberSession: Bool = true, item: WorkshopItem? = nil,
+    networkMonitor: (any ProcessNetworkMonitoring)? = nil
   ) -> WorkshopDownloader {
     let downloader = WorkshopDownloader(
       sessionDirectory: root.appendingPathComponent("SteamSession"),
-      runtimeProvider: ShellRuntimeProvider())
-    let requestedItem = WorkshopItem(
+      runtimeProvider: ShellRuntimeProvider(),
+      networkMonitor: networkMonitor ?? FixtureNetworkMonitor())
+    let requestedItem = item ?? WorkshopItem(
       id: itemID, title: "Session fixture", creator: "Test", summary: "", previewURL: nil,
       tags: ["Video"], size: 0, subscriptions: 0)
     downloader.start(
@@ -1487,5 +1943,50 @@ private struct FixtureSystemAssessment: SteamCMDProcessRunning {
     }
     try Task.checkCancellation()
     return 0
+  }
+}
+
+@MainActor
+private final class FixtureNetworkMonitor: ProcessNetworkMonitoring {
+  var value: Double?
+  var startedPIDs: [Int32] = []
+  private(set) var stopCount = 0
+  private var running = false
+
+  func start(processID: Int32) {
+    startedPIDs.append(processID)
+    running = true
+  }
+
+  func rate(at time: TimeInterval) -> Double? { value }
+
+  func stop() async {
+    if running { stopCount += 1 }
+    running = false
+  }
+}
+
+private final class FailingNetworkRunner: SteamCMDProcessRunning, @unchecked Sendable {
+  private let lock = NSLock()
+  private var captured: (URL, [String])?
+
+  var invocation: (URL, [String])? {
+    lock.lock()
+    defer { lock.unlock() }
+    return captured
+  }
+
+  private func record(_ executable: URL, _ arguments: [String]) {
+    lock.lock()
+    defer { lock.unlock() }
+    captured = (executable, arguments)
+  }
+
+  func run(
+    executable: URL, arguments: [String], workingDirectory: URL, environment: [String: String],
+    onOutput: @escaping @Sendable (Data) -> Void
+  ) async throws -> Int32 {
+    record(executable, arguments)
+    throw WorkshopFailure(message: "fixture monitor failure")
   }
 }

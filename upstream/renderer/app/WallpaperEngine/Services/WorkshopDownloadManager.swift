@@ -22,6 +22,9 @@ final class WorkshopDownload: Identifiable {
     return worker.status
   }
   var progress: Double? { isQueued ? nil : worker.progress }
+  var bytesReceived: Int64? { isQueued ? nil : worker.bytesReceived }
+  var bytesExpected: Int64? { isQueued ? nil : worker.bytesExpected }
+  var bytesPerSecond: Double? { isQueued ? nil : worker.bytesPerSecond }
 
   fileprivate init(
     item: WorkshopItem?, account: String, rememberSession: Bool, sessionDirectory: URL,

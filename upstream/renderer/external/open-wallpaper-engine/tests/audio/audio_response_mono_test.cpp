@@ -15,6 +15,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <unistd.h>
 
 namespace
 {
@@ -449,6 +450,73 @@ TEST(AudioResponseMonoTest, WorkerClearsStaleFullFifoBeforeAnalysis) {
     EXPECT_EQ(AudioResponseRetainedFrameCountForTesting(), 0u);
     EXPECT_EQ(snapshot.last_submit_sample_rate, kSubmitSampleRate);
     EXPECT_EQ(snapshot.accepted_frame_count, stale_samples.size());
+}
+
+void ResetWaitingWorkerInChild(bool wait_for_stale) {
+    // A lost stop wake must fail this child, not leave a joinable thread in the suite.
+    alarm(2);
+    ResetAudioResponseServiceForTesting();
+    std::array<float, 1024> tone {};
+    for (size_t index = 0; index < tone.size(); ++index) {
+        tone[index] = 0.25f * std::sin(static_cast<float>(index) * 0.08f);
+    }
+    const uint32_t frames = wait_for_stale ? tone.size() : 200u;
+    if (!SubmitMonoAudioFrames(kSubmitSampleRate, frames, tone.data(), nullptr)) {
+        std::_Exit(1);
+    }
+    if (wait_for_stale) {
+        const auto live = WaitForGeneration();
+        if (!HasNonZeroAverage64Bin(live)) {
+            std::_Exit(2);
+        }
+        const auto stale = WaitForSilentGeneration(live.generation);
+        if (stale.generation <= live.generation || HasNonZeroAverage64Bin(stale)) {
+            std::_Exit(3);
+        }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    ResetAudioResponseServiceForTesting();
+    if (!SubmitMonoAudioFrames(kSubmitSampleRate, tone.size(), tone.data(), nullptr)) {
+        std::_Exit(4);
+    }
+    const auto resumed = WaitForGeneration();
+    if (!HasNonZeroAverage64Bin(resumed) || resumed.accepted_frame_count != tone.size()) {
+        std::_Exit(5);
+    }
+    ResetAudioResponseServiceForTesting();
+    std::_Exit(0);
+}
+
+TEST(AudioResponseMonoTest, ResetInterruptsPartialInputWaitAndAcceptsFreshTone) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ASSERT_EXIT(ResetWaitingWorkerInChild(false), ::testing::ExitedWithCode(0), "");
+}
+
+TEST(AudioResponseMonoTest, ResetInterruptsExpiredInputWaitAndAcceptsFreshTone) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ASSERT_EXIT(ResetWaitingWorkerInChild(true), ::testing::ExitedWithCode(0), "");
+}
+
+TEST(AudioResponseMonoTest, PartialSubmissionsExtendExpiryUntilACompleteBlockArrives) {
+    ResetAudioResponseServiceForTesting();
+    std::array<float, 1024> tone {};
+    for (size_t index = 0; index < tone.size(); ++index) {
+        tone[index] = 0.25f * std::sin(static_cast<float>(index) * 0.08f);
+    }
+    ASSERT_TRUE(SubmitMonoAudioFrames(kSubmitSampleRate, 400, tone.data(), nullptr));
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    ASSERT_TRUE(SubmitMonoAudioFrames(kSubmitSampleRate, 400, tone.data() + 400, nullptr));
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    ASSERT_TRUE(SubmitMonoAudioFrames(kSubmitSampleRate, 224, tone.data() + 800, nullptr));
+    const auto combined = WaitForGeneration();
+    ASSERT_GT(combined.generation, 0u);
+    ASSERT_TRUE(HasNonZeroAverage64Bin(combined));
+
+    ResetAudioResponseServiceForTesting();
+    ASSERT_TRUE(SubmitMonoAudioFrames(kSubmitSampleRate, tone.size(), tone.data(), nullptr));
+    const auto fresh = WaitForGeneration();
+    ASSERT_GT(fresh.generation, 0u);
+    EXPECT_LT(MaxAbsDifference(combined.average64, fresh.average64), 0.00001f);
 }
 
 TEST(AudioResponseMonoTest, SixtyFourBinFrameInputsPopulateAllSpectrumResolutions) {

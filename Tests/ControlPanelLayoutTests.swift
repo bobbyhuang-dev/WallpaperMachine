@@ -286,6 +286,233 @@ final class ControlPanelLayoutTests: XCTestCase {
     await workshop.steamCMDSetup.shutdown()
   }
 
+  func testHiddenPanelCoalescesChangesAndStillRepliesToCommands() async throws {
+    try await withPanel { panel in
+      for index in 0..<4 {
+        panel.store.librarySnapshot.wallpapers = [
+          BridgeWallpaperEntry(
+            id: "latest", title: "Revision \(index)", kind: .video, supported: true,
+            active: false, selected: false, previewPath: nil)
+        ]
+        panel.workshop.searchText = "Query \(index)"
+        try await Task.sleep(for: .milliseconds(20))
+      }
+      let reply = try await panel.js("""
+        const state = await window.webkit.messageHandlers.native.postMessage({action:'navigate',page:'settings'});
+        return {title:state.wallpapers[0].title, text:state.workshop.text, page:state.page,
+                pushes:window.powerProbe.received.length};
+        """) as? [String: Any]
+      XCTAssertEqual(reply?["title"] as? String, "Revision 3")
+      XCTAssertEqual(reply?["text"] as? String, "Query 3")
+      XCTAssertEqual(reply?["page"] as? String, "settings")
+      XCTAssertEqual(reply?["pushes"] as? Int, 0)
+      panel.show()
+      try await panel.waitJS("powerProbe.received.length === 1")
+      try await panel.quiet()
+      let delivered = try await panel.js("""
+        return {count:powerProbe.received.length, title:powerProbe.received.at(-1).wallpapers[0].title,
+                text:powerProbe.received.at(-1).workshop.text};
+        """) as? [String: Any]
+      XCTAssertEqual(delivered?["count"] as? Int, 1)
+      XCTAssertEqual(delivered?["title"] as? String, "Revision 3")
+      XCTAssertEqual(delivered?["text"] as? String, "Query 3")
+    }
+  }
+
+  func testHiddenPanelContinuesSetupAndObservesNestedDownloadChanges() async throws {
+    try await withPanel { panel in
+      _ = try await panel.js("powerProbe.hold = true")
+      panel.show()
+      try await panel.waitJS("powerProbe.pending.length === 1")
+      panel.hide()
+      let item = WorkshopItem(
+        id: "222", title: "Local video", creator: "Fixture", summary: "",
+        previewURL: nil, tags: ["Video"], size: 0, subscriptions: 0)
+      panel.workshop.username = "localtest"
+      panel.workshop.requestDownload(item: item, rememberSession: false, bridge: panel.store)
+      XCTAssertEqual(panel.workshop.downloadRequests.map(\.id), ["222"])
+      panel.workshop.steamCMDSetup.selectExisting(at: panel.executable)
+      try await panel.waitUntil { panel.workshop.downloader.download(for: "222")?.progress == 0.25 }
+      XCTAssertTrue(panel.workshop.downloadRequests.isEmpty)
+      try await panel.expectJS("return powerProbe.received.length", equals: 1)
+      _ = try await panel.js("powerProbe.hold = false; powerProbe.pending.shift()()")
+      panel.show()
+      try await panel.waitJS("powerProbe.received.at(-1)?.downloads[0]?.progress === 0.25")
+      try Data().write(to: panel.root.appendingPathComponent("advance"))
+      try await panel.waitJS("powerProbe.received.at(-1)?.downloads[0]?.progress === 0.75")
+      panel.hide()
+      try await panel.quiet()
+      let count = try await panel.js("return powerProbe.received.length") as? Int ?? -1
+      let job = try XCTUnwrap(panel.workshop.downloader.download(for: "222"))
+      panel.workshop.downloader.cancel(job)
+      try await panel.waitUntil { !job.isPending }
+      try await panel.quiet()
+      try await panel.expectJS("return powerProbe.received.length", equals: count)
+      panel.show()
+      try await panel.waitJS("powerProbe.received.at(-1)?.downloads[0]?.cancelled === true")
+    }
+  }
+
+  func testPanelPushWaitsForReceiveAndKeepsOnlyLatestPendingState() async throws {
+    try await withPanel { panel in
+      _ = try await panel.js("powerProbe.hold = true")
+      panel.show()
+      try await panel.waitJS("powerProbe.pending.length === 1")
+      for index in 0..<4 {
+        panel.workshop.searchText = "Pending \(index)"
+        try await Task.sleep(for: .milliseconds(20))
+      }
+      let busy = try await panel.js("return [powerProbe.received.length, powerProbe.maxActive]") as? [Int]
+      XCTAssertEqual(busy, [1, 1])
+      _ = try await panel.js("powerProbe.pending.shift()()")
+      try await panel.waitJS("powerProbe.received.length === 2")
+      try await panel.expectJS("return powerProbe.received.at(-1).workshop.text", equals: "Pending 3")
+      try await panel.expectJS("return powerProbe.maxActive", equals: 1)
+      panel.controller.stop()
+      panel.workshop.searchText = "Must not be pushed"
+      _ = try await panel.js("powerProbe.pending.shift()()")
+      panel.controller.scheduleUpdate()
+      try await panel.quiet()
+      try await panel.expectJS("return powerProbe.received.length", equals: 2)
+    }
+  }
+
+  func testOldPageCompletionCannotReleaseNewPagesInFlightPush() async throws {
+    try await withPanel { panel in
+      _ = try await panel.js("powerProbe.hold = true")
+      panel.show()
+      try await panel.waitJS("powerProbe.pending.length === 1")
+      let oldPage = panel.web
+      panel.hide()
+      // Keep the old page's pending Promise alive while simulating the replacement page.
+      panel.web = panel.controller.makeWebView()
+      panel.controller.webViewWebContentProcessDidTerminate(panel.web)
+      try await panel.waitUntil { panel.controller.isReady }
+      try await panel.installRecorder()
+      _ = try await panel.js("powerProbe.hold = true")
+      panel.show()
+      try await panel.waitJS("powerProbe.pending.length === 1")
+      _ = try await oldPage.callAsyncJavaScript(
+        "powerProbe.pending.shift()()", arguments: [:], in: nil, contentWorld: .page)
+      panel.workshop.searchText = "New page latest"
+      try await panel.quiet()
+      try await panel.expectJS("return powerProbe.received.length", equals: 1)
+      _ = try await panel.js("powerProbe.pending.shift()()")
+      try await panel.waitJS("powerProbe.received.length === 2")
+      try await panel.expectJS(
+        "return powerProbe.received.at(-1).workshop.text", equals: "New page latest")
+      _ = try await panel.js("powerProbe.pending.shift()()")
+      XCTAssertNil(oldPage.window)
+    }
+  }
+
+  func testFailedPagePushWaitsForAnExternalChangeBeforeRetrying() async throws {
+    try await withPanel { panel in
+      _ = try await panel.js("""
+        const receive = wallpaperUI.receive;
+        window.failedPushes = 0;
+        wallpaperUI.receive = state => { failedPushes++; throw new Error('injected'); };
+        window.restoreReceive = () => { wallpaperUI.receive = receive; };
+        """)
+      panel.show()
+      try await panel.waitJS("failedPushes === 1")
+      try await panel.quiet()
+      try await panel.expectJS("return failedPushes", equals: 1)
+      _ = try await panel.js("restoreReceive()")
+      panel.workshop.searchText = "Retry latest"
+      try await panel.waitJS("powerProbe.received.at(-1)?.workshop.text === 'Retry latest'")
+    }
+  }
+
+  func testSupplementalOptionsAreOnlyFetchedForVisibleSettings() async throws {
+    try await withPanel { panel in
+      panel.configureDisplays()
+      panel.show()
+      try await panel.waitJS("powerProbe.received.length > 0")
+      XCTAssertTrue(panel.bridge.optionRequests.isEmpty)
+      panel.navigation.selection = .settings
+      try await panel.waitJS("powerProbe.received.at(-1)?.displays[1]?.fps === 48")
+      XCTAssertEqual(panel.bridge.optionRequests, ["second"])
+      let values = try await panel.js("""
+        return ['primary','secondary'].map(id => [
+          Number(document.querySelector(`[data-display="${id}"][data-display-setting="fps"]`).value),
+          Number(document.querySelector(`[data-display="${id}"][data-display-setting="volume"]`).value)
+        ]);
+        """) as? [[Double]]
+      XCTAssertEqual(values, [[24, 0.2], [48, 0.7]])
+    }
+  }
+
+  func testOptionsFailureFallsBackWithoutLoopingAndRetriesOnReentry() async throws {
+    try await withPanel { panel in
+      panel.configureDisplays()
+      panel.bridge.failedOptionIDs = ["second"]
+      panel.navigation.selection = .settings
+      panel.show()
+      try await panel.waitUntil { panel.bridge.optionRequests.count == 1 }
+      try await panel.quiet()
+      XCTAssertEqual(panel.bridge.optionRequests, ["second"])
+      try await panel.expectJS("return powerProbe.received.at(-1).displays[1].fps", equals: 30)
+      panel.navigation.selection = .wallpaper
+      try await panel.waitJS("powerProbe.received.at(-1)?.page === 'installed'")
+      panel.bridge.failedOptionIDs = []
+      panel.navigation.selection = .settings
+      try await panel.waitJS("powerProbe.received.at(-1)?.displays[1]?.fps === 48")
+      XCTAssertEqual(panel.bridge.optionRequests, ["second", "second"])
+    }
+  }
+
+  func testCancelledOptionsCannotOverwriteNewRevisionOrRemovedDisplay() async throws {
+    try await withPanel { panel in
+      panel.configureDisplays()
+      let oldOptions = try XCTUnwrap(panel.bridge.options["second"])
+      panel.bridge.holdOptions = true
+      panel.navigation.selection = .settings
+      panel.show()
+      try await panel.waitUntil { panel.bridge.pendingOptions.count == 1 }
+      panel.hide()
+      panel.navigation.selection = .wallpaper
+      try await panel.quiet()
+      panel.navigation.selection = .settings
+      panel.show()
+      try await panel.waitUntil { panel.bridge.pendingOptions.count == 2 }
+      panel.bridge.finishOption(oldOptions)
+      try await panel.quiet()
+      XCTAssertEqual(panel.bridge.optionRequests, ["second", "second"])
+      try await panel.expectJS("return powerProbe.received.at(-1).displays[1].fps", equals: 30)
+
+      panel.store.monitorInformationSnapshot.rows[1].wallpaperId = "replacement"
+      panel.store.snapshotRevision &+= 1
+      try await panel.waitUntil { panel.bridge.optionRequests.last == "replacement" }
+      panel.bridge.finishOption(oldOptions)
+      try await panel.quiet()
+      try await panel.expectJS(
+        "return powerProbe.received.at(-1).displays[1].wallpaperID", equals: "replacement")
+      try await panel.expectJS("return powerProbe.received.at(-1).displays[1].fps", equals: 30)
+      panel.store.monitorInformationSnapshot.rows.removeLast()
+      panel.store.settingsSnapshot.displays.removeLast()
+      panel.store.snapshotRevision &+= 1
+      try await panel.waitJS("powerProbe.received.at(-1)?.displays.length === 1")
+      panel.bridge.finishOption(oldOptions)
+      try await panel.quiet()
+      try await panel.expectJS("return powerProbe.received.at(-1).displays.length", equals: 1)
+      XCTAssertEqual(panel.bridge.optionRequests, ["second", "second", "replacement"])
+    }
+  }
+
+  private func withPanel(_ body: (PanelFixture) async throws -> Void) async throws {
+    let fixture = makeStore()
+    let panel = try PanelFixture(store: fixture.store, bridge: fixture.bridge)
+    do {
+      try await panel.start()
+      try await body(panel)
+    } catch {
+      await panel.shutdown()
+      throw error
+    }
+    await panel.shutdown()
+  }
+
   private func makeStore() -> (store: BridgeStore, bridge: LayoutSnapshotBridge) {
     let bridge = LayoutSnapshotBridge(noPointer: .init())
     let store = BridgeStore(bridge: bridge)
@@ -304,6 +531,28 @@ final class ControlPanelLayoutTests: XCTestCase {
 
 private final class LayoutSnapshotBridge: WallpaperBridge {
   var snapshot: BridgeSnapshotBundle?
+  @MainActor var options: [String: BridgeWallpaperOptionsSnapshot] = [:]
+  @MainActor var optionRequests: [String] = []
+  @MainActor var failedOptionIDs = Set<String>()
+  @MainActor var holdOptions = false
+  @MainActor var pendingOptions: [CheckedContinuation<BridgeWallpaperOptionsSnapshot, Error>] = []
+
+  override func wallpaperOptionsSnapshot(wallpaperId: String) async throws -> BridgeWallpaperOptionsSnapshot {
+    try await option(wallpaperId)
+  }
+
+  @MainActor private func option(_ id: String) async throws -> BridgeWallpaperOptionsSnapshot {
+    optionRequests.append(id)
+    if holdOptions {
+      return try await withCheckedThrowingContinuation { pendingOptions.append($0) }
+    }
+    guard !failedOptionIDs.contains(id), let value = options[id] else { throw CancellationError() }
+    return value
+  }
+
+  @MainActor func finishOption(_ value: BridgeWallpaperOptionsSnapshot) {
+    pendingOptions.removeFirst().resume(returning: value)
+  }
 
   override func allSnapshots() async throws -> BridgeSnapshotBundle {
     guard let snapshot else { throw CancellationError() }
@@ -316,4 +565,164 @@ private struct UnavailableRuntime: SteamCMDRuntimeProviding {
     func validateBootstrap(at root: URL) async throws { throw WorkshopFailure(message: "fixture") }
     func prepare(executable: URL, staging: URL) async throws -> URL { throw WorkshopFailure(message: "fixture") }
     func validate(at root: URL) async throws { throw WorkshopFailure(message: "fixture") }
+}
+
+@MainActor
+private final class PanelFixture {
+  final class Visibility { var visible = false }
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent("panel-power-\(UUID().uuidString)")
+  let store: BridgeStore
+  let bridge: LayoutSnapshotBridge
+  let navigation = ControlPanelNavigation()
+  let visibility = Visibility()
+  let defaults: UserDefaults
+  let previousHome: String?
+  let workshop: WorkshopStore
+  let controller: WebPanelController
+  var web: WKWebView
+  let executable: URL
+
+  init(store: BridgeStore, bridge: LayoutSnapshotBridge) throws {
+    self.store = store
+    self.bridge = bridge
+    defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+    defaults.set(root.appendingPathComponent("missing").path, forKey: "MacWallpaperEngineSteamCMDPath")
+    previousHome = ProcessInfo.processInfo.environment["MAC_WALLPAPER_ENGINE_HOME"]
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    executable = root.appendingPathComponent("steamcmd")
+    try Data("""
+      #!/bin/sh
+      printf '25%%\\n'
+      while [ ! -e "\(root.path)/advance" ]; do /bin/sleep 0.02; done
+      printf '75%%\\n'
+      IFS= read -r hold
+
+      """.utf8).write(to: executable)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+    setenv("MAC_WALLPAPER_ENGINE_HOME", root.path, 1)
+    let downloader = WorkshopDownloadManager(
+      sessionDirectory: root.appendingPathComponent("session"), runtimeProvider: PanelRuntime())
+    workshop = WorkshopStore(
+      downloader: downloader, supportDirectory: root, defaults: defaults,
+      runtimeProvider: PanelRuntime(), sceneAssetsAvailable: { false })
+    let visibility = self.visibility
+    controller = WebPanelController(
+      store: store, navigation: navigation, workshop: workshop,
+      isPresentationVisible: { visibility.visible })
+    web = controller.makeWebView()
+    web.setFrameSize(NSSize(width: 960, height: 640))
+  }
+
+  func start() async throws {
+    try await waitUntil(timeout: 15) { self.controller.isReady && !self.workshop.steamCMDSetup.isBusy }
+    try await quiet()
+    try await installRecorder()
+  }
+
+  func installRecorder() async throws {
+    _ = try await js("""
+      window.powerProbe = {received:[], active:0, maxActive:0, pending:[], hold:false};
+      const receive = window.wallpaperUI.receive;
+      window.wallpaperUI.receive = state => {
+        const probe = window.powerProbe;
+        probe.active++;
+        probe.maxActive = Math.max(probe.maxActive, probe.active);
+        probe.received.push(state);
+        const finish = () => { receive(state); probe.active--; };
+        if (probe.hold) return new Promise(resolve => probe.pending.push(() => { finish(); resolve(null); }));
+        finish();
+        return null;
+      };
+      """)
+  }
+
+  func show() { visibility.visible = true; controller.scheduleUpdate() }
+  func hide() { visibility.visible = false; controller.scheduleUpdate() }
+
+  func js(_ script: String) async throws -> Any? {
+    XCTAssertNil(web.window, "Every panel behavior check must remain offscreen")
+    return try await web.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page)
+  }
+
+  func expectJS<T: Equatable>(
+    _ script: String, equals expected: T, file: StaticString = #filePath, line: UInt = #line
+  ) async throws {
+    let actual = try await js(script) as? T
+    XCTAssertEqual(actual, expected, file: file, line: line)
+  }
+
+  func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition() {
+      guard Date() < deadline else { throw WorkshopFailure(message: "Panel fixture timed out") }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+  }
+
+  func waitJS(_ condition: String) async throws {
+    let deadline = Date().addingTimeInterval(2)
+    while try await js("return Boolean(\(condition))") as? Bool != true {
+      guard Date() < deadline else { throw WorkshopFailure(message: "Page did not satisfy: \(condition)") }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+  }
+
+  func quiet() async throws { try await Task.sleep(for: .milliseconds(120)) }
+
+  func configureDisplays() {
+    store.settingsSnapshot.displays = ["primary", "secondary"].map { id in
+      BridgeDisplaySettingsRow(
+        displayId: id, title: id, enabled: true, mode: .standalone, mirrorTargets: [],
+        selectedMirrorTarget: nil, scalingMode: .fill, scalingFactor: 1,
+        targetFps: 30, maxFps: 60, muted: false, volume: 1)
+    }
+    store.monitorInformationSnapshot.rows = [
+      ("primary", "first"), ("secondary", "second"),
+    ].map { display, wallpaper in
+      BridgeMonitorInfoRow(
+        displayId: display, title: display, wallpaperId: wallpaper, wallpaperTitle: wallpaper,
+        mirrorTargetDisplayId: nil, mirrorTargetTitle: nil, scalingMode: "fill",
+        targetFps: "30", audioResponse: false)
+    }
+    for (display, id, fps, volume) in [
+      ("primary", "first", UInt32(24), Float(0.2)),
+      ("secondary", "second", UInt32(48), Float(0.7)),
+    ] {
+      bridge.options[id] = BridgeWallpaperOptionsSnapshot(
+        wallpaperId: id, title: id, kind: .projectScene, supported: true, dirty: false,
+        properties: [], displayConfigurations: [
+          BridgeDisplayConfigRow(
+            displayId: display, title: display, enabled: true, scalingMode: .fill,
+            scalingFactor: 1, targetFps: fps, maxFps: 60, muted: false, volume: volume,
+            dirty: false, canRestoreDefaults: false)
+        ], audioResponseEnabled: false, muted: false, volume: volume)
+    }
+    store.wallpaperOptionsSnapshot = bridge.options["first"]
+    store.snapshotRevision &+= 1
+  }
+
+  func shutdown() async {
+    controller.stop()
+    _ = try? await js("if (window.powerProbe) while (powerProbe.pending.length) powerProbe.pending.shift()()")
+    for pending in bridge.pendingOptions { pending.resume(throwing: CancellationError()) }
+    bridge.pendingOptions.removeAll()
+    await workshop.downloader.shutdown()
+    await workshop.steamCMDSetup.shutdown()
+    defaults.removePersistentDomain(forName: root.lastPathComponent)
+    if let previousHome { setenv("MAC_WALLPAPER_ENGINE_HOME", previousHome, 1) }
+    else { unsetenv("MAC_WALLPAPER_ENGINE_HOME") }
+    try? FileManager.default.removeItem(at: root)
+  }
+}
+
+private struct PanelRuntime: SteamCMDRuntimeProviding {
+  func resolve(executable: URL) throws -> SteamCMDRuntime {
+    guard FileManager.default.isExecutableFile(atPath: executable.path) else {
+      throw SteamCMDSetupIssue(kind: .invalidSelection, detail: "Missing local fixture")
+    }
+    return SteamCMDRuntime(rootURL: executable.deletingLastPathComponent(), executableURL: executable)
+  }
+  func validateBootstrap(at root: URL) async throws {}
+  func prepare(executable: URL, staging: URL) async throws -> URL { executable }
+  func validate(at root: URL) async throws {}
 }

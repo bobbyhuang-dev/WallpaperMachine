@@ -86,73 +86,122 @@ async fn wallpaper_options_preserves_invalid_input_errors() {
     assert_eq!(error.kind(), BridgeErrorKind::InvalidInput);
 }
 
-#[tokio::test]
-async fn poll_mouse_position_forwards_to_engine_facade() {
-    let engine = FakeEngineFacade::default();
-    let bridge = BridgeBuilder::new(engine.clone())
-        .with_state(BridgeActorState::default())
-        .with_mouse_polling_enabled(false)
-        .build()
-        .expect("bridge should build");
+pub(super) fn mouse_scenario<F: Future<Output = ()>>(run: impl FnOnce() -> F + Send + 'static) {
+    let (done, result) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(run());
+        }));
+        let _ = done.send(outcome);
+    });
+    let outcome = result
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("mouse scenario, including bridge drop, must finish within two seconds");
+    worker.join().unwrap();
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
 
-    bridge
-        .poll_mouse_position()
-        .await
-        .expect("mouse polling should forward to engine");
+pub(super) fn active_mouse_display() -> DisplaySnapshotEntry {
+    let mut display = identified_display("mouse-display", 7);
+    display.handle = Some(wallpaper_core::project::SceneHandle::new(42));
+    display
+}
 
-    assert_eq!(engine.mouse_poll_calls(), vec![()]);
+pub(super) fn await_mouse_sample(engine: &FakeEngineFacade) {
+    let poll = engine.block_next_mouse_poll();
+    let reached = poll.wait_until_blocked(std::time::Duration::from_secs(1));
+    poll.release();
+    assert!(reached, "enabled poller must reach the engine");
+}
+
+pub(super) fn assert_mouse_idle(engine: &FakeEngineFacade) {
+    let count = engine.mouse_poll_calls().len();
+    std::thread::sleep(std::time::Duration::from_millis(80));
+    assert_eq!(
+        engine.mouse_poll_calls().len(),
+        count,
+        "quiescent poller must perform no periodic engine work"
+    );
 }
 
 #[test]
-fn bridge_owns_mouse_polling_without_swift_timer() {
-    let engine = FakeEngineFacade::default();
-    let bridge = BridgeBuilder::new(engine.clone())
-        .with_state(BridgeActorState::default())
-        .build()
-        .expect("bridge should build");
+fn mouse_polling_follows_scene_lifetime_and_samples_latest_input_on_resume() {
+    mouse_scenario(|| async {
+        let engine = FakeEngineFacade::default();
+        let bridge = BridgeBuilder::new(engine.clone()).build().unwrap();
+        bridge.app_snapshot().await.unwrap();
+        bridge.poll_mouse_position().await.unwrap();
+        assert_mouse_idle(&engine);
+        assert!(engine.mouse_poll_calls().is_empty());
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
-    while engine.mouse_poll_calls().is_empty() && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(16));
-    }
+        engine.set_snapshot(vec![active_mouse_display()]);
+        bridge.refresh_displays().await.unwrap();
+        await_mouse_sample(&engine);
 
-    assert!(!engine.mouse_poll_calls().is_empty());
-    drop(bridge);
+        bridge.set_presentation_suspended(true).await.unwrap();
+        let suspended_count = engine.mouse_poll_calls().len();
+        bridge.poll_mouse_position().await.unwrap();
+        assert_eq!(engine.mouse_poll_calls().len(), suspended_count);
+        assert_mouse_idle(&engine);
+        engine.set_mouse_input(123.0, 456.0);
+        let resumed = engine.block_next_mouse_poll();
+        bridge.set_presentation_suspended(false).await.unwrap();
+        let reached = resumed.wait_until_blocked(std::time::Duration::from_secs(1));
+        resumed.release();
+        assert!(reached, "resume must sample without any new input event");
+        assert_eq!(engine.mouse_samples().last(), Some(&(123.0, 456.0)));
+
+        engine.set_snapshot(Vec::new());
+        bridge.refresh_displays().await.unwrap();
+        assert_mouse_idle(&engine);
+        drop(bridge);
+    });
+}
+
+#[test]
+fn mouse_polling_disabled_drop_exits_without_an_input_event() {
+    mouse_scenario(|| async {
+        let engine = FakeEngineFacade::default();
+        let bridge = BridgeBuilder::new(engine.clone()).build().unwrap();
+        bridge.app_snapshot().await.unwrap();
+        assert_mouse_idle(&engine);
+        drop(bridge);
+        assert!(engine.mouse_poll_calls().is_empty());
+    });
 }
 
 #[test]
 fn bridge_mouse_polling_waits_for_stalled_engine_poll() {
-    let engine = FakeEngineFacade::default();
-    let blocked_poll = engine.block_next_mouse_poll();
-    let bridge = BridgeBuilder::new(engine.clone())
-        .with_state(BridgeActorState::default())
-        .build()
-        .expect("bridge should build");
+    mouse_scenario(|| async {
+        let engine = FakeEngineFacade::default();
+        engine.set_snapshot(vec![active_mouse_display()]);
+        let blocked_poll = engine.block_next_mouse_poll();
+        let bridge = BridgeBuilder::new(engine.clone())
+            .with_state(BridgeActorState::default())
+            .build()
+            .expect("bridge should build");
 
-    assert!(
-        blocked_poll.wait_until_blocked(std::time::Duration::from_secs(2)),
-        "first mouse poll should reach the engine"
-    );
-
-    std::thread::sleep(std::time::Duration::from_millis(80));
-    assert_eq!(
-        engine.mouse_poll_calls().len(),
-        1,
-        "poller must not enqueue additional polls while one engine poll is in flight"
-    );
-
-    let next_poll = engine.block_next_mouse_poll();
-    blocked_poll.release();
-    let queued_poll_reached_engine =
-        next_poll.wait_until_blocked(std::time::Duration::from_millis(8));
-    if queued_poll_reached_engine {
+        let reached = blocked_poll.wait_until_blocked(std::time::Duration::from_secs(1));
+        if !reached {
+            blocked_poll.release();
+        }
+        assert!(reached, "first mouse poll should reach the engine");
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let calls = engine.mouse_poll_calls().len();
+        let next_poll = engine.block_next_mouse_poll();
+        blocked_poll.release();
+        assert_eq!(calls, 1, "only one poll may be in flight");
+        let queued = next_poll.wait_until_blocked(std::time::Duration::from_millis(8));
         next_poll.release();
-    }
-    assert!(
-        !queued_poll_reached_engine,
-        "poller must not have queued a backlog while the first poll was stalled"
-    );
-    drop(bridge);
+        assert!(!queued, "stalled poll must not accumulate a backlog");
+        drop(bridge);
+    });
 }
 
 #[tokio::test]

@@ -426,6 +426,10 @@ pub struct FakeEngineFacade {
     snapshot: Arc<ArcSwap<Vec<DisplaySnapshotEntry>>>,
     snapshot_after_refresh: Arc<ArcSwap<Option<Vec<DisplaySnapshotEntry>>>>,
     paused_calls: Arc<ArcSwap<Vec<bool>>>,
+    pause_failure: Arc<ArcSwap<Option<String>>>,
+    suspend_failure: Arc<ArcSwap<Option<String>>>,
+    disable_capture_failure: Arc<ArcSwap<Option<String>>>,
+    close_failure: Arc<ArcSwap<Option<String>>>,
     audio_volume_calls: Arc<ArcSwap<Vec<(SceneHandle, f32)>>>,
     audio_muted_calls: Arc<ArcSwap<Vec<(SceneHandle, bool)>>>,
     audio_response_calls: Arc<ArcSwap<Vec<(SceneHandle, bool)>>>,
@@ -439,6 +443,8 @@ pub struct FakeEngineFacade {
     fps_calls: Arc<ArcSwap<Vec<(SceneHandle, u32)>>>,
     mouse_poll_calls: Arc<ArcSwap<Vec<()>>>,
     mouse_poll_block: Arc<SegQueue<ReconcileBlockGate>>,
+    mouse_input: Arc<ArcSwap<(f64, f64)>>,
+    mouse_samples: Arc<ArcSwap<Vec<(f64, f64)>>>,
     mouse_position_calls: Arc<ArcSwap<Vec<(SceneHandle, f64, f64)>>>,
     mouse_button_calls: Arc<ArcSwap<Vec<(SceneHandle, u32, bool)>>>,
     mouse_entered_calls: Arc<ArcSwap<Vec<(SceneHandle, bool)>>>,
@@ -581,6 +587,34 @@ impl FakeEngineFacade {
     #[must_use]
     pub fn mouse_poll_calls(&self) -> Vec<()> {
         load_log(&self.mouse_poll_calls)
+    }
+
+    pub fn set_mouse_input(&self, x: f64, y: f64) {
+        self.mouse_input.store(Arc::new((x, y)));
+    }
+
+    pub fn mouse_samples(&self) -> Vec<(f64, f64)> {
+        load_log(&self.mouse_samples)
+    }
+
+    pub fn fail_next_pause(&self) {
+        self.pause_failure
+            .store(Arc::new(Some("pause failed".into())));
+    }
+
+    pub fn fail_next_suspend(&self) {
+        self.suspend_failure
+            .store(Arc::new(Some("audio suspend failed".into())));
+    }
+
+    pub fn fail_next_disable_capture(&self) {
+        self.disable_capture_failure
+            .store(Arc::new(Some("audio disable failed".into())));
+    }
+
+    pub fn fail_next_close(&self) {
+        self.close_failure
+            .store(Arc::new(Some("close failed".into())));
     }
 
     #[must_use]
@@ -764,13 +798,31 @@ impl EngineFacade for FakeEngineFacade {
     }
 
     fn close_all_scenes(&self) -> EngineFuture<()> {
-        async move { Ok(()) }.boxed()
+        let fake = self.clone();
+        async move {
+            if let Some(message) = fake.close_failure.swap(Arc::new(None)).as_ref() {
+                return Err(EngineError::Platform(message.clone()));
+            }
+            fake.snapshot.rcu(|current| {
+                let mut next = current.as_ref().clone();
+                for display in &mut next {
+                    display.handle = None;
+                    display.assignment = None;
+                }
+                next
+            });
+            Ok(())
+        }
+        .boxed()
     }
 
     fn set_all_paused(&self, paused: bool) -> EngineFuture<()> {
         let fake = self.clone();
         async move {
             push_log(&fake.paused_calls, paused);
+            if let Some(message) = fake.pause_failure.swap(Arc::new(None)).as_ref() {
+                return Err(EngineError::Platform(message.clone()));
+            }
             fake.rendered_scenes.rcu(|scenes| {
                 let mut scenes = scenes.as_ref().clone();
                 for scene in &mut scenes {
@@ -835,6 +887,11 @@ impl EngineFacade for FakeEngineFacade {
                 let _ = block.blocked_tx.send(());
                 let _ = block.release_rx.recv();
             }
+            if !enabled {
+                if let Some(message) = fake.disable_capture_failure.swap(Arc::new(None)).as_ref() {
+                    return Err(EngineError::Platform(message.clone()));
+                }
+            }
             if enabled {
                 if let Some(message) = fake.audio_capture_failure.load_full().as_ref() {
                     return Err(EngineError::Platform(message.clone()));
@@ -857,6 +914,9 @@ impl EngineFacade for FakeEngineFacade {
         let fake = self.clone();
         async move {
             push_log(&fake.audio_capture_suspend_calls, suspended);
+            if let Some(message) = fake.suspend_failure.swap(Arc::new(None)).as_ref() {
+                return Err(EngineError::Platform(message.clone()));
+            }
             if !suspended {
                 if let Some(message) = fake.audio_capture_failure.load_full().as_ref() {
                     return Err(EngineError::Platform(message.clone()));
@@ -917,9 +977,15 @@ impl EngineFacade for FakeEngineFacade {
         let fake = self.clone();
         async move {
             push_log(&fake.mouse_poll_calls, ());
+            push_log(&fake.mouse_samples, **fake.mouse_input.load());
             if let Some(block) = fake.mouse_poll_block.pop() {
                 let _ = block.blocked_tx.send(());
-                let _ = block.release_rx.recv();
+                block
+                    .release_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .map_err(|error| {
+                        EngineError::Platform(format!("mouse poll release timed out: {error}"))
+                    })?;
             }
             Ok(())
         }

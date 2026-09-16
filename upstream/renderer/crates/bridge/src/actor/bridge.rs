@@ -41,7 +41,7 @@ use crate::{
         BridgeDisplaySettingsRow, BridgeError, BridgeLibraryScanStatus, BridgeLibrarySnapshot,
         BridgeLockScreenScene, BridgePlaybackState, BridgePropertyValue, BridgeScalingMode,
         BridgeSnapshotBundle, BridgeWallpaperEntry, BridgeWallpaperKind,
-        BridgeWallpaperMutationBundle,
+        BridgeWallpaperMutationBundle, MousePollingControl,
     },
     config::{AppConfig, ConfigStore, SerializedSelector, WallpaperConfig},
     display::{DisplaySelectorExt, DisplaySnapshotExt},
@@ -80,6 +80,7 @@ pub struct BridgeActor<E: EngineFacade> {
     pub config_store: Option<ConfigStore>,
     launch_at_login: LaunchAtLoginController,
     paths: BridgePaths,
+    mouse_polling: Arc<MousePollingControl>,
 }
 
 enum PlaybackChangeOrigin {
@@ -116,6 +117,7 @@ impl<E: EngineFacade> BridgeActorHandle<E> {
         config_store: Option<ConfigStore>,
         launch_at_login: LaunchAtLoginController,
         paths: BridgePaths,
+        mouse_polling: Arc<MousePollingControl>,
     ) -> Result<Self, BridgeError> {
         let actor = BridgeActor {
             state,
@@ -130,7 +132,9 @@ impl<E: EngineFacade> BridgeActorHandle<E> {
             config_store,
             launch_at_login,
             paths,
+            mouse_polling,
         };
+        actor.refresh_mouse_polling();
 
         let runtime = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
@@ -187,6 +191,24 @@ fn duplicate_error(error: &BridgeError) -> BridgeError {
     BridgeError::Error {
         kind: error.kind(),
         message: error.message().to_string(),
+    }
+}
+
+impl<E: EngineFacade> BridgeActor<E> {
+    fn playback_paused(&self) -> bool {
+        self.state.presentation_suspended
+            || self.state.playback_state == crate::api::BridgePlaybackState::Paused
+    }
+
+    fn refresh_mouse_polling(&self) {
+        self.mouse_polling.set_enabled(
+            !self.playback_paused()
+                && self
+                    .engine
+                    .display_snapshot()
+                    .iter()
+                    .any(|display| display.handle.is_some()),
+        );
     }
 }
 
@@ -305,6 +327,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
 
     fn bump_generation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
+        self.refresh_mouse_polling();
     }
 
     fn reserve_reconcile(&mut self) -> u64 {
@@ -316,6 +339,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
 
     fn finish_reconcile(&mut self, generation: u64, actor: ActorRef<BridgeActor<E>>) {
         self.reconciled_generation = generation;
+        self.refresh_mouse_polling();
         if self.active_restore_generation == Some(generation) {
             self.active_restore_generation = None;
             if self.restore_requested_after_active {
@@ -334,6 +358,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
     }
 
     fn stale_reconcile(&mut self, generation: u64, actor: ActorRef<BridgeActor<E>>) {
+        self.refresh_mouse_polling();
         if self.active_restore_generation == Some(generation) {
             self.active_restore_generation = None;
             if self.restore_requested_after_active {
@@ -362,6 +387,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         error: BridgeError,
         actor: ActorRef<BridgeActor<E>>,
     ) {
+        self.refresh_mouse_polling();
         self.state.errors.push(error.message().to_string());
 
         if self.reconcile_current(generation) {
@@ -589,6 +615,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             .refresh_displays()
             .await
             .map_err(|error| BridgeError::engine(error.to_string()))?;
+        self.refresh_mouse_polling();
         self.sync_displays()
     }
 
@@ -612,18 +639,22 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         let has_configured_wallpapers = !self.state.configured_ids().is_empty();
         let displays = self.engine.display_snapshot();
         if !has_configured_wallpapers || displays.is_empty() {
+            self.refresh_mouse_polling();
             return Ok(());
         }
         if let Some(scenes) = self.unchanged_configured_scenes(&displays)? {
             self.state.set_active_ids_from_scenes(&scenes);
+            self.refresh_mouse_polling();
             return Ok(());
         }
 
         let app_config = self.state.app_config.clone();
         let wallpaper_configs = self.state.wallpaper_configs.clone();
-        let scenes = self
+        let result = self
             .reconcile_engine(app_config.clone(), wallpaper_configs)
-            .await?;
+            .await;
+        self.refresh_mouse_polling();
+        let scenes = result?;
         self.state.set_active_ids_from_scenes(&scenes);
         Ok(())
     }
@@ -762,11 +793,6 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         Ok(())
     }
 
-    fn playback_paused(&self) -> bool {
-        self.state.presentation_suspended
-            || self.state.playback_state == crate::api::BridgePlaybackState::Paused
-    }
-
     async fn apply_engine_pause(&self, previous_paused: bool) -> Result<(), BridgeError> {
         let paused = self.playback_paused();
         let result = async {
@@ -790,6 +816,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             }
             return Err(BridgeError::engine(message));
         }
+        self.refresh_mouse_polling();
         Ok(())
     }
 
@@ -821,6 +848,9 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         display_settings: BTreeMap<String, BridgeDisplaySettingsRow>,
         scenes: Vec<SceneDesc>,
     ) -> Result<(), BridgeError> {
+        // Reconciliation already changed the live handles, even if saving
+        // fails.
+        self.refresh_mouse_polling();
         if let Some(store) = &self.config_store {
             store.save_app_config(&app_config)?;
         }
@@ -828,6 +858,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         self.state.display_settings = display_settings;
         self.state.set_active_ids_from_scenes(&scenes);
         self.state.rebase_drafts();
+        self.refresh_mouse_polling();
         Ok(())
     }
 
@@ -1359,6 +1390,9 @@ impl<E: EngineFacade + Clone> Message<PollMousePosition> for BridgeActor<E> {
         _msg: PollMousePosition,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        if !self.mouse_polling.is_enabled() {
+            return Ok(());
+        }
         self.engine
             .poll_mouse_position()
             .await
@@ -1393,7 +1427,7 @@ impl<E: EngineFacade + Clone> Message<ClearShaderCache> for BridgeActor<E> {
         self.load_wallpapers()?;
         let app_config = self.state.app_config.clone();
         let wallpaper_configs = self.state.wallpaper_configs.clone();
-        let scenes = reconcile_with(
+        let result = reconcile_with(
             self.engine.clone(),
             app_config,
             wallpaper_configs,
@@ -1401,7 +1435,9 @@ impl<E: EngineFacade + Clone> Message<ClearShaderCache> for BridgeActor<E> {
             self.paths.clone(),
             true,
         )
-        .await?;
+        .await;
+        self.refresh_mouse_polling();
+        let scenes = result?;
         self.state.set_active_ids_from_scenes(&scenes);
         self.bump_generation();
 
@@ -2256,6 +2292,7 @@ impl<E: EngineFacade + Clone> Message<Shutdown> for BridgeActor<E> {
         _msg: Shutdown,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        self.mouse_polling.set_enabled(false);
         let mut active_handles = Vec::new();
         for display in self.engine.display_snapshot() {
             let Some(handle) = display.handle else {
@@ -2267,16 +2304,17 @@ impl<E: EngineFacade + Clone> Message<Shutdown> for BridgeActor<E> {
             active_handles.push(handle);
         }
 
-        for handle in active_handles {
-            self.engine
-                .set_audio_capture_enabled(handle, false)
-                .await
-                .map_err(|error| BridgeError::engine(error.to_string()))?;
+        let result = async {
+            for handle in active_handles {
+                self.engine.set_audio_capture_enabled(handle, false).await?;
+            }
+            self.engine.close_all_scenes().await
         }
-        self.engine
-            .close_all_scenes()
-            .await
-            .map_err(|error| BridgeError::engine(error.to_string()))
+        .await;
+        if result.is_err() {
+            self.refresh_mouse_polling();
+        }
+        result.map_err(|error| BridgeError::engine(error.to_string()))
     }
 }
 
@@ -2790,6 +2828,7 @@ impl<E: EngineFacade + Clone> Message<CompleteRestoreAfterReconcile> for BridgeA
                 Ok(())
             }
             Err(error) => {
+                self.refresh_mouse_polling();
                 self.state.errors.push(error.message().to_string());
                 Err(error)
             }

@@ -681,8 +681,10 @@ impl WallpaperEngine {
     }
 
     async fn poll_mouse_state(&self, state: MousePollState) -> Result<(), EngineError> {
-        let snapshot = self.display_snapshot();
-        let snapshot = DisplaySnapshot { entries: &snapshot };
+        let snapshot = self.snapshots.load();
+        let snapshot = DisplaySnapshot {
+            entries: &snapshot.displays,
+        };
         for entry in snapshot.entries {
             let Some(handle) = entry.handle else {
                 continue;

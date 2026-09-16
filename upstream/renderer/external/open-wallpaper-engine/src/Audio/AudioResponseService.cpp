@@ -29,7 +29,7 @@ constexpr float kPcmSignalFloor = 0.00005f;
 struct AudioResponseState
 {
     std::mutex mutex;
-    std::condition_variable condition;
+    std::condition_variable_any condition;
     std::vector<float> fifo;
     std::jthread worker;
     bool worker_started { false };
@@ -93,62 +93,66 @@ bool PcmBlockHasSignal(const std::array<float, kFftSize>& block)
 bool InputStreamIsStale(std::chrono::steady_clock::time_point now)
 {
     return g_state.last_submit_time != std::chrono::steady_clock::time_point {} &&
-           (now - g_state.last_submit_time) > kSnapshotStaleAfter;
+           now >= g_state.last_submit_time + kSnapshotStaleAfter;
 }
 
 void WorkerMain(std::stop_token stop_token)
 {
-    while (!stop_token.stop_requested()) {
+    while (true) {
         std::array<float, kFftSize> block {};
         AudioSpectrumSnapshot next_snapshot {};
-        bool analyze_block { false };
 
         {
             std::unique_lock<std::mutex> lock(g_state.mutex);
-            g_state.condition.wait_for(lock, std::chrono::milliseconds(16), [&] {
-                return stop_token.stop_requested() ||
-                       g_state.fifo.size() >= block.size();
-            });
-
-            if (stop_token.stop_requested()) {
-                break;
-            }
-
-            const bool input_stream_is_stale = InputStreamIsStale(std::chrono::steady_clock::now());
-            const bool snapshot_has_signal = SnapshotHasSignal(g_state.snapshot);
-
-            if (input_stream_is_stale) {
-                g_state.fifo.clear();
-                if (g_state.snapshot.generation > 0 && snapshot_has_signal) {
-                    next_snapshot = g_state.snapshot;
-                    ClearAudioResponseSnapshot(&next_snapshot);
-                    next_snapshot.generation += 1u;
-                    next_snapshot.sample_rate = kAnalysisSampleRate;
-                    next_snapshot.last_submit_sample_rate = g_state.snapshot.last_submit_sample_rate;
-                    next_snapshot.accepted_frame_count = g_state.snapshot.accepted_frame_count;
-                    g_state.snapshot = next_snapshot;
+            while (true) {
+                if (stop_token.stop_requested()) {
+                    return;
                 }
-            } else if (g_state.fifo.size() >= block.size()) {
-                std::copy_n(g_state.fifo.begin(), block.size(), block.begin());
-                g_state.fifo.erase(g_state.fifo.begin(), g_state.fifo.begin() + kHopSize);
-                next_snapshot = g_state.snapshot;
-                analyze_block = true;
-            } else {
-                continue;
+
+                if (InputStreamIsStale(std::chrono::steady_clock::now())) {
+                    g_state.fifo.clear();
+                    if (g_state.snapshot.generation > 0 && SnapshotHasSignal(g_state.snapshot)) {
+                        next_snapshot = g_state.snapshot;
+                        ClearAudioResponseSnapshot(&next_snapshot);
+                        next_snapshot.generation += 1u;
+                        next_snapshot.sample_rate = kAnalysisSampleRate;
+                        next_snapshot.last_submit_sample_rate = g_state.snapshot.last_submit_sample_rate;
+                        next_snapshot.accepted_frame_count = g_state.snapshot.accepted_frame_count;
+                        g_state.snapshot = next_snapshot;
+                    }
+                    g_state.last_submit_time = {};
+                }
+
+                if (g_state.fifo.size() >= block.size()) {
+                    std::copy_n(g_state.fifo.begin(), block.size(), block.begin());
+                    g_state.fifo.erase(g_state.fifo.begin(), g_state.fifo.begin() + kHopSize);
+                    next_snapshot = g_state.snapshot;
+                    break;
+                }
+
+                const auto submitted_at = g_state.last_submit_time;
+                const auto input_changed = [submitted_at] {
+                    return g_state.fifo.size() >= kFftSize ||
+                           g_state.last_submit_time != submitted_at;
+                };
+                if (submitted_at == std::chrono::steady_clock::time_point {}) {
+                    g_state.condition.wait(lock, stop_token, input_changed);
+                } else {
+                    g_state.condition.wait_until(
+                        lock, stop_token, submitted_at + kSnapshotStaleAfter, input_changed);
+                }
             }
         }
 
-        if (analyze_block) {
-            if (PcmBlockHasSignal(block)) {
-                AnalyzeAudioResponseMonoBlock(block.data(), kFftSize, &next_snapshot);
-            } else {
-                ClearAudioResponseSnapshot(&next_snapshot);
-            }
-            next_snapshot.generation += 1u;
-            next_snapshot.sample_rate = kAnalysisSampleRate;
+        if (PcmBlockHasSignal(block)) {
+            AnalyzeAudioResponseMonoBlock(block.data(), kFftSize, &next_snapshot);
+        } else {
+            ClearAudioResponseSnapshot(&next_snapshot);
         }
+        next_snapshot.generation += 1u;
+        next_snapshot.sample_rate = kAnalysisSampleRate;
 
-        if (analyze_block) {
+        {
             std::lock_guard<std::mutex> lock(g_state.mutex);
             next_snapshot.last_submit_sample_rate = g_state.snapshot.last_submit_sample_rate;
             next_snapshot.accepted_frame_count = g_state.snapshot.accepted_frame_count;

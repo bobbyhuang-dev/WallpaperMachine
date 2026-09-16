@@ -2,6 +2,65 @@ import Foundation
 
 @MainActor
 extension WebPanelController {
+  /// Register native dependencies without materializing a page payload while hidden.
+  func trackSnapshotDependencies() {
+    _ = store.appSnapshot
+    _ = store.librarySnapshot
+    _ = store.wallpaperOptionsSnapshot
+    _ = store.monitorInformationSnapshot
+    _ = store.settingsSnapshot
+    _ = store.snapshotRevision
+    _ = store.libraryLoadState
+    _ = store.activatingWallpaperID
+    _ = store.applyingWallpaperID
+    _ = store.latestBridgeErrorMessage
+    _ = store.latestBridgeErrorRevision
+    let lock = store.lockScreenWallpaper
+    _ = lock?.isRequested
+    _ = lock?.isBusy
+    _ = lock?.status
+    _ = lock?.errorMessage
+    _ = workshop.searchText
+    _ = workshop.kind
+    _ = workshop.sort
+    _ = workshop.tags
+    _ = workshop.items
+    _ = workshop.selectedItem
+    _ = workshop.page
+    _ = workshop.totalPages
+    _ = workshop.totalCount
+    _ = workshop.isLoading
+    _ = workshop.hasLoaded
+    _ = workshop.errorMessage
+    _ = workshop.sceneAssetsReady
+    _ = workshop.sceneAssetsFailure
+    _ = workshop.downloadRequests
+    _ = workshop.username
+    _ = workshop.suggestedAccount
+    let setup = workshop.steamCMDSetup
+    _ = setup.state
+    _ = setup.isBusy
+    _ = setup.selectedRuntime
+    _ = setup.retainedCandidateURL
+    let downloader = workshop.downloader
+    _ = downloader.savedAccount
+    _ = downloader.rememberSessionWhileRunning
+    _ = downloader.errorMessage
+    for job in downloader.downloads {
+      _ = job.status
+      _ = job.progress
+      _ = job.isPending
+      _ = job.isQueued
+      _ = job.isCancelled
+      let worker = job.worker
+      _ = worker.steamGuardChallenge
+      _ = worker.isAuthenticating
+      _ = worker.errorMessage
+      _ = worker.prompt
+      _ = worker.sessionWarning
+    }
+  }
+
   /// A dismissal suppresses exactly the message the user dismissed; a later,
   /// different failure surfaces again, and clearing the source re-arms it.
   var libraryFailureMessage: String? {
@@ -45,7 +104,8 @@ extension WebPanelController {
       let active = store.monitorInformationSnapshot.rows.first { $0.displayId == display.displayId }
       let wallpaperOptions = active.flatMap { row in
         store.wallpaperOptionsSnapshot?.wallpaperId == row.wallpaperId
-          ? store.wallpaperOptionsSnapshot : displayOptions[row.wallpaperId]
+          ? store.wallpaperOptionsSnapshot
+          : (displayOptionsRevision == store.snapshotRevision ? displayOptions[row.wallpaperId] : nil)
       }
       let config =
         display.mode == .standalone

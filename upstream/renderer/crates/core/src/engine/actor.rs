@@ -754,7 +754,6 @@ impl Message<messages::SetMousePosition> for EngineActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.set_mouse_position(msg.handle, msg.x, msg.y)?;
-        self.publish_snapshot();
         Ok(())
     }
 }
@@ -768,7 +767,6 @@ impl Message<messages::SetMouseButton> for EngineActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.set_mouse_button(msg.handle, msg.button, msg.pressed)?;
-        self.publish_snapshot();
         Ok(())
     }
 }
@@ -782,7 +780,6 @@ impl Message<messages::SetMouseEntered> for EngineActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.set_mouse_entered(msg.handle, msg.entered)?;
-        self.publish_snapshot();
         Ok(())
     }
 }

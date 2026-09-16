@@ -3,10 +3,7 @@ mod types;
 
 use std::{
     pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Condvar, Mutex, MutexGuard},
 };
 
 pub use error::{BridgeError, BridgeErrorKind};
@@ -162,19 +159,21 @@ impl<E: EngineFacade> BridgeBuilder<E> {
         }
 
         let engine = ArcEngineFacade::new(self.engine);
+        let mouse_polling = Arc::new(MousePollingControl::new());
         let actor = BridgeActorHandle::spawn(
             state,
             engine.clone(),
             self.config_store.clone(),
             self.launch_at_login,
             self.paths,
+            Arc::clone(&mouse_polling),
         )?;
         let first_frame_notifier = FirstFrameNotifier {
             actor: actor.clone(),
         };
         engine.set_first_frame_callback(first_frame_notifier.callback());
         let mouse_poller = if self.mouse_polling_enabled {
-            Some(MousePoller::spawn(actor.clone()))
+            Some(MousePoller::spawn(actor.clone(), mouse_polling))
         } else {
             None
         };
@@ -194,8 +193,94 @@ impl<E: EngineFacade> BridgeBuilder<E> {
 }
 
 struct MousePoller {
-    stop: Arc<AtomicBool>,
+    control: Arc<MousePollingControl>,
     worker: Option<std::thread::JoinHandle<()>>,
+}
+
+struct MousePollingState {
+    enabled: bool,
+    stopped: bool,
+}
+
+pub(crate) struct MousePollingControl {
+    state: Mutex<MousePollingState>,
+    changed: Condvar,
+}
+
+impl MousePollingControl {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: Mutex::new(MousePollingState {
+                enabled: false,
+                stopped: false,
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn recover_poison<'a>(
+        &self,
+        mut state: MutexGuard<'a, MousePollingState>,
+    ) -> MutexGuard<'a, MousePollingState> {
+        if !state.stopped {
+            log::error!("mouse polling control poisoned; stopping worker");
+            state.stopped = true;
+            state.enabled = false;
+        }
+        self.changed.notify_all();
+        state
+    }
+
+    fn lock(&self) -> MutexGuard<'_, MousePollingState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| self.recover_poison(error.into_inner()))
+    }
+
+    pub(crate) fn set_enabled(&self, enabled: bool) {
+        let mut state = self.lock();
+        if !state.stopped && state.enabled != enabled {
+            state.enabled = enabled;
+            self.changed.notify_all();
+        }
+    }
+
+    pub(crate) fn is_enabled(&self) -> bool {
+        let state = self.lock();
+        state.enabled && !state.stopped
+    }
+
+    pub(crate) fn stop(&self) {
+        self.lock().stopped = true;
+        self.changed.notify_all();
+    }
+
+    pub(crate) fn wait_until_enabled(&self) -> bool {
+        let mut state = self.lock();
+        while !state.enabled && !state.stopped {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(|error| self.recover_poison(error.into_inner()));
+        }
+        !state.stopped
+    }
+
+    pub(crate) fn wait_interval(&self, interval: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + interval;
+        let mut state = self.lock();
+        while state.enabled && !state.stopped {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            state = match self.changed.wait_timeout(state, remaining) {
+                Ok((state, _)) => state,
+                Err(error) => self.recover_poison(error.into_inner().0),
+            };
+        }
+        !state.stopped
+    }
 }
 
 struct FirstFrameNotifier {
@@ -225,30 +310,31 @@ impl MousePoller {
     const INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
 
     #[allow(clippy::single_call_fn)]
-    fn spawn(actor: BridgeActorHandle<ArcEngineFacade>) -> Self {
-        let stop = Arc::new(AtomicBool::new(false));
-        let worker_stop = Arc::clone(&stop);
+    fn spawn(actor: BridgeActorHandle<ArcEngineFacade>, control: Arc<MousePollingControl>) -> Self {
+        let worker_control = Arc::clone(&control);
         let worker = std::thread::Builder::new()
             .name("wallpaper-bridge-mouse-poller".to_string())
             .spawn(move || {
-                while !worker_stop.load(Ordering::Relaxed) {
+                while worker_control.wait_until_enabled() {
                     let poll_result: Result<(), BridgeError> =
                         actor.blocking_ask(PollMousePosition);
                     if let Err(error) = poll_result {
                         log::debug!("mouse poll skipped: {error}");
                     }
-                    std::thread::sleep(Self::INTERVAL);
+                    if !worker_control.wait_interval(Self::INTERVAL) {
+                        break;
+                    }
                 }
             })
             .ok();
 
-        Self { stop, worker }
+        Self { control, worker }
     }
 }
 
 impl Drop for MousePoller {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
+        self.control.stop();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }

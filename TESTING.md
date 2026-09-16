@@ -133,6 +133,76 @@ Coordinator tests use unattached
 CAMetalLayers and injected notification/encoding services; they never create a
 window, initialize a renderer, or call the real wallpaper setter.
 
+## Idle-work reduction
+
+Verification (2026-09-16, source changes only):
+
+- Audio response uses stop-aware input/deadline waits instead of a periodic
+  16 ms timeout. Expiry clears retained input and publishes silence once; fresh
+  input, continuous silence, FFT size/hop, accepted frames, and restart behavior
+  are unchanged. Child-process regressions give partial-input and expired-input
+  Reset paths a two-second exit deadline.
+- Mouse polling sleeps while no scene is active or effective playback is paused.
+  It retains the 16 ms interval and single-in-flight contract when enabled.
+  Renderer/audio pause failures and canceled shutdown restore polling from the
+  confirmed playback state and remaining handles. Reconciliation failures also
+  refresh from actual handles: scene creation can succeed before audio setup
+  fails, including configured refresh, shader-cache rebuild, and asynchronous
+  restore. Mouse setters no longer publish unchanged engine snapshots; sampling
+  borrows the current display list.
+- Hidden/minimized/occluded panels register native dependencies without building
+  page dictionaries or pushing JavaScript. Download continuation and error
+  reconciliation remain active, including while a previous page Promise is
+  pending. Visible pushes coalesce through one in-flight task; old-page
+  completions cannot affect a replacement page. Supplemental display options
+  are fetched only for visible Settings/display pages, reuse selected options,
+  and discard canceled or superseded revisions.
+
+Fresh checks:
+
+- `cargo test --release -p wallpaper-core --lib`: **174 passed**.
+- `cargo test --release -p wallpaper-bridge --lib`: **214 passed**, including
+  scene lifetime, presentation/manual pause precedence, failure rollback,
+  disabled destruction, stalled single-flight mouse scenarios, and live handles
+  remaining after reconciliation/audio errors. The three new error-exit
+  regressions fail before the follow-up correction and pass afterward:
+  `reconcile-before.log`, `reconcile-after.log`, and `reconcile-full-bridge.log`
+  in the evidence directory below.
+- Renderer CMake targets: `AudioResponseMonoTest.*` **19 passed**,
+  `mouse_input_test` **6 passed**, `particle_mouse_controlpoint_test` **35 passed**,
+  and `timer_tests` **6 passed**.
+- `python3 scripts/test.py`: **200 native tests and 34 Python tests passed**.
+  Result: `build/Tests-20260916-131715-068727.xcresult`.
+  The 13 control-panel tests use unattached WKWebViews, including real bundled
+  page delivery and rendered FPS/volume values; no test opens a desktop window.
+- Baselines before editing: core 174, bridge 206, audio 16, mouse 6, particle 35,
+  timer 6, native 192, Python 34. Native baseline:
+  `build/Tests-20260916-124922-295788.xcresult`.
+
+Device-free probes and logs: `build/verification/power-work/`.
+The real audio analyzer accepted a synthetic 12 kHz tone, published silence
+after expiry, held generation constant for five idle seconds, accepted a fresh
+tone, and reset successfully. Process CPU during the settled five-second idle
+phase was 0.004657 s before and 0.000014 s after in these individual runs.
+These small synthetic-process measurements are not application watts or a
+controlled battery-life comparison.
+
+A three-cycle headless mouse workload recorded zero additional engine calls
+while paused and after removing the final scene, and sampled the latest input
+on resume. The configured wait remains 16 ms; this run observed eight callbacks
+per 162.8–165.0 ms active window (about 20.3–20.6 ms per call, including host
+scheduling), not guaranteed 16 ms wall-clock delivery. Offscreen observation
+probes demonstrated hidden preview-map construction before the change and none
+afterward without an explicit page request. Throwaway probes were removed.
+Rust formatting was scoped to edited ranges; unrelated existing formatting
+drift was not rewritten.
+
+No Release application was built or delivered, and the running
+`/Applications/MacWallpaperEngine.app` was not replaced or restarted.
+Desktop visuals, real input/audio capture, and actual battery/power savings remain
+unverified. FPS, render resolution, video/animation timelines, audio-response
+preferences, renderer fences, and the lock-screen strategy were not changed.
+
 ## Presentation suspension and scene timing
 
 Desktop presentation suspension is separate from user/battery playback state.

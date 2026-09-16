@@ -869,6 +869,18 @@ public protocol WallpaperBridgeProtocol : AnyObject {
      */
     func wallpaperOptionsSnapshot(wallpaperId: String) async throws  -> BridgeWallpaperOptionsSnapshot
     
+    /**
+     * Returns committed web wallpapers for the currently connected displays.
+     * The host renders these in web views; the scene engine never opens a
+     * window for them. Draft options do not affect these inputs.
+     *
+     * # Errors
+     *
+     * Returns an error when a web project has no entry file or its path
+     * cannot be resolved.
+     */
+    func webWallpapers() async throws  -> [BridgeWebWallpaper]
+    
 }
 
 open class WallpaperBridge:
@@ -1902,6 +1914,33 @@ open func wallpaperOptionsSnapshot(wallpaperId: String)async throws  -> BridgeWa
             completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
             freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeBridgeWallpaperOptionsSnapshot.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Returns committed web wallpapers for the currently connected displays.
+     * The host renders these in web views; the scene engine never opens a
+     * window for them. Draft options do not affect these inputs.
+     *
+     * # Errors
+     *
+     * Returns an error when a web project has no entry file or its path
+     * cannot be resolved.
+     */
+open func webWallpapers()async throws  -> [BridgeWebWallpaper] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_web_wallpapers(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeBridgeWebWallpaper.lift,
             errorHandler: FfiConverterTypeBridgeError.lift
         )
 }
@@ -3855,6 +3894,152 @@ public func FfiConverterTypeBridgeWallpaperOptionsSnapshot_lower(_ value: Bridge
     return FfiConverterTypeBridgeWallpaperOptionsSnapshot.lower(value)
 }
 
+
+/**
+ * Committed inputs for a web wallpaper the host renders in a web view on one
+ * display. Mirrors of a web source display appear as separate entries.
+ */
+public struct BridgeWebWallpaper {
+    public var displayId: UInt32
+    public var wallpaperId: String
+    public var title: String
+    /**
+     * Absolute project directory.
+     */
+    public var projectPath: String
+    /**
+     * Entry page relative to `project_path`.
+     */
+    public var entryFile: String
+    public var fps: UInt32
+    public var paused: Bool
+    public var audioResponseEnabled: Bool
+    /**
+     * Wallpaper Engine `applyUserProperties` payload: `{ id: { value } }`
+     * for every user-editable property, overrides applied over defaults.
+     */
+    public var propertiesJson: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(displayId: UInt32, wallpaperId: String, title: String, 
+        /**
+         * Absolute project directory.
+         */projectPath: String, 
+        /**
+         * Entry page relative to `project_path`.
+         */entryFile: String, fps: UInt32, paused: Bool, audioResponseEnabled: Bool, 
+        /**
+         * Wallpaper Engine `applyUserProperties` payload: `{ id: { value } }`
+         * for every user-editable property, overrides applied over defaults.
+         */propertiesJson: String) {
+        self.displayId = displayId
+        self.wallpaperId = wallpaperId
+        self.title = title
+        self.projectPath = projectPath
+        self.entryFile = entryFile
+        self.fps = fps
+        self.paused = paused
+        self.audioResponseEnabled = audioResponseEnabled
+        self.propertiesJson = propertiesJson
+    }
+}
+
+
+
+extension BridgeWebWallpaper: Equatable, Hashable {
+    public static func ==(lhs: BridgeWebWallpaper, rhs: BridgeWebWallpaper) -> Bool {
+        if lhs.displayId != rhs.displayId {
+            return false
+        }
+        if lhs.wallpaperId != rhs.wallpaperId {
+            return false
+        }
+        if lhs.title != rhs.title {
+            return false
+        }
+        if lhs.projectPath != rhs.projectPath {
+            return false
+        }
+        if lhs.entryFile != rhs.entryFile {
+            return false
+        }
+        if lhs.fps != rhs.fps {
+            return false
+        }
+        if lhs.paused != rhs.paused {
+            return false
+        }
+        if lhs.audioResponseEnabled != rhs.audioResponseEnabled {
+            return false
+        }
+        if lhs.propertiesJson != rhs.propertiesJson {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(displayId)
+        hasher.combine(wallpaperId)
+        hasher.combine(title)
+        hasher.combine(projectPath)
+        hasher.combine(entryFile)
+        hasher.combine(fps)
+        hasher.combine(paused)
+        hasher.combine(audioResponseEnabled)
+        hasher.combine(propertiesJson)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeWebWallpaper: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeWebWallpaper {
+        return
+            try BridgeWebWallpaper(
+                displayId: FfiConverterUInt32.read(from: &buf), 
+                wallpaperId: FfiConverterString.read(from: &buf), 
+                title: FfiConverterString.read(from: &buf), 
+                projectPath: FfiConverterString.read(from: &buf), 
+                entryFile: FfiConverterString.read(from: &buf), 
+                fps: FfiConverterUInt32.read(from: &buf), 
+                paused: FfiConverterBool.read(from: &buf), 
+                audioResponseEnabled: FfiConverterBool.read(from: &buf), 
+                propertiesJson: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BridgeWebWallpaper, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.displayId, into: &buf)
+        FfiConverterString.write(value.wallpaperId, into: &buf)
+        FfiConverterString.write(value.title, into: &buf)
+        FfiConverterString.write(value.projectPath, into: &buf)
+        FfiConverterString.write(value.entryFile, into: &buf)
+        FfiConverterUInt32.write(value.fps, into: &buf)
+        FfiConverterBool.write(value.paused, into: &buf)
+        FfiConverterBool.write(value.audioResponseEnabled, into: &buf)
+        FfiConverterString.write(value.propertiesJson, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeWebWallpaper_lift(_ buf: RustBuffer) throws -> BridgeWebWallpaper {
+    return try FfiConverterTypeBridgeWebWallpaper.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeWebWallpaper_lower(_ value: BridgeWebWallpaper) -> RustBuffer {
+    return FfiConverterTypeBridgeWebWallpaper.lower(value)
+}
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
@@ -4870,6 +5055,31 @@ fileprivate struct FfiConverterSequenceTypeBridgeWallpaperEntry: FfiConverterRus
         return seq
     }
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeBridgeWebWallpaper: FfiConverterRustBuffer {
+    typealias SwiftType = [BridgeWebWallpaper]
+
+    public static func write(_ value: [BridgeWebWallpaper], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBridgeWebWallpaper.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BridgeWebWallpaper] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BridgeWebWallpaper]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBridgeWebWallpaper.read(from: &buf))
+        }
+        return seq
+    }
+}
 private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
 private let UNIFFI_RUST_FUTURE_POLL_MAYBE_READY: Int8 = 1
 
@@ -5062,6 +5272,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_wallpaper_options_snapshot() != 45708) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_web_wallpapers() != 49603) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_constructor_wallpaperbridge_new() != 14027) {

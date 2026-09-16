@@ -8,6 +8,7 @@ use crate::{
         BridgeMonitorInformationSnapshot, BridgePlaybackState, BridgePropertyValue,
         BridgeScalingMode, BridgeSettingsSnapshot, BridgeSnapshotBundle, BridgeWallpaperEntry,
         BridgeWallpaperKind, BridgeWallpaperMutationBundle, BridgeWallpaperOptionsSnapshot,
+        BridgeWebWallpaper,
     },
     config::{AppConfig, WallpaperConfig},
     power::PowerSource,
@@ -22,6 +23,8 @@ pub struct GetAppSnapshot;
 pub struct GetLibrarySnapshot;
 
 pub struct GetLockScreenScenes;
+
+pub struct GetWebWallpapers;
 
 pub struct GetMonitorInformationSnapshot;
 
@@ -243,6 +246,7 @@ pub type BootstrapReply = AllSnapshotsReply;
 pub type AppSnapshotReply = Result<BridgeAppSnapshot, BridgeError>;
 pub type LibrarySnapshotReply = Result<BridgeLibrarySnapshot, BridgeError>;
 pub type LockScreenScenesReply = Result<Vec<BridgeLockScreenScene>, BridgeError>;
+pub type WebWallpapersReply = Result<Vec<BridgeWebWallpaper>, BridgeError>;
 pub type MonitorInformationSnapshotReply = Result<BridgeMonitorInformationSnapshot, BridgeError>;
 pub type SettingsSnapshotReply = Result<BridgeSettingsSnapshot, BridgeError>;
 pub type ClearShaderCacheReply = Result<BridgeSettingsSnapshot, BridgeError>;

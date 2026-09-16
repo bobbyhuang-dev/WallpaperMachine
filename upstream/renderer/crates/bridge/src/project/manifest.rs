@@ -23,6 +23,9 @@ pub struct ProjectModel {
     pub description_html: String,
     pub project_type: WallpaperProjectType,
     pub preview_file: Option<PathBuf>,
+    /// The manifest's `file` entry (video file or web page), relative to the
+    /// project directory.
+    pub entry_file: Option<String>,
     pub properties: Vec<ProjectProperty>,
 }
 
@@ -74,6 +77,11 @@ impl ProjectModel {
             .get("preview")
             .and_then(Value::as_str)
             .map(PathBuf::from);
+        let entry_file = obj
+            .get("file")
+            .and_then(Value::as_str)
+            .filter(|file| !file.is_empty())
+            .map(str::to_string);
 
         let properties = obj
             .get("general")
@@ -208,6 +216,7 @@ impl ProjectModel {
             description_html,
             project_type,
             preview_file,
+            entry_file,
             properties,
         })
     }

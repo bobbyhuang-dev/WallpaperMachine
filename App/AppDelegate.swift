@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private lazy var appUpdater = AppUpdateStore()
     private var displayChangeObserver: NSObjectProtocol?
     private var desktopWallpaperSync: DesktopWallpaperSync?
+    private var webWallpaperHost: WebWallpaperHost?
     private var presentationPolicy: WallpaperPresentationPolicy?
     private var store: BridgeStore?
     private var startupError: Error?
@@ -74,8 +75,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 self?.desktopWallpaperSync = nil
                 try self?.startDesktopWallpaperSync()
             }
+            let webHost = WebWallpaperHost(bridge: store.bridge)
+            webWallpaperHost = webHost
+            webHost.onError = { [weak self] message in
+                self?.lastError = WallpaperActionError(message: message)
+                self?.rebuildMenu()
+            }
+            webHost.onSurfacesChanged = { [weak self, weak lockScreen] in
+                guard let self, !self.shutdownInProgress else { return }
+                self.presentationPolicy?.evaluate()
+                guard lockScreen?.ownsDesktopProvider != true else { return }
+                do { try self.startDesktopWallpaperSync() } catch {
+                    AppLog.error("Desktop poster sync could not be restarted: \(error.localizedDescription)")
+                }
+            }
+            webHost.start()
             store.onSnapshotApplied = { [weak self, weak lockScreen] in
                 guard let self, !self.shutdownInProgress else { return }
+                // Web wallpapers live in host windows; open or close them before
+                // the poster sync and the presentation policy look at the desktop.
+                self.webWallpaperHost?.reconcile()
                 self.presentationPolicy?.evaluate()
                 if let lockScreen, lockScreen.isRequested, lockScreen.errorMessage == nil {
                     lockScreen.refresh()
@@ -93,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     completion(.failure(CancellationError()))
                     return
                 }
+                self.webWallpaperHost?.setPresentationSuspended(suspended)
                 Task {
                     do {
                         try await store.setPresentationSuspendedAsync(suspended)
@@ -131,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         presentationPolicy?.stop()
         presentationPolicy = nil
         desktopWallpaperSync?.stop()
+        webWallpaperHost?.shutdown()
         if let displayChangeObserver {
             NotificationCenter.default.removeObserver(displayChangeObserver)
             self.displayChangeObserver = nil
@@ -159,6 +180,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 presentationPolicy = nil
                 desktopWallpaperSync?.stop()
                 desktopWallpaperSync = nil
+                webWallpaperHost?.shutdown()
+                webWallpaperHost = nil
             } catch {
                 lastError = error
                 shutdownInProgress = false

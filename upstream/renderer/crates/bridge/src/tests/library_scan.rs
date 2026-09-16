@@ -6,9 +6,9 @@ use crate::library::scan;
 fn scanner_returns_supported_and_unsupported_entries() {
     let root = tempfile::tempdir().unwrap();
     let scene = root.path().join("100");
-    let web = root.path().join("200");
+    let application = root.path().join("200");
     fs::create_dir_all(&scene).unwrap();
-    fs::create_dir_all(&web).unwrap();
+    fs::create_dir_all(&application).unwrap();
     fs::write(
         scene.join("project.json"),
         r#"{"type":"scene","title":"Scene One","preview":"preview.png"}"#,
@@ -16,8 +16,8 @@ fn scanner_returns_supported_and_unsupported_entries() {
     .unwrap();
     fs::write(scene.join("preview.png"), b"png").unwrap();
     fs::write(
-        web.join("project.json"),
-        r#"{"type":"web","title":"Web One","preview":"preview.png"}"#,
+        application.join("project.json"),
+        r#"{"type":"application","title":"App One","preview":"preview.png"}"#,
     )
     .unwrap();
 

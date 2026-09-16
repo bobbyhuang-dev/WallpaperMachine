@@ -355,9 +355,6 @@
     "Choose Wallpaper Engine project folders, a Steam library, or video files. Projects are copied into your local library only when their files are ready." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose Wallpaper Engine project folders, a Steam library, or video files. Projects are copied into your local library only when their files are ready."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择 Wallpaper Engine 项目文件夹、Steam 库或视频文件。只有在项目文件准备就绪后，才会将项目复制到本地壁纸库。"}}}
     },
-    "Web projects can be saved to your library, but this renderer cannot play them. For HTML with assets, import the complete project folder. Standalone images are not supported." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Web projects can be saved to your library, but this renderer cannot play them. For HTML with assets, import the complete project folder. Standalone images are not supported."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "网页项目可以保存到壁纸库，但此渲染器无法播放。包含资源的 HTML 请导入完整项目文件夹。不支持单独的图片。"}}}
-    },
     "If a wallpaper already exists" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "If a wallpaper already exists"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸已存在时"}}}
     },
@@ -412,8 +409,14 @@
     "Click a wallpaper to apply it to the selected display and show its settings. Use Select & Customize in its context menu to inspect without applying." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Click a wallpaper to apply it to the selected display and show its settings. Use Select & Customize in its context menu to inspect without applying."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "单击壁纸可将其应用到所选显示器并显示设置。若只想查看而不应用，请使用右键菜单中的“选择并自定义”。"}}}
     },
-    "Web projects can be saved to your library, but this renderer cannot play them." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Web projects can be saved to your library, but this renderer cannot play them."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "网页项目可以保存到壁纸库，但此渲染器无法播放。"}}}
+    "This web wallpaper’s entry page is missing. Import the complete project folder, including its HTML file, before applying it." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This web wallpaper’s entry page is missing. Import the complete project folder, including its HTML file, before applying it."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此网页壁纸缺少入口页面。请先导入包含 HTML 文件的完整项目文件夹，再应用。"}}}
+    },
+    "Web wallpaper “%@” could not load: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Web wallpaper “%1$@” could not load: %2$@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "网页壁纸“%1$@”无法加载：%2$@"}}}
+    },
+    "The web wallpaper stopped unexpectedly and could not be restarted." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The web wallpaper stopped unexpectedly and could not be restarted."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "网页壁纸意外停止且无法重新启动。"}}}
     },
     "This wallpaper type cannot be played on macOS. You can still inspect or remove it from your library." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper type cannot be played on macOS. You can still inspect or remove it from your library."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 无法播放这种类型的壁纸。你仍可查看详情或将其从壁纸库中移除。"}}}
@@ -925,9 +928,6 @@
     "Choose a wallpaper, enter your Steam account login name, and confirm ownership on first use or when switching accounts. Enter your password or Steam Guard code only when prompted; mobile approval is supported." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose a wallpaper, enter your Steam account login name, and confirm ownership on first use or when switching accounts. Enter your password or Steam Guard code only when prompted; mobile approval is supported."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择壁纸，输入 Steam 账号登录名，并在首次使用或切换账号时确认拥有 Wallpaper Engine。仅在出现提示时输入密码或 Steam 令牌验证码；也支持手机确认。"}}}
     },
-    "Scene wallpapers need shared resources in addition to the Workshop download. Use Install scene assets… in Settings or the wallpaper details, or locate the assets folder from your purchased installation. Setup downloads the Windows installation but keeps only assets and never runs Windows programs. Application wallpapers are unsupported; Web wallpapers cannot be applied by this renderer." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scene wallpapers need shared resources in addition to the Workshop download. Use Install scene assets… in Settings or the wallpaper details, or locate the assets folder from your purchased installation. Setup downloads the Windows installation but keeps only assets and never runs Windows programs. Application wallpapers are unsupported; Web wallpapers cannot be applied by this renderer."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "场景壁纸除了创意工坊下载内容外，还需要共享资源。请使用设置或壁纸详情中的“安装场景资源…”，或选择你已购买版本安装目录中的 assets 文件夹。安装过程会下载 Windows 版安装内容，但仅保留资源，绝不运行 Windows 程序。不支持应用程序壁纸；此渲染器无法应用网页壁纸。"}}}
-    },
     "Wallpaper Engine on Steam" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wallpaper Engine on Steam"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 上的 Wallpaper Engine"}}}
     },
@@ -955,8 +955,8 @@
     "Video · codec dependent" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Video · codec dependent"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "视频 · 取决于编解码器支持"}}}
     },
-    "Web · not supported by this renderer" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Web · not supported by this renderer"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "网页 · 此渲染器不支持"}}}
+    "Web · built-in web view" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Web · built-in web view"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "网页 · 内置网页视图"}}}
     },
     "Application · unsupported on macOS" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Application · unsupported on macOS"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "应用程序 · macOS 不支持"}}}

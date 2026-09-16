@@ -8,7 +8,7 @@
     "license": "GPL-2.0-only",
     "directory": "upstream/renderer",
     "modified": true,
-    "note": "Vendored directly rather than as a submodule. Only the Rust crates, the C++ scene engine and their build files remain here."
+    "note": "Vendored directly rather than as a submodule. Only the Rust crates, the C++ scene engine and their build files remain here. 2026-09-16: crates/bridge routes `type: \"web\"` projects away from the scene engine — WallpaperEntry marks Web supported, ProjectModel parses `file`, ActivationInputs takes project models and splits build() (engine scenes) from build_web() (WebWallpaperDesc per assigned/mirrored display), active ids include configured web wallpapers, and the uniffi surface gains `web_wallpapers()` returning BridgeWebWallpaper for the Swift-hosted WKWebView windows."
   },
   "sceneEngine": {
     "repository": "https://github.com/bigsaltyfishes/open-wallpaper-engine",

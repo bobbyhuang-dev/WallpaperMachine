@@ -415,6 +415,12 @@ final class BridgeStore {
             }
             setenv("MAC_WALLPAPER_ENGINE_ASSETS_ROOT", assets.path, 1)
         }
+        if (manifest?["type"] as? String)?.lowercased() == "web" {
+            guard let file = manifest?["file"] as? String, !file.isEmpty,
+                  FileManager.default.fileExists(atPath: folder.appendingPathComponent(file).path) else {
+                throw NSError(domain: "MacWallpaperEngine", code: 3, userInfo: [NSLocalizedDescriptionKey: String(localized: "This web wallpaper’s entry page is missing. Import the complete project folder, including its HTML file, before applying it.")])
+            }
+        }
     }
 
     private func applyValidatedWallpaperOptionsAsync(wallpaperId: String) async throws {

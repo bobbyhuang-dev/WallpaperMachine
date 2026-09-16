@@ -1167,6 +1167,80 @@ async fn lock_screen_export_ignores_drafts_and_tracks_pause_and_ejection() {
 }
 
 #[tokio::test]
+async fn web_wallpaper_apply_bypasses_engine_and_exports_host_inputs() {
+    let engine = FakeEngineFacade::default();
+    engine.set_snapshot(vec![display_snapshot(7, 75)]);
+    let bridge = BridgeBuilder::new(engine.clone())
+        .with_state(crate::actor::state::BridgeActorState::default())
+        .build()
+        .unwrap();
+    bridge
+        .inject_scene_project_for_test(
+            "300",
+            "Web",
+            r#"{
+            "type":"web",
+            "title":"Web",
+            "file":"index.html",
+            "general":{"properties":{
+                "group":{"type":"group","text":"Group","order":0},
+                "theme":{"type":"combo","text":"Theme","value":"light","order":1,
+                         "options":[{"label":"Light","value":"light"},{"label":"Dark","value":"dark"}]},
+                "tint":{"type":"color","text":"Tint","value":"1 0.5 0","order":2}
+            }}
+        }"#,
+        )
+        .await;
+    bridge
+        .set_display_config_enabled("300".into(), "7".into(), true)
+        .await
+        .unwrap();
+    bridge
+        .edit_property(
+            "300".into(),
+            "theme".into(),
+            crate::BridgePropertyValue::String {
+                value: "dark".into(),
+            },
+        )
+        .await
+        .unwrap();
+    bridge.apply_wallpaper_options("300".into()).await.unwrap();
+
+    assert!(
+        engine.rendered_scenes().is_empty(),
+        "web wallpapers must never reach the scene engine"
+    );
+    assert_eq!(
+        bridge.app_snapshot().await.unwrap().active_wallpaper_ids,
+        vec!["300".to_string()]
+    );
+    assert!(bridge.lock_screen_scenes().await.unwrap().is_empty());
+
+    let web = bridge.web_wallpapers().await.unwrap();
+    assert_eq!(web.len(), 1);
+    assert_eq!(web[0].display_id, 7);
+    assert_eq!(web[0].wallpaper_id, "300");
+    assert_eq!(web[0].entry_file, "index.html");
+    assert!(std::path::Path::new(&web[0].project_path).is_absolute());
+    assert!(web[0].project_path.ends_with("300"));
+    assert!(!web[0].paused);
+    let properties: serde_json::Value = serde_json::from_str(&web[0].properties_json).unwrap();
+    assert_eq!(properties["theme"]["value"], "dark");
+    assert_eq!(properties["tint"]["value"], "1 0.5 0");
+    assert!(properties.get("group").is_none(), "group rows are not user properties");
+
+    bridge.pause_all().await.unwrap();
+    assert!(bridge.web_wallpapers().await.unwrap()[0].paused);
+    bridge
+        .eject_wallpaper_from_display("7".into(), "300".into())
+        .await
+        .unwrap();
+    assert!(bridge.web_wallpapers().await.unwrap().is_empty());
+    assert!(bridge.app_snapshot().await.unwrap().active_wallpaper_ids.is_empty());
+}
+
+#[tokio::test]
 async fn lock_screen_export_ignores_presentation_suspension_but_preserves_playback_policy() {
     let engine = FakeEngineFacade::default();
     engine.set_snapshot(vec![display_snapshot(7, 75)]);

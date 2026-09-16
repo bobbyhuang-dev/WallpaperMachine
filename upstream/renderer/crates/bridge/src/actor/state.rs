@@ -5,7 +5,7 @@ pub mod drafts {
 use std::collections::BTreeMap;
 
 use drafts::WallpaperOptionsDraft;
-use wallpaper_core::project::SceneDesc;
+use wallpaper_core::project::{SceneDesc, WallpaperProjectType};
 
 use crate::{
     api::{
@@ -261,6 +261,8 @@ impl BridgeActorState {
         self.active_wallpaper_ids = Self::active_ids(&self.app_config);
     }
 
+    /// Active ids are the engine-rendered scenes plus every configured web
+    /// wallpaper, which the host renders outside the scene engine.
     pub fn set_active_ids_from_scenes(&mut self, scenes: &[SceneDesc]) {
         let mut ids = scenes
             .iter()
@@ -272,10 +274,40 @@ impl BridgeActorState {
                     .filter(|id| !id.is_empty())
                     .map(ToString::to_string)
             })
+            .chain(
+                Self::active_ids(&self.app_config)
+                    .into_iter()
+                    .filter(|id| self.is_web_wallpaper(id)),
+            )
             .collect::<Vec<_>>();
         ids.sort();
         ids.dedup();
         self.active_wallpaper_ids = ids;
+    }
+
+    pub fn is_web_wallpaper(&self, wallpaper_id: &str) -> bool {
+        self.project_models
+            .get(wallpaper_id)
+            .is_some_and(|model| model.project_type == WallpaperProjectType::Web)
+    }
+
+    /// Project models for the wallpapers `app_config` assigns to displays;
+    /// the subset reconciliation needs to route web projects away from the
+    /// scene engine.
+    pub fn configured_project_models(
+        &self,
+        app_config: &AppConfig,
+    ) -> BTreeMap<String, ProjectModel> {
+        app_config
+            .monitors
+            .iter()
+            .filter_map(|monitor| monitor.wallpaper.as_deref())
+            .filter_map(|id| {
+                self.project_models
+                    .get(id)
+                    .map(|model| (id.to_string(), model.clone()))
+            })
+            .collect()
     }
 
     pub fn wallpaper_draft_mut(

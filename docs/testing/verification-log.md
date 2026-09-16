@@ -11,6 +11,113 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-17 — Web wallpapers receive mouse input; desktop-click setting
+
+Workshop 3799142774 (*Rhine Lab · 莱茵生命交互桌面 | Interactive Desktop*) rendered
+but ignored the mouse. `WebWallpaperMouseForwarder` now mirrors desktop pointer
+events into the page from a global `NSEvent` monitor (nothing consumed, no
+permission prompt); `WebWallpaperWindow` reports `isKeyWindow` so WebKit
+hit-tests hover; the host script cancels `contextmenu` defaults. Settings ›
+General gained *Keep windows in place when clicking the wallpaper*, which writes
+`com.apple.WindowManager EnableStandardClickToShowDesktop`
+(`DesktopClickRevealPreference`). See
+[features/web-wallpapers.md](../features/web-wallpapers.md).
+
+Verified:
+
+- `python3 scripts/test.py`: Python script tests passed; `xcodegen generate`;
+  `MacWallpaperEngineTests` **232 passed**, 0 failed, 0 skipped (~90 s). New
+  `WebWallpaperMouseRoutingTests` (desktop-only routing, press/drag/release
+  continuity per button, single hover exit, cross-display exit) and
+  `WebWallpaperPageTests.testForwardedPointerEventsReachThePageWithoutANativeContextMenu`
+  (windowless `WKWebView`: forwarded left click at CSS (100,100) and right click
+  reach page listeners in order; `contextmenu` arrives default-prevented).
+- Throwaway probe binaries (deleted after the run) against a `WKWebView` in a
+  desktop-level, mouse-transparent window: `NSEvent.mouseEvent` replays produce
+  `mousedown`/`mouseup`/`click`/drag `mousemove` at the expected CSS point;
+  hover only reaches JS through `_simulateMouseMove:` and only while the window
+  reports `isKeyWindow` (plain `mouseMoved(with:)` is dropped by `WKWebView`,
+  and WebKit routes inactive-window moves to scrollbars only); `:hover` matches
+  in standards mode; `_simulateMouseExit:` fires `mouseout`; a copied scroll
+  `CGEvent` located at (x, primary height − y) converts to the wallpaper-local
+  point and fires `wheel` at the correct coordinates. `NSWindow.windowNumber(at:)`
+  plus `CGWindowListCopyWindowInfo(.optionIncludingWindow, id)` classified an
+  application window (layer 0) and listed Finder's desktop at layer
+  −2147483603 (`CGWindowListCreateDescriptionFromArray` returned nothing on this
+  build, hence the `optionIncludingWindow` lookup).
+- Not verified: the running app on the desktop (global monitor delivery, hover
+  over the real Finder desktop, multi-display coordinates) and whether
+  WindowManager applies `EnableStandardClickToShowDesktop` without a re-login
+  on this build; no desktop run was authorized and the preference was not
+  written during development.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED; delivered `build/Build/Products/Release/MacWallpaperEngine.app`
+  with the changes above (existing renderer/bindings reused).
+
+## 2026-09-16 — Web wallpapers render in a host WKWebView
+
+`type: "web"` projects (e.g. Workshop 3799142774, *Rhine Lab · 莱茵生命交互桌面*)
+were library-only. The bridge now marks them supported, keeps them out of
+engine reconciliation and exposes `web_wallpapers()`; Swift hosts one
+desktop-level `WKWebView` window per display (`App/Services/WebWallpaper/`),
+pushes `applyUserProperties`/`applyGeneralProperties`/`setPaused`, joins the
+presentation policy and answers Space-poster requests with page snapshots.
+See [features/web-wallpapers.md](../features/web-wallpapers.md).
+
+Verified:
+
+- `cargo test -p wallpaper-bridge --release --lib` (build env from
+  `scripts/build.py`): **215 passed**, 0 failed, including the new
+  `web_wallpaper_apply_bypasses_engine_and_exports_host_inputs` (no engine
+  scene, active id, lock screen empty, properties payload, pause, eject).
+- `python3 scripts/build.py --renderer-only` regenerated `App/Bridge/Generated`
+  with `webWallpapers()` / `BridgeWebWallpaper`.
+- `python3 scripts/test.py`: Python script tests passed; `xcodegen generate`;
+  `MacWallpaperEngineTests` **227 passed**, 0 failed, 0 skipped (~90 s). New
+  `WebWallpaperPageTests` load a synthetic project offscreen: ES module from the
+  project folder, late-listener replay of properties/fps/pause, presentation
+  suspension composed with user pause, top-frame navigation lockdown, no window.
+- Throwaway offscreen smoke (deleted after the run) against a local copy of the
+  Rhine Lab GitHub release: page loaded from `file:`, 74 user properties
+  delivered, fps 30, app mounted 21 nodes into `#stage`, snapshot 3456×2234 with
+  99.5 % lit pixels showing the wallpaper's opening screen.
+- Not verified: desktop windows, Space posters, multi-display and
+  presentation-policy behavior in the running app (no desktop run authorized);
+  no Release build was requested.
+
+## 2026-09-16 — Panel selects share button metrics
+
+The Discover sort select (and every other `select` in `panel.css`) kept
+WebKit's native `menulist` appearance, so macOS painted its own pop-up
+button inside the padded, bordered 30 px box — a shorter control-in-a-box
+beside the `Search` and refresh buttons. `select` now uses `appearance:
+none` with an inline SVG chevron and a hover border, matching the button
+height and edges. CSS-only; `settings.css` is untouched.
+
+Verified:
+
+- `.agents/skills/impeccable/scripts/impeccable detect --json WebUI/panel.css` → no findings.
+- `python3 scripts/test.py` → 225 tests, 0 failures.
+- Not verified: visual render in the running panel (no desktop run authorized).
+
+## 2026-09-16 — Discover grid fills full Workshop pages
+
+Discover used the shared `auto-fill` tile grid, so a 30-item Workshop page
+left a partial last row (e.g. 7 columns → 4 full rows + 2 tiles) and a
+visible void beside the pagination bar. `.browser-column` is now an
+inline-size container and `.discover .wallpaper-grid` picks a column
+count that divides 30 (2 / 3 / 5 / 6 / 10) by container width, keeping
+the 154 px minimum tile; the Installed grid is unchanged.
+
+Verified:
+
+- `python3 scripts/test.py`: Python script tests **24** and **10** passed;
+  `xcodegen generate`; `MacWallpaperEngineTests` **225 passed**, 0 failed,
+  0 skipped (~90 s).
+- `impeccable detect --json WebUI/panel.css`: no findings.
+- No renderer or bridge changes; `python3 scripts/check_renderer.py` not run.
+- Not visually verified in the running app (no desktop run authorized);
+  breakpoints derived from tile minimum, 12 px gap and 16 px grid padding.
 ## 2026-09-16 — Cursor mapping rebased onto the coverage-mask work
 
 `fix(scene): map cursor input through the presented wallpaper` was rebased onto

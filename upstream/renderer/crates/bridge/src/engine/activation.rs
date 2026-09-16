@@ -1,12 +1,12 @@
 //! Translate bridge state into the `SceneDesc` list consumed by engine
-//! reconciliation.
+//! reconciliation, plus the web-wallpaper descriptors the host renders itself.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use wallpaper_core::{
     DisplayDesc, DisplaySelector, DisplaySnapshotEntry, EngineError, WallpaperAssignment,
     media::audio::AudioVolume,
-    project::{SceneDesc, SceneDescBuilder, SceneTemplate},
+    project::{SceneDesc, SceneDescBuilder, SceneTemplate, WallpaperProjectType},
 };
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
     config::{AppConfig, MonitorCfg, MonitorRender, MonitorSettingsCfg, WallpaperConfig},
     display::{DisplayDescExt, DisplaySelectorExt, DisplaySnapshotExt},
     paths::BridgePaths,
-    project::{OverrideMapExt, PropertyValue},
+    project::{OverrideMapExt, ProjectModel, PropertyKind, PropertyValue},
 };
 
 pub struct ActivationInputs<'a> {
@@ -24,15 +24,203 @@ pub struct ActivationInputs<'a> {
     pub paused: bool,
     pub paths: &'a BridgePaths,
     pub force_shader_refresh: bool,
+    /// Parsed manifests keyed by wallpaper id. Web projects are routed to
+    /// [`ActivationInputs::build_web`] instead of the scene engine; ids
+    /// without a model are treated as engine-rendered.
+    pub project_models: &'a BTreeMap<String, ProjectModel>,
+}
+
+/// A web wallpaper assigned to one display, rendered by the host process in a
+/// web view rather than by the scene engine.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WebWallpaperDesc {
+    pub display: DisplayDesc,
+    pub wallpaper_id: String,
+    pub project_dir: PathBuf,
+    pub entry_file: String,
+    pub fps: u32,
+    pub paused: bool,
+    pub audio_response_enabled: bool,
+    /// Effective user-property values (overrides over manifest defaults),
+    /// excluding group and label pseudo-properties.
+    pub properties: BTreeMap<String, PropertyValue>,
+}
+
+struct DirectSlot<'a> {
+    display: DisplayDesc,
+    wallpaper_id: &'a str,
+    wallpaper: &'a WallpaperConfig,
+    monitor: &'a MonitorCfg,
+}
+
+struct MirrorSlot {
+    display: DisplayDesc,
+    source_display_id: u32,
+    settings: MonitorSettingsCfg,
 }
 
 impl ActivationInputs<'_> {
+    /// Engine-rendered scenes for every enabled, resolved display. Web
+    /// wallpapers are excluded; see [`Self::build_web`].
+    ///
     /// # Errors
     ///
     /// Returns an error when an active wallpaper config cannot be converted
     /// into a scene.
-    pub fn build(self) -> Result<Vec<SceneDesc>, BridgeError> {
+    pub fn build(&self) -> Result<Vec<SceneDesc>, BridgeError> {
+        let (direct, mirrors) = self.slots();
         let mut scenes = Vec::new();
+        for slot in direct {
+            if self.is_web(slot.wallpaper_id) {
+                continue;
+            }
+            scenes.push(self.scene_for_monitor(
+                slot.display,
+                slot.wallpaper_id,
+                slot.wallpaper,
+                slot.monitor,
+            )?);
+        }
+
+        let mut mirrored: Vec<DisplayDesc> = Vec::new();
+        for mirror in mirrors {
+            if mirrored
+                .iter()
+                .any(|used| used.same_physical_display(&mirror.display))
+            {
+                continue;
+            }
+            let Some(source_scene) = scenes
+                .iter()
+                .find(|scene| scene.display.display_id == mirror.source_display_id)
+                .cloned()
+            else {
+                continue;
+            };
+            mirrored.push(mirror.display.clone());
+            let audio_volume = AudioVolume::try_from(mirror.settings.volume).map_err(|error| {
+                BridgeError::Error {
+                    kind: BridgeErrorKind::Engine,
+                    message: EngineError::InvalidInput(error.to_string()).to_string(),
+                }
+            })?;
+            let mut scene = source_scene;
+            scene.display = mirror.display;
+            scene.scaling_mode = mirror.settings.parse_scaling_mode();
+            scene.scaling_factor = mirror.settings.scaling_factor;
+            scene.fps = scene
+                .display
+                .refresh_rate_hz
+                .max(1)
+                .min(mirror.settings.target_fps.max(1));
+            scene.audio_volume = audio_volume;
+            scene.audio_muted = mirror.settings.muted;
+            scene.validate().map_err(|error| BridgeError::Error {
+                kind: BridgeErrorKind::Engine,
+                message: error.to_string(),
+            })?;
+            scenes.push(scene);
+        }
+
+        Ok(scenes)
+    }
+
+    /// Host-rendered web wallpapers for every enabled, resolved display,
+    /// including mirrors of a web source display.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a web project has no entry file.
+    pub fn build_web(&self) -> Result<Vec<WebWallpaperDesc>, BridgeError> {
+        let (direct, mirrors) = self.slots();
+        let mut web = Vec::new();
+        for slot in direct {
+            let Some(model) = self.web_model(slot.wallpaper_id) else {
+                continue;
+            };
+            let entry_file = model.entry_file.clone().ok_or_else(|| {
+                BridgeError::invalid_input(format!(
+                    "web wallpaper {} declares no entry file",
+                    slot.wallpaper_id
+                ))
+            })?;
+            let overrides = model.override_values(&slot.wallpaper.property_overrides);
+            let properties = model
+                .properties
+                .iter()
+                .filter(|property| {
+                    !matches!(property.kind, PropertyKind::Group | PropertyKind::Text)
+                })
+                .map(|property| (property.id.clone(), property.effective_value(&overrides)))
+                .collect();
+            let render = RenderOverrideResolver {
+                wallpaper: slot.wallpaper,
+                monitor: slot.monitor,
+                display: &slot.display,
+                displays: self.displays,
+            }
+            .resolve();
+            let fps = render
+                .map_or(60, |render| render.fps)
+                .max(1)
+                .min(slot.display.refresh_rate_hz.max(1));
+            web.push(WebWallpaperDesc {
+                display: slot.display,
+                wallpaper_id: slot.wallpaper_id.to_string(),
+                project_dir: self.paths.steam_workshop_root().join(slot.wallpaper_id),
+                entry_file,
+                fps,
+                paused: self.paused,
+                audio_response_enabled: slot.wallpaper.audio.response_enabled,
+                properties,
+            });
+        }
+
+        let mut mirrored: Vec<DisplayDesc> = Vec::new();
+        for mirror in mirrors {
+            if mirrored
+                .iter()
+                .any(|used| used.same_physical_display(&mirror.display))
+            {
+                continue;
+            }
+            let Some(source) = web
+                .iter()
+                .find(|desc| desc.display.display_id == mirror.source_display_id)
+                .cloned()
+            else {
+                continue;
+            };
+            mirrored.push(mirror.display.clone());
+            let fps = mirror
+                .settings
+                .target_fps
+                .max(1)
+                .min(mirror.display.refresh_rate_hz.max(1));
+            web.push(WebWallpaperDesc {
+                display: mirror.display,
+                fps,
+                ..source
+            });
+        }
+
+        Ok(web)
+    }
+
+    fn is_web(&self, wallpaper_id: &str) -> bool {
+        self.web_model(wallpaper_id).is_some()
+    }
+
+    fn web_model(&self, wallpaper_id: &str) -> Option<&ProjectModel> {
+        self.project_models
+            .get(wallpaper_id)
+            .filter(|model| model.project_type == WallpaperProjectType::Web)
+    }
+
+    /// Resolves enabled monitors to live displays: primary-first direct
+    /// assignments, then mirrors whose display is not already used.
+    fn slots(&self) -> (Vec<DirectSlot<'_>>, Vec<MirrorSlot>) {
+        let mut direct = Vec::new();
         let mut used_displays: Vec<DisplayDesc> = Vec::new();
         let mut monitors = self.app_config.monitors.iter().collect::<Vec<_>>();
         monitors.sort_by_key(|monitor| {
@@ -66,12 +254,16 @@ impl ActivationInputs<'_> {
                 continue;
             }
 
-            let scene =
-                self.scene_for_monitor(display.clone(), wallpaper_id, wallpaper, monitor)?;
-            used_displays.push(display);
-            scenes.push(scene);
+            used_displays.push(display.clone());
+            direct.push(DirectSlot {
+                display,
+                wallpaper_id,
+                wallpaper,
+                monitor,
+            });
         }
 
+        let mut mirrors = Vec::new();
         for monitor in self
             .app_config
             .monitors
@@ -97,13 +289,6 @@ impl ActivationInputs<'_> {
             else {
                 continue;
             };
-            let Some(source_scene) = scenes
-                .iter()
-                .find(|scene| scene.display.display_id == source_display_id)
-                .cloned()
-            else {
-                continue;
-            };
             let settings = self
                 .app_config
                 .monitor_settings
@@ -114,31 +299,14 @@ impl ActivationInputs<'_> {
                     selector: monitor.selector.clone(),
                     ..MonitorSettingsCfg::default()
                 });
-            let audio_volume =
-                AudioVolume::try_from(settings.volume).map_err(|error| BridgeError::Error {
-                    kind: BridgeErrorKind::Engine,
-                    message: EngineError::InvalidInput(error.to_string()).to_string(),
-                })?;
-            let mut scene = source_scene;
-            scene.display = display.clone();
-            scene.scaling_mode = settings.parse_scaling_mode();
-            scene.scaling_factor = settings.scaling_factor;
-            scene.fps = scene
-                .display
-                .refresh_rate_hz
-                .max(1)
-                .min(settings.target_fps.max(1));
-            scene.audio_volume = audio_volume;
-            scene.audio_muted = settings.muted;
-            scene.validate().map_err(|error| BridgeError::Error {
-                kind: BridgeErrorKind::Engine,
-                message: error.to_string(),
-            })?;
-            used_displays.push(display);
-            scenes.push(scene);
+            mirrors.push(MirrorSlot {
+                display,
+                source_display_id,
+                settings,
+            });
         }
 
-        Ok(scenes)
+        (direct, mirrors)
     }
 
     fn scene_for_monitor(

@@ -16,6 +16,7 @@ pub use types::{
     BridgePropertyKind, BridgePropertyValue, BridgeScalingMode, BridgeSettingsSnapshot,
     BridgeSliderMetadata, BridgeSnapshotBundle, BridgeStorageStatus, BridgeWallpaperEntry,
     BridgeWallpaperKind, BridgeWallpaperMutationBundle, BridgeWallpaperOptionsSnapshot,
+    BridgeWebWallpaper,
 };
 use wallpaper_core::{
     DisplaySelector, FirstFrameCallback, WallpaperAssignment, WallpaperEngine,
@@ -39,7 +40,8 @@ use crate::{
             ApplyWallpaperOptions, Bootstrap, CancelWallpaperOptions, ClearShaderCache,
             EditProperty, EjectWallpaperFromDisplay, GetAllSnapshots, GetAppSnapshot,
             GetLibrarySnapshot, GetLockScreenScenes, GetMonitorInformationSnapshot,
-            GetSettingsSnapshot, GetWallpaperOptionsSnapshot, InitialFrameReady, PollMousePosition,
+            GetSettingsSnapshot, GetWallpaperOptionsSnapshot, GetWebWallpapers, InitialFrameReady,
+            PollMousePosition,
             RefreshDisplays, RefreshLibrary, RestorePropertyDefault, SelectWallpaper,
             SetAudioResponseEnabled, SetDisplayConfigEnabled, SetDisplayEnabled, SetDisplayMode,
             SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMirrorMuted, SetMirrorScalingFactor,
@@ -554,6 +556,18 @@ impl WallpaperBridge {
     /// Returns an error when scene resolution or renderer-input conversion fails.
     pub async fn lock_screen_scenes(&self) -> Result<Vec<BridgeLockScreenScene>, BridgeError> {
         self.actor.ask(GetLockScreenScenes).await
+    }
+
+    /// Returns committed web wallpapers for the currently connected displays.
+    /// The host renders these in web views; the scene engine never opens a
+    /// window for them. Draft options do not affect these inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a web project has no entry file or its path
+    /// cannot be resolved.
+    pub async fn web_wallpapers(&self) -> Result<Vec<BridgeWebWallpaper>, BridgeError> {
+        self.actor.ask(GetWebWallpapers).await
     }
 
     /// # Errors

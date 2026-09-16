@@ -23,7 +23,7 @@ enum WorkshopKind: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .scene: String(localized: "Scene · experimental renderer")
         case .video: String(localized: "Video · codec dependent")
-        case .web: String(localized: "Web · not supported by this renderer")
+        case .web: String(localized: "Web · built-in web view")
         case .application: String(localized: "Application · unsupported on macOS")
         case .all: String(localized: "Compatibility checked after download")
         }

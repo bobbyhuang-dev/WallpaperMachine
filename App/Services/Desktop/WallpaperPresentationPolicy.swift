@@ -84,9 +84,18 @@ final class WallpaperPresentationPolicy {
         commit(false)
     }
 
+    /// Both window kinds host wallpaper pixels: the renderer's Metal window and
+    /// the app's web wallpaper window.
+    static let wallpaperWindowClassNames = ["MWEWallpaperDesktopWindow", "MWEWebWallpaperDesktopWindow"]
+
+    static func wallpaperWindows() -> [NSWindow] {
+        let types = wallpaperWindowClassNames.compactMap(NSClassFromString)
+        guard !types.isEmpty else { return [] }
+        return NSApp.windows.filter { window in types.contains { window.isKind(of: $0) } }
+    }
+
     static func desktopIsVisible() -> Bool {
-        guard let type = NSClassFromString("MWEWallpaperDesktopWindow") else { return true }
-        let windows = NSApp.windows.filter { $0.isKind(of: type) }
+        let windows = wallpaperWindows()
         // No wallpaper window means nothing to suspend.
         return windows.isEmpty || windows.contains { $0.occlusionState.contains(.visible) }
     }

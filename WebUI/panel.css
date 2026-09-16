@@ -211,6 +211,9 @@ button.danger { color: var(--danger); }
 button.icon-button { padding: 6px; min-width: 30px; }
 svg { flex-shrink: 0; vertical-align: middle; }
 input:not([type="checkbox"]):not([type="range"]):not([type="color"]), select, textarea { min-height: 30px; padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--sunken); min-width: 0; max-width: 100%; }
+/* Native menulist paints its own pop-up inside the padded box; draw the control ourselves so it shares button metrics. */
+select { appearance: none; padding-right: 26px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14' viewBox='0 0 10 14' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 5.5 5 2.5l3 3M2 8.5l3 3 3-3'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 8px center; }
+select:hover:not(:disabled) { border-color: var(--line-strong); }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
 input { caret-color: var(--accent); }
 input[type="checkbox"] { accent-color: var(--control); width: 15px; height: 15px; margin: 0; flex: 0 0 auto; }
@@ -245,7 +248,7 @@ small, .muted { color: var(--muted); }
 #main { flex: 1; min-height: 0; overflow: hidden; }
 .library-page { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 280px; }
 .library-page.discover { grid-template-columns: 174px minmax(0, 1fr) 280px; }
-.browser-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.browser-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; }
 .browser-toolbar { padding: 16px 16px 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .search-form { flex: 1 1 150px; display: flex; align-items: center; position: relative; }
 .search-form > svg { position: absolute; left: 9px; color: var(--muted); pointer-events: none; }
@@ -254,6 +257,12 @@ small, .muted { color: var(--muted); }
 .browser-toolbar select { max-width: 180px; }
 .browser-summary { min-height: 27px; padding: 0 16px 8px; color: var(--muted); font-size: 12px; }
 .wallpaper-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(154px, 1fr)); gap: 12px; padding: 2px 16px 16px; overflow: auto; align-content: start; flex: 1; min-height: 0; }
+/* Workshop pages hold 30 items (WorkshopService numperpage); column counts divide 30 so a full page leaves no partial row. */
+.discover .wallpaper-grid { grid-template-columns: repeat(var(--page-columns, 2), minmax(0, 1fr)); }
+@container (min-width: 518px) { .discover .wallpaper-grid { --page-columns: 3; } }
+@container (min-width: 850px) { .discover .wallpaper-grid { --page-columns: 5; } }
+@container (min-width: 1016px) { .discover .wallpaper-grid { --page-columns: 6; } }
+@container (min-width: 1680px) { .discover .wallpaper-grid { --page-columns: 10; } }
 .wallpaper-tile { position: relative; min-width: 0; }
 .tile-select { display: block; position: relative; width: 100%; aspect-ratio: 1; padding: 0; border: 1px solid transparent; border-radius: 3px; overflow: hidden; text-align: left; background: var(--media-well); }
 .tile-select:hover:not(:disabled) { background: var(--media-well); border-color: var(--line-strong); }

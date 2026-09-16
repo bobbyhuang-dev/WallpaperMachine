@@ -12,10 +12,12 @@ final class WallpaperActivationRecoveryTests: XCTestCase {
         home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let folder = home.appendingPathComponent("Library/failing", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        // "web" skips the video and scene asset preflights; this test covers the
-        // apply failure, not manifest validation.
-        try Data(#"{"type":"web","title":"Failing"}"#.utf8)
+        // A complete web project passes its preflight without decoding media or
+        // needing scene assets; this test covers the apply failure, not validation.
+        try Data(#"{"type":"web","title":"Failing","file":"index.html"}"#.utf8)
             .write(to: folder.appendingPathComponent("project.json"))
+        try Data("<!doctype html><title>Failing</title>".utf8)
+            .write(to: folder.appendingPathComponent("index.html"))
         setenv("MAC_WALLPAPER_ENGINE_HOME", home.path, 1)
     }
 

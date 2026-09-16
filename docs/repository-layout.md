@@ -24,6 +24,7 @@ App/                               MacWallpaperEngine application target sources
   Services/Library/                ClientPaths and library import/deletion; owns the app-support layout
   Services/LockScreen/             lock-screen selection overrides and configuration publishing
   Services/Steam/                  SteamCMD runtime discovery and setup state
+  Services/WebWallpaper/           WKWebView host windows and page protocol for web wallpapers
   Services/Workshop/               Workshop query model, browse store, downloader and queue
   ViewModels/                      BridgeStore and editor draft state; observable, no view code
   Views/ControlPanel/              SwiftUI container, WKWebView host, snapshot builder, action handlers
@@ -33,7 +34,7 @@ Shared/                            LockScreenConfiguration.swift only; compiled 
 WebUI/                             HTML/CSS/JS control panel; bundled verbatim as the app resource folder WebUI
 Resources/StarterWallpaper/        bundled sample wallpaper (Aurora.mp4, preview.jpg, project.json)
 Tests/Unit/<Domain>/               MacWallpaperEngineTests, grouped Appearance, Desktop, GitHub, Library,
-                                   LockScreen, Panel, Steam, Workshop; hosted in the app binary
+                                   LockScreen, Panel, Steam, WebWallpaper, Workshop; hosted in the app binary
 Tests/UI/                          MacWallpaperEngineUITests; desktop-driving XCUITest suite
 docs/                              all project documentation; see docs/README.md for the index
 scripts/                           developer command line; Python only

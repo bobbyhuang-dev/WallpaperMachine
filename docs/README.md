@@ -47,6 +47,7 @@ live under `testing/`.
 | [features/control-panel.md](features/control-panel.md) | Window and panel UX, tabs, inspector, interaction reference |
 | [features/workshop-downloads.md](features/workshop-downloads.md) | Discover, SteamCMD setup, download queue |
 | [features/audio-response.md](features/audio-response.md) | Audio-responsive wallpapers |
+| [features/web-wallpapers.md](features/web-wallpapers.md) | HTML/JS wallpapers hosted in a web view, host protocol, limits |
 | [features/lock-screen.md](features/lock-screen.md) | Experimental animated lock screen |
 | [features/appearance.md](features/appearance.md) | Theme and appearance customization |
 

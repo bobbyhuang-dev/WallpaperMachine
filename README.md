@@ -1,7 +1,7 @@
 # MacWallpaperEngine
 
-A native macOS Wallpaper Engine client with scene rendering and independently
-implemented Steam Workshop browsing and downloads. The app is a SwiftUI/AppKit
+A native macOS Wallpaper Engine client with scene, video and web wallpaper rendering and
+independently implemented Steam Workshop browsing and downloads. The app is a SwiftUI/AppKit
 shell around a vendored Rust/C++ renderer, with an HTML control panel hosted in
 `WKWebView` and a sandboxed ExtensionKit extension for the experimental animated
 lock screen.

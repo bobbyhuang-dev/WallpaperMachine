@@ -181,6 +181,7 @@ extension WebPanelController {
       switch try request.string("key") {
       case "launchAtLogin": try await store.setLaunchAtLoginAsync(enabled: value)
       case "pauseOnBattery": try await store.setPauseOnBatteryPowerAsync(enabled: value)
+      case "keepWindowsOnWallpaperClick": try DesktopClickRevealPreference.setEnabled(!value)
       case "lockScreenEnabled":
         guard let lock = store.lockScreenWallpaper else {
           throw WallpaperActionError(message: "Lock Screen integration is unavailable.")

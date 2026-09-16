@@ -86,6 +86,7 @@ Services are grouped by domain under `App/Services/`.
 | `LockScreen/` | `LockScreenWallpaperSelection`, `LockScreenWallpaperService` | System lock-screen selection overrides and configuration publishing |
 | `Steam/` | `SteamCMDRuntime`, `SteamCMDSetupStore` | SteamCMD discovery, download, validation, security approval |
 | `Workshop/` | `WorkshopService`, `WorkshopStore`, `WorkshopDownloader`, `WorkshopDownloadManager` | Workshop query model, browse state, SteamCMD-driven downloads, queue |
+| `WebWallpaper/` | `WebWallpaperHost`, `WebWallpaperWindow`, `WebWallpaperPage` | Desktop-level `WKWebView` windows for `type: "web"` projects, driven by the bridge's `webWallpapers()`; see [features/web-wallpapers.md](features/web-wallpapers.md) |
 
 `ClientPaths` fixes the on-disk contract: everything lives under
 `~/Library/Application Support/mac-wallpaper-engine` (overridable with
@@ -95,10 +96,12 @@ resolves the same paths.
 
 ### Desktop wallpaper windows and private-API handling
 
-Live desktop wallpaper windows are created by the Rust core, not by Swift:
-`upstream/renderer/crates/core/src/window.rs` defines the `NSWindow` subclass
+Live desktop wallpaper windows for scene and video projects are created by the Rust core, not
+by Swift: `upstream/renderer/crates/core/src/window.rs` defines the `NSWindow` subclass
 `MWEWallpaperDesktopWindow` (stable Objective-C name, deliberately depended on by Swift) hosting
-a `CAMetalLayer` at a wallpaper window level.
+a `CAMetalLayer` at a wallpaper window level. Web projects get the same window shape from Swift
+(`MWEWebWallpaperDesktopWindow`, `App/Services/WebWallpaper/`); the bridge excludes them from
+engine reconciliation and reports them through `webWallpapers()`.
 
 Swift keeps the *system* wallpaper consistent with that window:
 

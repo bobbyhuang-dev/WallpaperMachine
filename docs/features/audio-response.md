@@ -37,7 +37,7 @@ and average buffers contain the same signal.
 ## Non-goals
 
 - Pre-rendered video wallpapers do not gain reactive effects.
-- This does not add web-wallpaper rendering.
+- [Web wallpapers](web-wallpapers.md) do not receive audio samples.
 - The [lock-screen extension](lock-screen.md) does not capture system audio.
 
 ## Verification

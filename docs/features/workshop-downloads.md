@@ -105,8 +105,8 @@ discard an already downloaded wallpaper; scene playback stays unavailable until
 its resources are installed. The resources can also be located on disk instead
 of downloaded.
 
-Scene support is experimental; web and Windows application wallpapers are
-labeled unsupported.
+Scene support is experimental; [web wallpapers](web-wallpapers.md) run in a
+built-in web view; Windows application wallpapers are labeled unsupported.
 
 **Install scene assets…** in Settings, or the same action in an installed
 scene's Workshop details, starts the installation; **Locate assets…** instead

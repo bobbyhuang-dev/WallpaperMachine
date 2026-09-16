@@ -55,6 +55,7 @@ function draw(view) {
   const lockUnavailable = unavailable || settings.lockScreenStatus == null;
   const general = settingToggle('launchAtLogin', 'Launch at login', !settings.launchAtLoginAvailable, !settings.launchAtLoginAvailable ? 'Move the app to Applications to enable.' : '')
     + settingToggle('pauseOnBattery', 'Pause on battery')
+    + settingToggle('keepWindowsOnWallpaperClick', 'Keep windows in place when clicking the wallpaper', false, 'Turns off macOS’s “Click wallpaper to reveal desktop” so clicks reach interactive wallpapers.')
     + `<div class="settings-group-gap"></div>`
     + settingToggle('lockScreenEnabled', 'Animate lock screen', lockUnavailable || settings.lockScreenBusy, 'Experimental')
     + row('lock-status', 'Lock screen status', `<span class="settings-status" role="status">${e(lockUnavailable ? 'Unavailable' : settings.lockScreenBusy ? `${settings.lockScreenStatus || 'Updating'}…` : settings.lockScreenStatus)}</span>${settings.lockScreenError ? button('Retry', 'lockScreenRetry', {}, busy || settings.lockScreenBusy) : ''}`)

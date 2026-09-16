@@ -42,8 +42,10 @@ struct DesktopPosterFrame: Sendable {
     var bgra: Bool
 }
 
+/// `layer` identifies the surface: the renderer's `CAMetalLayer`, or a web
+/// wallpaper view's backing layer. Its owner answers the poster request.
 struct DesktopPosterSurface {
-    var layer: CAMetalLayer
+    var layer: CALayer
     var display: String
 }
 
@@ -70,9 +72,8 @@ final class DesktopWallpaperSync {
 
     convenience init(folder: URL) throws {
         try self.init(folder: folder, workspace: SystemDesktopPictureWorkspace(), surfaces: {
-            guard let type = NSClassFromString("MWEWallpaperDesktopWindow") else { return [] }
-            return NSApp.windows.compactMap { window in
-                guard window.isKind(of: type), let layer = window.contentView?.layer as? CAMetalLayer,
+            WallpaperPresentationPolicy.wallpaperWindows().compactMap { window in
+                guard let layer = window.contentView?.layer,
                       let screen = window.screen, let id = SystemDesktopPictureWorkspace.id(screen) else { return nil }
                 return DesktopPosterSurface(layer: layer, display: id)
             }
@@ -169,7 +170,7 @@ final class DesktopWallpaperSync {
     }
 
     private func receive(_ notification: Notification) {
-        guard !stopped, let layer = notification.object as? CAMetalLayer,
+        guard !stopped, let layer = notification.object as? CALayer,
               surfaces().contains(where: { $0.layer === layer }),
               let values = notification.userInfo,
               let pixels = values["pixels"] as? Data,

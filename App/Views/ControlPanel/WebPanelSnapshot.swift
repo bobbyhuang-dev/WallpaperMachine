@@ -223,6 +223,7 @@ extension WebPanelController {
         "launchAtLogin": settings.launchAtLoginEnabled,
         "launchAtLoginAvailable": settings.launchAtLoginAvailable,
         "pauseOnBattery": settings.pauseOnBatteryPower,
+        "keepWindowsOnWallpaperClick": !DesktopClickRevealPreference.isEnabled,
         "lockScreenEnabled": lock?.isRequested ?? false, "lockScreenAvailable": lock != nil,
         "lockScreenBusy": lock?.isBusy ?? false, "lockScreenStatus": lock?.status ?? "Unavailable",
         "lockScreenError": lock?.errorMessage as Any? ?? null,

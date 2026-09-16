@@ -146,6 +146,7 @@ mod tests {
             description_html: String::new(),
             project_type: wallpaper_core::project::WallpaperProjectType::Unknown,
             preview_file: None,
+            entry_file: None,
             properties: vec![ProjectProperty {
                 id: id.into(),
                 kind: PropertyKind::Bool,

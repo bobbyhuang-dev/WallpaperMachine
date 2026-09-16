@@ -24,6 +24,7 @@ use crate::{
             CompleteRestoreAfterReconcile, EditProperty, EjectWallpaperFromDisplay,
             GetAllSnapshots, GetAppSnapshot, GetLibrarySnapshot, GetLockScreenScenes,
             GetMonitorInformationSnapshot, GetSettingsSnapshot, GetWallpaperOptionsSnapshot,
+            GetWebWallpapers,
             InitialFrameReady, InjectDisplayForTest, InjectSceneProjectForTest,
             InjectSceneWallpaperConfigForTest, InjectWallpaperForTest, PollMousePosition,
             ReconcileFailed, RefreshDisplays, RefreshLibrary, ReplaceLibraryForTest,
@@ -41,7 +42,7 @@ use crate::{
         BridgeDisplaySettingsRow, BridgeError, BridgeLibraryScanStatus, BridgeLibrarySnapshot,
         BridgeLockScreenScene, BridgePlaybackState, BridgePropertyValue, BridgeScalingMode,
         BridgeSnapshotBundle, BridgeWallpaperEntry, BridgeWallpaperKind,
-        BridgeWallpaperMutationBundle, MousePollingControl,
+        BridgeWallpaperMutationBundle, BridgeWebWallpaper, MousePollingControl,
     },
     config::{AppConfig, ConfigStore, SerializedSelector, WallpaperConfig},
     display::{DisplaySelectorExt, DisplaySnapshotExt},
@@ -659,17 +660,72 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         Ok(())
     }
 
-    fn lock_screen_scenes(&self) -> Result<Vec<BridgeLockScreenScene>, BridgeError> {
-        let displays = self.engine.display_snapshot();
-        let scenes = ActivationInputs {
+    fn activation_inputs<'a>(
+        &'a self,
+        displays: &'a [DisplaySnapshotEntry],
+        paused: bool,
+    ) -> ActivationInputs<'a> {
+        ActivationInputs {
             app_config: &self.state.app_config,
             wallpapers: &self.state.wallpaper_configs,
-            displays: &displays,
-            paused: self.state.playback_state == BridgePlaybackState::Paused,
+            displays,
+            paused,
             paths: &self.paths,
             force_shader_refresh: false,
+            project_models: &self.state.project_models,
         }
-        .build()?;
+    }
+
+    /// Committed web wallpapers for connected displays, rendered by the host.
+    fn web_wallpapers(&self) -> Result<Vec<BridgeWebWallpaper>, BridgeError> {
+        let displays = self.engine.display_snapshot();
+        self.activation_inputs(&displays, self.playback_paused())
+            .build_web()?
+            .into_iter()
+            .map(|desc| {
+                let title = self
+                    .state
+                    .library
+                    .iter()
+                    .find(|entry| entry.id == desc.wallpaper_id)
+                    .map(|entry| entry.title.clone())
+                    .unwrap_or_default();
+                let project_path = std::path::absolute(&desc.project_dir)
+                    .map_err(|error| BridgeError::Error {
+                        kind: crate::api::BridgeErrorKind::Io,
+                        message: error.to_string(),
+                    })?
+                    .into_os_string()
+                    .into_string()
+                    .map_err(|_| BridgeError::invalid_input("web wallpaper path is not UTF-8"))?;
+                let properties = desc
+                    .properties
+                    .iter()
+                    .map(|(id, value)| {
+                        (
+                            id.clone(),
+                            serde_json::json!({ "value": value.to_json() }),
+                        )
+                    })
+                    .collect::<serde_json::Map<_, _>>();
+                Ok(BridgeWebWallpaper {
+                    display_id: desc.display.display_id,
+                    wallpaper_id: desc.wallpaper_id,
+                    title,
+                    project_path,
+                    entry_file: desc.entry_file,
+                    fps: desc.fps,
+                    paused: desc.paused,
+                    audio_response_enabled: desc.audio_response_enabled,
+                    properties_json: serde_json::Value::Object(properties).to_string(),
+                })
+            })
+            .collect()
+    }
+
+    fn lock_screen_scenes(&self) -> Result<Vec<BridgeLockScreenScene>, BridgeError> {
+        let displays = self.engine.display_snapshot();
+        let scenes = self.activation_inputs(&displays, self.state.playback_state == BridgePlaybackState::Paused).build()?;
 
         scenes
             .into_iter()
@@ -742,15 +798,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         &self,
         displays: &[DisplaySnapshotEntry],
     ) -> Result<Option<Vec<SceneDesc>>, BridgeError> {
-        let scenes = ActivationInputs {
-            app_config: &self.state.app_config,
-            wallpapers: &self.state.wallpaper_configs,
-            displays,
-            paused: self.playback_paused(),
-            paths: &self.paths,
-            force_shader_refresh: false,
-        }
-        .build()?;
+        let scenes = self.activation_inputs(displays, self.playback_paused()).build()?;
         let snapshot = self.engine.display_snapshot();
         let has_direct_runtime = |entry: &&DisplaySnapshotEntry| {
             entry.handle.is_some()
@@ -830,11 +878,20 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         let engine = self.engine.clone();
         let app_config = self.state.app_config.clone();
         let wallpaper_configs = self.state.wallpaper_configs.clone();
+        let project_models = self.state.configured_project_models(&app_config);
         let paused = self.playback_paused();
         let paths = self.paths.clone();
         tokio::spawn(async move {
-            let result =
-                reconcile_with(engine, app_config, wallpaper_configs, paused, paths, false).await;
+            let result = reconcile_with(
+                engine,
+                app_config,
+                wallpaper_configs,
+                project_models,
+                paused,
+                paths,
+                false,
+            )
+            .await;
             let _ = actor
                 .ask(CompleteRestoreAfterReconcile { result, generation })
                 .await;
@@ -867,10 +924,12 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         app_config: AppConfig,
         wallpaper_configs: BTreeMap<String, WallpaperConfig>,
     ) -> Result<Vec<SceneDesc>, BridgeError> {
+        let project_models = self.state.configured_project_models(&app_config);
         reconcile_with(
             self.engine.clone(),
             app_config,
             wallpaper_configs,
+            project_models,
             self.playback_paused(),
             self.paths.clone(),
             false,
@@ -885,6 +944,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         ctx: &mut Context<Self, DelegatedReply<messages::DisplayMutationReply>>,
     ) -> DelegatedReply<messages::DisplayMutationReply> {
         let wallpaper_configs = self.state.wallpaper_configs.clone();
+        let project_models = self.state.configured_project_models(&app_config);
         let generation = self.reserve_reconcile();
         let paused = self.playback_paused();
         let actor = ctx.actor_ref().clone();
@@ -895,6 +955,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                 engine,
                 app_config.clone(),
                 wallpaper_configs.clone(),
+                project_models,
                 paused,
                 paths,
                 false,
@@ -1223,6 +1284,7 @@ async fn reconcile_with<E: EngineFacade>(
     engine: E,
     app_config: AppConfig,
     wallpaper_configs: BTreeMap<String, WallpaperConfig>,
+    project_models: BTreeMap<String, ProjectModel>,
     paused: bool,
     paths: BridgePaths,
     force_shader_refresh: bool,
@@ -1235,6 +1297,7 @@ async fn reconcile_with<E: EngineFacade>(
         paused,
         paths: &paths,
         force_shader_refresh,
+        project_models: &project_models,
     }
     .build()?;
     let results = engine
@@ -1354,6 +1417,18 @@ impl<E: EngineFacade + Clone> Message<GetLockScreenScenes> for BridgeActor<E> {
     }
 }
 
+impl<E: EngineFacade + Clone> Message<GetWebWallpapers> for BridgeActor<E> {
+    type Reply = messages::WebWallpapersReply;
+
+    async fn handle(
+        &mut self,
+        _msg: GetWebWallpapers,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.web_wallpapers()
+    }
+}
+
 impl<E: EngineFacade + Clone> Message<GetMonitorInformationSnapshot> for BridgeActor<E> {
     type Reply = messages::MonitorInformationSnapshotReply;
 
@@ -1427,10 +1502,12 @@ impl<E: EngineFacade + Clone> Message<ClearShaderCache> for BridgeActor<E> {
         self.load_wallpapers()?;
         let app_config = self.state.app_config.clone();
         let wallpaper_configs = self.state.wallpaper_configs.clone();
+        let project_models = self.state.configured_project_models(&app_config);
         let result = reconcile_with(
             self.engine.clone(),
             app_config,
             wallpaper_configs,
+            project_models,
             self.playback_paused(),
             self.paths.clone(),
             true,
@@ -1475,7 +1552,9 @@ impl<E: EngineFacade + Clone> Message<InjectWallpaperForTest> for BridgeActor<E>
             kind: msg.kind,
             supported: matches!(
                 msg.kind,
-                BridgeWallpaperKind::ProjectScene | BridgeWallpaperKind::Video
+                BridgeWallpaperKind::ProjectScene
+                    | BridgeWallpaperKind::Video
+                    | BridgeWallpaperKind::Webpage
             ),
             active: false,
             selected: false,
@@ -2692,11 +2771,13 @@ impl<E: EngineFacade + Clone> Message<ApplyWallpaperOptions> for BridgeActor<E> 
                         paused,
                         paths: &self.paths,
                         force_shader_refresh: false,
+                        project_models: &self.state.project_models,
                     }
                     .build()
                 })
                 .transpose()
         );
+        let project_models = self.state.configured_project_models(&app_config);
 
         if requires_reconcile {
             let generation = self.reserve_reconcile();
@@ -2709,6 +2790,7 @@ impl<E: EngineFacade + Clone> Message<ApplyWallpaperOptions> for BridgeActor<E> 
                     engine,
                     app_config,
                     wallpaper_configs,
+                    project_models,
                     paused,
                     paths,
                     false,

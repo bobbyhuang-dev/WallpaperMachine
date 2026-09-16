@@ -40,6 +40,25 @@ pub struct BridgeLockScreenScene {
     pub paused: bool,
 }
 
+/// Committed inputs for a web wallpaper the host renders in a web view on one
+/// display. Mirrors of a web source display appear as separate entries.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct BridgeWebWallpaper {
+    pub display_id: u32,
+    pub wallpaper_id: String,
+    pub title: String,
+    /// Absolute project directory.
+    pub project_path: String,
+    /// Entry page relative to `project_path`.
+    pub entry_file: String,
+    pub fps: u32,
+    pub paused: bool,
+    pub audio_response_enabled: bool,
+    /// Wallpaper Engine `applyUserProperties` payload: `{ id: { value } }`
+    /// for every user-editable property, overrides applied over defaults.
+    pub properties_json: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum BridgeDisplayMode {
     Standalone,

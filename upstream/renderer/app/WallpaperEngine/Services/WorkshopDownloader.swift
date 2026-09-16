@@ -841,6 +841,10 @@ struct NetworkReceiveMeter {
     private var intervals: [(bytes: Double, duration: TimeInterval)] = []
     private var currentRate: Double?
 
+    init(processID: Int32) {
+        self.processID = processID
+    }
+
     mutating func append(_ data: Data, at time: TimeInterval) {
         guard time.isFinite else { return }
         pending += String(decoding: data, as: UTF8.self)

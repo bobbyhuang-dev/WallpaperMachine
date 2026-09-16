@@ -11,6 +11,29 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-16 — Cursor mapping rebased onto the coverage-mask work
+
+`fix(scene): map cursor input through the presented wallpaper` was rebased onto
+`2385923` (script side-effect writes, puppet animation layers, cursor coverage).
+Conflicts resolved by hand: `CursorHitsLayer` now runs the content check before
+the incoming hit-mask lookup, and both `provenance.json` notes and both
+`renderer.md` coverage rows were kept.
+
+Re-verified on the merged tree:
+
+- `mouse_input_test` **9**, `script_runtime_compat_test` **39 passed, 1 failed**
+  (the pre-existing `HostVectorUpdates…`), `scene_schema_tests` **53**,
+  `scenescript_sound_layer_smoke` **8**, `particle_mouse_controlpoint_test`
+  **35**, `text_object_runtime_test` **60 passed, 2 skipped**.
+- `python3 scripts/test.py`: native **225 passed**, 0 failed, 0 skipped.
+- `python3 scripts/check_renderer.py` (full): **9 generated GPU cases** passed
+  known-pixel assertions and pooled/isolated byte comparisons; **8 projects × 2
+  reloads** passed; the three test binaries exited 0.
+- `python3 scripts/build.py --configuration Release` rebuilt
+  `build/Build/Products/Release/MacWallpaperEngine.app` from the merged tree;
+  the binary exports both this change's cursor symbols and the merged
+  `PuppetAnimationControl`. The app was not launched or quit.
+
 ## 2026-09-16 — Cursor hit testing follows the presented wallpaper
 
 Renderer source and native checks only; no desktop input, capture or delivery.

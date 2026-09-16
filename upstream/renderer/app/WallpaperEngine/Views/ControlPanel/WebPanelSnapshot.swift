@@ -143,6 +143,7 @@ extension WebPanelController {
       "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         ?? "",
       "page": page, "targetDisplayID": navigation.targetDisplayID,
+      "theme": theme.preferences.snapshot,
       "selectedID": store.appSnapshot.selectedWallpaperId as Any? ?? null,
       "paused": store.appSnapshot.playbackState == .paused,
       "busy": commandBusy || store.activatingWallpaperID != nil || store.applyingWallpaperID != nil,

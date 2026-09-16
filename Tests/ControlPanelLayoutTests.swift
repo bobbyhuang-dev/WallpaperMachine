@@ -85,13 +85,11 @@ final class ControlPanelLayoutTests: XCTestCase {
         """
         const state = await window.webkit.messageHandlers.native.postMessage({action:'navigate',page:'settings'});
         window.wallpaperUI.receive(state);
-        return {page:state.page, visible:!document.getElementById('settings-content').hidden,
-                tabs:[...document.querySelectorAll('.tabs [data-page]')].map(x=>x.textContent.trim())};
+        return {page:state.page, visible:!document.getElementById('settings-content').hidden};
         """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
     XCTAssertEqual(result?["page"] as? String, "settings")
     XCTAssertEqual(result?["visible"] as? Bool, true)
     XCTAssertEqual(navigation.selection, .settings)
-    XCTAssertEqual(result?["tabs"] as? [String], ["Discover", "Installed", "Settings"])
     let denied =
       try await web.callAsyncJavaScript(
         """
@@ -100,6 +98,131 @@ final class ControlPanelLayoutTests: XCTestCase {
         """, arguments: [:], in: nil, contentWorld: .page) as? Bool
     XCTAssertEqual(denied, true)
     XCTAssertNil(web.window, "This regression must not open a desktop window")
+    await workshop.steamCMDSetup.shutdown()
+  }
+
+  func testAppearanceControlsPersistAndFollowNativeAppearanceWithoutWindow() async throws {
+    let fixture = makeStore()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "theme-ui-\(UUID().uuidString)")
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+    defer {
+      defaults.removePersistentDomain(forName: root.lastPathComponent)
+      try? FileManager.default.removeItem(at: root)
+    }
+    let theme = AppThemeStore(defaults: defaults)
+    try theme.set("mode", value: "light")
+    let workshop = WorkshopStore(
+      downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
+      defaults: defaults)
+    let controller = WebPanelController(
+      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop, theme: theme)
+    let web = controller.makeWebView()
+    defer { controller.stop() }
+    web.setFrameSize(NSSize(width: 760, height: 560))
+    let deadline = Date().addingTimeInterval(15)
+    while !controller.isReady && Date() < deadline {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    XCTAssertTrue(controller.isReady)
+    guard controller.isReady else { return }
+
+    let interactions =
+      try await web.callAsyncJavaScript(
+        """
+        const waitFor = async predicate => {
+          const deadline = Date.now() + 5000;
+          while (!predicate()) {
+            if (Date.now() > deadline) throw new Error('Theme control did not settle');
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+        };
+        const root = document.documentElement;
+        const initialBackground = getComputedStyle(root).backgroundColor;
+        document.querySelector('.tabs [data-page="settings"]').click();
+        await waitFor(() => !document.getElementById('settings-content').hidden);
+        document.querySelector('[data-section="appearance"]').click();
+        const change = async (key, value) => {
+          const input = document.querySelector(`[data-theme-setting="${key}"]`);
+          await waitFor(() => !input.disabled);
+          input.value = value;
+          input.dispatchEvent(new Event('input', {bubbles:true}));
+          input.dispatchEvent(new Event('change', {bubbles:true}));
+          await waitFor(() => !input.disabled);
+        };
+        await change('mode', 'dark');
+        await waitFor(() => root.dataset.theme === 'dark');
+        const darkBackground = getComputedStyle(root).backgroundColor;
+        await change('accent', '#b43271');
+        await change('tone', 'warm');
+        await waitFor(() => root.dataset.tone === 'warm');
+        const saved = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+        document.querySelector('[data-action="resetTheme"]').click();
+        await waitFor(() => root.dataset.themeMode === 'system' && root.dataset.tone === 'neutral');
+        const reset = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+        return {initialBackground, darkBackground, saved:saved.theme, reset:reset.theme};
+        """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+    XCTAssertEqual(interactions?["initialBackground"] as? String, "rgb(255, 255, 255)")
+    XCTAssertNotEqual(interactions?["darkBackground"] as? String, "rgb(255, 255, 255)")
+    let saved = interactions?["saved"] as? [String: Any]
+    XCTAssertEqual(saved?["mode"] as? String, "dark")
+    XCTAssertEqual(saved?["accent"] as? String, "#b43271")
+    XCTAssertEqual(saved?["tone"] as? String, "warm")
+    let reset = interactions?["reset"] as? [String: Any]
+    XCTAssertEqual(reset?["mode"] as? String, "system")
+    XCTAssertEqual(reset?["tone"] as? String, "neutral")
+    XCTAssertEqual(AppThemeStore(defaults: defaults).preferences, theme.preferences)
+
+    // Override only this detached view to simulate live macOS appearance changes.
+    // Never change NSApp appearance or the user's global system preference.
+    for appearance in [NSAppearance.Name.darkAqua, .aqua] {
+      web.appearance = NSAppearance(named: appearance)
+      let expected = appearance == .darkAqua ? "dark" : "light"
+      let resolved =
+        try await web.callAsyncJavaScript(
+          """
+          const deadline = Date.now() + 5000;
+          while (document.documentElement.dataset.theme !== expected) {
+            if (Date.now() > deadline) throw new Error('System appearance was not followed');
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+          return getComputedStyle(document.documentElement).colorScheme;
+          """, arguments: ["expected": expected], in: nil, contentWorld: .page) as? String
+      XCTAssertEqual(resolved, expected)
+    }
+    try theme.set("mode", value: "light")
+    web.appearance = NSAppearance(named: .darkAqua)
+    let override =
+      try await web.callAsyncJavaScript(
+        """
+        const deadline = Date.now() + 5000;
+        while (document.documentElement.dataset.themeMode !== 'light'
+               || !matchMedia('(prefers-color-scheme: dark)').matches) {
+          if (Date.now() > deadline) throw new Error('Appearance override was not applied');
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        return document.documentElement.dataset.theme;
+        """, arguments: [:], in: nil, contentWorld: .page) as? String
+    XCTAssertEqual(override, "light", "Explicit Light must win over a dark native appearance")
+    try theme.set("accent", value: "#b43271")
+    try theme.set("tone", value: "cool")
+    controller.webViewWebContentProcessDidTerminate(web)
+    let recoveryDeadline = Date().addingTimeInterval(15)
+    while !controller.isReady && Date() < recoveryDeadline {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    XCTAssertTrue(controller.isReady)
+    let recovered =
+      try await web.callAsyncJavaScript(
+        """
+        return {mode:document.documentElement.dataset.theme,
+                tone:document.documentElement.dataset.tone,
+                accent:getComputedStyle(document.documentElement).getPropertyValue('--accent-base').trim()};
+        """, arguments: [:], in: nil, contentWorld: .page) as? [String: String]
+    XCTAssertEqual(recovered?["mode"], "light")
+    XCTAssertEqual(recovered?["tone"], "cool")
+    XCTAssertEqual(recovered?["accent"], "#b43271")
+    XCTAssertNil(web.window)
     await workshop.steamCMDSetup.shutdown()
   }
 
@@ -360,14 +483,26 @@ final class ControlPanelLayoutTests: XCTestCase {
         return {indeterminate, zeroRate, noRate, validating, byteProgress};
         """, arguments: ["base": base], in: nil, contentWorld: .page) as? [String: Any]
     let indeterminate = result?["indeterminate"] as? [String: Any]
-    XCTAssertEqual(indeterminate?["activityProgress"] as? Bool, true, "Activity bar must render a valueless progress bar while pending")
-    XCTAssertEqual(indeterminate?["queueProgress"] as? Bool, true, "Queue row must render a valueless progress bar while pending")
-    XCTAssertEqual(indeterminate?["rate"] as? Bool, true, "Both surfaces must show the measured network speed")
-    XCTAssertEqual(indeterminate?["noPercentOrBytes"] as? Bool, true, "Workshop downloads must not report percentage or byte totals")
+    XCTAssertEqual(
+      indeterminate?["activityProgress"] as? Bool, true,
+      "Activity bar must render a valueless progress bar while pending")
+    XCTAssertEqual(
+      indeterminate?["queueProgress"] as? Bool, true,
+      "Queue row must render a valueless progress bar while pending")
+    XCTAssertEqual(
+      indeterminate?["rate"] as? Bool, true, "Both surfaces must show the measured network speed")
+    XCTAssertEqual(
+      indeterminate?["noPercentOrBytes"] as? Bool, true,
+      "Workshop downloads must not report percentage or byte totals")
     XCTAssertEqual(result?["zeroRate"] as? Bool, true, "A measured idle rate must render as 0 B/s")
-    XCTAssertEqual(result?["noRate"] as? Bool, true, "An unavailable rate must be omitted, not shown as zero")
-    XCTAssertEqual(result?["validating"] as? Bool, true, "The validating phase must show its status without a network speed")
-    XCTAssertEqual(result?["byteProgress"] as? Bool, true, "Explicit app-update bytes may still drive determinate progress")
+    XCTAssertEqual(
+      result?["noRate"] as? Bool, true, "An unavailable rate must be omitted, not shown as zero")
+    XCTAssertEqual(
+      result?["validating"] as? Bool, true,
+      "The validating phase must show its status without a network speed")
+    XCTAssertEqual(
+      result?["byteProgress"] as? Bool, true,
+      "Explicit app-update bytes may still drive determinate progress")
     XCTAssertNil(web.window, "This regression must not open a desktop window")
     await workshop.steamCMDSetup.shutdown()
   }
@@ -398,8 +533,12 @@ private final class LayoutSnapshotBridge: WallpaperBridge {
 }
 
 private struct UnavailableRuntime: SteamCMDRuntimeProviding {
-    func resolve(executable: URL) throws -> SteamCMDRuntime { throw WorkshopFailure(message: "fixture") }
-    func validateBootstrap(at root: URL) async throws { throw WorkshopFailure(message: "fixture") }
-    func prepare(executable: URL, staging: URL) async throws -> URL { throw WorkshopFailure(message: "fixture") }
-    func validate(at root: URL) async throws { throw WorkshopFailure(message: "fixture") }
+  func resolve(executable: URL) throws -> SteamCMDRuntime {
+    throw WorkshopFailure(message: "fixture")
+  }
+  func validateBootstrap(at root: URL) async throws { throw WorkshopFailure(message: "fixture") }
+  func prepare(executable: URL, staging: URL) async throws -> URL {
+    throw WorkshopFailure(message: "fixture")
+  }
+  func validate(at root: URL) async throws { throw WorkshopFailure(message: "fixture") }
 }

@@ -72,6 +72,12 @@ Renderer and scene-engine sources are included directly in this snapshot, rather
   Wallpapers appear as square image-first tiles with a transparent title overlay;
   the right inspector shows the preview, title, kind, tags, actions, and the
   selected wallpaper's options and properties.
+- Appearance: **Settings → Appearance** offers **System (Auto)**, **Light** (white),
+  and **Dark**. System follows macOS appearance changes without reloading the panel;
+  a manual choice also sets the native app appearance. Customize the interface's
+  accent color and Neutral/Warm/Cool surface tone. Accent shades adapt for readable
+  text, buttons, and focus rings. Changes persist across launches; **Reset appearance**
+  restores System and the default colors without touching wallpapers or playback.
 - Installed: choose an enabled independent display as the target, then select a
   wallpaper. Selecting a tile only selects it — **Apply wallpaper** (or **Reapply
   wallpaper** for the active one) activates it on that target, and double-clicking

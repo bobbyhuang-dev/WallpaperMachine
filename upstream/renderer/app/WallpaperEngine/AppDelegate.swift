@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
@@ -17,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var playbackSnapshotCurrent = false
     private var shutdownInProgress = false
     private var shutdownComplete = false
+    private var themeSubscription: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hosted unit tests need the executable's types, not its desktop lifecycle.
@@ -25,6 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             NSApp.setActivationPolicy(.prohibited)
             return
         }
+        themeSubscription = AppThemeStore.shared.$preferences
+            .map(\.mode).removeDuplicates()
+            .sink { mode in NSApp.appearance = mode.appearance }
         logStartup("didFinishLaunching start")
         BridgeEnvironment.configureVulkanICDIfNeeded()
         logStartup("vulkan icd configured")

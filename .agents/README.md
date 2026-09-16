@@ -7,6 +7,7 @@ themselves live in [`../AGENTS.md`](../AGENTS.md); human contributors start at
 | Path | Tracked | Purpose |
 | --- | --- | --- |
 | `../AGENTS.md` | yes | Authoritative rules: skill routing, verification limits, build delivery |
+| `../CLAUDE.md` | yes (symlink) | Claude entry point; relative target `AGENTS.md`, never a second rule file |
 | `.agents/README.md` | yes | This file: how the agent tooling is wired |
 | `.agents/skills/sources.json` | yes | Upstream commit pinned for each vendored skill |
 | `.agents/skills/<name>/` | no | Vendored third-party skill text, restored locally |
@@ -16,6 +17,8 @@ themselves live in [`../AGENTS.md`](../AGENTS.md); human contributors start at
 `AGENTS.md` stays at the repository root: the vendored skill entry points link to
 it as `../../../AGENTS.md`, and that is where agent harnesses look for it. Moving
 it breaks both.
+`CLAUDE.md` is a relative symlink to the root `AGENTS.md`; edit the target only.
+
 
 ## Skills
 

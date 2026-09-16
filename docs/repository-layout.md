@@ -7,6 +7,7 @@ For how the pieces interact at runtime, see [architecture.md](architecture.md).
 
 ```
 AGENTS.md                          agent rules; authoritative for automated contributors
+CLAUDE.md -> AGENTS.md              Claude entry point; relative symlink, same rules
 CONTRIBUTING.md                    contributor working agreement
 LICENSING.md                       license-compatibility record for the vendored renderer
 README.md                          product overview, quickstart, documentation index

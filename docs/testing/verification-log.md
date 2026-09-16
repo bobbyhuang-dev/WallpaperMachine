@@ -11,6 +11,34 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-16 — Compact agent guidance and Claude entry point
+
+Documentation and symlink only. Aligned the root guidance with the workspace
+refactor, replaced the mandatory reading sequence with task-based routing, and
+kept authorization, generated/vendored ownership and delivery rules explicit.
+Detailed regression coverage stays in `renderer.md`, including the private-PTY
+`nettop` and CRLF requirements. Registered `CLAUDE.md` as a relative symlink in
+the tooling notes, layout and documentation index.
+
+Verified:
+
+- In-memory Python checks resolved **46 relative Markdown links** across the
+  five changed guidance/reference files, including heading anchors, and checked
+  **22 unique root-rule path references** against the tree or build-path helper.
+- `readlink CLAUDE.md` returned `AGENTS.md`; `cmp AGENTS.md CLAUDE.md` succeeded.
+  Python also confirmed a relative symlink resolving to the same file.
+- `python3 scripts/build.py --help`, `python3 scripts/test.py --help`,
+  `python3 scripts/check_renderer.py --help` and
+  `python3 scripts/clean.py --help` all exited **0** with the documented options.
+  `PYTHONDONTWRITEBYTECODE=1` kept these checks from creating repository caches.
+- `wc -l -w -c AGENTS.md`: **139 → 73 lines, 1,044 → 526 words,
+  7,982 → 4,900 bytes**. This measures text size, not model-specific token counts.
+
+Not verified: native/renderer behavior, desktop or visual behavior, permission
+grants, or Release delivery. No app build, app launch, desktop automation or
+wallpaper change was performed. Checks created no repository scripts or evidence
+files; existing shared-workspace byproducts were left untouched.
+
 ## 2026-09-16 — Continuous-playback resource reuse
 
 Source and headless GPU only.

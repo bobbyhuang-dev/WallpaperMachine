@@ -120,7 +120,7 @@ executable directly from the renderer check build directory.
 | Translucent coverage / alpha compositing | the `generated-alpha` case in `scripts/check_renderer.py` |
 | Clock/text corruption | `render_target_lifetime_test`, `text_object_runtime_test`, `shader_cache_metadata_test` |
 | Continuous-playback resource reuse | `playback_gpu_test` |
-| Download-speed sampling | `DownloaderTests` in `Tests/Unit/`, including a local-socket check of real `nettop` streaming |
+| Download-speed sampling | `DownloaderTests` in `Tests/Unit/Workshop/`: real `nettop` streaming over a private PTY with local-socket traffic; CRLF and split line endings. LF-only fixtures do not verify live delivery. |
 
 ### Startup and staging buffers
 

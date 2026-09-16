@@ -27,7 +27,7 @@ live under `testing/`.
 | [conventions.md](conventions.md) | Code, test, documentation, commit and pull-request rules |
 | [release.md](release.md) | Versioning, release specs, CI pipeline, in-app updater contract |
 | [development-tools.md](development-tools.md) | Optional diagnostics and the desktop authorization boundary |
-| [../AGENTS.md](../AGENTS.md) | Authoritative rule file for automated contributors |
+| [../AGENTS.md](../AGENTS.md) / [../CLAUDE.md](../CLAUDE.md) | Agent rules; CLAUDE.md is a symlink, not a separate policy |
 | [../LICENSING.md](../LICENSING.md) | License-compatibility record and distribution constraints |
 
 ## Testing

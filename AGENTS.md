@@ -1,139 +1,73 @@
 # Agent rules
 
-Authoritative rules for automated contributors to this repository. They outrank
-any skill workflow, upstream example or habit. Human contributors start at
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+MacWallpaperEngine: macOS/arm64; AppKit/SwiftUI, WKWebView panel, Rust/C++ renderer,
+sandboxed ExtensionKit lock screen. `CLAUDE.md` must stay a relative symlink to `AGENTS.md`.
 
-Orientation, in reading order:
+## Read on demand
 
-| Question | Read |
-| --- | --- |
-| What is this and how do I run it? | [`README.md`](README.md) |
-| Where does code live and where does new code go? | [`docs/repository-layout.md`](docs/repository-layout.md) |
-| How do the pieces fit together? | [`docs/architecture.md`](docs/architecture.md) |
-| How do I build it? | [`docs/build.md`](docs/build.md) |
-| How do I verify a change? | [`docs/testing/README.md`](docs/testing/README.md) |
-| What are the code and documentation rules? | [`docs/conventions.md`](docs/conventions.md) |
-| Everything else | [`docs/README.md`](docs/README.md) |
-| How is the agent tooling wired? | [`.agents/README.md`](.agents/README.md) |
+Read only task-relevant sections; keep this file to durable rules and routing.
 
-## Repository rules
+- Placement / runtime: [layout](docs/repository-layout.md), [architecture](docs/architecture.md).
+- Code / tests / docs: [conventions](docs/conventions.md), [testing](docs/testing/README.md).
+- Build / package / versions: [build](docs/build.md), [release](docs/release.md).
+- Product / features: [README](README.md), [docs index](docs/README.md). Humans: [CONTRIBUTING](CONTRIBUTING.md).
 
-- `project.yml` is the only source of truth for targets, build settings and
-  versions. Edit it and run `xcodegen generate`; never hand-edit
-  `mac-wallpaper-engine.xcodeproj`.
-- `App/Bridge/Generated` is build output from `scripts/build.py`. Never edit it
-  by hand.
-- `upstream/` is vendored third-party code. Changing anything there requires a
-  matching update to `upstream/provenance.json`, and `LICENSING.md` governs how
-  it may be combined and distributed.
-- `artifacts/` and `build/` are disposable and Git-ignored. Never commit them,
-  never cite a path inside them as durable evidence, and use
-  `python3 scripts/clean.py` to clear byproducts instead of leaving logs, result
-  bundles or `.app` snapshots lying around.
-- Keep private wallpaper assets, screenshots and traces out of Git.
+## Ownership and invariants
 
-## Skill routing and conflicts
+- `App/Services/<Domain>/`: domain logic/stores; `App/ViewModels/`: `BridgeStore`
+  renderer facade and editor drafts; `App/Views/ControlPanel/`: host, snapshots, actions.
+- `WebUI/`: bundled verbatim; ES modules, no npm/bundler. Preserve CSP, escaping and
+  message-origin checks; new files need `WebPanelAssets` allowlisting. Network work stays in Swift.
+- `Extension/`: sandboxed extension; `Shared/`: only code compiled by both targets,
+  extension-API-safe. Tests: `Tests/Unit/<Domain>/` and opt-in `Tests/UI/`.
+- `scripts/`: Python CLI; reuse `scripts/lib/` (paths, glyphs); tests in `scripts/tests/`.
+- `project.yml` owns targets/settings/versions: run `xcodegen generate`, never hand-edit
+  `mac-wallpaper-engine.xcodeproj`. Regenerate `App/Bridge/Generated/` via
+  `scripts/build.py` after bridge changes; never patch generated bindings.
+- `upstream/` is vendored renderer code, not app code. Every change requires updating
+  `upstream/provenance.json`; preserve notices and [licensing constraints](LICENSING.md).
+- Match surrounding conventions; reuse `ClientPaths`, `AppLog`, localization and
+  dependency injection. Isolate tests with `MAC_WALLPAPER_ENGINE_HOME`; assert behavior,
+  not wording/wiring. Migrate changed APIs completely; preserve others' concurrent edits.
+- `artifacts/` = disposable evidence; `build/` = disposable Xcode output. Neither is
+  durable evidence or committable; keep secrets/private assets/screenshots/traces out too.
+  Coordinate cleanup; preview with `python3 scripts/clean.py --dry-run`, then use
+  `python3 scripts/clean.py` (keeps built apps). `--all` deletes the delivered app.
 
-- Skills are task guidance, not independent authorization. Follow system and
-  developer instructions, the user's explicit task and authorization, and these
-  project rules over conflicting skill workflows. Continue unaffected work; do
-  not stop implementation solely because an optional skill step is unavailable
-  or disallowed.
-- Use `impeccable` for visual design and UX, and `swiftui-webkit` as the primary
-  WebKit implementation skill. For work spanning both, apply each to its own
-  concern rather than running two competing end-to-end workflows.
-- `webkit-integration` is a supplemental, explicitly invoked reference, not a
-  second automatic WebKit workflow. Its upstream examples contain API
-  differences; the selected Xcode SDK and deployment target are authoritative.
-  Never combine conflicting API signatures or raise the deployment target merely
-  to satisfy a skill.
-- Skills do not impose a read-only mode on implementation requests. Use the
-  tools available in this harness within the task's authorization; respect
-  actual harness restrictions and explicit review-only requests.
-- Skill instructions to launch browsers or apps, capture screenshots, run
-  desktop automation or rebuild Release remain subject to the verification and
-  delivery rules below. Without the required authorization, use source
-  inspection and non-desktop checks, report visual behavior as unverified, and
-  continue. Do not open a skill's browser-based question UI automatically; ask
-  in chat instead.
-- Keep local skill adaptations documented in [`.agents/README.md`](.agents/README.md)
-  and preserve them when updating the pinned upstream sources in
-  `.agents/skills/sources.json`.
+## Skills and permissions
 
-## Verification
+- System/developer instructions, explicit user scope and these rules outrank skills.
+  Skills grant neither authorization nor read-only restrictions; respect actual harness
+  limits and review-only requests. Continue permitted work when optional steps are
+  unavailable; ask questions in chat, not a browser UI.
+- `impeccable` → UI/UX; `swiftui-webkit` → primary WebKit; `webkit-integration` →
+  explicit-only reference. Use each only for its concern. The selected SDK and
+  `project.yml` decide APIs/deployment target, not examples; no skill-driven migration.
+  Preserve [local adaptations and source pins](.agents/README.md).
+- No desktop control, opening windows, screenshots, wallpaper/appearance changes, audio
+  hardware, permission prompts, live Steam login or app install/restart without explicit
+  authorization. Feature/test approval is not desktop approval. Peekaboo and
+  `python3 scripts/test.py --ui` require a requested desktop run, never a completion/release
+  gate. [Tool guidance](docs/development-tools.md) includes `python3 scripts/check_dev_tools.py`
+  (safe inspection; installation ≠ permission).
 
-- Routine verification must not control the desktop, capture screenshots, open
-  app windows, or change the user's wallpapers.
-- Use `python3 scripts/test.py` for the Python script tests and the native
-  unit/integration suite. Add targeted checks from
-  [`docs/testing/README.md`](docs/testing/README.md) when the change warrants
-  them.
-- Do not run Peekaboo, XCUITest or other desktop automation unless the user
-  explicitly requests a desktop test run. Approval to implement a feature or to
-  run routine tests is not approval for desktop automation.
-  `python3 scripts/test.py --ui` takes over the desktop and is never a required
-  completion or release gate.
-- Report visual behavior as unverified when it was not checked. Do not run
-  desktop automation to fill that gap automatically.
-- Record what a change verified in
-  [`docs/testing/verification-log.md`](docs/testing/verification-log.md), newest
-  entry first, including what was explicitly not verified.
-- Coverage that must not silently regress, with details and probe environment
-  variables in [`docs/testing/renderer.md`](docs/testing/renderer.md):
-  - Scene `general.zoom` may carry an authored scalar animation, not just a
-    fixed camera scale — `scene_schema_tests --gtest_filter='SceneSchema.*CameraZoom*'`.
-  - Callback-only property scripts — `*CallbackOnly*` in `scene_schema_tests`
-    and `script_runtime_compat_test`.
-  - MDLS3 skinning must preserve the authored skeleton; mesh format versions do
-    not justify flattening it —
-    `MdlSchema.Mdls3SkinningPreservesAuthoredHierarchyAndPivotsAcrossMeshVersions`
-    in `mdl_schema_tests`.
-  - Download-speed sampling, including the local-socket check of real `nettop`
-    streaming over a private PTY with CRLF handling — `DownloaderTests`.
-    LF-only fixtures do not verify live sample delivery.
-- The fixed local asset corpus in
-  [`docs/testing/wallpaper-corpus.md`](docs/testing/wallpaper-corpus.md) is not
-  yet populated; do not treat it as a passing test suite.
+## Verify and deliver
 
-## Build delivery
+- Routine gate: `python3 scripts/test.py` (Python → XcodeGen → native unit/integration).
+  Add `python3 scripts/check_renderer.py` for renderer changes; preserve applicable
+  [renderer/download regressions](docs/testing/renderer.md#regression-areas-that-must-stay-covered).
+  Report skipped asset checks as skipped; the [local corpus](docs/testing/wallpaper-corpus.md)
+  is not a passing suite. Docs/skill-only changes: check links, paths and commands;
+  no app build or desktop test.
+- Release builds only for an explicit build/delivery request:
+  `python3 scripts/build.py --swift-only --configuration Release` for Swift/WebUI/resources/config
+  with current renderer/bindings; `python3 scripts/build.py --configuration Release`
+  for renderer/bridge changes or missing outputs.
+- Delivered app: `build/Build/Products/Release/MacWallpaperEngine.app`. Claim delivery
+  only after a successful Release build containing the changes; report path and remind
+  the user to quit/reopen. Never launch/quit automatically. Failed/blocked builds ≠ delivery.
+- Update the owning docs; index new/removed documents in [docs/README.md](docs/README.md).
+  Record commands, results, skips and gaps newest-first in the
+  [verification log](docs/testing/verification-log.md). Historical results aren't current proof.
+  Report shared-workspace blockers and unchecked visual behavior explicitly.
 
-- Release builds are an explicit integration step, not a per-session
-  requirement. Multiple agents may be editing this workspace concurrently; do
-  not build Release automatically after app changes. Build it only when the user
-  explicitly requests a build or delivery.
-- Perform targeted verification where practical. Report exactly what was
-  verified and whether shared-workspace changes blocked verification.
-  Distinguish changes implemented and verified from an updated app delivered.
-- The user runs `build/Build/Products/Release/MacWallpaperEngine.app`. Never
-  claim that this Release app contains your changes unless a successful Release
-  build was performed after those changes.
-- When a Release build is requested, run
-  `python3 scripts/build.py --swift-only --configuration Release` for Swift-only
-  changes, or `python3 scripts/build.py --configuration Release` when renderer
-  changes are included.
-- After a successful Release build, report its path and remind the user to quit
-  and reopen the app to load the updated build. If the build fails, report the
-  failure without claiming delivery. Do not launch or quit the app
-  automatically as part of routine verification.
-
-## Development tools
-
-- Peekaboo is installed at `/opt/homebrew/bin/peekaboo` (last checked: 4.3.0)
-  and can be invoked through bash; no extra Computer Use framework or MCP server
-  is required. Check `--help` for version-specific usage.
-- The selected full Xcode includes Instruments, Accessibility Inspector and
-  `xctrace`. Use them for CPU, memory and GPU profiling and accessibility
-  diagnosis when the relevant interactive test is explicitly authorized.
-- Run `python3 scripts/check_dev_tools.py` for a safe installation check. It
-  reports versions and paths only; it neither captures nor controls the desktop,
-  and installation does not prove that Screen Recording or Accessibility
-  permissions are granted.
-- For explicitly requested desktop tests, use Peekaboo for exploratory visual
-  checks and the existing XCUITest suite in `Tests/UI` for repeatable UI
-  regression. Prefer semantic accessibility actions with explicit app and window
-  targets. Do not install redundant automation frameworks.
-- Tool availability is not permission to use the desktop. Do not automatically
-  request permissions, launch apps, capture screenshots or modify wallpapers.
-  [`docs/development-tools.md`](docs/development-tools.md) has the full
-  authorization boundary and tool-selection guidance.

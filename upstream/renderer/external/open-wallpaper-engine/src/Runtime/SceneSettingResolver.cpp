@@ -149,8 +149,11 @@ DynamicValueUniquePtr wrap_script_if_needed(
     }
 
     const auto script_source = setting.at("script").get<std::string>();
+    const bool scene_events = script_source.find("engine.on(") != std::string::npos ||
+                              script_source.find("scene.on(") != std::string::npos ||
+                              script_source.find("thisScene.on(") != std::string::npos;
     if (!allow_script_update ||
-        script_source.find("export function update") == std::string::npos) {
+        (scene_events && script_source.find("export function update") == std::string::npos)) {
         return value;
     }
 

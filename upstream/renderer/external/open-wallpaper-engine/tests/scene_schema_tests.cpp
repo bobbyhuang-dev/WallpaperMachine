@@ -2042,6 +2042,56 @@ TEST(SceneSchema, ParserUsesStableRuntimeNamesForDuplicateImageLayerNames) {
     EXPECT_EQ(scene->runtime->NodeSize("__we_layer_21"), Eigen::Vector2f(64.0f, 32.0f));
 }
 
+TEST(SceneSchema, CallbackOnlyDuplicateButtonsToggleNamedGroupsThroughParser) {
+    fs::VFS vfs;
+    MountSceneFiles(vfs);
+    audio::SoundManager sound;
+    WPSceneParser parser;
+    const nlohmann::json setting = {
+        {"value", true}, {"script", R"JS(
+export var scriptProperties = createScriptProperties()
+    .addText({name: 'target', value: 'missing'}).finish();
+let visible;
+export function init(value) { visible = true; return value; }
+export function cursorClick() {
+    visible = !visible;
+    thisScene.getLayer(scriptProperties.target).visible = visible;
+}
+)JS"}, {"scriptproperties", {{"target", "mode"}}}};
+    const nlohmann::json source = {
+        {"camera", {{"center", {0, 0, 0}}, {"eye", {0, 0, 1}}, {"up", {0, 1, 0}}}},
+        {"general", {{"ambientcolor", {0, 0, 0}}, {"skylightcolor", {0, 0, 0}},
+                     {"clearcolor", {0, 0, 0}}, {"cameraparallax", false},
+                     {"orthogonalprojection", {{"width", 400}, {"height", 300}}}}},
+        {"objects", nlohmann::json::array({
+            {{"id", 1}, {"name", "mode"}, {"visible", true}},
+            {{"id", 2}, {"name", "content"}, {"image", "image.json"}, {"parent", 1}},
+            {{"id", 3}, {"name", "button"}, {"image", "image.json"},
+             {"origin", {200, 150, 0}}, {"size", {80, 80}}, {"visible", setting}},
+            {{"id", 4}, {"name", "button"}, {"image", "image.json"}, {"parent", 3},
+             {"scale", {0.9, 0.9, 1}}, {"size", {80, 80}}, {"visible", setting}}
+        })}
+    };
+    ProjectProperties properties;
+    auto scene = parser.Parse(SceneParseRequest {
+        .scene_id = "callback-buttons", .project_properties = &properties,
+    }, source.dump(), vfs, sound);
+    ASSERT_NE(scene, nullptr);
+    ASSERT_NE(scene->runtime, nullptr);
+    auto& runtime = *scene->runtime;
+    runtime.Tick(0.01);
+    runtime.SetCursorInput(0.5f, 0.5f);
+    runtime.SetCursorEnter(true);
+    for (bool visible : {false, true, false}) {
+        runtime.SetCursorButtons(0, 1, 1);
+        runtime.DispatchCursorFrameEvents(true);
+        runtime.SetCursorButtons(0, 0, 0);
+        runtime.Tick(0.01);
+        EXPECT_EQ(runtime.NodeVisible("mode"), visible);
+    }
+    EXPECT_EQ(runtime.scriptErrorCount(), 0u);
+}
+
 TEST(SceneSchema, DuplicateParsedImageClickScriptsGateRealAssetSoundLayers) {
     fs::VFS vfs;
     MountSceneFiles(vfs);

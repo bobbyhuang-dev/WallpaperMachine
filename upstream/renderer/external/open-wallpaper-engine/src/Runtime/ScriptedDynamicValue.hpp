@@ -50,6 +50,7 @@ private:
     std::unique_ptr<PropertyScriptProgram>       m_program;
     DynamicValue                                 m_base_value;
     ScriptedValueSemantic                        m_semantic { ScriptedValueSemantic::Generic };
+    bool                                        m_has_update { false };
 };
 
 } // namespace wallpaper

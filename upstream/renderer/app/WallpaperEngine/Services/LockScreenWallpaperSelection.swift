@@ -17,6 +17,8 @@ final class LockScreenWallpaperSelection {
     var observeOnly: Bool? = nil
   }
 
+  private static var lastReloadSignal: Date?
+
   private let storeURL: URL
   private let journalURL: URL
   private let reload: @MainActor () throws -> Void
@@ -328,11 +330,16 @@ final class LockScreenWallpaperSelection {
       }
       found = true
     }
-    guard found else {
-      throw LockScreenWallpaperFailure(
-        message:
-          "No positively verified user-owned WallpaperAgent is running. Native selection could not be activated; its restoration journal was retained."
-      )
+    if found {
+      lastReloadSignal = Date()
+      return
     }
+    // We SIGTERMed the agent moments ago and launchd has not relaunched it yet.
+    // The relaunch reads the store we just wrote, so no signal is needed.
+    if let last = lastReloadSignal, Date().timeIntervalSince(last) < 10 { return }
+    throw LockScreenWallpaperFailure(
+      message:
+        "No positively verified user-owned WallpaperAgent is running. Native selection could not be activated; its restoration journal was retained."
+    )
   }
 }

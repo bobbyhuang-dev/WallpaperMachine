@@ -70,14 +70,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
             store.onSnapshotApplied = { [weak self, weak lockScreen] in
                 guard let self, !self.shutdownInProgress else { return }
-                if let lockScreen, lockScreen.isRequested {
-                    if lockScreen.errorMessage == nil {
-                        lockScreen.refresh()
-                    } else {
-                        self.desktopWallpaperSync?.refresh()
+                if let lockScreen, lockScreen.isRequested, lockScreen.errorMessage == nil {
+                    lockScreen.refresh()
+                } else if lockScreen?.ownsDesktopProvider != true {
+                    // A suspended poster sync must never outlive the native provider.
+                    do { try self.startDesktopWallpaperSync() } catch {
+                        self.lastError = error
+                        AppLog.error("Desktop poster sync could not be restarted: \(error.localizedDescription)")
                     }
-                } else {
-                    self.desktopWallpaperSync?.refresh()
                 }
             }
             do {
@@ -204,8 +204,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     private func startDesktopWallpaperSync() throws {
-        guard desktopWallpaperSync == nil, !shutdownInProgress else {
-            desktopWallpaperSync?.refresh()
+        guard !shutdownInProgress else { return }
+        if let sync = desktopWallpaperSync, !sync.isSuspended {
+            sync.refresh()
             return
         }
         let sync = try DesktopWallpaperSync(folder: ClientPaths.supportURL.appendingPathComponent("DesktopPosters"))

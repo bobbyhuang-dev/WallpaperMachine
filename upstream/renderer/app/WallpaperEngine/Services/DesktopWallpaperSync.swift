@@ -60,6 +60,7 @@ final class DesktopWallpaperSync {
     private let encode: @Sendable (DesktopPosterFrame) async throws -> Data
     private var retry: Task<Void, Never>?
     private var stopped = false
+    var isSuspended: Bool { stopped }
 
     convenience init(folder: URL) throws {
         try self.init(folder: folder, workspace: SystemDesktopPictureWorkspace(), surfaces: {

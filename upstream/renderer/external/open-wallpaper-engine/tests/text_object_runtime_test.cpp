@@ -2070,6 +2070,50 @@ TEST(TextObjectRuntime, TextRasterExpandsBeyondExplicitBoxWhenNeeded) {
     EXPECT_LT(max_x, static_cast<int>(width));
 }
 
+TEST(TextObjectRuntime, CenteredTextIsCenteredInsideWiderExplicitBox) {
+    TextLayerState state {
+        .text                   = "Saturday",
+        .font_key               = "systemfont_Helvetica",
+        .resolved_font_kind     = "system",
+        .resolved_font_identity = "Helvetica",
+        .resolved_font_path     = ResolveSystemFontPath("systemfont_Helvetica"),
+        .point_size             = 20.0f,
+        .padding                = 32.0f,
+        .explicit_size          = Eigen::Vector2f(1200.0f, 120.0f),
+        .horizontal_align       = "center",
+        .vertical_align         = "center",
+    };
+#ifdef __APPLE__
+    ASSERT_FALSE(state.resolved_font_path.empty());
+#endif
+
+    const auto measured = MeasureTextLayerSize(state);
+    ASSERT_LT(measured.x(), state.explicit_size.x() * 0.5f);
+    const auto size = TextLayerRasterSize(state);
+    EXPECT_FLOAT_EQ(size.x(), 1200.0f);
+
+    const uint32_t       width  = static_cast<uint32_t>(std::ceil(size.x()));
+    const uint32_t       height = static_cast<uint32_t>(std::ceil(size.y()));
+    std::vector<uint8_t> rgba(static_cast<std::size_t>(width) * height * 4u, 0u);
+    RasterizeTextLayer(state, width, height, rgba);
+
+    int min_x = static_cast<int>(width);
+    int max_x = -1;
+    for (uint32_t y = 0; y < height; ++y) {
+        for (uint32_t x = 0; x < width; ++x) {
+            const auto alpha = rgba[(static_cast<std::size_t>(y) * width + x) * 4u + 3u];
+            if (alpha == 0u) continue;
+            min_x = std::min(min_x, static_cast<int>(x));
+            max_x = std::max(max_x, static_cast<int>(x));
+        }
+    }
+
+    ASSERT_GE(max_x, min_x);
+    const float ink_center = (static_cast<float>(min_x) + static_cast<float>(max_x)) * 0.5f;
+    EXPECT_NEAR(ink_center, static_cast<float>(width) * 0.5f, 4.0f);
+    EXPECT_GT(min_x, 300);
+}
+
 TEST(TextObjectRuntime, DynamicTextTransformSettingsUpdateRuntimeNode) {
     fs::VFS vfs;
     MountAssets(vfs);

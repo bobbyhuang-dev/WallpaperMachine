@@ -106,6 +106,9 @@ public:
 
     std::string                                puppet;
     std::vector<WPPuppetLayer::AnimationLayer> puppet_layers;
+    // Raw "animationlayers" entries, parallel to puppet_layers, so the parser
+    // can bind visible/rate/blend to user properties.
+    std::vector<nlohmann::json>                puppet_layer_settings;
     std::string                                attachment;
 };
 

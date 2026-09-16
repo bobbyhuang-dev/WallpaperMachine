@@ -35,6 +35,213 @@ Not verified: live GitHub Releases, archive extraction, replacement of
 an app in Applications, or visual layout of the About page in a real
 window. No desktop automation, wallpaper change, or Release delivery
 was performed.
+## 2026-09-16 — Script side-effect writes, puppet animation layers, cursor coverage
+
+"流萤 夏日沙滩" (`3292361861`, the wallpaper applied on this machine) reported
+three defects. All three were scene-engine bugs, none package-specific:
+
+1. **Viewing mode + "无遮" hid the character.** The layer is authored
+   `visible: false` and driven by the workshop "video texture controls" script
+   (`thisLayer.visible = false` in `init()`, `thisLayer.visible = alpha != 0`
+   in `update()`, no return value). `ScriptedDynamicValue` only overrode
+   `update(const DynamicValue&)`, so the typed `update(bool)` that
+   `SetNodeVisible` calls never reached its base value; the next
+   `Evaluate` fed the stale `false` back in and reverted the write every tick.
+   Resolved by the concurrent "persist state across frames" change (entry
+   above), which evaluates from the live dynamic value; this entry's
+   regression test covers the visibility case on that implementation.
+2. **Double-click on the character did nothing.** `getAnimationLayer(name)` was
+   a JavaScript stub whose `play()` was empty. `WPPuppetLayer` copies now share
+   one playback state, the parser registers it with the runtime, and the shim is
+   backed by `SceneRuntimeContext::PuppetAnimationControl` (play/pause/stop,
+   frame, rate, blend, visible, isPlaying). Single-shot layers hold their last
+   frame and report stopped so `play()` restarts them. The same path binds
+   `animationlayers[].visible/rate/blend` to user properties, which this
+   package uses to switch the "健全/无遮" idle animations in interactive mode.
+3. **Both triangle buttons fired on one click.** The two buttons are
+   interlocking triangles whose bounding boxes overlap by roughly half; the hit
+   test was a world-space AABB. It now runs in the layer's local plane and, for
+   image layers whose scripts handle cursor events, consults a coverage mask
+   sampled from the albedo alpha at parse time (RGBA8/BC2/BC3, ≤256 px/side).
+
+Verified:
+
+- `offscreen_scene_probe` on `3292361861`, `WE_TEST_PROPERTIES` for all four
+  mode/outfit combinations. Before: viewing + 无遮 rendered no character and
+  `nodes.txt` had `293 … visible=0 effective=0`. After: `visible=1 effective=1`
+  and the frame shows the character; interactive frames now differ between the
+  two outfit values (**9576** sampled pixels vs **7** before), i.e. the bound
+  animation layers switch. Diagnostics are the pre-existing set (media-player
+  scripts, `clipping_mask` shader, `MediaPlaybackEvent`); nothing new.
+- `offscreen_scene_probe` clicks with the new `WE_TEST_CLICK_OFFSET`: clicking
+  `468` at `+150 0` (inside its rectangle, in its transparent half, over the
+  other triangle) leaves `interactiveLayer1 visible=1`; clicking it at `0 -60`
+  (covered texels) switches to `viewingLayer1 visible=1`. Two clicks on `232`
+  raise no cursor script errors.
+- `script_runtime_compat_test`: **36 tests, 35 passed**; the four new
+  regressions `UpdateSideEffectWritesSurviveWhenUpdateReturnsUndefined`,
+  `PuppetAnimationLayerPlayRestartsFinishedSingleShotForAllCopies`,
+  `PuppetAnimationLayerVisibilityFollowsUserProperty` and
+  `CursorHitTestRespectsCoverageMask` pass. The first was confirmed failing
+  (`visible=0` on every tick) against the pre-fix engine through a throwaway
+  harness. The one failure is the documented pre-existing
+  `HostVectorUpdatesDoNotCallMutableGlobalVectorConstructors`.
+- `mdl_schema_tests` **45 passed**, `scene_schema_tests` **53 passed**,
+  `mouse_input_test` **6 passed** after the `WPPuppetLayer` blend refactor.
+- `python3 scripts/check_renderer.py --project …/3292361861/project.json`: the
+  three test binaries pass, all nine generated cases pooled/isolated equal with
+  0 diagnostics and pixel assertions met, reload cycles 0. The `3292361861`
+  case reports `pixels_equal=false`; two consecutive pooled runs of that scene
+  also differ (wall-clock text and randomised script delays), so the mismatch
+  is inherent to the package, not the change.
+- `python3 scripts/test.py`: Python script tests, `xcodegen generate`, then
+  **223 native tests passed, 0 failed, 0 skipped**.
+
+Not verified: no desktop run, no live mouse input, no Release build. The
+delivered app still carries the old renderer until
+`python3 scripts/build.py --configuration Release` is run. The `clipping_mask`
+shader failure (`!float` in the translated vertex shader) is pre-existing and
+only affects effects this package leaves disabled.
+
+## 2026-09-16 — Hidden-by-default visibility scripts and lost alignment anchors
+
+"On the way" (`3798819887`) rendered nothing but `general.clearcolor`
+(`0.7 0.7 0.7`, the reported plain grey). Three scene-engine defects, none
+specific to that package:
+
+1. `WPSceneParser` dropped *every* dynamic binding — `visible`, `origin`,
+   `scale`, `angles`, queued scene scripts — of a layer whose `visible` setting
+   combined a `script` with a falsy `value`. The authored value is the script's
+   initial value, not a licence to run it, so the three weather layers stayed at
+   their authored `false`/`false`/`true` and the day layer could never appear.
+   The gate and the `allow_script_update` parameter it fed through
+   `ResolveBoolSetting`/`ResolveVec3Setting`/`ResolveStringSetting` are gone.
+2. Image-layer alignment was baked into the node translate by `LoadAlignment`,
+   so the first tick of a scripted origin overwrote it and the layer rendered
+   half a canvas off. `SceneRuntimeContext` now owns the anchor for image layers
+   (`SetNodeAnchorAlignment`, renamed from `SetNodeTextAlignment`) and
+   re-derives `origin + size * scale * 0.5`; center alignment keeps the old
+   direct path.
+3. `RegisterNode` re-seeded the anchor origin from `node->Translate()` on every
+   call, and `RegisterNodeVisibility`/`Translate`/`Scale`/`Rotation` each call it
+   again for the same node. Once an anchor is registered that translate already
+   holds the offset, so the next `ApplyNodeTransform` added a second one. It now
+   re-seeds only when the bound node changes or no anchor exists, and
+   `SetNodeAlignment` no longer forces `size_anchor = false` on an anchored node.
+   This also fixes pre-existing double-counting on *text* layers, whose anchor is
+   registered before their translate/scale bindings.
+
+Verified:
+
+- `offscreen_scene_probe` on `3798819887`: before, `nodes.txt` reported
+  `TramDay/TramRain/TramNight` all `visible=0 effective=0` and `frame-2.ppm`
+  sampled **1 distinct colour** (`178,178,178`). After, `TramDay` is
+  `visible=1 effective=1 translate=1280 540`, the frame has **0 fully grey rows**
+  and **2719 distinct sampled colours**, and the PNG shows the authored tram,
+  rice fields and sky.
+- `scene_schema_tests`: **53 tests passed**, including the two new regressions
+  `HiddenByDefaultVisibilityScriptDrivesVisibilityAndOrigin` and
+  `ImageAlignmentAnchorSurvivesScriptedOriginAndScale`. Both fail against the
+  pre-fix engine with the expected values (origin `0` instead of `30`, anchor
+  `y=0` instead of `16`, `x=42` instead of `74`). The anchor test also covers a
+  static origin with a scripted scale, which fails with `90` instead of `26`
+  when `RegisterNode` re-seeds the anchor.
+- Local corpus A/B, **21 scene wallpapers**, run in a detached worktree at
+  `HEAD` so concurrent edits in the main tree could not leak into either arm;
+  both arms carry the same probe, so only the engine change differs.
+  `nodes.txt` (visibility, translate, scale) differs in **4 of 21** scenes:
+  `3798819887` gains its visible day layer and its anchor; `2887099508` and
+  `3292361861` restore anchors on menu/overlay layers and finally run the origin
+  scripts of previously frozen click-activated panels; `3799253558` moves two
+  media-info text layers back onto their authored anchor (`259` → `154.5` and
+  `235.85` → `142.925`, each exactly one half-width of double count). No
+  previously hidden layer became visible. Frame hashes differ for **7** scenes,
+  **six** of which are the known wall-clock/RNG scenes (three distinct hashes
+  across three runs of one binary); the only time-independent frame change is
+  `3798819887`. `3292361861`'s `Audio Bars` now lands on
+  `-155.18878 + 512 × 0.45 / 2 = -39.9888` instead of the double-counted
+  `88.0112`.
+- `python3 scripts/check_renderer.py`: 9 generated cases pooled vs isolated
+  **pixel-equal**, known-pixel assertions passed, **0 diagnostics**,
+  `render_target_lifetime_test`/`text_object_runtime_test`/
+  `shader_cache_metadata_test` and the reload cycles all exit `0`. Re-run with
+  `--project .../3798819887/project.json`: pixel-equal, **0 diagnostics**,
+  reload cycles `0`.
+- C++ binaries: `scene_schema_tests` 53, `mdl_schema_tests` 45,
+  `script_runtime_compat_test` 32 passed with only the documented pre-existing
+  `HostVectorUpdatesDoNotCallMutableGlobalVectorConstructors` failure,
+  `render_target_lifetime_test` 4, `shader_cache_metadata_test` 1,
+  `audio_tests` 38, `mouse_input_test` 6,
+  `particle_mouse_controlpoint_test` 35, `timer_tests` 6.
+- `python3 scripts/test.py`: Python script tests, `xcodegen generate`, then
+  **223 native tests passed, 0 failed, 0 skipped** in **99 s**.
+- `offscreen_scene_probe` now requests the production device extensions
+  (`VK_EXT_metal_objects`), so scene video textures import headlessly instead of
+  logging `failed to import initial video frame`. That alone removed pre-existing
+  probe-only diagnostics from `3147346398`, `3292361861`, `3800572533` and
+  `3801438494` without touching the engine.
+
+The renderer checks, the C++ binaries and the corpus A/B above were all run in a
+detached `HEAD` worktree carrying only this change, so concurrent edits in the
+main tree could not leak into either arm. Another agent was editing
+`SceneRuntimeContext`, `ScriptedDynamicValue`, `WPPuppet`, `WPImageObject`,
+`ScriptEngine` and `WPSceneParser` throughout; their work is preserved (this
+change to `SceneRuntimeContext.cpp` was re-applied by hand after a stash
+collision). Once the main tree compiled again it was re-verified on the merged
+sources: `scene_schema_tests` 53, `mdl_schema_tests` 45,
+`script_runtime_compat_test` 32 with only the documented pre-existing failure,
+`render_target_lifetime_test` 4, `shader_cache_metadata_test` 1, `audio_tests`
+38, `mouse_input_test` 6, `particle_mouse_controlpoint_test` 35, `timer_tests`
+6; `scripts/check_renderer.py --skip-build` pixel-equal on all 9 cases with
+**0 diagnostics** and reload cycles `0`; and `3798819887` still reports
+`TramDay visible=1 effective=1 translate=1280 540`.
+
+Not verified: on-desktop presentation. No Release build, no app launch, no
+wallpaper change and no screenshot. Pre-existing gaps observed while building the
+vendored tests, untouched: `tex_schema_tests` fails to compile (`lz4.h` not on
+its include path) and `scenescript_sound_layer_smoke`,
+`scenescript_media_event_smoke`, `media_thumbnail_texture_smoke` and
+`rendergraph_smoke` do not link `nlohmann_json`, so none of them build here;
+`scripts/check_renderer.py` does not build them either. Removing the visibility
+gate also exposes an unimplemented `thisLayer.getParent()` in `3292361861`
+(**23** `cannot read property 'multiply' of undefined` update errors per run,
+alongside the **17** `init` failures that scene already logged); that layer keeps
+its authored value, so its rendered output is unchanged.
+
+## 2026-09-16 — Build stamp resolves the repository, not the pinned renderer
+
+`scripts/build.py` computed `GIT_SHORT_COMMIT` with the working directory set to
+`upstream/renderer`. That directory carries its own Git checkout at the pinned
+vendored revision, so the stamp was frozen at the upstream revision on any
+machine where that checkout exists, and Settings reported it as `Git revision`.
+The stamp is now resolved with `git -C <repository root>` through a new
+`repository_commit()` helper; the renderer layout and vendored sources were left
+unchanged.
+
+Verified:
+
+- Reproduction in the linked artifact: `strings` on the previously built
+  `upstream/renderer/target/release/libwallpaper_bridge.a` matched the pinned
+  revision `8c19c00` **5 times** and the repository HEAD `2916c00` **0 times**.
+  `shadow_rs` resolved the same checkout for its `SHORT_COMMIT` fallback
+  (`8c19c002`).
+- `python3 scripts/tests/test_build.py`: **1 test passed**. It builds a
+  throwaway repository containing a second checkout at `upstream/renderer` and
+  asserts the outer commit is reported; the previous working-directory
+  behaviour returns the nested commit and fails it.
+- `python3 scripts/test.py`: Python script tests, `xcodegen generate`, then
+  **223 native tests passed, 0 failed, 0 skipped** in **94 s**.
+- `python3 scripts/build.py --renderer-only`: only `wallpaper-bridge`
+  recompiled (**6.38 s**), because cargo records `# env-dep:GIT_SHORT_COMMIT`
+  from `option_env!` and invalidates just that crate. The rebuilt static library
+  now contains `2916c00`, and `uniffi-bindgen` regenerated
+  `App/Bridge/Generated` with no diff.
+
+Not verified: the on-screen Settings `Git revision` row. No app build beyond the
+Debug test run, no Release build, no app launch and no desktop automation. The
+vendored `shadow_rs` fallback still resolves the pinned checkout, so a bare
+`cargo build` outside `scripts/build.py` continues to stamp `8c19c002`; the
+vendored crates were deliberately not modified.
 
 ## 2026-09-16 — Compact agent guidance and Claude entry point
 

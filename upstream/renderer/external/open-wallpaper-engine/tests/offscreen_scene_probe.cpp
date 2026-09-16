@@ -14,6 +14,7 @@
 #include "WPPkgFs.hpp"
 #include "SceneSourceResolver.hpp"
 #include <charconv>
+#include <cstdio>
 #include "SpecTexs.hpp"
 #include "Vulkan/Device.hpp"
 #include "Vulkan/TextureCache.hpp"
@@ -226,7 +227,16 @@ int main() {
             locate(locate, scene->sceneGraph.get());
             Check(target != nullptr, "click layer missing");
             target->UpdateTrans();
-            const Eigen::Vector3f position = (target->ModelTrans() * Eigen::Vector4d(0, 0, 0, 1)).head<3>().cast<float>();
+            Eigen::Vector3f position = (target->ModelTrans() * Eigen::Vector4d(0, 0, 0, 1)).head<3>().cast<float>();
+            if (const char* offset = std::getenv("WE_TEST_CLICK_OFFSET")) {
+                // World-space "dx dy" from the layer origin, e.g. to probe a
+                // texel-covered corner instead of the centre.
+                float dx = 0.0f;
+                float dy = 0.0f;
+                Check(std::sscanf(offset, "%f %f", &dx, &dy) == 2, "WE_TEST_CLICK_OFFSET must be \"dx dy\"");
+                position.x() += dx;
+                position.y() += dy;
+            }
             int click_count = 1;
             if (const char* count = std::getenv("WE_TEST_CLICK_COUNT")) {
                 const std::string_view value(count);
@@ -250,7 +260,9 @@ int main() {
             const auto dump = [&](auto&& self, SceneNode* node) -> void {
                 if (!node) return;
                 nodes << node->ID() << ' ' << node->Name() << " visible=" << node->Visible()
-                      << " effective=" << node->EffectiveVisible() << " scale=" << node->Scale().transpose() << '\n';
+                      << " effective=" << node->EffectiveVisible()
+                      << " translate=" << node->Translate().transpose()
+                      << " scale=" << node->Scale().transpose() << '\n';
                 for (const auto& child : node->GetChildren()) self(self, child.get());
             };
             dump(dump, scene->sceneGraph.get());
@@ -281,7 +293,12 @@ int main() {
         Instance instance;
         std::vector<Extension> instance_extensions { { true, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME } };
         Check(Instance::Create(instance, instance_extensions, {}), "create instance");
+        // Match the production device extension set so scenes whose textures are
+        // video streams import their frames here instead of rendering empty slots.
         std::vector<Extension> extensions { { true, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME } };
+#if defined(__APPLE__)
+        extensions.push_back({ true, "VK_EXT_metal_objects" });
+#endif
         Check(instance.ChoosePhysicalDevice([&](auto gpu) { return Device::CheckGPU(gpu, extensions, {}); }), "choose GPU");
         Device device;
         const auto extent = ResolveScreenBoundRenderTargetSizes(*scene, {1920, 1080});

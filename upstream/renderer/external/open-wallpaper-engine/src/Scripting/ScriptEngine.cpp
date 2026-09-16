@@ -1184,20 +1184,30 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
         << "    if (layerOrName && typeof layerOrName.name === 'string') return layerOrName.name;\n"
         << "    return '';\n"
         << "  }\n"
-        << "  function __makePuppetAnimation(name) {\n"
+        << "  function __makePuppetAnimation(layer, name) {\n"
+        << "    var native = __puppetAnimationControl(layer, name, 'exists') !== 0;\n"
+        << "    var control = function(op, value) { return native ? "
+           "__puppetAnimationControl(layer, name, op, value) : 0; };\n"
         << "    return {\n"
         << "      name: name || '',\n"
-        << "      frameCount: 1,\n"
-        << "      rate: 1,\n"
-        << "      blend: 1,\n"
-        << "      visible: true,\n"
-        << "      _frame: 0,\n"
+        << "      get fps() { return control('fps'); },\n"
+        << "      get frameCount() { return native ? control('frameCount') : 1; },\n"
+        << "      get duration() { return this.fps > 0 ? this.frameCount / this.fps : 0; },\n"
+        << "      get rate() { return native ? control('rate') : 1; },\n"
+        << "      set rate(value) { control('setRate', Number(value)); },\n"
+        << "      get blend() { return native ? control('blend') : 1; },\n"
+        << "      set blend(value) { control('setBlend', Number(value)); },\n"
+        << "      get visible() { return native ? control('visible') !== 0 : true; },\n"
+        << "      set visible(value) { control('setVisible', value ? 1 : 0); },\n"
         << "      _endedCallbacks: [],\n"
-        << "      play: function() {},\n"
-        << "      pause: function() {},\n"
-        << "      stop: function() {},\n"
-        << "      setFrame: function(frame) { this._frame = Number(frame) || 0; },\n"
-        << "      getCurrentTime: function() { return 0; },\n"
+        << "      play: function() { control('play'); },\n"
+        << "      pause: function() { control('pause'); },\n"
+        << "      stop: function() { control('stop'); },\n"
+        << "      isPlaying: function() { return control('isPlaying') !== 0; },\n"
+        << "      getFrame: function() { return control('frame'); },\n"
+        << "      setFrame: function(frame) { control('setFrame', Number(frame) || 0); },\n"
+        << "      getCurrentTime: function() { return this.fps > 0 ? control('frame') / "
+           "this.fps : 0; },\n"
         << "      addEndedCallback: function(callback) { if (typeof callback === 'function') "
            "this._endedCallbacks.push(callback); },\n"
         << "      removeEndedCallback: function(callback) { this._endedCallbacks = "
@@ -1322,7 +1332,7 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
         << "      getAnimationLayer: function(layerName) {\n"
         << "        var key = String(layerName);\n"
         << "        if (!state.animationLayers[key]) state.animationLayers[key] = "
-           "__makePuppetAnimation(key);\n"
+           "__makePuppetAnimation(name, key);\n"
         << "        return state.animationLayers[key];\n"
         << "      },\n"
         << "      getAnimationLayerCount: function() { return "
@@ -2142,6 +2152,25 @@ JSValue JsAnimationControl(JSContext* context, JSValueConst, int argc, JSValueCo
     return JS_NewFloat64(context, result);
 }
 
+JSValue JsPuppetAnimationControl(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
+    auto* bridge = GetBridgeState(context);
+    if (bridge == nullptr || bridge->runtime == nullptr || argc < 3) return JS_NewFloat64(context, 0.0);
+    const char* layer     = JS_ToCString(context, argv[0]);
+    const char* name      = JS_ToCString(context, argv[1]);
+    const char* operation = JS_ToCString(context, argv[2]);
+    double      result    = 0.0;
+    if (layer != nullptr && name != nullptr && operation != nullptr) {
+        double     value     = 0.0;
+        const bool has_value = argc > 3 && JS_ToFloat64(context, &value, argv[3]) == 0 &&
+                               std::isfinite(value);
+        result = bridge->runtime->PuppetAnimationControl(layer, name, operation, value, has_value);
+    }
+    if (operation != nullptr) JS_FreeCString(context, operation);
+    if (name != nullptr) JS_FreeCString(context, name);
+    if (layer != nullptr) JS_FreeCString(context, layer);
+    return JS_NewFloat64(context, result);
+}
+
 JSValue JsTextureSetFrame(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
     auto* bridge = GetBridgeState(context);
     if (argc < 2 || bridge == nullptr || bridge->runtime == nullptr) return JS_UNDEFINED;
@@ -2574,6 +2603,11 @@ bool EnsureSharedHostBindings(JSContext* context, SceneRuntimeContext* runtime,
                           JS_NewCFunction(context, JsSoundSetMuted, "__soundSetMuted", 2));
         JS_SetPropertyStr(context, global_object, "__animationControl",
                           JS_NewCFunction(context, JsAnimationControl, "__animationControl", 4));
+        JS_SetPropertyStr(
+            context,
+            global_object,
+            "__puppetAnimationControl",
+            JS_NewCFunction(context, JsPuppetAnimationControl, "__puppetAnimationControl", 4));
         JS_SetPropertyStr(context,
                           global_object,
                           "__textureSetFrame",

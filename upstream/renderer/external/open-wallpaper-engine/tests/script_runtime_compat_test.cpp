@@ -177,6 +177,138 @@ export function update(value) { value.x += engine.frametime; return value; }
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 
+// A video-texture control script hides the layer in init() and re-shows it
+// from update() without returning a value. The native write must survive the
+// next reevaluation instead of being overwritten by the authored `false`.
+TEST(ScriptRuntimeCompat, UpdateSideEffectWritesSurviveWhenUpdateReturnsUndefined) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto node    = std::make_shared<SceneNode>();
+    node->SetVisible(false);
+    runtime->RegisterNode("clip", node.get());
+    runtime->RegisterNodeVisibility("clip", node.get(), ResolveBoolSetting(*runtime, {
+        {"value", false}, {"script", R"JS(
+export function init() { thisLayer.visible = false; }
+export function update(value) { thisLayer.visible = true; }
+)JS"}}, "clip"));
+    for (int i = 0; i < 3; ++i) runtime->Tick(0.01);
+    EXPECT_TRUE(node->Visible());
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+namespace
+{
+
+std::shared_ptr<WPPuppet> MakeSingleShotPuppet() {
+    auto puppet = std::make_shared<WPPuppet>();
+    puppet->bones.emplace_back();
+    WPPuppet::Animation animation;
+    animation.id     = 7;
+    animation.fps    = 10.0;
+    animation.length = 5;
+    animation.mode   = WPPuppet::PlayMode::Single;
+    animation.name   = "gesture";
+    WPPuppet::Animation::BoneTrack track;
+    for (int frame = 0; frame <= animation.length; ++frame) {
+        track.frames.push_back(WPPuppet::BoneFrame {
+            .position = Eigen::Vector3f(static_cast<float>(frame), 0.0f, 0.0f),
+            .angle    = Eigen::Vector3f::Zero(),
+            .scale    = Eigen::Vector3f::Ones(),
+        });
+    }
+    animation.bone_tracks.push_back(std::move(track));
+    puppet->anims.push_back(std::move(animation));
+    puppet->prepared();
+    return puppet;
+}
+
+} // namespace
+
+// getAnimationLayer(...).play() from a click handler restarts a single-shot
+// puppet layer that already finished, and every copy of the layer follows.
+TEST(ScriptRuntimeCompat, PuppetAnimationLayerPlayRestartsFinishedSingleShotForAllCopies) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto node    = std::make_shared<SceneNode>();
+    runtime->RegisterNode("character", node.get());
+
+    std::vector<WPPuppetLayer::AnimationLayer> authored(1);
+    authored[0].id   = 7;
+    authored[0].name = "siche";
+    WPPuppetLayer layer(MakeSingleShotPuppet());
+    layer.prepared(authored);
+    WPPuppetLayer render_copy = layer;
+    runtime->RegisterPuppetLayer("character", layer);
+
+    runtime->RegisterNodeVisibility("character", node.get(), ResolveBoolSetting(*runtime, {
+        {"value", true}, {"script", R"JS(
+export function cursorClick(event) { thisLayer.getAnimationLayer("siche").play(); }
+)JS"}}, "character"));
+    runtime->Tick(0.01);
+
+    render_copy.genFrame(0.0);
+    render_copy.genFrame(2.0);
+    EXPECT_FALSE(render_copy.isPlaying(0));
+    EXPECT_DOUBLE_EQ(render_copy.frame(0), 5.0);
+
+    runtime->DispatchCursorClick();
+    EXPECT_TRUE(render_copy.isPlaying(0));
+    EXPECT_DOUBLE_EQ(render_copy.frame(0), 0.0);
+    render_copy.genFrame(2.1);
+    EXPECT_NEAR(render_copy.frame(0), 1.0, 1e-9);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+// Puppet animation layers bound to a user property toggle their visibility on
+// the shared state when the property changes.
+TEST(ScriptRuntimeCompat, PuppetAnimationLayerVisibilityFollowsUserProperty) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {
+        .project_properties = {{"outfit", RuntimeScalarValue::String("1")}},
+    });
+    std::vector<WPPuppetLayer::AnimationLayer> authored(1);
+    authored[0].id = 7;
+    WPPuppetLayer layer(MakeSingleShotPuppet());
+    layer.prepared(authored);
+    WPPuppetLayer copy = layer;
+    runtime->RegisterDynamicValueListener(
+        ResolveBoolSetting(*runtime, {{"value", true}, {"user", {{"name", "outfit"}, {"condition", "0"}}}}),
+        [layer](const DynamicValue& value) mutable { layer.setVisible(0, value.getBool()); });
+    EXPECT_FALSE(copy.visible(0));
+    runtime->ApplyProjectPropertyOverride({{"outfit", RuntimeScalarValue::String("0")}});
+    EXPECT_TRUE(copy.visible(0));
+}
+
+// Two interlocking triangle buttons share a bounding box; the cursor must only
+// hit the one whose texels are opaque under it.
+TEST(ScriptRuntimeCompat, CursorHitTestRespectsCoverageMask) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto node    = std::make_shared<SceneNode>();
+    node->SetTranslate(Eigen::Vector3f(100.0f, 100.0f, 0.0f));
+    runtime->RegisterNode("button", node.get());
+    runtime->RegisterNodeSize("button", Eigen::Vector2f(40.0f, 40.0f));
+    // Left half opaque, right half transparent.
+    NodeHitMask mask;
+    mask.width  = 4;
+    mask.height = 2;
+    mask.alpha  = { 255, 255, 0, 0, 255, 255, 0, 0 };
+    runtime->RegisterNodeHitMask("button", std::move(mask));
+    runtime->RegisterNodeVisibility("button", node.get(), ResolveBoolSetting(*runtime, {
+        {"value", true}, {"script", R"JS(
+export function cursorClick(event) { thisLayer.visible = false; }
+)JS"}}, "button"));
+    runtime->Tick(0.01);
+    runtime->SetCursorEnter(true);
+
+    runtime->SetCursorWorldPosition(Eigen::Vector3f(110.0f, 100.0f, 0.0f));
+    runtime->SetCursorButtons(0, 1, 1);
+    runtime->DispatchCursorFrameEvents(false);
+    EXPECT_TRUE(node->Visible());
+
+    runtime->SetCursorWorldPosition(Eigen::Vector3f(90.0f, 100.0f, 0.0f));
+    runtime->SetCursorButtons(0, 1, 1);
+    runtime->DispatchCursorFrameEvents(true);
+    EXPECT_FALSE(node->Visible());
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
 TEST(ScriptRuntimeCompat, TextureAnimationSelectsAMPMFrameWithoutScriptErrors) {
     Scene scene;
     auto runtime = MakeRuntimeWithScene(scene);

@@ -54,7 +54,10 @@ identifiers and no workshop-specific rendering rules.
 All probes are explicitly invoked executables, not ctest cases or UI tests.
 `offscreen_scene_probe` creates a surface-free Vulkan device and private render
 targets, uses the production shader passes and batching plan, and writes PPM
-images under `WE_TEST_OUTPUT`. Use a disposable output/cache directory.
+images under `WE_TEST_OUTPUT`. Use a disposable output/cache directory. The
+device requests the same extension set as the wallpaper renderer, including
+`VK_EXT_metal_objects` on Apple, so a scene whose textures are video streams
+imports its frames here instead of rendering empty texture slots.
 
 ```sh
 WE_TEST_PROJECT="$HOME/Library/Application Support/mac-wallpaper-engine/Library/<id>/project.json" \
@@ -74,11 +77,12 @@ artifacts/renderer/bin/tests/offscreen_scene_probe
 | `WE_TEST_NO_REUSE=1` | `offscreen_scene_probe` | Isolated texture allocation (no pooling) |
 | `WE_TEST_FRAMES` | `offscreen_scene_probe` | Number of sampled frames |
 | `WE_TEST_FRAME_STEP` | `offscreen_scene_probe` | Sampling interval, to look past an intro |
-| `WE_TEST_DUMP_SOURCE=1` | `offscreen_scene_probe` | Write the packaged scene JSON beneath `WE_TEST_OUTPUT`; also includes node visibility in `nodes.txt` |
+| `WE_TEST_DUMP_SOURCE=1` | `offscreen_scene_probe` | Write the packaged scene JSON beneath `WE_TEST_OUTPUT`; `nodes.txt` also records per-node visibility, translate and scale, which diffs layer placement between builds without comparing pixels |
 | `WE_TEST_DUMP_PASSES` | `offscreen_scene_probe` | Dump per-pass detail |
 | `WE_TEST_PROPERTIES` | `offscreen_scene_probe` | Flat JSON property overrides, in memory only |
 | `WE_TEST_CLICK_LAYER` | `offscreen_scene_probe` | Image-layer ID to click |
 | `WE_TEST_CLICK_COUNT` | `offscreen_scene_probe` | `1..10` synthetic clicks, no desktop input |
+| `WE_TEST_CLICK_OFFSET` | `offscreen_scene_probe` | World-space `"dx dy"` added to the click layer's origin, to hit a covered or transparent texel instead of the centre |
 | `WE_TEST_AUDIO_HZ` | `offscreen_scene_probe` | Synthetic PCM at `0..6000` Hz; `0` means silence |
 | `WE_TEST_AUDIO_ENABLED=0` | `offscreen_scene_probe` | Exercise the disabled audio gate |
 | `WE_TEST_EXPECT_WARM=1` | `text_object_runtime_test` | Assert zero shader compilations on a second run |
@@ -115,6 +119,11 @@ executable directly from the renderer check build directory.
 | Camera zoom | `scene_schema_tests --gtest_filter='SceneSchema.*CameraZoom*'`. Scene `general.zoom` may contain an authored scalar animation, not just a fixed camera scale. |
 | Callback-only property scripts | `*CallbackOnly*` in `scene_schema_tests` and `script_runtime_compat_test` |
 | Property-script feedback / hover easing | `ScriptRuntimeCompat.HoverScaleInterpolatesAcrossFramesAndReversesWithoutSnapping` and `ScriptRuntimeCompat.PropertyFeedbackResumesFromExplicitUserValueChanges` in `script_runtime_compat_test` |
+| Script-driven layer visibility | `SceneSchema.HiddenByDefaultVisibilityScriptDrivesVisibilityAndOrigin` in `scene_schema_tests`. The authored `visible.value` is the script's initial value, never a permission to run it (see below). |
+| Alignment anchors under dynamic transforms | `SceneSchema.ImageAlignmentAnchorSurvivesScriptedOriginAndScale` in `scene_schema_tests`, plus `nodes.txt` translate diffs from `offscreen_scene_probe` |
+| SceneScript writes from `update()` | `ScriptRuntimeCompat.UpdateSideEffectWritesSurviveWhenUpdateReturnsUndefined` in `script_runtime_compat_test`: a `thisLayer.visible = …` written during `update()` survives the next reevaluation even when `update()` returns nothing (see below). |
+| Puppet animation layer control | `ScriptRuntimeCompat.PuppetAnimationLayer*` in `script_runtime_compat_test`: `getAnimationLayer(name).play()` restarts a finished single-shot layer on every copy of the shared state; a `visible` bound to a user property toggles the layer. |
+| Cursor coverage masks | `ScriptRuntimeCompat.CursorHitTestRespectsCoverageMask` in `script_runtime_compat_test`: transparent texels of a cursor-scripted image layer do not hit. `offscreen_scene_probe` with `WE_TEST_CLICK_OFFSET` exercises real assets. |
 | MDLS3 hierarchy/pivots | `MdlSchema.Mdls3SkinningPreservesAuthoredHierarchyAndPivotsAcrossMeshVersions` in `mdl_schema_tests`. Mesh format versions do not justify flattening an authored skeleton. |
 | Large-scene first-frame startup | `offscreen_scene_probe` cold/warm startup timings; staging-buffer growth must stay geometric (see below) |
 | JPEG/EXIF orientation | `tex_schema_tests`: all eight EXIF display transforms on asymmetric RGBA pixels, both TIFF byte orders, truncated JPEG/EXIF data, invalid IFD offsets |
@@ -122,6 +131,65 @@ executable directly from the renderer check build directory.
 | Clock/text corruption | `render_target_lifetime_test`, `text_object_runtime_test`, `shader_cache_metadata_test` |
 | Continuous-playback resource reuse | `playback_gpu_test` |
 | Download-speed sampling | `DownloaderTests` in `Tests/Unit/Workshop/`: real `nettop` streaming over a private PTY with local-socket traffic; CRLF and split line endings. LF-only fixtures do not verify live delivery. |
+
+### Property bindings and alignment anchors
+
+A layer setting may carry `value`, `user` and `script` at once. `value` is the
+initial value the property script receives; it does not decide whether the
+script runs. The parser used to drop every dynamic binding of a layer whose
+`visible` setting combined a script with a falsy `value`, which froze
+day/night/weather switchers and any other layer authored hidden at rest — the
+scene then rendered nothing but `general.clearcolor`. Scripts are now always
+bound; `PropertyScriptProgram::Evaluate` already keeps the current value when a
+script throws, returns `undefined`, or returns an object for a boolean, so a
+hidden helper layer cannot be revealed by accident.
+
+Alignment is an anchor, not a one-off offset. `SceneRuntimeContext` owns the
+anchor for image and text layers and re-derives `origin + size * scale * 0.5`
+for the named edges whenever the origin, scale or size changes. Baking the
+offset into the node translate loses it as soon as a scripted or user-bound
+origin writes the translate, and ignores scale. Center-aligned image layers
+carry no offset and keep the direct path.
+
+The anchor origin must survive re-registration. `RegisterNodeVisibility`,
+`RegisterNodeTranslate`, `RegisterNodeScale` and `RegisterNodeRotation` each
+call `RegisterNode` again for the same node, and `RegisterNode` seeds the anchor
+from `node->Translate()`. Once an anchor is registered that translate already
+contains the offset, so re-seeding it makes the next `ApplyNodeTransform` add a
+second offset — visible only on layers whose scale or origin is dynamic, which
+is why a static-origin/scripted-scale case is part of the regression test.
+`RegisterNode` therefore re-seeds only when the bound node changes or no anchor
+is registered yet, and `SetNodeAlignment` keeps the existing anchor mode instead
+of forcing `size_anchor = false` on an already-anchored node.
+
+### Native writes from scripts, puppet layers and cursor coverage
+
+"Keep the current value when `update()` returns `undefined`" only works if the
+current value includes what the script wrote. `ScriptedDynamicValue` used to
+feed a private copy of the authored base value into `update(value)`; native
+writes such as `thisLayer.visible = …`, `origin`, `scale` and `angles` arrive
+through the typed `DynamicValue::update` overloads and never reached that
+copy, so the authored `false` reverted the write on the next tick. Evaluation
+now continues from the live dynamic value itself (see the property-feedback
+entry above). The workshop "video texture controls" script (hide in `init()`,
+`thisLayer.visible = alpha != 0` in `update()`, no return) is the canonical
+victim: a layer authored `visible: false` never appeared.
+
+Puppet animation layers are one shared playback state per image object
+(`WPPuppetLayer` copies share it), registered with the runtime under the layer
+name. `thisLayer.getAnimationLayer(name)` is backed by
+`SceneRuntimeContext::PuppetAnimationControl`; it used to be a no-op stub, so
+click-triggered puppet gestures never played. Authored layers start playing; a
+single-shot layer holds its last frame and reports stopped, and `play()`
+restarts it. `animationlayers[].visible/rate/blend` bound to user properties
+follow the property like any other setting.
+
+Cursor hit tests run in the layer's local plane (rotated and flipped buttons
+keep their rectangle) and, for image layers whose scripts handle cursor events,
+consult a coverage mask sampled from the albedo texture at parse time
+(RGBA8/BC2/BC3, ≤256 texels per side, alpha ≥ 16 counts as covered). Two
+interlocking triangle buttons whose rectangles overlap no longer fire together.
+Puppets, videos, sprite sheets and opaque formats keep the rectangle test.
 
 ### Startup and staging buffers
 

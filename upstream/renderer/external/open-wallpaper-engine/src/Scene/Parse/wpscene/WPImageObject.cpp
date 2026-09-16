@@ -265,6 +265,7 @@ bool WPImageObject::FromJson(const nlohmann::json& json, fs::VFS& vfs) {
              GET_JSON_NAME_VALUE_NOWARN(jLayer, "blendout", layer.blendout);
              GET_JSON_NAME_VALUE_NOWARN(jLayer, "blendtime", layer.blendtime);
              puppet_layers.push_back(layer);
+             puppet_layer_settings.push_back(jLayer);
         }
     }
     if(json.contains("config")) {

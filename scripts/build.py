@@ -22,6 +22,17 @@ def run(args, cwd=ROOT, env=None):
     subprocess.run(list(map(str, args)), cwd=cwd, env=env, check=True)
 
 
+def repository_commit(root=ROOT):
+    """Short commit of `root`, stamped into the build as the source it came from.
+
+    `upstream/renderer` holds its own Git checkout pinned to the vendored revision in
+    `upstream/provenance.json`, so HEAD is resolved against the repository root
+    explicitly: resolving it inside the renderer reports that pinned revision forever,
+    whatever source the binary was actually built from.
+    """
+    return subprocess.check_output(["git", "-C", str(root), "rev-parse", "--short", "HEAD"], text=True).strip()
+
+
 def build_environment():
     result = os.environ.copy()
     prefix = subprocess.check_output(["brew", "--prefix"], text=True).strip()
@@ -36,7 +47,7 @@ def build_environment():
     result["CC"] = "/usr/bin/clang"
     result["CXX"] = "/usr/bin/clang++"
     result["MACOSX_DEPLOYMENT_TARGET"] = "26.0"
-    result["GIT_SHORT_COMMIT"] = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=RENDERER, text=True).strip()
+    result["GIT_SHORT_COMMIT"] = repository_commit()
     return result
 
 

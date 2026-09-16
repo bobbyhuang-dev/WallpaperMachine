@@ -2092,6 +2092,164 @@ export function cursorClick() {
     EXPECT_EQ(runtime.scriptErrorCount(), 0u);
 }
 
+TEST(SceneSchema, HiddenByDefaultVisibilityScriptDrivesVisibilityAndOrigin) {
+    fs::VFS vfs;
+    MountSceneFiles(vfs);
+    audio::SoundManager sound;
+    WPSceneParser        parser;
+    // Authored "value" is the initial state handed to the script, not a licence
+    // to run it: a layer hidden at authoring time must still follow update().
+    const auto visibility = [](const char* property) {
+        return nlohmann::json {
+            { "value", false },
+            { "script", std::string(R"JS(
+let on = false;
+export function applyUserProperties(changed) { if (changed.hasOwnProperty(')JS") +
+                            property + R"JS(')) on = changed.)JS" + property + R"JS(; }
+export function update() { return on; }
+)JS" },
+        };
+    };
+    const nlohmann::json source = {
+        { "camera", { { "center", { 0, 0, 0 } }, { "eye", { 0, 0, 1 } }, { "up", { 0, 1, 0 } } } },
+        { "general",
+          { { "ambientcolor", { 0, 0, 0 } },
+            { "skylightcolor", { 0, 0, 0 } },
+            { "clearcolor", { 0, 0, 0 } },
+            { "cameraparallax", false },
+            { "orthogonalprojection", { { "width", 400 }, { "height", 300 } } } } },
+        { "objects",
+          nlohmann::json::array(
+              { { { "id", 11 },
+                  { "name", "shown by script" },
+                  { "image", "image.json" },
+                  { "size", { 80, 60 } },
+                  { "origin",
+                    { { "value", { 0, 0, 0 } },
+                      { "script", "export function update() { return new Vec3(30, 0, 0); }" } } },
+                  { "visible", visibility("show_first") } },
+                { { "id", 12 },
+                  { "name", "hidden by script" },
+                  { "image", "image.json" },
+                  { "size", { 80, 60 } },
+                  { "visible", visibility("show_second") } } }) }
+    };
+    ProjectProperties properties {
+        { "show_first", RuntimeScalarValue::Bool(true) },
+        { "show_second", RuntimeScalarValue::Bool(false) },
+    };
+    auto scene = parser.Parse(SceneParseRequest {
+                                  .scene_id           = "hidden-default-visibility-script",
+                                  .project_properties = &properties,
+                              },
+                              source.dump(),
+                              vfs,
+                              sound);
+    ASSERT_NE(scene, nullptr);
+    ASSERT_NE(scene->runtime, nullptr);
+    auto& runtime = *scene->runtime;
+    runtime.Tick(0.01);
+
+    auto shown = FindRootChildByName(*scene, "shown by script");
+    ASSERT_NE(shown, nullptr);
+    EXPECT_TRUE(shown->Visible());
+    EXPECT_FLOAT_EQ(shown->Translate().x(), 30.0f);
+    auto hidden = FindRootChildByName(*scene, "hidden by script");
+    ASSERT_NE(hidden, nullptr);
+    EXPECT_FALSE(hidden->Visible());
+    EXPECT_EQ(runtime.scriptErrorCount(), 0u);
+}
+
+TEST(SceneSchema, ImageAlignmentAnchorSurvivesScriptedOriginAndScale) {
+    fs::VFS vfs;
+    MountSceneFiles(vfs);
+    audio::SoundManager sound;
+    WPSceneParser        parser;
+    const nlohmann::json source = {
+        { "camera", { { "center", { 0, 0, 0 } }, { "eye", { 0, 0, 1 } }, { "up", { 0, 1, 0 } } } },
+        { "general",
+          { { "ambientcolor", { 0, 0, 0 } },
+            { "skylightcolor", { 0, 0, 0 } },
+            { "clearcolor", { 0, 0, 0 } },
+            { "cameraparallax", false },
+            { "orthogonalprojection", { { "width", 400 }, { "height", 300 } } } } },
+        { "objects",
+          nlohmann::json::array(
+              { { { "id", 21 },
+                  { "name", "scripted origin" },
+                  { "image", "image.json" },
+                  { "alignment", "bottom" },
+                  { "size", { 200, 100 } },
+                  { "visible", true },
+                  { "origin",
+                    { { "value", { 50, 0, 0 } },
+                      { "script", "export function update(value) { return value; }" } } } },
+                { { "id", 22 },
+                  { "name", "scaled anchor" },
+                  { "image", "image.json" },
+                  { "alignment", "left" },
+                  { "size", { 100, 100 } },
+                  { "scale", { 2, 2, 1 } },
+                  { "visible", true },
+                  { "origin", { 10, 0, 0 } } },
+                { { "id", 23 },
+                  { "name", "scripted scale anchor" },
+                  { "image", "image.json" },
+                  { "alignment", "left" },
+                  { "size", { 100, 100 } },
+                  { "visible", true },
+                  { "origin", { 10, 0, 0 } },
+                  { "scale",
+                    { { "value", { 2, 2, 1 } },
+                      { "script",
+                        "export function update() { return new Vec3(0.5, 0.5, 1); }" } } } } }) }
+    };
+    ProjectProperties properties;
+    auto              scene = parser.Parse(SceneParseRequest {
+                                  .scene_id           = "image-alignment-anchor",
+                                  .project_properties = &properties,
+                              },
+                              source.dump(),
+                              vfs,
+                              sound);
+    ASSERT_NE(scene, nullptr);
+    ASSERT_NE(scene->runtime, nullptr);
+    auto& runtime = *scene->runtime;
+
+    // The layer size comes from the mounted image, so express the anchor offset
+    // in terms of the registered size instead of fixture constants.
+    const auto scripted_size = runtime.NodeSize("scripted origin");
+    const auto scaled_size   = runtime.NodeSize("scaled anchor");
+
+    // A scripted origin replaces the translate every tick, so the anchor offset
+    // has to be re-derived instead of being baked in once at parse time.
+    auto scripted = FindRootChildByName(*scene, "scripted origin");
+    ASSERT_NE(scripted, nullptr);
+    EXPECT_FLOAT_EQ(scripted->Translate().y(), scripted_size.y() * 0.5f);
+    runtime.Tick(0.01);
+    EXPECT_FLOAT_EQ(scripted->Translate().x(), 50.0f);
+    EXPECT_FLOAT_EQ(scripted->Translate().y(), scripted_size.y() * 0.5f);
+
+    // The anchor sits on the scaled edge, so scale participates in the offset.
+    auto scaled = FindRootChildByName(*scene, "scaled anchor");
+    ASSERT_NE(scaled, nullptr);
+    EXPECT_FLOAT_EQ(scaled->Translate().x(), 10.0f + scaled_size.x() * 2.0f * 0.5f);
+
+    // Every Register* helper re-registers the node; the anchor origin must stay
+    // the authored origin so a scripted scale replaces the offset, never stacks
+    // a second one on top of it.
+    const auto scripted_scale_size = runtime.NodeSize("scripted scale anchor");
+    auto       scripted_scale      = FindRootChildByName(*scene, "scripted scale anchor");
+    ASSERT_NE(scripted_scale, nullptr);
+    EXPECT_FLOAT_EQ(scripted_scale->Scale().x(), 0.5f);
+    EXPECT_FLOAT_EQ(scripted_scale->Translate().x(),
+                    10.0f + scripted_scale_size.x() * 0.5f * 0.5f);
+    runtime.Tick(0.01);
+    EXPECT_FLOAT_EQ(scripted_scale->Translate().x(),
+                    10.0f + scripted_scale_size.x() * 0.5f * 0.5f);
+    EXPECT_EQ(runtime.scriptErrorCount(), 0u);
+}
+
 TEST(SceneSchema, DuplicateParsedImageClickScriptsGateRealAssetSoundLayers) {
     fs::VFS vfs;
     MountSceneFiles(vfs);

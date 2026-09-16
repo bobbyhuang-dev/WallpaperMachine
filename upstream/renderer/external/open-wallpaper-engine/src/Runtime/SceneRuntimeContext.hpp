@@ -3,6 +3,7 @@
 #include "Project/ProjectProperties.hpp"
 #include "Audio/include/Audio/AudioResponseService.h"
 #include "Runtime/ScalarAnimation.hpp"
+#include "Scene/Parse/WPPuppet.hpp"
 #include "Text/TextLayer.hpp"
 #include "Video/VideoTextureSource.hpp"
 
@@ -58,6 +59,19 @@ struct RuntimePendingTextLayerJob {
     TextLayerState state;
 };
 
+// Downsampled coverage of an image layer's base texture. Cursor hit tests
+// consult it so transparent texels do not count as the layer; without one the
+// layer's authored rectangle is the hit area.
+struct NodeHitMask {
+    uint32_t             width { 0 };
+    uint32_t             height { 0 };
+    std::vector<uint8_t> alpha;
+
+    static constexpr uint8_t kOpaqueThreshold = 16;
+
+    [[nodiscard]] bool covers(float u, float v) const noexcept;
+};
+
 class SceneRuntimeContext {
 public:
     struct NodeRegistrationSnapshot;
@@ -91,6 +105,16 @@ public:
     [[nodiscard]] std::shared_ptr<NodeRegistrationSnapshot>
                   CaptureNodeRegistration(std::string_view name) const;
     void          RegisterNodeSize(std::string name, Eigen::Vector2f value);
+    void          RegisterNodeHitMask(std::string name, NodeHitMask mask);
+    // The copy shares playback state with the render passes that own it.
+    void          RegisterPuppetLayer(std::string name, WPPuppetLayer layer);
+    WPPuppetLayer* FindPuppetLayer(std::string_view name);
+    // Mirrors the SceneScript IAnimationLayer operations. Unknown layers and
+    // operations return 0.
+    double        PuppetAnimationControl(std::string_view layer_name,
+                                         std::string_view animation_layer,
+                                         std::string_view operation, double value,
+                                         bool has_value);
     void          RegisterLayerTemplate(std::string template_path, std::shared_ptr<SceneNode> node,
                                         Eigen::Vector2f size);
     void          RegisterNodeVisibility(std::string name, SceneNode* node,
@@ -144,8 +168,10 @@ public:
     bool            SetNodeTranslate(std::string_view name, const Eigen::Vector3f& value);
     bool            SetNodeScale(std::string_view name, const Eigen::Vector3f& value);
     bool            SetNodeAlignment(std::string_view name, std::string alignment);
-    bool            SetNodeTextAlignment(std::string_view name, std::string alignment,
-                                         const Eigen::Vector3f& origin);
+    // Authored anchor alignment: the origin is the anchor point, so the runtime
+    // re-derives the offset whenever a dynamic origin or scale replaces it.
+    bool            SetNodeAnchorAlignment(std::string_view name, std::string alignment,
+                                           const Eigen::Vector3f& origin);
     bool            SetNodeRotation(std::string_view name, const Eigen::Vector3f& value);
     Eigen::Vector3f NodeTranslate(std::string_view name) const;
     Eigen::Vector3f NodeScale(std::string_view name) const;
@@ -243,6 +269,8 @@ public:
         std::optional<NodeVec3Binding>          rotation;
         std::optional<NodeEffectFinalBinding>   effect_final;
         std::optional<Eigen::Vector2f>          size;
+        std::optional<NodeHitMask>              hit_mask;
+        std::optional<WPPuppetLayer>            puppet_layer;
         std::optional<TextLayer>                text_layer;
         std::vector<TextValueBinding>           text_values;
         std::optional<NodeAlignmentBinding>     alignment;
@@ -337,6 +365,8 @@ private:
     std::vector<TextValueBinding>                                  m_text_values;
     std::vector<DynamicValueListenerBinding>                       m_dynamic_value_listeners;
     std::unordered_map<std::string, Eigen::Vector2f>               m_node_size;
+    std::unordered_map<std::string, NodeHitMask>                   m_node_hit_masks;
+    std::unordered_map<std::string, WPPuppetLayer>                 m_puppet_layers;
     std::unordered_map<std::string, TextLayer>                     m_text_layers;
     std::unordered_map<std::string, uint64_t>                      m_queued_text_revisions;
     std::unordered_map<std::string, NodeAlignmentBinding>          m_node_alignment;

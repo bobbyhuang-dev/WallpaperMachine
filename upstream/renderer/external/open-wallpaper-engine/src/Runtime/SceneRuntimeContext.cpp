@@ -176,34 +176,34 @@ Eigen::Vector3f CursorHitTestWorldPosition(const ScriptHostContext& host_context
     return host_context.cursor_world_position;
 }
 
-bool HitTestNode(SceneNode& node, Eigen::Vector2f size, const Eigen::Vector3f& cursor) {
+// Hit tests in the node's local plane so rotated and flipped layers keep
+// their authored rectangle, then consults the coverage mask when present.
+bool HitTestNode(SceneNode& node, Eigen::Vector2f size, const Eigen::Vector3f& cursor,
+                 const NodeHitMask* mask) {
     node.UpdateTrans();
     if (size.x() <= 0.0f && size.y() <= 0.0f) {
         size = Eigen::Vector2f(100.0f, 100.0f);
     }
 
-    const double                         half_width  = static_cast<double>(size.x()) * 0.5;
-    const double                         half_height = static_cast<double>(size.y()) * 0.5;
-    const std::array<Eigen::Vector4d, 4> corners {
-        Eigen::Vector4d(-half_width, -half_height, 0.0, 1.0),
-        Eigen::Vector4d(half_width, -half_height, 0.0, 1.0),
-        Eigen::Vector4d(half_width, half_height, 0.0, 1.0),
-        Eigen::Vector4d(-half_width, half_height, 0.0, 1.0),
-    };
-
-    double min_x = std::numeric_limits<double>::max();
-    double min_y = std::numeric_limits<double>::max();
-    double max_x = std::numeric_limits<double>::lowest();
-    double max_y = std::numeric_limits<double>::lowest();
-    for (const auto& corner : corners) {
-        const Eigen::Vector4d world = node.ModelTrans() * corner;
-        min_x                       = std::min(min_x, world.x());
-        max_x                       = std::max(max_x, world.x());
-        min_y                       = std::min(min_y, world.y());
-        max_y                       = std::max(max_y, world.y());
+    const Eigen::Matrix4d model = node.ModelTrans();
+    if (! std::isfinite(model.determinant()) || std::abs(model.determinant()) < 1e-12) {
+        return false;
     }
+    const Eigen::Vector4d local =
+        model.inverse() * Eigen::Vector4d(cursor.x(), cursor.y(), cursor.z(), 1.0);
 
-    return cursor.x() >= min_x && cursor.x() <= max_x && cursor.y() >= min_y && cursor.y() <= max_y;
+    const double half_width  = static_cast<double>(size.x()) * 0.5;
+    const double half_height = static_cast<double>(size.y()) * 0.5;
+    if (local.x() < -half_width || local.x() > half_width || local.y() < -half_height ||
+        local.y() > half_height) {
+        return false;
+    }
+    if (mask == nullptr || half_width <= 0.0 || half_height <= 0.0) return true;
+
+    // Card meshes map local (left, top) to texture (0, 0).
+    const float u = static_cast<float>((local.x() + half_width) / (2.0 * half_width));
+    const float v = static_cast<float>((half_height - local.y()) / (2.0 * half_height));
+    return mask->covers(u, v);
 }
 
 struct ClonedMaterialBinding {
@@ -395,6 +395,14 @@ void SyncEffectFinalNode(SceneNode& source, SceneImageEffectLayer& layer) {
 }
 
 } // namespace
+
+bool NodeHitMask::covers(float u, float v) const noexcept {
+    if (width == 0 || height == 0 || ! std::isfinite(u) || ! std::isfinite(v)) return false;
+    if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f) return false;
+    const auto x = std::min<uint32_t>(static_cast<uint32_t>(u * static_cast<float>(width)), width - 1);
+    const auto y = std::min<uint32_t>(static_cast<uint32_t>(v * static_cast<float>(height)), height - 1);
+    return alpha[static_cast<std::size_t>(y) * width + x] >= kOpaqueThreshold;
+}
 
 SceneRuntimeContext::SceneRuntimeContext(SceneRuntimeBootstrap bootstrap)
     : m_script_engine(std::make_unique<ScriptEngine>()),
@@ -742,11 +750,19 @@ void SceneRuntimeContext::RegisterScriptedValue(ScriptedDynamicValue* value) {
 
 void SceneRuntimeContext::RegisterNode(std::string name, SceneNode* node) {
     if (node == nullptr || name.empty()) return;
-    std::string key  = std::move(name);
-    m_nodes[key]     = node;
-    auto& alignment  = m_node_alignment[key];
-    alignment.origin = node->Translate();
-    alignment.scale  = node->Scale();
+    std::string key     = std::move(name);
+    auto&       slot    = m_nodes[key];
+    const bool  rebound = slot != node;
+    slot                = node;
+    auto& alignment     = m_node_alignment[key];
+    if (rebound) alignment = NodeAlignmentBinding {};
+    // Every Register* helper re-registers the node, and a node carrying a
+    // registered anchor already has the offset in its translate. Recapturing it
+    // as the anchor origin would double-count on the next ApplyNodeTransform.
+    if (alignment.alignment.empty()) {
+        alignment.origin = node->Translate();
+        alignment.scale  = node->Scale();
+    }
 }
 
 void SceneRuntimeContext::UnregisterNode(std::string_view name) {
@@ -866,6 +882,51 @@ SceneRuntimeContext::CaptureNodeRegistration(std::string_view name) const {
 void SceneRuntimeContext::RegisterNodeSize(std::string name, Eigen::Vector2f value) {
     if (name.empty()) return;
     m_node_size[std::move(name)] = value;
+}
+
+void SceneRuntimeContext::RegisterNodeHitMask(std::string name, NodeHitMask mask) {
+    if (name.empty() || mask.width == 0 || mask.height == 0 ||
+        mask.alpha.size() != static_cast<std::size_t>(mask.width) * mask.height) {
+        return;
+    }
+    m_node_hit_masks[std::move(name)] = std::move(mask);
+}
+
+void SceneRuntimeContext::RegisterPuppetLayer(std::string name, WPPuppetLayer layer) {
+    if (name.empty() || ! layer.hasPuppet()) return;
+    m_puppet_layers[std::move(name)] = std::move(layer);
+}
+
+WPPuppetLayer* SceneRuntimeContext::FindPuppetLayer(std::string_view name) {
+    const auto iterator = m_puppet_layers.find(std::string(name));
+    return iterator == m_puppet_layers.end() ? nullptr : &iterator->second;
+}
+
+double SceneRuntimeContext::PuppetAnimationControl(std::string_view layer_name,
+                                                   std::string_view animation_layer,
+                                                   std::string_view operation, double value,
+                                                   bool has_value) {
+    auto* puppet = FindPuppetLayer(layer_name);
+    if (puppet == nullptr) return 0.0;
+    const i32 index = puppet->findLayer(animation_layer);
+    if (index < 0) return 0.0;
+    if (operation == "play") return puppet->play(index) ? 1.0 : 0.0;
+    if (operation == "pause") return puppet->pause(index) ? 1.0 : 0.0;
+    if (operation == "stop") return puppet->stop(index) ? 1.0 : 0.0;
+    if (operation == "isPlaying") return puppet->isPlaying(index) ? 1.0 : 0.0;
+    if (operation == "exists") return 1.0;
+    if (operation == "frame") return puppet->frame(index);
+    if (operation == "frameCount") return puppet->frameCount(index);
+    if (operation == "fps") return puppet->fps(index);
+    if (operation == "rate") return puppet->rate(index);
+    if (operation == "blend") return puppet->blend(index);
+    if (operation == "visible") return puppet->visible(index) ? 1.0 : 0.0;
+    if (! has_value) return 0.0;
+    if (operation == "setFrame") return puppet->setFrame(index, value) ? 1.0 : 0.0;
+    if (operation == "setRate") return puppet->setRate(index, value) ? 1.0 : 0.0;
+    if (operation == "setBlend") return puppet->setBlend(index, value) ? 1.0 : 0.0;
+    if (operation == "setVisible") return puppet->setVisible(index, value != 0.0) ? 1.0 : 0.0;
+    return 0.0;
 }
 
 void SceneRuntimeContext::RegisterLayerTemplate(std::string                template_path,
@@ -1384,17 +1445,19 @@ bool SceneRuntimeContext::SetNodeAlignment(std::string_view name, std::string al
 
     auto& binding = m_node_alignment[std::string(name)];
     if (binding.alignment.empty()) {
-        binding.origin = iterator->second->Translate();
-        binding.scale  = iterator->second->Scale();
+        // No anchor yet: the node translate is the authored placement, so only
+        // the scale delta belongs to the offset.
+        binding.origin      = iterator->second->Translate();
+        binding.scale       = iterator->second->Scale();
+        binding.size_anchor = false;
     }
-    binding.alignment   = std::move(alignment);
-    binding.size_anchor = false;
+    binding.alignment = std::move(alignment);
     ApplyNodeTransform(name);
     return true;
 }
 
-bool SceneRuntimeContext::SetNodeTextAlignment(std::string_view name, std::string alignment,
-                                               const Eigen::Vector3f& origin) {
+bool SceneRuntimeContext::SetNodeAnchorAlignment(std::string_view name, std::string alignment,
+                                                 const Eigen::Vector3f& origin) {
     const auto iterator = m_nodes.find(std::string(name));
     if (iterator == m_nodes.end() || iterator->second == nullptr) return false;
 
@@ -1664,10 +1727,16 @@ void SceneRuntimeContext::DispatchMediaPlaybackChanged(std::string_view name, bo
 
 bool SceneRuntimeContext::CursorHitsLayer(std::string_view name) const {
     if (name.empty()) return true;
-    const auto node_iterator = m_nodes.find(std::string(name));
+    const std::string key(name);
+    const auto        node_iterator = m_nodes.find(key);
     if (node_iterator == m_nodes.end() || node_iterator->second == nullptr) return false;
-    return HitTestNode(
-        *node_iterator->second, NodeSize(name), CursorHitTestWorldPosition(*m_host_context));
+    const auto         mask_iterator = m_node_hit_masks.find(key);
+    const NodeHitMask* mask =
+        mask_iterator == m_node_hit_masks.end() ? nullptr : &mask_iterator->second;
+    return HitTestNode(*node_iterator->second,
+                       NodeSize(name),
+                       CursorHitTestWorldPosition(*m_host_context),
+                       mask);
 }
 
 bool SceneRuntimeContext::CursorHitsScriptLayer(const ScriptedDynamicValue& value) const {

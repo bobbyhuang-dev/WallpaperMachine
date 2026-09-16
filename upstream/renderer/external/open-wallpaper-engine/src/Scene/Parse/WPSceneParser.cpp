@@ -158,24 +158,6 @@ bool HasRuntimeTextValueBinding(const nlohmann::json& value) {
     return value.is_object() && (value.contains("user") || HasUpdateScript(value));
 }
 
-bool DefaultSettingVisible(const nlohmann::json& value) {
-    const auto& source = UnwrapSettingValue(value);
-    if (source.is_boolean()) return source.get<bool>();
-    if (source.is_number()) return source.get<float>() != 0.0f;
-    if (source.is_string()) {
-        const auto string_value = source.get<std::string>();
-        return string_value == "true" || string_value == "1";
-    }
-    return false;
-}
-
-bool AllowSceneScriptsForVisibilitySetting(bool                  dynamic_visible,
-                                           const nlohmann::json& visible_setting) {
-    if (! dynamic_visible) return true;
-    if (! visible_setting.is_object() || ! visible_setting.contains("script")) return true;
-    return DefaultSettingVisible(visible_setting);
-}
-
 void ReadVec3Setting(const nlohmann::json& json, const char* key, std::array<float, 3>* destination,
                      nlohmann::json* setting, bool* dynamic) {
     if (! json.contains(key) || destination == nullptr || setting == nullptr || dynamic == nullptr)
@@ -350,8 +332,9 @@ void RegisterLayerAttachments(ParseContext& context) {
             model.bones[attachment->bone_index].world_bind * attachment->local_xform });
     }
     for (auto& [parent_id, attachments] : groups) {
+        // Copies share playback state with the parent's render passes.
         context.shader_updater->RegisterPuppetAttachments(
-            std::move(context.layer_puppet_animations.at(parent_id)), std::move(attachments));
+            context.layer_puppet_animations.at(parent_id), std::move(attachments));
     }
 }
 
@@ -399,9 +382,7 @@ void ParseLayerNodes(ParseContext& context, const nlohmann::json& objects) {
 
     for (const auto& layer : layers) {
         const auto runtime_name = LayerRuntimeName(context, layer);
-        const bool allow_script_update =
-            AllowSceneScriptsForVisibilitySetting(layer.dynamic_visible, layer.visible_setting);
-        auto node = std::make_shared<SceneNode>(Vector3f(layer.origin.data()),
+        auto       node         = std::make_shared<SceneNode>(Vector3f(layer.origin.data()),
                                                 Vector3f(layer.scale.data()),
                                                 Vector3f(layer.angles.data()),
                                                 runtime_name);
@@ -413,8 +394,7 @@ void ParseLayerNodes(ParseContext& context, const nlohmann::json& objects) {
                 ResolveBoolSetting(*context.scene->runtime,
                                    layer.dynamic_visible ? layer.visible_setting
                                                          : nlohmann::json(layer.visible),
-                                   runtime_name,
-                                   allow_script_update));
+                                   runtime_name));
             if (layer.dynamic_origin) {
                 context.scene->runtime->RegisterNodeTranslate(
                     runtime_name,
@@ -422,8 +402,7 @@ void ParseLayerNodes(ParseContext& context, const nlohmann::json& objects) {
                     ResolveVec3Setting(*context.scene->runtime,
                                        layer.origin_setting,
                                        runtime_name,
-                                       Vec3SettingSemantic::Generic,
-                                       allow_script_update));
+                                       Vec3SettingSemantic::Generic));
             }
             if (layer.dynamic_scale) {
                 context.scene->runtime->RegisterNodeScale(
@@ -432,8 +411,7 @@ void ParseLayerNodes(ParseContext& context, const nlohmann::json& objects) {
                     ResolveVec3Setting(*context.scene->runtime,
                                        layer.scale_setting,
                                        runtime_name,
-                                       Vec3SettingSemantic::Generic,
-                                       allow_script_update));
+                                       Vec3SettingSemantic::Generic));
             }
             if (layer.dynamic_angles) {
                 context.scene->runtime->RegisterNodeRotation(
@@ -442,18 +420,15 @@ void ParseLayerNodes(ParseContext& context, const nlohmann::json& objects) {
                     ResolveVec3Setting(*context.scene->runtime,
                                        layer.angles_setting,
                                        runtime_name,
-                                       Vec3SettingSemantic::AnglesDegrees,
-                                       allow_script_update));
+                                       Vec3SettingSemantic::AnglesDegrees));
             }
         } else {
             node->SetVisible(layer.visible);
         }
-        if (allow_script_update) {
-            QueueSceneScriptIfNeeded(context, runtime_name, layer.visible_setting);
-            QueueSceneScriptIfNeeded(context, runtime_name, layer.origin_setting);
-            QueueSceneScriptIfNeeded(context, runtime_name, layer.scale_setting);
-            QueueSceneScriptIfNeeded(context, runtime_name, layer.angles_setting);
-        }
+        QueueSceneScriptIfNeeded(context, runtime_name, layer.visible_setting);
+        QueueSceneScriptIfNeeded(context, runtime_name, layer.origin_setting);
+        QueueSceneScriptIfNeeded(context, runtime_name, layer.scale_setting);
+        QueueSceneScriptIfNeeded(context, runtime_name, layer.angles_setting);
         context.layer_nodes[layer.id]      = node;
         context.layer_parent_ids[layer.id] = layer.parent_id;
     }
@@ -1156,6 +1131,13 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::WPMaterial& wpmat, Scene* pScene,
     return true;
 }
 
+bool AlignmentHasAnchorOffset(std::string_view align) {
+    for (const auto edge : { "top", "bottom", "left", "right" }) {
+        if (align.find(edge) != std::string_view::npos) return true;
+    }
+    return false;
+}
+
 void LoadAlignment(SceneNode& node, std::string_view align, Vector2f size) {
     Vector3f trans = node.Translate();
     size *= 0.5f;
@@ -1442,9 +1424,6 @@ void ParseTextObj(ParseContext& context, wpscene::WPTextObject& obj) {
     SceneMesh effect_final_mesh(true);
     GenTextCardMesh(effect_final_mesh, effect_final_frame.bounds, effect_texture_bounds);
 
-    const bool allow_script_update =
-        AllowSceneScriptsForVisibilitySetting(obj.dynamic_visible, obj.visible_setting);
-
     if (context.scene->runtime != nullptr) {
         const auto texture_name = TextTextureName(runtime_name);
         RegisterTextTexture(*context.scene, texture_name, text_state);
@@ -1468,14 +1447,13 @@ void ParseTextObj(ParseContext& context, wpscene::WPTextObject& obj) {
             ResolveBoolSetting(*context.scene->runtime,
                                obj.dynamic_visible ? obj.visible_setting
                                                    : nlohmann::json(obj.visible),
-                               runtime_name,
-                               allow_script_update));
+                               runtime_name));
         context.scene->runtime->RegisterTextLayer(runtime_name, std::move(text_state));
         if (runtime_text_value != nullptr) {
             context.scene->runtime->RegisterTextValue(
                 runtime_name, std::move(runtime_text_value), false);
         }
-        context.scene->runtime->SetNodeTextAlignment(
+        context.scene->runtime->SetNodeAnchorAlignment(
             runtime_name, anchor, Vector3f(obj.origin.data()));
         if (obj.dynamic_origin) {
             context.scene->runtime->RegisterNodeTranslate(
@@ -1484,8 +1462,7 @@ void ParseTextObj(ParseContext& context, wpscene::WPTextObject& obj) {
                 ResolveVec3Setting(*context.scene->runtime,
                                    obj.origin_setting,
                                    runtime_name,
-                                   Vec3SettingSemantic::Generic,
-                                   allow_script_update));
+                                   Vec3SettingSemantic::Generic));
         }
         if (obj.dynamic_scale) {
             context.scene->runtime->RegisterNodeScale(
@@ -1494,8 +1471,7 @@ void ParseTextObj(ParseContext& context, wpscene::WPTextObject& obj) {
                 ResolveVec3Setting(*context.scene->runtime,
                                    obj.scale_setting,
                                    runtime_name,
-                                   Vec3SettingSemantic::Generic,
-                                   allow_script_update));
+                                   Vec3SettingSemantic::Generic));
         }
         if (obj.dynamic_angles) {
             context.scene->runtime->RegisterNodeRotation(
@@ -1504,8 +1480,7 @@ void ParseTextObj(ParseContext& context, wpscene::WPTextObject& obj) {
                 ResolveVec3Setting(*context.scene->runtime,
                                    obj.angles_setting,
                                    runtime_name,
-                                   Vec3SettingSemantic::AnglesDegrees,
-                                   allow_script_update));
+                                   Vec3SettingSemantic::AnglesDegrees));
         }
         if (! obj.effects.empty()) {
             AttachEffectsToNode(context,
@@ -1525,13 +1500,11 @@ void ParseTextObj(ParseContext& context, wpscene::WPTextObject& obj) {
         LoadAlignment(*node, anchor, layout_size);
     }
 
-    if (allow_script_update) {
-        QueueSceneScriptIfNeeded(context, runtime_name, obj.visible_setting);
-        QueueSceneScriptIfNeeded(context, runtime_name, obj.origin_setting);
-        QueueSceneScriptIfNeeded(context, runtime_name, obj.scale_setting);
-        QueueSceneScriptIfNeeded(context, runtime_name, obj.angles_setting);
-        QueueSceneScriptIfNeeded(context, runtime_name, obj.text);
-    }
+    QueueSceneScriptIfNeeded(context, runtime_name, obj.visible_setting);
+    QueueSceneScriptIfNeeded(context, runtime_name, obj.origin_setting);
+    QueueSceneScriptIfNeeded(context, runtime_name, obj.scale_setting);
+    QueueSceneScriptIfNeeded(context, runtime_name, obj.angles_setting);
+    QueueSceneScriptIfNeeded(context, runtime_name, obj.text);
 
     context.layer_nodes[obj.id] = node;
     context.layer_parent_ids[obj.id] = obj.parent_id;
@@ -1888,6 +1861,175 @@ void RegisterNodeVideoTextureRuntime(ParseContext& context, const std::string& r
     }
 }
 
+bool ScriptHandlesCursor(std::string_view script) {
+    return script.find("cursor") != std::string_view::npos;
+}
+
+bool SettingHandlesCursor(const nlohmann::json& setting) {
+    if (! setting.is_object() || ! setting.contains("script") ||
+        ! setting.at("script").is_string()) {
+        return false;
+    }
+    return ScriptHandlesCursor(setting.at("script").get_ref<const std::string&>());
+}
+
+// True when any script bound to this image object can receive cursor events,
+// so the layer needs a coverage mask for hit testing.
+bool ImageObjectHandlesCursorEvents(const wpscene::WPImageObject& wpimgobj) {
+    if (SettingHandlesCursor(wpimgobj.visible_setting) ||
+        SettingHandlesCursor(wpimgobj.origin_setting) ||
+        SettingHandlesCursor(wpimgobj.scale_setting) ||
+        SettingHandlesCursor(wpimgobj.angles_setting) ||
+        SettingHandlesCursor(wpimgobj.alpha_setting)) {
+        return true;
+    }
+    for (const auto& [name, constant] : wpimgobj.material.constantshadervalues) {
+        (void)name;
+        if (ScriptHandlesCursor(constant.script)) return true;
+    }
+    for (const auto& effect : wpimgobj.effects) {
+        for (const auto& material : effect.materials) {
+            for (const auto& [name, constant] : material.constantshadervalues) {
+                (void)name;
+                if (ScriptHandlesCursor(constant.script)) return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Alpha of one texel from the mip-0 payload, or 255 for formats without alpha.
+uint8_t TexelAlpha(const ImageData& mip, TextureFormat format, i32 x, i32 y) {
+    const auto* data = mip.data.get();
+    switch (format) {
+    case TextureFormat::RGBA8: {
+        const isize offset = (static_cast<isize>(y) * mip.width + x) * 4 + 3;
+        return offset < mip.size ? data[offset] : 0;
+    }
+    case TextureFormat::BC2: {
+        // 16-byte blocks; the first 8 bytes hold sixteen 4-bit alphas.
+        const isize blocks_per_row = (mip.width + 3) / 4;
+        const isize block          = (static_cast<isize>(y) / 4) * blocks_per_row + x / 4;
+        const isize offset         = block * 16 + ((y % 4) * 4 + (x % 4)) / 2;
+        if (offset >= mip.size) return 0;
+        const uint8_t pair = data[offset];
+        const uint8_t nib  = (x % 2) == 0 ? (pair & 0x0F) : (pair >> 4);
+        return static_cast<uint8_t>(nib * 17);
+    }
+    case TextureFormat::BC3: {
+        // 16-byte blocks; the first 8 bytes are a DXT5 interpolated alpha block.
+        const isize blocks_per_row = (mip.width + 3) / 4;
+        const isize block          = (static_cast<isize>(y) / 4) * blocks_per_row + x / 4;
+        const isize offset         = block * 16;
+        if (offset + 8 > mip.size) return 0;
+        const uint8_t a0 = data[offset];
+        const uint8_t a1 = data[offset + 1];
+        uint64_t      bits = 0;
+        for (int i = 0; i < 6; ++i) bits |= static_cast<uint64_t>(data[offset + 2 + i]) << (8 * i);
+        const unsigned index = static_cast<unsigned>((bits >> (3 * ((y % 4) * 4 + (x % 4)))) & 0x7);
+        if (index == 0) return a0;
+        if (index == 1) return a1;
+        if (a0 > a1) {
+            return static_cast<uint8_t>(((8 - index) * a0 + (index - 1) * a1) / 7);
+        }
+        if (index == 6) return 0;
+        if (index == 7) return 255;
+        return static_cast<uint8_t>(((6 - index) * a0 + (index - 1) * a1) / 5);
+    }
+    default:
+        return 255;
+    }
+}
+
+// Builds a coverage mask for an image object's albedo texture. Returns nullopt
+// for textures the runtime should keep hit testing by rectangle: videos,
+// sprite sheets, opaque formats and anything the parser cannot decode.
+std::optional<NodeHitMask> BuildImageHitMask(ParseContext& context,
+                                             const wpscene::WPImageObject& wpimgobj) {
+    constexpr uint32_t kMaxMaskSide = 256;
+    // Puppet meshes are cut-up sprites deformed by bones, not a card over the
+    // albedo, so their authored rectangle stays the hit area.
+    if (wpimgobj.material.textures.empty() || ! wpimgobj.puppet.empty()) return std::nullopt;
+    const auto& texture_name = wpimgobj.material.textures[0];
+    if (texture_name.empty() || IsSpecTex(texture_name)) return std::nullopt;
+    const auto texture_iterator = context.scene->textures.find(texture_name);
+    if (texture_iterator != context.scene->textures.end() &&
+        (texture_iterator->second.isVideo || texture_iterator->second.isSprite)) {
+        return std::nullopt;
+    }
+    const auto image = context.scene->imageParser->Parse(texture_name);
+    if (image == nullptr || image->header.isVideo || image->header.isSprite ||
+        image->slots.empty() || image->slots[0].mipmaps.empty()) {
+        return std::nullopt;
+    }
+    const auto format = image->header.format;
+    if (format != TextureFormat::RGBA8 && format != TextureFormat::BC2 &&
+        format != TextureFormat::BC3) {
+        return std::nullopt;
+    }
+    const auto& mip = image->slots[0].mipmaps[0];
+    if (mip.data == nullptr || mip.width <= 0 || mip.height <= 0) return std::nullopt;
+    // The authored image occupies the top-left mapWidth x mapHeight texels of
+    // a possibly padded texture; card meshes only sample that region.
+    const i32 map_width  = std::clamp<i32>(image->header.mapWidth, 1, mip.width);
+    const i32 map_height = std::clamp<i32>(image->header.mapHeight, 1, mip.height);
+
+    NodeHitMask mask;
+    const i32 longest = std::max(map_width, map_height);
+    const i32 step    = std::max<i32>(1, (longest + static_cast<i32>(kMaxMaskSide) - 1) /
+                                          static_cast<i32>(kMaxMaskSide));
+    mask.width  = static_cast<uint32_t>((map_width + step - 1) / step);
+    mask.height = static_cast<uint32_t>((map_height + step - 1) / step);
+    mask.alpha.resize(static_cast<std::size_t>(mask.width) * mask.height);
+    for (uint32_t y = 0; y < mask.height; ++y) {
+        const i32 texel_y = std::min<i32>(static_cast<i32>(y) * step + step / 2, map_height - 1);
+        for (uint32_t x = 0; x < mask.width; ++x) {
+            const i32 texel_x = std::min<i32>(static_cast<i32>(x) * step + step / 2, map_width - 1);
+            mask.alpha[static_cast<std::size_t>(y) * mask.width + x] =
+                TexelAlpha(mip, format, texel_x, texel_y);
+        }
+    }
+    return mask;
+}
+
+// Binds each authored animation layer's visible/rate/blend to user properties
+// (and scripts) so the shared puppet state follows the wallpaper settings.
+void BindPuppetAnimationLayerSettings(ParseContext& context, const std::string& runtime_name,
+                                      const wpscene::WPImageObject& wpimgobj,
+                                      WPPuppetLayer layer) {
+    auto& runtime = *context.scene->runtime;
+    const auto count = std::min(wpimgobj.puppet_layer_settings.size(), layer.layerCount());
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto& setting = wpimgobj.puppet_layer_settings[index];
+        if (! setting.is_object()) continue;
+        const i32 layer_index = static_cast<i32>(index);
+        const auto is_dynamic = [](const nlohmann::json& value) {
+            return value.is_object() && (value.contains("user") || value.contains("script"));
+        };
+        if (setting.contains("visible") && is_dynamic(setting.at("visible"))) {
+            runtime.RegisterDynamicValueListener(
+                ResolveBoolSetting(runtime, setting.at("visible"), runtime_name),
+                [layer, layer_index](const DynamicValue& value) mutable {
+                    layer.setVisible(layer_index, value.getBool());
+                });
+        }
+        if (setting.contains("rate") && is_dynamic(setting.at("rate"))) {
+            runtime.RegisterDynamicValueListener(
+                ResolveFloatSetting(runtime, setting.at("rate"), runtime_name),
+                [layer, layer_index](const DynamicValue& value) mutable {
+                    layer.setRate(layer_index, value.getFloat());
+                });
+        }
+        if (setting.contains("blend") && is_dynamic(setting.at("blend"))) {
+            runtime.RegisterDynamicValueListener(
+                ResolveFloatSetting(runtime, setting.at("blend"), runtime_name),
+                [layer, layer_index](const DynamicValue& value) mutable {
+                    layer.setBlend(layer_index, value.getFloat());
+                });
+        }
+    }
+}
+
 void RemapSubmeshesToMaterialSlot(SceneMesh& mesh, uint32_t material_slot) {
     for (auto& submesh : mesh.Submeshes()) {
         submesh.material_slot = material_slot;
@@ -2000,13 +2142,11 @@ TryLoadPuppetMaterialSlots(ParseContext& context, SceneNode* node, wpscene::WPIm
         return shader_info;
     };
 
-    auto make_shader_value_data = [&wpimgobj, &puppet, &image_shader_value_data, has_bones]() {
+    // The image's shader value data already carries the node's shared puppet
+    // layer; the copy keeps every slot on the same playback state.
+    auto make_shader_value_data = [&image_shader_value_data]() {
         auto shader_value_data = image_shader_value_data;
         shader_value_data.renderTargets.clear();
-        if (has_bones) {
-            shader_value_data.puppet_layer = WPPuppetLayer(puppet.puppet);
-            shader_value_data.puppet_layer.prepared(wpimgobj.puppet_layers);
-        }
         return shader_value_data;
     };
 
@@ -2422,8 +2562,14 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
                 puppet = nullptr;
             } else if (puppet->puppet != nullptr) {
                 context.layer_puppets[wpimgobj.id] = puppet->puppet;
+                // Single playback state per image object: every render pass,
+                // attachment group and the runtime take copies of this one.
                 auto layer = WPPuppetLayer(puppet->puppet);
                 layer.prepared(wpimgobj.puppet_layers);
+                if (context.scene->runtime != nullptr) {
+                    context.scene->runtime->RegisterPuppetLayer(runtime_name, layer);
+                    BindPuppetAnimationLayerSettings(context, runtime_name, wpimgobj, layer);
+                }
                 context.layer_puppet_animations.emplace(wpimgobj.id, std::move(layer));
             }
         }
@@ -2441,8 +2587,6 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
                                                  Vector3f(wpimgobj.scale.data()),
                                                  Vector3f(wpimgobj.angles.data()),
                                                  runtime_name);
-    const bool allow_script_update =
-        AllowSceneScriptsForVisibilitySetting(wpimgobj.dynamic_visible, wpimgobj.visible_setting);
     context.layer_nodes[wpimgobj.id] = spImgNode;
     spImgNode->SetVisible(wpimgobj.visible);
     RuntimeNodeRegistrationRollback runtime_node_registration(
@@ -2463,20 +2607,28 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
         context.scene->runtime->RegisterMaterialAlphaAnimation(material,
             context.scene->runtime->RegisterScalarAnimation(runtime_name, *animation));
     };
+    // A scripted or user-bound origin replaces the node translate every tick, so
+    // an anchor baked into the translate is lost. Hand the anchor to the runtime
+    // instead, which re-derives the offset from the current origin, scale and size.
+    const bool runtime_owns_anchor =
+        context.scene->runtime != nullptr && AlignmentHasAnchorOffset(wpimgobj.alignment);
     if (context.scene->runtime != nullptr) {
         context.scene->runtime->RegisterNode(runtime_name, spImgNode.get());
         context.scene->runtime->RegisterNodeSize(
             runtime_name,
             Eigen::Vector2f(static_cast<float>(wpimgobj.size[0]),
                             static_cast<float>(wpimgobj.size[1])));
+        if (runtime_owns_anchor) {
+            context.scene->runtime->SetNodeAnchorAlignment(
+                runtime_name, wpimgobj.alignment, Vector3f(wpimgobj.origin.data()));
+        }
         context.scene->runtime->RegisterNodeVisibility(
             runtime_name,
             spImgNode.get(),
             ResolveBoolSetting(*context.scene->runtime,
                                wpimgobj.dynamic_visible ? wpimgobj.visible_setting
                                                         : nlohmann::json(wpimgobj.visible),
-                               runtime_name,
-                               allow_script_update));
+                               runtime_name));
         if (wpimgobj.dynamic_origin) {
             context.scene->runtime->RegisterNodeTranslate(
                 runtime_name,
@@ -2484,8 +2636,7 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
                 ResolveVec3Setting(*context.scene->runtime,
                                    wpimgobj.origin_setting,
                                    runtime_name,
-                                   Vec3SettingSemantic::Generic,
-                                   allow_script_update));
+                                   Vec3SettingSemantic::Generic));
         }
         if (wpimgobj.dynamic_scale) {
             context.scene->runtime->RegisterNodeScale(
@@ -2494,8 +2645,7 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
                 ResolveVec3Setting(*context.scene->runtime,
                                    wpimgobj.scale_setting,
                                    runtime_name,
-                                   Vec3SettingSemantic::Generic,
-                                   allow_script_update));
+                                   Vec3SettingSemantic::Generic));
         }
         if (wpimgobj.dynamic_angles) {
             context.scene->runtime->RegisterNodeRotation(
@@ -2504,17 +2654,16 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
                 ResolveVec3Setting(*context.scene->runtime,
                                    wpimgobj.angles_setting,
                                    runtime_name,
-                                   Vec3SettingSemantic::AnglesDegrees,
-                                   allow_script_update));
+                                   Vec3SettingSemantic::AnglesDegrees));
         }
     }
-    if (allow_script_update) {
-        QueueSceneScriptIfNeeded(context, runtime_name, wpimgobj.visible_setting);
-        QueueSceneScriptIfNeeded(context, runtime_name, wpimgobj.origin_setting);
-        QueueSceneScriptIfNeeded(context, runtime_name, wpimgobj.scale_setting);
-        QueueSceneScriptIfNeeded(context, runtime_name, wpimgobj.angles_setting);
+    QueueSceneScriptIfNeeded(context, runtime_name, wpimgobj.visible_setting);
+    QueueSceneScriptIfNeeded(context, runtime_name, wpimgobj.origin_setting);
+    QueueSceneScriptIfNeeded(context, runtime_name, wpimgobj.scale_setting);
+    QueueSceneScriptIfNeeded(context, runtime_name, wpimgobj.angles_setting);
+    if (! runtime_owns_anchor) {
+        LoadAlignment(*spImgNode, wpimgobj.alignment, { wpimgobj.size[0], wpimgobj.size[1] });
     }
-    LoadAlignment(*spImgNode, wpimgobj.alignment, { wpimgobj.size[0], wpimgobj.size[1] });
     spImgNode->ID() = wpimgobj.id;
 
     const bool skipComposeRender = isCompose && ! hasEffect;
@@ -2599,8 +2748,7 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
                 }
             } else {
                 if (has_puppet_bones) {
-                    svData.puppet_layer = WPPuppetLayer(puppet->puppet);
-                    svData.puppet_layer.prepared(wpimgobj.puppet_layers);
+                    svData.puppet_layer = context.layer_puppet_animations.at(wpimgobj.id);
                 }
                 GenPuppetMeshSubmeshes(mesh, *puppet, true);
                 puppet_material_slots = TryLoadPuppetMaterialSlots(
@@ -2886,8 +3034,7 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
                 {
                     svData.parallaxDepth = { wpimgobj.parallaxDepth[0], wpimgobj.parallaxDepth[1] };
                     if (puppet && has_puppet_bones && wpmat.use_puppet) {
-                        svData.puppet_layer = WPPuppetLayer(puppet->puppet);
-                        svData.puppet_layer.prepared(wpimgobj.puppet_layers);
+                        svData.puppet_layer = context.layer_puppet_animations.at(wpimgobj.id);
                     }
                 }
                 spMesh->AddMaterial(std::move(material));
@@ -2914,8 +3061,12 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
             spImgNode,
             Eigen::Vector2f(static_cast<float>(wpimgobj.size[0]),
                             static_cast<float>(wpimgobj.size[1])));
+        if (ImageObjectHandlesCursorEvents(wpimgobj)) {
+            if (auto mask = BuildImageHitMask(context, wpimgobj); mask.has_value()) {
+                context.scene->runtime->RegisterNodeHitMask(runtime_name, std::move(*mask));
+            }
+        }
     }
-
 }
 
 struct ParticleChildPtr {
@@ -3047,8 +3198,6 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
         is_child ? nullptr : &context.pending_scene_scripts);
 
     if (! is_child) {
-        const bool allow_script_update = AllowSceneScriptsForVisibilitySetting(
-            wppartobj.dynamic_visible, wppartobj.visible_setting);
         if (context.scene->runtime != nullptr) {
             context.scene->runtime->RegisterNode(runtime_name, spNode.get());
             context.scene->runtime->RegisterNodeVisibility(
@@ -3057,8 +3206,7 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
                 ResolveBoolSetting(*context.scene->runtime,
                                    wppartobj.dynamic_visible ? wppartobj.visible_setting
                                                              : nlohmann::json(wppartobj.visible),
-                                   runtime_name,
-                                   allow_script_update));
+                                   runtime_name));
             if (wppartobj.dynamic_origin) {
                 context.scene->runtime->RegisterNodeTranslate(
                     runtime_name,
@@ -3066,8 +3214,7 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
                     ResolveVec3Setting(*context.scene->runtime,
                                        wppartobj.origin_setting,
                                        runtime_name,
-                                       Vec3SettingSemantic::Generic,
-                                       allow_script_update));
+                                       Vec3SettingSemantic::Generic));
             }
             if (wppartobj.dynamic_scale) {
                 context.scene->runtime->RegisterNodeScale(
@@ -3076,8 +3223,7 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
                     ResolveVec3Setting(*context.scene->runtime,
                                        wppartobj.scale_setting,
                                        runtime_name,
-                                       Vec3SettingSemantic::Generic,
-                                       allow_script_update));
+                                       Vec3SettingSemantic::Generic));
             }
             if (wppartobj.dynamic_angles) {
                 context.scene->runtime->RegisterNodeRotation(
@@ -3086,16 +3232,13 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
                     ResolveVec3Setting(*context.scene->runtime,
                                        wppartobj.angles_setting,
                                        runtime_name,
-                                       Vec3SettingSemantic::AnglesDegrees,
-                                       allow_script_update));
+                                       Vec3SettingSemantic::AnglesDegrees));
             }
         }
-        if (allow_script_update) {
-            QueueSceneScriptIfNeeded(context, runtime_name, wppartobj.visible_setting);
-            QueueSceneScriptIfNeeded(context, runtime_name, wppartobj.origin_setting);
-            QueueSceneScriptIfNeeded(context, runtime_name, wppartobj.scale_setting);
-            QueueSceneScriptIfNeeded(context, runtime_name, wppartobj.angles_setting);
-        }
+        QueueSceneScriptIfNeeded(context, runtime_name, wppartobj.visible_setting);
+        QueueSceneScriptIfNeeded(context, runtime_name, wppartobj.origin_setting);
+        QueueSceneScriptIfNeeded(context, runtime_name, wppartobj.scale_setting);
+        QueueSceneScriptIfNeeded(context, runtime_name, wppartobj.angles_setting);
     }
 
     auto override_state =

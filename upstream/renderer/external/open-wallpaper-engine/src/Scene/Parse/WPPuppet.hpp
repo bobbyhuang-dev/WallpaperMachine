@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <vector>
 #include <string>
+#include <string_view>
 #include <memory>
 #include <span>
 #include <array>
@@ -174,6 +175,9 @@ private:
     std::vector<Eigen::Affine3f> m_final_affines;
 };
 
+// One puppet's animation-layer stack. Copies share playback state: the image
+// node, its effect passes and its attachments each keep a copy, and a script
+// or user property controlling one of them must move all of them together.
 class WPPuppetLayer {
     friend class WPPuppet;
 
@@ -196,6 +200,9 @@ public:
         bool        blendin { false };
         bool        blendout { false };
         double      blendtime { 0.0 };
+        // Authored layers start playing, matching the editor. A single-shot
+        // animation stops at its last frame until play() restarts it.
+        bool        playing { true };
     };
 
     void prepared(std::span<AnimationLayer>);
@@ -203,6 +210,25 @@ public:
     std::span<const Eigen::Affine3f> genFrame(double time) noexcept;
 
     void updateInterpolation(double time) noexcept;
+
+    // SceneScript IAnimationLayer surface. Layers resolve by authored name
+    // first, then by stack index; -1 means no such layer.
+    i32  findLayer(std::string_view name) const noexcept;
+    usize layerCount() const noexcept;
+    bool play(i32 index) noexcept;
+    bool pause(i32 index) noexcept;
+    bool stop(i32 index) noexcept;
+    bool isPlaying(i32 index) const noexcept;
+    bool setFrame(i32 index, double frame) noexcept;
+    double frame(i32 index) const noexcept;
+    double frameCount(i32 index) const noexcept;
+    double fps(i32 index) const noexcept;
+    bool setRate(i32 index, double rate) noexcept;
+    double rate(i32 index) const noexcept;
+    bool setBlend(i32 index, double blend) noexcept;
+    double blend(i32 index) const noexcept;
+    bool setVisible(i32 index, bool visible) noexcept;
+    bool visible(i32 index) const noexcept;
 
 private:
     struct Layer {
@@ -213,12 +239,19 @@ private:
 
         operator bool() const noexcept { return anim != nullptr; };
     };
+    struct State {
+        double m_global_blend { 1.0 };
+        double m_total_blend { 0.0 };
+        double m_last_elapsed { -1.0 };
 
-    double m_global_blend { 1.0 };
-    double m_total_blend { 0.0 };
-    double m_last_elapsed { -1.0 };
+        std::vector<Layer> m_layers;
+    };
 
-    std::vector<Layer>        m_layers;
+    void   rebuildBlend() noexcept;
+    Layer* layerAt(i32 index) noexcept;
+    const Layer* layerAt(i32 index) const noexcept;
+
+    std::shared_ptr<State>    m_state;
     std::shared_ptr<WPPuppet> m_puppet;
 };
 

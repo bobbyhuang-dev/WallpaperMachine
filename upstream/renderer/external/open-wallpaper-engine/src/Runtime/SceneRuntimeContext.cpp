@@ -411,6 +411,13 @@ SceneRuntimeContext::SceneRuntimeContext(SceneRuntimeBootstrap bootstrap)
       m_project_properties(bootstrap.project_properties) {
     m_host_context->canvas_size = Eigen::Vector2f(static_cast<float>(bootstrap.canvas_width),
                                                   static_cast<float>(bootstrap.canvas_height));
+    // Until the renderer reports its presentation, the window is the canvas.
+    m_cursor_viewport = CursorViewport {
+        .origin         = Eigen::Vector2f::Zero(),
+        .size           = m_host_context->canvas_size,
+        .content_origin = Eigen::Vector2f::Zero(),
+        .content_size   = m_host_context->canvas_size,
+    };
     m_host_context->cursor_normalized_position = Eigen::Vector2f(0.5f, 0.5f);
     m_host_context->cursor_world_position      = Eigen::Vector3f::Zero();
     m_host_context->frame_time                 = 0.0;
@@ -549,12 +556,21 @@ void SceneRuntimeContext::SetCursorWorldPosition(const Eigen::Vector3f& value) {
     m_host_context->cursor_world_position = value;
 }
 
+void SceneRuntimeContext::SetCursorViewport(const CursorViewport& viewport) {
+    if (! viewport.origin.allFinite() || ! viewport.size.allFinite()) return;
+    if (! viewport.content_origin.allFinite() || ! viewport.content_size.allFinite()) return;
+    if (viewport.size.x() == 0.0f || viewport.size.y() == 0.0f) return;
+    m_cursor_viewport = viewport;
+}
+
 void SceneRuntimeContext::SetCursorInput(float x, float y) {
     x                                          = std::clamp(x, 0.0f, 1.0f);
     y                                          = std::clamp(y, 0.0f, 1.0f);
     m_host_context->cursor_normalized_position = Eigen::Vector2f(x, y);
-    m_host_context->cursor_world_position      = Eigen::Vector3f(
-        x * m_host_context->canvas_size.x(), (1.0f - y) * m_host_context->canvas_size.y(), 0.0f);
+    m_host_context->cursor_world_position =
+        Eigen::Vector3f(m_cursor_viewport.origin.x() + x * m_cursor_viewport.size.x(),
+                        m_cursor_viewport.origin.y() + (1.0f - y) * m_cursor_viewport.size.y(),
+                        0.0f);
 }
 
 void SceneRuntimeContext::SetCursorEnter(bool entered) {
@@ -1725,8 +1741,21 @@ void SceneRuntimeContext::DispatchMediaPlaybackChanged(std::string_view name, bo
     (void)playing;
 }
 
+// Letterboxed presentations leave window area the wallpaper never draws. The
+// cursor still maps to a scene coordinate there, extrapolated past the drawn
+// image, so layers reaching beyond the canvas must not answer to those bars.
+bool SceneRuntimeContext::CursorInsidePresentedContent() const {
+    const auto& origin = m_cursor_viewport.content_origin;
+    const auto& size   = m_cursor_viewport.content_size;
+    if (size.x() <= 0.0f || size.y() <= 0.0f) return true;
+    const auto& cursor = m_host_context->cursor_world_position;
+    return cursor.x() >= origin.x() && cursor.x() <= origin.x() + size.x() &&
+           cursor.y() >= origin.y() && cursor.y() <= origin.y() + size.y();
+}
+
 bool SceneRuntimeContext::CursorHitsLayer(std::string_view name) const {
     if (name.empty()) return true;
+    if (! CursorInsidePresentedContent()) return false;
     const std::string key(name);
     const auto        node_iterator = m_nodes.find(key);
     if (node_iterator == m_nodes.end() || node_iterator->second == nullptr) return false;

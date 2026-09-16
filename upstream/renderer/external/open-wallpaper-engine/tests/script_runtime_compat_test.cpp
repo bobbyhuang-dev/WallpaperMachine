@@ -1,3 +1,4 @@
+#include "Presentation/WallpaperScaling.hpp"
 #include "Runtime/DynamicValue.hpp"
 #include "Runtime/SceneRuntimeContext.hpp"
 #include "Runtime/SceneSettingResolver.hpp"
@@ -152,6 +153,91 @@ export function update(value) {
     for (int frame = 0; frame < 120; ++frame) runtime->Tick(1.0 / 60.0);
     EXPECT_NEAR(node->Scale().x(), 1.0f, 1.0e-5f);
     EXPECT_NEAR(node->Scale().y(), 2.0f, 1.0e-5f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+// Real wallpapers receive the cursor as a window fraction, not scene
+// coordinates. A 7680x2160 scene on the recorded 4112x2658 output is cropped by
+// the FILL presentation, so hover hit boxes only line up with the drawn layer
+// when the window fraction is mapped back through that presentation rectangle.
+TEST(ScriptRuntimeCompat, HoverScaleFollowsNormalizedDisplayInputOnACroppedWallpaper) {
+    Scene scene;
+    auto  runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {
+         .canvas_width  = 7680,
+         .canvas_height = 2160,
+    });
+    ASSERT_NE(runtime, nullptr);
+    runtime->AttachScene(&scene);
+
+    auto node = std::make_shared<SceneNode>();
+    node->SetTranslate(Eigen::Vector3f(3850.0f, 865.0f, 0.0f));
+    runtime->RegisterNodeSize("hover", Eigen::Vector2f(275.0f, 134.0f));
+    runtime->RegisterNodeScale("hover",
+                               node.get(),
+                               ResolveVec3Setting(*runtime,
+                                                  { { "value", "1 1 1" }, { "script", R"JS(
+import * as WEMath from 'WEMath';
+let original, enlarged, hovered = false;
+export function init(value) {
+    original = value;
+    enlarged = value.multiply(1.2);
+}
+export function cursorEnter() { hovered = true; }
+export function cursorLeave() { hovered = false; }
+export function update(value) {
+    const target = hovered ? enlarged : original;
+    return new Vec3(WEMath.mix(value.x, target.x, 0.2),
+                    WEMath.mix(value.y, target.y, 0.2),
+                    WEMath.mix(value.z, target.z, 0.2));
+}
+)JS" } },
+                                                  "hover"));
+
+    // Recorded runtime configuration: output_px 4112x2658, display_scale 2.0,
+    // scaling mode fill, factor 1.0.
+    const auto layout =
+        ComputeWallpaperScalingLayout(WallpaperScalingMode::FILL, 7680, 2160, 2056, 1329, 2.0, 1.0);
+    const auto mapping = ComputeWallpaperCursorMapping(layout, 3840.0, 1080.0, 7680.0, 2160.0);
+    ASSERT_TRUE(mapping.valid);
+    runtime->SetCursorViewport(CursorViewport {
+        .origin = Eigen::Vector2f(static_cast<float>(mapping.origin_x),
+                                  static_cast<float>(mapping.origin_y)),
+        .size =
+            Eigen::Vector2f(static_cast<float>(mapping.size_x), static_cast<float>(mapping.size_y)),
+        .content_origin = Eigen::Vector2f(static_cast<float>(mapping.content_origin_x),
+                                          static_cast<float>(mapping.content_origin_y)),
+        .content_size   = Eigen::Vector2f(static_cast<float>(mapping.content_size_x),
+                                        static_cast<float>(mapping.content_size_y)),
+    });
+
+    // Window fraction where the presented wallpaper draws a scene point.
+    const auto screen_x = [&](double world) {
+        const double fraction = (world - 3840.0) / 7680.0 + 0.5;
+        return static_cast<float>((fraction * layout.viewport_px.width + layout.viewport_px.x) /
+                                  4112.0);
+    };
+    const auto screen_y = [&](double world) {
+        const double fraction = 0.5 - (world - 1080.0) / 2160.0;
+        return static_cast<float>((fraction * layout.viewport_px.height + layout.viewport_px.y) /
+                                  2658.0);
+    };
+
+    bool       inside = false;
+    const auto settle = [&](double world_x, double world_y, int frames) {
+        runtime->SetCursorInput(screen_x(world_x), screen_y(world_y));
+        for (int frame = 0; frame < frames; ++frame) {
+            inside = runtime->DispatchCursorFrameEvents(inside);
+            runtime->Tick(1.0 / 60.0);
+        }
+        return node->Scale().x();
+    };
+
+    runtime->SetCursorEnter(true);
+    // 120 scene units right of centre is inside the 275-unit layer, but outside
+    // the strip a canvas-relative mapping would cover.
+    EXPECT_NEAR(settle(3850.0 + 120.0, 865.0, 120), 1.2f, 1.0e-4f);
+    EXPECT_NEAR(settle(3850.0 + 400.0, 865.0, 120), 1.0f, 1.0e-4f);
+    EXPECT_NEAR(settle(3850.0 - 120.0, 865.0, 120), 1.2f, 1.0e-4f);
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 

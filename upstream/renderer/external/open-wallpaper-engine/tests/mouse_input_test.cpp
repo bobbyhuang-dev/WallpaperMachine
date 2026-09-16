@@ -1,3 +1,4 @@
+#include "Presentation/WallpaperScaling.hpp"
 #include "Runtime/SceneRuntimeContext.hpp"
 #include "Scripting/ScriptEngine.hpp"
 #include "Scene/SceneNode.h"
@@ -207,6 +208,171 @@ function update() {
 
     EXPECT_FALSE(cursor_was_in_window);
     EXPECT_TRUE(runtime->NodeVisible("probe"));
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+// The presented image is the camera rectangle stretched into the scaling
+// viewport, which FILL pushes outside the window. Cursor coordinates have to
+// follow that rectangle: mapping them onto the raw canvas compresses every hit
+// box toward the screen centre on scenes whose aspect differs from the display.
+TEST(MouseInput, CursorViewportMapsWindowOntoTheCroppedSceneRectangle) {
+    const auto filled =
+        ComputeWallpaperScalingLayout(WallpaperScalingMode::FILL, 7680, 2160, 3456, 2234, 1.0, 1.0);
+    const auto crop = ComputeWallpaperCursorMapping(filled, 3840.0, 1080.0, 7680.0, 2160.0);
+    ASSERT_TRUE(crop.valid);
+    // A FILL crop keeps the full scene height and shows
+    // window_width * scene_height / window_height scene units horizontally.
+    EXPECT_NEAR(crop.size_x, 3456.0 * 2160.0 / 2234.0, 1.0);
+    EXPECT_NEAR(crop.origin_x, 3840.0 - 0.5 * 3456.0 * 2160.0 / 2234.0, 1.0);
+    EXPECT_NEAR(crop.origin_y, 0.0, 1.0);
+    EXPECT_NEAR(crop.size_y, 2160.0, 1.0);
+
+    const auto letterboxed =
+        ComputeWallpaperScalingLayout(WallpaperScalingMode::FIT, 1920, 1080, 1000, 1000, 1.0, 1.0);
+    const auto fit = ComputeWallpaperCursorMapping(letterboxed, 960.0, 540.0, 1920.0, 1080.0);
+    ASSERT_TRUE(fit.valid);
+    EXPECT_NEAR(fit.origin_x, 0.0, 1.0);
+    EXPECT_NEAR(fit.size_x, 1920.0, 1.0);
+    // Cursor positions over the letterbox bars stay outside the scene, and the
+    // drawn content stays the camera rectangle.
+    EXPECT_LT(fit.origin_y, 0.0);
+    EXPECT_GT(fit.origin_y + fit.size_y, 1080.0);
+    EXPECT_NEAR(fit.origin_y + 0.5 * fit.size_y, 540.0, 1.0);
+    EXPECT_NEAR(fit.content_origin_x, 0.0, 1.0e-6);
+    EXPECT_NEAR(fit.content_origin_y, 0.0, 1.0e-6);
+    EXPECT_NEAR(fit.content_size_x, 1920.0, 1.0e-6);
+    EXPECT_NEAR(fit.content_size_y, 1080.0, 1.0e-6);
+
+    EXPECT_FALSE(ComputeWallpaperCursorMapping(filled, 3840.0, 1080.0, 0.0, 2160.0).valid);
+    EXPECT_FALSE(ComputeWallpaperCursorMapping({}, 3840.0, 1080.0, 7680.0, 2160.0).valid);
+}
+
+TEST(MouseInput, LayerHitTestingFollowsWhereTheWallpaperIsPresented) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {
+        .canvas_width  = 7680,
+        .canvas_height = 2160,
+    });
+    ASSERT_NE(runtime, nullptr);
+
+    auto layer = std::make_shared<SceneNode>();
+    layer->SetTranslate(Eigen::Vector3f(3850.0f, 865.0f, 0.0f));
+    runtime->RegisterNode("layer", layer.get());
+    runtime->RegisterNodeSize("layer", Eigen::Vector2f(275.0f, 134.0f));
+    auto marker = std::make_shared<SceneNode>();
+    marker->SetVisible(false);
+    runtime->RegisterNode("marker", marker.get());
+    runtime->RegisterSceneScript(
+        R"JS(
+function cursorEnter() { scene.getObject('marker').visible = true; }
+function cursorLeave() { scene.getObject('marker').visible = false; }
+)JS",
+        "layer");
+
+    const auto layout =
+        ComputeWallpaperScalingLayout(WallpaperScalingMode::FILL, 7680, 2160, 3456, 2234, 1.0, 1.0);
+    const auto mapping = ComputeWallpaperCursorMapping(layout, 3840.0, 1080.0, 7680.0, 2160.0);
+    ASSERT_TRUE(mapping.valid);
+    runtime->SetCursorViewport(CursorViewport {
+        .origin = Eigen::Vector2f(static_cast<float>(mapping.origin_x),
+                                  static_cast<float>(mapping.origin_y)),
+        .size =
+            Eigen::Vector2f(static_cast<float>(mapping.size_x), static_cast<float>(mapping.size_y)),
+        .content_origin = Eigen::Vector2f(static_cast<float>(mapping.content_origin_x),
+                                          static_cast<float>(mapping.content_origin_y)),
+        .content_size   = Eigen::Vector2f(static_cast<float>(mapping.content_size_x),
+                                        static_cast<float>(mapping.content_size_y)),
+    });
+
+    // Where the presented wallpaper draws a scene point, in window fractions.
+    const auto screen_x = [&](double world) {
+        const double fraction = (world - 3840.0) / 7680.0 + 0.5;
+        return (fraction * layout.viewport_px.width + layout.viewport_px.x) / 3456.0;
+    };
+    const auto screen_y = [&](double world) {
+        const double fraction = 0.5 - (world - 1080.0) / 2160.0;
+        return (fraction * layout.viewport_px.height + layout.viewport_px.y) / 2234.0;
+    };
+
+    runtime->SetCursorEnter(true);
+    bool       cursor_was_in_window = false;
+    const auto hover                = [&](double world_x, double world_y) {
+        runtime->SetCursorInput(static_cast<float>(screen_x(world_x)),
+                                static_cast<float>(screen_y(world_y)));
+        cursor_was_in_window = runtime->DispatchCursorFrameEvents(cursor_was_in_window);
+        runtime->Tick(1.0 / 60.0);
+        return runtime->NodeVisible("marker");
+    };
+
+    EXPECT_TRUE(hover(3850.0, 865.0));
+    // Near the drawn left and right edges, far outside the canvas-relative
+    // fraction the window would map to without the presentation rectangle.
+    EXPECT_TRUE(hover(3850.0 - 130.0, 865.0));
+    EXPECT_TRUE(hover(3850.0 + 130.0, 865.0));
+    EXPECT_FALSE(hover(3850.0 + 200.0, 865.0));
+    EXPECT_FALSE(hover(3850.0, 865.0 + 100.0));
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+// A letterboxed presentation leaves window area the wallpaper never draws.
+// Extrapolated coordinates there must not reach layers that extend past the
+// canvas edge, or the bars behave like an invisible extension of the scene.
+TEST(MouseInput, LetterboxBarsDoNotTriggerLayersThatCrossTheCanvasEdge) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {
+        .canvas_width  = 1920,
+        .canvas_height = 1080,
+    });
+    ASSERT_NE(runtime, nullptr);
+
+    // Half of this layer hangs below the canvas, so it is drawn only down to
+    // the bottom edge of the wallpaper.
+    auto layer = std::make_shared<SceneNode>();
+    layer->SetTranslate(Eigen::Vector3f(960.0f, 40.0f, 0.0f));
+    runtime->RegisterNode("layer", layer.get());
+    runtime->RegisterNodeSize("layer", Eigen::Vector2f(400.0f, 200.0f));
+    auto marker = std::make_shared<SceneNode>();
+    marker->SetVisible(false);
+    runtime->RegisterNode("marker", marker.get());
+    runtime->RegisterSceneScript(
+        R"JS(
+function cursorEnter() { scene.getObject('marker').visible = true; }
+function cursorLeave() { scene.getObject('marker').visible = false; }
+)JS",
+        "layer");
+
+    const auto layout =
+        ComputeWallpaperScalingLayout(WallpaperScalingMode::FIT, 1920, 1080, 1000, 1000, 1.0, 1.0);
+    const auto mapping = ComputeWallpaperCursorMapping(layout, 960.0, 540.0, 1920.0, 1080.0);
+    ASSERT_TRUE(mapping.valid);
+    runtime->SetCursorViewport(CursorViewport {
+        .origin = Eigen::Vector2f(static_cast<float>(mapping.origin_x),
+                                  static_cast<float>(mapping.origin_y)),
+        .size =
+            Eigen::Vector2f(static_cast<float>(mapping.size_x), static_cast<float>(mapping.size_y)),
+        .content_origin = Eigen::Vector2f(static_cast<float>(mapping.content_origin_x),
+                                          static_cast<float>(mapping.content_origin_y)),
+        .content_size   = Eigen::Vector2f(static_cast<float>(mapping.content_size_x),
+                                        static_cast<float>(mapping.content_size_y)),
+    });
+
+    runtime->SetCursorEnter(true);
+    bool       cursor_was_in_window = false;
+    const auto hover                = [&](float x, float y) {
+        runtime->SetCursorInput(x, y);
+        cursor_was_in_window = runtime->DispatchCursorFrameEvents(cursor_was_in_window);
+        runtime->Tick(1.0 / 60.0);
+        return runtime->NodeVisible("marker");
+    };
+
+    // Bottom edge of the drawn wallpaper, over the layer.
+    const double drawn_bottom_px = layout.viewport_px.y + layout.viewport_px.height;
+    EXPECT_TRUE(hover(0.5f, static_cast<float>((drawn_bottom_px - 1.0) / 1000.0)));
+    // Just below it, on the bar. The extrapolated scene position is still
+    // inside the layer's box, but the wallpaper draws nothing there.
+    runtime->SetCursorInput(0.5f, static_cast<float>((drawn_bottom_px + 8.0) / 1000.0));
+    const float bar_world_y = runtime->hostContext().cursor_world_position.y();
+    EXPECT_LT(bar_world_y, 0.0f);
+    EXPECT_GT(bar_world_y, -60.0f);
+    EXPECT_FALSE(hover(0.5f, static_cast<float>((drawn_bottom_px + 8.0) / 1000.0)));
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 

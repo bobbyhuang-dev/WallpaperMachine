@@ -11,6 +11,86 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-16 — Cursor hit testing follows the presented wallpaper
+
+Renderer source and native checks only; no desktop input, capture or delivery.
+
+Problem: `SceneRuntimeContext::SetCursorInput` mapped the window-normalized
+cursor onto the raw scene canvas. The wallpaper is presented through the global
+camera rectangle and `ComputeWallpaperScalingLayout`, which `FILL` pushes
+outside the window to crop, so on any scene whose aspect differs from the
+display every `cursorEnter`/`cursorLeave` box was squeezed toward the screen
+centre. Hovering the middle of a text layer enlarged it; hovering the same text
+a few centimetres left or right did nothing.
+
+Changes:
+
+- `ComputeWallpaperCursorMapping` inverts the presentation transform
+  (window pixel → viewport fraction → camera world coordinate) and reports the
+  drawn content rectangle alongside the window rectangle.
+- `VulkanRender::CursorMapping` computes it from the current output extent,
+  scaling mode/factor and the global camera; `SceneWallpaper` pushes it into
+  `SceneRuntimeContext::SetCursorViewport` before each frame's cursor dispatch.
+  Without a valid mapping the runtime keeps the canvas rectangle.
+- Named layers only take cursor events while the cursor is inside the drawn
+  content. Coordinates still extrapolate past it, but letterbox bars no longer
+  reach layers whose box crosses the canvas edge.
+- `scripts/check_renderer.py` runs Cargo from `upstream/renderer` so rustup
+  resolves that tree's `rust-toolchain.toml`; `scripts/build.py` already did.
+- `scenescript_sound_layer_smoke` now links `nlohmann_json`; it did not compile.
+
+Results:
+
+- A disposable CPU-only probe parsed the selected local 7680×2160 package and
+  walked the cursor across the **visible** width of its weekday text, using the
+  configuration its own run log records (`output_px=4112x2658`,
+  `display_scale=2.000`, scaling mode `fill`, factor `1.000`). Before: **4 of
+  11** samples enlarged the layer, which is drawn across 0.4561–0.5503 of the
+  window width. After: **11 of 11**, the date layer likewise, zero script
+  errors. The probe was removed.
+- `mouse_input_test` **9 passed**, including three new cases.
+  `LayerHitTestingFollowsWhereTheWallpaperIsPresented` fails without the
+  viewport mapping; `LetterboxBarsDoNotTriggerLayersThatCrossTheCanvasEdge`
+  fails without the content check (verified by disabling each in turn).
+- `script_runtime_compat_test` **35 passed, 1 failed**. The new
+  `HoverScaleFollowsNormalizedDisplayInputOnACroppedWallpaper` drives the
+  existing synthetic hover script through `SetCursorInput` at the recorded
+  display configuration and fails without the mapping. The failure is the
+  pre-existing `HostVectorUpdatesDoNotCallMutableGlobalVectorConstructors`
+  recorded in `renderer.md`.
+- `scene_schema_tests` **51**, `scenescript_sound_layer_smoke` **8**,
+  `particle_mouse_controlpoint_test` **35**, `text_object_runtime_test`
+  **60 passed, 2 local-asset cases skipped**.
+- `python3 scripts/check_renderer.py` (full, including the Cargo build): all
+  **9 generated GPU cases** passed known-pixel assertions and exact
+  pooled/isolated comparisons with no diagnostics; **8 projects × 2 reloads**
+  passed; lifetime, text and shader-cache binaries exited 0.
+- `python3 scripts/test.py`: Python **24** and **10** passed; native
+  **225 passed**, 0 failed, 0 skipped.
+- `python3 scripts/build.py --configuration Release` succeeded and refreshed
+  `build/Build/Products/Release/MacWallpaperEngine.app`. The delivered binary
+  exports `ComputeWallpaperCursorMapping`,
+  `SceneRuntimeContext::SetCursorViewport`,
+  `SceneRuntimeContext::CursorInsidePresentedContent` and
+  `VulkanRender::CursorMapping`, so it contains this change. The app was not
+  launched or quit.
+
+Toolchain note: before the `cwd` fix the checker's Cargo step ran from the
+repository root and picked the default stable toolchain, which fails with
+`E0463`. On this machine stable **rustc 1.97.0** and **1.84.1** emit proc-macro
+dylibs that dyld on macOS 27.0 refuses to load (`mis-aligned LINKEDIT string
+pool`); a minimal throwaway proc-macro crate reproduced it outside the
+repository, under the project build environment and a plain one, and with
+`-ld_classic` and `strip=debuginfo`. The pinned nightly toolchain produced a
+loadable dylib. `scripts/build.py` already ran Cargo from `upstream/renderer`,
+so the application build path was never affected by this, and the Release build
+above confirms it.
+
+Not verified: real cursor capture, rendered pixels, multi-display or mirrored
+layouts, non-default scaling modes on a real display, and the lock-screen
+extension. No desktop automation, wallpaper change or app launch was performed;
+the delivered bundle was checked by symbol inspection, not by running it.
+
 ## 2026-09-16 — Restore Settings → About update controls
 
 The WebKit control panel still held `AppUpdateStore` and the application

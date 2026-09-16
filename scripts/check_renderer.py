@@ -17,9 +17,9 @@ from lib.paths import RENDERER, RENDERER_ARTIFACTS, ROOT
 GENERATED_CASE_COUNT = 9
 
 
-def run(command, log, env, timeout=180):
+def run(command, log, env, timeout=180, cwd=ROOT):
     with log.open("w") as stream:
-        return subprocess.run(list(map(str, command)), cwd=ROOT, env=env,
+        return subprocess.run(list(map(str, command)), cwd=cwd, env=env,
                               stdout=stream, stderr=subprocess.STDOUT,
                               timeout=timeout, check=False).returncode
 
@@ -162,13 +162,15 @@ def main():
     env = build_environment()
     build = RENDERER_ARTIFACTS / "bin"
     if not args.skip_build:
+        # Cargo must run inside the renderer tree: rustup resolves
+        # rust-toolchain.toml from the working directory, not --manifest-path.
         steps = [
-            (["cargo", "build", "--manifest-path", RENDERER / "Cargo.toml", "-p", "shader", "--features", "ffi", "--release"], "shader-build"),
-            (["cmake", "-S", RENDERER / "external/open-wallpaper-engine", "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTS=ON", "-DBUILD_QML=OFF", "-DBUILD_WAYWALLEN=OFF", "-DRUST_SHADER_FFI=ON", "-DRUST_SHADER_STATICLIB=" + str(RENDERER / "target/release/libshader.a")], "configure"),
-            (["cmake", "--build", build, "--target", "offscreen_scene_probe", "scene_reload_cycle_probe", "render_target_lifetime_test", "text_object_runtime_test", "shader_cache_metadata_test", "-j", "6"], "build"),
+            (["cargo", "build", "-p", "shader", "--features", "ffi", "--release"], "shader-build", RENDERER),
+            (["cmake", "-S", RENDERER / "external/open-wallpaper-engine", "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTS=ON", "-DBUILD_QML=OFF", "-DBUILD_WAYWALLEN=OFF", "-DRUST_SHADER_FFI=ON", "-DRUST_SHADER_STATICLIB=" + str(RENDERER / "target/release/libshader.a")], "configure", ROOT),
+            (["cmake", "--build", build, "--target", "offscreen_scene_probe", "scene_reload_cycle_probe", "render_target_lifetime_test", "text_object_runtime_test", "shader_cache_metadata_test", "-j", "6"], "build", ROOT),
         ]
-        for command, name in steps:
-            if run(command, out / (name + ".log"), env, 600):
+        for command, name, cwd in steps:
+            if run(command, out / (name + ".log"), env, 600, cwd):
                 print(f"Build failed; see {out / (name + '.log')}")
                 return 1
     report = {"desktop_automation": False, "gpu_surface": False, "cases": []}

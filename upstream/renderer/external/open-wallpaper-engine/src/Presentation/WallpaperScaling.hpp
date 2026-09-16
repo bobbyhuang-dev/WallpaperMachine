@@ -41,6 +41,29 @@ WallpaperScalingLayout ComputeWallpaperScalingLayout(
     double display_scale_factor,
     double wallpaper_scale_factor);
 
+// World rectangle the window covers, expressed for a cursor given in
+// window-normalized coordinates: world = origin + (x, 1 - y) * size. The
+// content rectangle is the part of it the wallpaper actually draws, which is
+// smaller than the window whenever the presentation letterboxes.
+struct WallpaperCursorMapping {
+    double origin_x { 0.0 };
+    double origin_y { 0.0 };
+    double size_x { 0.0 };
+    double size_y { 0.0 };
+    double content_origin_x { 0.0 };
+    double content_origin_y { 0.0 };
+    double content_size_x { 0.0 };
+    double content_size_y { 0.0 };
+    bool   valid { false };
+};
+
+// The presented image is the camera rectangle scaled into layout.viewport_px,
+// which FILL deliberately pushes outside the window. Cursor coordinates must
+// follow that mapping, or hit testing drifts from what the display shows.
+WallpaperCursorMapping ComputeWallpaperCursorMapping(const WallpaperScalingLayout& layout,
+                                                     double camera_center_x, double camera_center_y,
+                                                     double camera_width, double camera_height);
+
 VkViewport MakeWallpaperViewport(const WallpaperScalingLayout& layout);
 VkRect2D   MakeWallpaperScissor(const WallpaperScalingLayout& layout);
 

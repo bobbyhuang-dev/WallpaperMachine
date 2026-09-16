@@ -41,6 +41,16 @@ struct SceneRuntimeBootstrap {
     ProjectProperties project_properties {};
 };
 
+// How window-normalized cursor input maps onto scene coordinates:
+// world = origin + (x, 1 - y) * size. `content` is the part of that rectangle
+// the wallpaper draws; input outside it is over letterbox bars, not the scene.
+struct CursorViewport {
+    Eigen::Vector2f origin { Eigen::Vector2f::Zero() };
+    Eigen::Vector2f size { Eigen::Vector2f::Zero() };
+    Eigen::Vector2f content_origin { Eigen::Vector2f::Zero() };
+    Eigen::Vector2f content_size { Eigen::Vector2f::Zero() };
+};
+
 struct RuntimePreparedTextLayerImage {
     std::string     name;
     uint64_t        revision { 0 };
@@ -89,6 +99,9 @@ public:
     void          ResetProjectPropertyOverride();
     void          AttachScene(Scene* scene);
     void          SetCursorWorldPosition(const Eigen::Vector3f& value);
+    // World rectangle the window shows, so window-normalized cursor input lands
+    // where the presented wallpaper actually draws each layer.
+    void          SetCursorViewport(const CursorViewport& viewport);
     void          SetCursorInput(float x, float y);
     void          SetCursorEnter(bool entered);
     void          SetCursorButton(int button, bool pressed);
@@ -330,6 +343,7 @@ private:
     void DispatchMediaPlaybackChanged(std::string_view name, bool playing);
     void ApplyNodeTransform(std::string_view name);
     void ApplySceneZoomAnimation();
+    bool                           CursorInsidePresentedContent() const;
     bool CursorHitsLayer(std::string_view name) const;
     bool CursorHitsScriptLayer(const ScriptedDynamicValue& value) const;
     bool CursorHitsScriptLayer(const SceneScriptProgram& script) const;
@@ -343,6 +357,7 @@ private:
     std::unique_ptr<ScriptEngine>                                  m_script_engine;
     std::unique_ptr<ScriptHostContext>                             m_host_context;
     Scene*                                                         m_scene { nullptr };
+    CursorViewport                                                 m_cursor_viewport {};
     ProjectProperties                                              m_default_project_properties;
     ProjectProperties                                              m_project_property_overrides;
     ProjectProperties                                              m_project_properties;

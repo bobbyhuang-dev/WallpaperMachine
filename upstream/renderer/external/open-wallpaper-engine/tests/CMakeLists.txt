@@ -203,7 +203,7 @@ gtest_discover_tests(
     DISCOVERY_TIMEOUT 120
 )
 add_executable(scenescript_sound_layer_smoke scenescript_sound_layer_smoke.cpp)
-target_link_libraries(scenescript_sound_layer_smoke PRIVATE ${PROJECT_NAME} wpAudio wpScene GTest::gtest_main)
+target_link_libraries(scenescript_sound_layer_smoke PRIVATE ${PROJECT_NAME} wpAudio wpScene nlohmann_json::nlohmann_json GTest::gtest_main)
 target_include_directories(scenescript_sound_layer_smoke PRIVATE .)
 target_compile_features(scenescript_sound_layer_smoke PRIVATE cxx_std_20)
 gtest_discover_tests(
@@ -245,8 +245,8 @@ gtest_discover_tests(
     DISCOVERY_TIMEOUT 60
 )
 add_executable(script_runtime_compat_test script_runtime_compat_test.cpp)
-target_link_libraries(script_runtime_compat_test PRIVATE ${PROJECT_NAME} wpScene wpFs nlohmann_json::nlohmann_json GTest::gtest_main)
-target_include_directories(script_runtime_compat_test PRIVATE .)
+target_link_libraries(script_runtime_compat_test PRIVATE ${PROJECT_NAME} wpScene wpFs wpVulkan nlohmann_json::nlohmann_json GTest::gtest_main)
+target_include_directories(script_runtime_compat_test PRIVATE . ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(script_runtime_compat_test PRIVATE cxx_std_20)
 gtest_discover_tests(
     script_runtime_compat_test
@@ -281,8 +281,8 @@ gtest_discover_tests(
     DISCOVERY_TIMEOUT 60
 )
 add_executable(mouse_input_test mouse_input_test.cpp)
-target_link_libraries(mouse_input_test PRIVATE ${PROJECT_NAME} wpScene GTest::gtest_main)
-target_include_directories(mouse_input_test PRIVATE .)
+target_link_libraries(mouse_input_test PRIVATE ${PROJECT_NAME} wpScene wpVulkan GTest::gtest_main)
+target_include_directories(mouse_input_test PRIVATE . ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(mouse_input_test PRIVATE cxx_std_20)
 gtest_discover_tests(
     mouse_input_test

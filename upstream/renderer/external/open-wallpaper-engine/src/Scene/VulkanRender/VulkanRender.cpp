@@ -113,6 +113,9 @@ struct VulkanRender::Impl {
     bool drawFrameOffscreen();
     void setRenderTargetSize(Scene&, rg::RenderGraph&);
     void updateScalingLayout(const Scene&, uint32_t output_width, uint32_t output_height);
+    WallpaperScalingLayout computeScalingLayout(const Scene&, uint32_t output_width,
+                                                uint32_t output_height) const;
+    WallpaperCursorMapping CursorMapping(const Scene&) const;
 
     Instance                m_instance;
     std::unique_ptr<Device> m_device;
@@ -195,6 +198,9 @@ void VulkanRender::SetWallpaperScalingFactor(double factor) {
 }
 void VulkanRender::SetWallpaperHorizontalFlip(bool enabled) {
     pImpl->SetWallpaperHorizontalFlip(enabled);
+}
+wallpaper::WallpaperCursorMapping VulkanRender::CursorMapping(const Scene& scene) const {
+    return pImpl->CursorMapping(scene);
 }
 void VulkanRender::SetVideoPlaybackPaused(bool paused) {
     if (pImpl->m_device != nullptr) {
@@ -872,8 +878,9 @@ void VulkanRender::Impl::setRenderTargetSize(Scene& scene, rg::RenderGraph& rg) 
                                             static_cast<i32>(source_extent.height));
 }
 
-void VulkanRender::Impl::updateScalingLayout(const Scene& scene, uint32_t output_width,
-                                             uint32_t output_height) {
+wallpaper::WallpaperScalingLayout
+VulkanRender::Impl::computeScalingLayout(const Scene& scene, uint32_t output_width,
+                                         uint32_t output_height) const {
     const double scale_factor  = NormalizeScaleFactor(m_display_scale_factor);
     const auto   source_extent = ResolveSceneSourceExtent(
         scene, { std::max(1u, output_width), std::max(1u, output_height) });
@@ -882,13 +889,34 @@ void VulkanRender::Impl::updateScalingLayout(const Scene& scene, uint32_t output
     const uint32_t logical_height = std::max(
         1u, static_cast<uint32_t>(std::lround(static_cast<double>(output_height) / scale_factor)));
 
-    m_scaling_layout = ComputeWallpaperScalingLayout(m_scaling_mode,
-                                                     source_extent.width,
-                                                     source_extent.height,
-                                                     logical_width,
-                                                     logical_height,
-                                                     scale_factor,
-                                                     m_scaling_factor);
+    return ComputeWallpaperScalingLayout(m_scaling_mode,
+                                         source_extent.width,
+                                         source_extent.height,
+                                         logical_width,
+                                         logical_height,
+                                         scale_factor,
+                                         m_scaling_factor);
+}
+
+void VulkanRender::Impl::updateScalingLayout(const Scene& scene, uint32_t output_width,
+                                             uint32_t output_height) {
+    m_scaling_layout = computeScalingLayout(scene, output_width, output_height);
+}
+
+wallpaper::WallpaperCursorMapping VulkanRender::Impl::CursorMapping(const Scene& scene) const {
+    if (! m_inited || m_device == nullptr) return {};
+    const auto extent = m_device->out_extent();
+    if (extent.width == 0 || extent.height == 0) return {};
+
+    const auto camera = scene.cameras.find("global");
+    if (camera == scene.cameras.end() || camera->second == nullptr) return {};
+
+    const auto position = camera->second->GetPosition();
+    return ComputeWallpaperCursorMapping(computeScalingLayout(scene, extent.width, extent.height),
+                                         position.x(),
+                                         position.y(),
+                                         camera->second->Width(),
+                                         camera->second->Height());
 }
 
 void VulkanRender::Impl::UpdateCameraFillMode(wallpaper::Scene&   scene,

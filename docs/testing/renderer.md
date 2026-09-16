@@ -14,7 +14,11 @@ python3 scripts/check_renderer.py
 
 It assembles the Homebrew environment from `scripts/build.py`, then:
 
-1. builds `cargo build -p shader --features ffi --release`,
+1. builds `cargo build -p shader --features ffi --release` **from
+   `upstream/renderer`**, because rustup resolves that tree's
+   `rust-toolchain.toml` (nightly) from the working directory, not from
+   `--manifest-path`; running it from the repository root picks the default
+   stable toolchain instead,
 2. configures CMake over `upstream/renderer/external/open-wallpaper-engine` with
    `CMAKE_BUILD_TYPE=Release`, `BUILD_TESTS=ON`, `BUILD_QML=OFF`,
    `BUILD_WAYWALLEN=OFF`, `RUST_SHADER_FFI=ON`, and `RUST_SHADER_STATICLIB`
@@ -124,6 +128,7 @@ executable directly from the renderer check build directory.
 | SceneScript writes from `update()` | `ScriptRuntimeCompat.UpdateSideEffectWritesSurviveWhenUpdateReturnsUndefined` in `script_runtime_compat_test`: a `thisLayer.visible = …` written during `update()` survives the next reevaluation even when `update()` returns nothing (see below). |
 | Puppet animation layer control | `ScriptRuntimeCompat.PuppetAnimationLayer*` in `script_runtime_compat_test`: `getAnimationLayer(name).play()` restarts a finished single-shot layer on every copy of the shared state; a `visible` bound to a user property toggles the layer. |
 | Cursor coverage masks | `ScriptRuntimeCompat.CursorHitTestRespectsCoverageMask` in `script_runtime_compat_test`: transparent texels of a cursor-scripted image layer do not hit. `offscreen_scene_probe` with `WE_TEST_CLICK_OFFSET` exercises real assets. |
+| Cursor hit testing under scaling | `MouseInput.CursorViewportMapsWindowOntoTheCroppedSceneRectangle`, `MouseInput.LayerHitTestingFollowsWhereTheWallpaperIsPresented`, `MouseInput.LetterboxBarsDoNotTriggerLayersThatCrossTheCanvasEdge` in `mouse_input_test`, and `ScriptRuntimeCompat.HoverScaleFollowsNormalizedDisplayInputOnACroppedWallpaper` (see below) |
 | MDLS3 hierarchy/pivots | `MdlSchema.Mdls3SkinningPreservesAuthoredHierarchyAndPivotsAcrossMeshVersions` in `mdl_schema_tests`. Mesh format versions do not justify flattening an authored skeleton. |
 | Large-scene first-frame startup | `offscreen_scene_probe` cold/warm startup timings; staging-buffer growth must stay geometric (see below) |
 | JPEG/EXIF orientation | `tex_schema_tests`: all eight EXIF display transforms on asymmetric RGBA pixels, both TIFF byte orders, truncated JPEG/EXIF data, invalid IFD offsets |
@@ -211,6 +216,27 @@ exactly as before. The `generated-alpha` case composites a half-covered source
 over transparent, half-covered and opaque destinations inside a compose layer
 and samples the composed alpha back as RGB: expected readback is 128/191/255,
 and the pre-fix binary produces 64/96/191. It uses synthetic shaders only.
+
+### Cursor coordinates and presentation
+
+Scene coordinates reach the window through two transforms: the global camera
+rectangle fills the default render target, and `ComputeWallpaperScalingLayout`
+places that target in the window, which `FILL` deliberately pushes outside the
+window to crop. Cursor input arrives as a window fraction, so it has to be
+mapped back through both (`ComputeWallpaperCursorMapping` →
+`SceneRuntimeContext::SetCursorViewport`). Mapping it onto the raw canvas
+instead only matches when the scene and the display share an aspect ratio;
+otherwise every `cursorEnter`/`cursorLeave` box is squeezed toward the screen
+centre. On the 7680×2160 local scene at the recorded 4112×2658 output, a
+275-unit text layer answered the cursor across only about 4% of the window
+width while it was drawn across about 9%, so hovering the ends of the text did
+nothing.
+
+The mapping also reports the drawn content rectangle. Coordinates keep
+extrapolating past it — scripts read positions outside the canvas — but named
+layers only take cursor events while the cursor is inside it. Without that,
+`FIT` and scaled-down wallpapers would let letterbox bars trigger any layer
+whose box crosses the canvas edge.
 
 ### Text, fonts and clocks
 

@@ -49,6 +49,11 @@ public:
     void SetVideoPlaybackPaused(bool paused);
     void SetVideoPlaybackRate(float rate);
 
+    /// World rectangle the presented wallpaper covers, for mapping
+    /// window-normalized cursor input onto scene coordinates. Invalid before
+    /// the output extent is known.
+    WallpaperCursorMapping CursorMapping(const Scene&) const;
+
     ExSwapchain* exSwapchain() const;
     bool inited() const;
 

@@ -635,6 +635,21 @@ private:
                 m_scene->pointerPosition = pos;
                 m_scene->shaderValueUpdater->MouseInput(pos[0], pos[1]);
                 if (m_scene->runtime != nullptr) {
+                    const auto mapping = m_render->CursorMapping(*m_scene);
+                    if (mapping.valid) {
+                        m_scene->runtime->SetCursorViewport(CursorViewport {
+                            .origin = Eigen::Vector2f(static_cast<float>(mapping.origin_x),
+                                                      static_cast<float>(mapping.origin_y)),
+                            .size   = Eigen::Vector2f(static_cast<float>(mapping.size_x),
+                                                    static_cast<float>(mapping.size_y)),
+                            .content_origin =
+                                Eigen::Vector2f(static_cast<float>(mapping.content_origin_x),
+                                                static_cast<float>(mapping.content_origin_y)),
+                            .content_size =
+                                Eigen::Vector2f(static_cast<float>(mapping.content_size_x),
+                                                static_cast<float>(mapping.content_size_y)),
+                        });
+                    }
                     m_scene->runtime->SetCursorInput(pos[0], pos[1]);
                     m_scene->runtime->SetCursorEnter(m_cursor_in_window.load());
                     const MouseButtonSnapshot buttons = consumeMouseButtonSnapshot();

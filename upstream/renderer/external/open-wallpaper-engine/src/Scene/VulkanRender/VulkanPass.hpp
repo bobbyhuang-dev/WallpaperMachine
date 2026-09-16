@@ -23,6 +23,7 @@ public:
     VulkanPass()                                                     = default;
     virtual ~VulkanPass()                                            = default;
     virtual void prepare(Scene&, const Device&, RenderingResources&) = 0;
+    virtual bool updateFrame(const Device&, RenderingResources&) { return true; }
     virtual void execute(const Device&, RenderingResources&)         = 0;
     virtual void destory(const Device&, RenderingResources&)         = 0;
 

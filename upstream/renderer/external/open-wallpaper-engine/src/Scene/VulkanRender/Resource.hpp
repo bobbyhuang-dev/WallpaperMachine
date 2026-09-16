@@ -20,8 +20,8 @@ struct RenderingResources {
     vvk::Semaphore sem_export;
     vvk::Fence     fence_frame;
 
-    StagingBuffer* vertex_buf;
-    StagingBuffer* dyn_buf;
+    StagingBuffer* vertex_buf { nullptr };
+    StagingBuffer* dyn_buf { nullptr };
 
     VkViewport wallpaper_viewport {};
     VkRect2D   wallpaper_scissor {};

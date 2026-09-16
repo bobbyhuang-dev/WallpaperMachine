@@ -133,6 +133,82 @@ Coordinator tests use unattached
 CAMetalLayers and injected notification/encoding services; they never create a
 window, initialize a renderer, or call the real wallpaper setter.
 
+## Continuous-playback resource reuse
+
+Verification (2026-09-16, source and headless GPU only):
+
+- NV12 conversion remains synchronous and generation-sensitive. Converted Metal
+  destinations enter a per-cache idle pool only after the final owning reference
+  retires. The idle pool retains at most four textures and 64 MiB in total; active
+  frames are not throttled. Vulkan Image/View objects are still imported per new
+  generation. BGRA retains its existing direct/alias semantics.
+- Successful draw fences retire video pins and staging transactions together.
+  Failed submissions never wait an unsignaled frame fence. Unknown completion
+  retains owners and stops that renderer; surface reset recreates frame sync
+  resources. Confirmed device loss is terminal for that device. Final destruction
+  terminates only when checked device idle cannot prove safe resource release.
+- Prepared-pass CPU updates precede uploads. Staging stays mapped, compares exact
+  bytes, flushes actual dirty ranges, and freezes storage until completion or
+  checked recording discard. Batch scratch capacity is reused, camera matrix
+  selection avoids duplicate work, and descriptor writes are pushed once per draw.
+  FPS, resolution, color conversion, audio response, input, and animation policies
+  were not reduced.
+
+The Apple-only `playback_gpu_test` requires real Metal/MoltenVK capabilities and
+uses private images and synthetic IOSurface-backed inputs. It creates no window,
+surface, swapchain, audio device, or screenshot. Run the built executable at
+`build/verification/renderer-tests/tests/playback_gpu_test`; missing required GPU
+capabilities fail explicitly rather than being skipped.
+
+Fresh results:
+
+- All **13 PlaybackGPU cases passed**: generation/retained-pixel correctness,
+  six concurrently recorded consumers across cache eviction, conversion/import
+  failure rollback, resize/BGRA lifetimes, recording/submit/fence recovery,
+  Clear and isolated terminal cleanup, partial/discarded/grown uploads,
+  current-frame UBO/geometry, graph ordering, split/combined descriptors and MSAA.
+- All ten requested renderer targets built with disconnected CMake dependencies.
+  `offscreen_scene_probe` was built for caller migration, not run on private assets.
+  Video policy/submission: **5 passed**; shader bridge: **16 passed**; planner
+  smoke passed with Release assertions enabled; render-target lifetime: **4 passed**;
+  mouse: **6 passed**; particle: **35 passed**; timer: **6 passed**.
+- Script runtime: **30 passed, 1 failed**, both before and after this work.
+  The unchanged failure is
+  `ScriptRuntimeCompat.HostVectorUpdatesDoNotCallMutableGlobalVectorConstructors`.
+  The extended compose-camera matrix regression passed.
+- Rust core: **174 passed**; Rust bridge: **214 passed**.
+  `python3 scripts/test.py`: **200 native and 34 Python tests passed**.
+  Native evidence: `build/Tests-20260916-170942-550486.xcresult`.
+
+Performance evidence is in `build/verification/playback-implementation/`,
+especially `final-report.json` and `benchmark-material-results.json`.
+The generated workload uses 3840×2160 NV12 inputs, a 4112×2658 private target,
+a reflected 256-byte material block, 2 MiB staging allocations, and three
+interleaved 180-frame rounds per mode at 60 Hz. Compilation/readback are outside
+timing. Comparing the current pipeline with forced-fresh conversion outputs
+against pooled outputs, mean process CPU was **2.421 ms/frame versus 0.868 ms/frame**.
+Across the 540 measured pooled frames: **0 new converted destinations, 540 reuses,
+540 Vulkan imports, 0 dynamic copies, 540 descriptor pushes**, with stable scratch
+capacity. This isolates destination reuse in the current pipeline, not an old
+full-application A/B comparison. A separate unpooled conversion-only run measured
+**2.080 ms/frame**; the pre-existing compiled conversion experiment was also rerun.
+
+The 2 MiB dirty-upload probe copied only `(offset=4, size=4)` and
+`(offset=68, size=8)` for writes at offsets 5 and 69, and verified all 256 output
+bytes through GPU readback. An unchanged update recorded no copy.
+
+GPU elapsed measurements varied substantially across repeated runs. An isolated
+diagnostic aligning draw submission timing narrowed/reversed the apparent draw
+differences; no such delay was added to production. These samples do not establish
+a GPU-time improvement or an attributable GPU regression, and are not power or
+battery measurements. Raw phase distributions remain in the evidence directory.
+Temporary instrumentation was removed.
+
+No Release application was built or delivered, and neither app installation was
+replaced or restarted. Real screen playback, surface/acquire/present failure
+recovery, visual equivalence on the desktop, and battery/power gains remain
+unverified.
+
 ## Idle-work reduction
 
 Verification (2026-09-16, source changes only):

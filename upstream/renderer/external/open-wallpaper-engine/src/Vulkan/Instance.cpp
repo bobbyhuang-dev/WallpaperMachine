@@ -183,7 +183,14 @@ void Instance::releaseSurface() { m_surface.reset(); }
 bool Instance::supportExt(std::string_view name) const { return exists(m_extensions, name); }
 bool Instance::supportLayer(std::string_view name) const { return exists(m_layers, name); }
 
-void Instance::Destroy() {}
+void Instance::Destroy() {
+    m_surface.reset();
+    m_gpu = {};
+    m_debug_utils.reset();
+    m_vinst.reset();
+    m_extensions.clear();
+    m_layers.clear();
+}
 
 bool Instance::Create(Instance& inst, std::span<const Extension> instExts,
                       std::span<const InstanceLayer> instLayers) {

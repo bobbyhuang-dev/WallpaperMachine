@@ -6,6 +6,7 @@
 #include <Metal/Metal.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <mutex>
@@ -524,11 +525,25 @@ id<MTLTexture> CreatePixelBufferBackedMetalTexture(id<MTLDevice> device,
     return texture;
 }
 
+bool CompatibleConvertedDestination(id<MTLTexture> texture, id<MTLDevice> device,
+                                    uint32_t width, uint32_t height)
+{
+    const MTLTextureUsage required_usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    return texture != nil && texture.device == device &&
+        texture.textureType == MTLTextureType2D &&
+        texture.width == width && texture.height == height && texture.depth == 1 &&
+        texture.pixelFormat == MTLPixelFormatBGRA8Unorm &&
+        texture.storageMode == MTLStorageModeShared &&
+        texture.mipmapLevelCount == 1 && texture.sampleCount == 1 && texture.arrayLength == 1 &&
+        (texture.usage & required_usage) == required_usage;
+}
+
 id<MTLTexture> CreateConvertedMetalTexture(id<MTLDevice>    device,
                                            CVPixelBufferRef pixel_buffer,
                                            OSType           pixel_format,
                                            uint32_t         width,
                                            uint32_t         height,
+                                           id<MTLTexture>   reusable_destination,
                                            std::string*     error)
 {
     CVMetalTextureCacheRef texture_cache = GetTextureCacheForDevice(device, error);
@@ -579,16 +594,18 @@ id<MTLTexture> CreateConvertedMetalTexture(id<MTLDevice>    device,
         return SetError(error, "CVMetalTextureCache returned null plane textures"), nil;
     }
 
-    MTLTextureDescriptor* descriptor =
-        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                                           width:width
-                                                          height:height
-                                                       mipmapped:NO];
-    descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-    descriptor.storageMode = MTLStorageModeShared;
-    descriptor.resourceOptions = MTLResourceStorageModeShared;
-
-    id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
+    id<MTLTexture> texture = reusable_destination;
+    if (texture == nil) {
+        MTLTextureDescriptor* descriptor =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                               width:width
+                                                              height:height
+                                                           mipmapped:NO];
+        descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        descriptor.storageMode = MTLStorageModeShared;
+        descriptor.resourceOptions = MTLResourceStorageModeShared;
+        texture = [device newTextureWithDescriptor:descriptor];
+    }
     if (texture == nil) {
         CFRelease(y_plane_ref);
         CFRelease(uv_plane_ref);
@@ -667,6 +684,69 @@ id<MTLTexture> CreateConvertedMetalTexture(id<MTLDevice>    device,
 }
 
 } // namespace
+
+struct AppleVideoMetalTexturePool::Impl {
+    id<MTLDevice> device;
+    struct Entry {
+        void* texture { nullptr };
+        uint64_t bytes { 0 };
+    };
+    std::array<Entry, 4> entries {};
+    size_t count { 0 };
+    uint64_t bytes { 0 };
+    static constexpr uint64_t budget = 64u * 1024u * 1024u;
+
+    explicit Impl(void* handle) : device((__bridge id<MTLDevice>)handle) {}
+
+    void* remove(size_t index) noexcept {
+        void* texture = entries[index].texture;
+        bytes -= entries[index].bytes;
+        for (size_t i = index + 1; i < count; ++i) entries[i - 1] = entries[i];
+        entries[--count] = {};
+        return texture;
+    }
+};
+
+AppleVideoMetalTexturePool::AppleVideoMetalTexturePool(void* metal_device)
+    : m_impl(std::make_unique<Impl>(metal_device)) {}
+
+AppleVideoMetalTexturePool::~AppleVideoMetalTexturePool() { Clear(); }
+
+void* AppleVideoMetalTexturePool::Take(uint32_t width, uint32_t height)
+{
+    for (size_t i = 0; i < m_impl->count; ++i) {
+        id<MTLTexture> texture = (__bridge id<MTLTexture>)m_impl->entries[i].texture;
+        if (CompatibleConvertedDestination(texture, m_impl->device, width, height)) {
+            return m_impl->remove(i);
+        }
+    }
+    return nullptr;
+}
+
+void AppleVideoMetalTexturePool::Recycle(void* retained_destination) noexcept
+{
+    if (retained_destination == nullptr) return;
+    id<MTLTexture> texture = (__bridge id<MTLTexture>)retained_destination;
+    const uint64_t bytes = texture.allocatedSize;
+    if (!CompatibleConvertedDestination(texture, m_impl->device, texture.width, texture.height) ||
+        bytes > Impl::budget) {
+        ReleaseAppleVideoMetalTexture(retained_destination);
+        return;
+    }
+    while (m_impl->count == m_impl->entries.size() || m_impl->bytes > Impl::budget - bytes) {
+        ReleaseAppleVideoMetalTexture(m_impl->remove(0));
+    }
+    m_impl->entries[m_impl->count++] = { retained_destination, bytes };
+    m_impl->bytes += bytes;
+}
+
+void AppleVideoMetalTexturePool::Clear() noexcept
+{
+    while (m_impl->count != 0) ReleaseAppleVideoMetalTexture(m_impl->remove(0));
+}
+
+uint64_t AppleVideoMetalTexturePool::CachedTextureCount() const noexcept { return m_impl->count; }
+uint64_t AppleVideoMetalTexturePool::CachedBytes() const noexcept { return m_impl->bytes; }
 
 bool CreateVideoToolboxDeviceContext(AVBufferRef** hw_device_ctx, std::string* error)
 {
@@ -804,6 +884,7 @@ std::string DescribeAppleVideoFrame(const VideoTextureFrame& frame)
 
 void* CreateAppleVideoMetalTextureForDevice(const VideoTextureFrame& frame,
                                             void* metal_device,
+                                            void* reusable_destination,
                                             std::string* error)
 {
     if (!frame.valid()) {
@@ -821,6 +902,16 @@ void* CreateAppleVideoMetalTextureForDevice(const VideoTextureFrame& frame,
 
         id<MTLTexture> texture = nil;
         const OSType pixel_format = static_cast<OSType>(frame.pixel_format);
+        const bool is_nv12 = pixel_format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
+            pixel_format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+        id<MTLTexture> destination = (__bridge id<MTLTexture>)reusable_destination;
+        if (destination != nil &&
+            (!is_nv12 || !CompatibleConvertedDestination(destination, device, frame.width, frame.height))) {
+            return SetError(error, "incompatible reusable NV12 conversion destination"), nullptr;
+        }
+        if (is_nv12 && frame.pixel_buffer == nullptr) {
+            return SetError(error, "NV12 conversion requires a pixel buffer"), nullptr;
+        }
         if (pixel_format == kCVPixelFormatType_32BGRA && frame.io_surface != nullptr) {
             texture = CreateDirectMetalTexture(
                 device,
@@ -845,6 +936,7 @@ void* CreateAppleVideoMetalTextureForDevice(const VideoTextureFrame& frame,
                 pixel_format,
                 frame.width,
                 frame.height,
+                destination,
                 error);
         } else if (frame.io_surface != nullptr && frame.pixel_buffer == nullptr) {
             texture = CreateDirectMetalTexture(
@@ -867,7 +959,7 @@ void* CreateAppleVideoMetalTextureForDevice(const VideoTextureFrame& frame,
 
 void* CreateAppleVideoMetalTexture(const VideoTextureFrame& frame, std::string* error)
 {
-    return CreateAppleVideoMetalTextureForDevice(frame, nullptr, error);
+    return CreateAppleVideoMetalTextureForDevice(frame, nullptr, nullptr, error);
 }
 
 void ReleaseAppleVideoMetalTexture(void* handle)

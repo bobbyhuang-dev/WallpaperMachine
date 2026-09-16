@@ -101,6 +101,21 @@ TEST(ScriptRuntimeCompat, ComposeBackgroundUsesScreenCameraAndParentTransform) {
     const auto expected = ShaderValue::fromMatrix(screen->GetViewProjectionMatrix() * node->ModelTrans());
     ASSERT_EQ(actual.size(), expected.size());
     for (std::size_t i = 0; i < actual.size(); ++i) EXPECT_NEAR(actual[i], expected[i], 1e-5);
+
+    parent->SetTranslate(Eigen::Vector3f(260, 80, 0));
+    auto screen_node = std::make_shared<SceneNode>();
+    screen_node->SetTranslate(Eigen::Vector3f(30, 0, 0));
+    screen->AttatchNode(screen_node);
+    actual = ShaderValue {};
+    updater.UpdateUniforms(node.get(), sprites, [&](std::string_view n, ShaderValue v) {
+        if (n == "g_ModelViewProjectionMatrix") actual = v;
+    });
+    const auto second_expected =
+        ShaderValue::fromMatrix(screen->GetViewProjectionMatrix() * node->ModelTrans());
+    ASSERT_EQ(actual.size(), second_expected.size());
+    for (std::size_t i = 0; i < actual.size(); ++i) {
+        EXPECT_NEAR(actual[i], second_expected[i], 1e-5);
+    }
 }
 
 TEST(ScriptRuntimeCompat, ThisLayerAndThisSceneResolveCurrentLayer) {

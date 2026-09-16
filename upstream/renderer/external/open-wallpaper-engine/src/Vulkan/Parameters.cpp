@@ -80,7 +80,8 @@ ImageSlots& ImageSlots::operator=(ImageSlots&& o) noexcept {
 ImageSlotsRef::ImageSlotsRef()  = default;
 ImageSlotsRef::~ImageSlotsRef() = default;
 ImageSlotsRef::ImageSlotsRef(const ImageSlots& o)
-    : slots(std::vector<ImageParameters>(o.slots.begin(), o.slots.end())) {}
+    : slots(std::vector<ImageParameters>(o.slots.begin(), o.slots.end())),
+      video_frame_owner() {}
 
 } // namespace vulkan
 } // namespace wallpaper

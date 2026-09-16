@@ -328,6 +328,11 @@ TEST(RustShaderBridge, CustomShaderDescriptorLayoutRejectsActiveTextureOutsideMa
     std::vector<VkDescriptorSetLayoutBinding> layout_bindings;
     EXPECT_FALSE(wallpaper::vulkan::detail::PlanCustomShaderDescriptors(
         reflected, 2, texture_bindings, layout_bindings));
+
+    EXPECT_TRUE(wallpaper::vulkan::detail::PlanCustomShaderDescriptors(
+        reflected, wallpaper::WE_GLTEX_NAMES.size(), texture_bindings, layout_bindings));
+    EXPECT_FALSE(wallpaper::vulkan::detail::PlanCustomShaderDescriptors(
+        reflected, wallpaper::WE_GLTEX_NAMES.size() + 1, texture_bindings, layout_bindings));
 }
 
 TEST(RustShaderBridge, RustReflectionRejectsUnsupportedDescriptorSetsAndCounts)

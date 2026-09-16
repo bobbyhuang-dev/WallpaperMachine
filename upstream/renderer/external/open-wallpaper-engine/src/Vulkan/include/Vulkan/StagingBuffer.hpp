@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include "Core/NoCopyMove.hpp"
 #include "Instance.hpp"
 #include "Parameters.hpp"
@@ -39,6 +40,7 @@ public:
     bool fillBuf(const StagingBufferRef& ref, size_t offset, size_t size, uint8_t c);
 
     bool recordUpload(vvk::CommandBuffer&);
+    void finishUpload(bool completed) noexcept;
 
     VkBuffer gpuBuf() const;
 
@@ -51,9 +53,10 @@ private:
         VkDeviceSize    size { 0 };
     };
 
-    VkResult      mapStageBuf();
-    VirtualBlock* newVirtualBlock(VkDeviceSize);
-    bool          increaseBuf(VkDeviceSize);
+    VirtualBlock* newVirtualBlock(VkDeviceSize size, VkDeviceSize alignment);
+    bool          increaseBuf(VkDeviceSize required_capacity);
+    void          markDirty(VkDeviceSize offset, VkDeviceSize size);
+    void          requireFullUpload() noexcept;
 
     const Device& m_device;
     VkDeviceSize  m_size_step;
@@ -65,7 +68,10 @@ private:
 
     VmaBufferParameters m_stage_buf;
     VmaBufferParameters m_gpu_buf;
-    bool                m_dirty { true };
+    std::array<VkBufferCopy, 64> m_dirty_ranges {};
+    size_t                     m_dirty_count { 0 };
+    bool                       m_full_upload_required { true };
+    bool                       m_upload_pending { false };
 };
 
 } // namespace vulkan

@@ -20,6 +20,8 @@
 #include <cstdio>
 #include <memory>
 #include <optional>
+#include <exception>
+#include <limits>
 
 using namespace wallpaper;
 using namespace wallpaper::vulkan;
@@ -248,7 +250,7 @@ CreateImportedMetalTextureImage(const Device& device, void* metal_texture, Textu
 
     if (const VkResult result = device.handle().CreateImage(image_info, image.handle);
         result != VK_SUCCESS) {
-        VVK_CHECK(result);
+        LOG_ERROR("imported video image creation failed: %d", result);
         SetError(error, "failed to create Vulkan image for imported video frame");
         return std::nullopt;
     }
@@ -271,7 +273,7 @@ CreateImportedMetalTextureImage(const Device& device, void* metal_texture, Textu
         };
         if (const VkResult result = device.handle().CreateImageView(view_info, image.view);
             result != VK_SUCCESS) {
-            VVK_CHECK(result);
+            LOG_ERROR("imported video image view creation failed: %d", result);
             SetError(error, "failed to create Vulkan image view for imported video frame");
             return std::nullopt;
         }
@@ -291,7 +293,7 @@ CreateImportedMetalTextureImage(const Device& device, void* metal_texture, Textu
         if (const VkResult result =
                 device.handle().CreateSampler(GenSamplerInfo(tex_key), image.sampler);
             result != VK_SUCCESS) {
-            VVK_CHECK(result);
+            LOG_ERROR("imported video sampler creation failed: %d", result);
             SetError(error, "failed to create Vulkan sampler for imported video frame");
             return std::nullopt;
         }
@@ -756,11 +758,21 @@ ImageSlotsRef TextureCache::CreateTex(Image& image) {
 }
 
 ImageSlotsRef TextureCache::CreateTex(Image& image, TextureUploadSynchronization synchronization) {
+    if (m_device_lost) {
+        LOG_ERROR("cannot create texture after device loss");
+        return {};
+    }
     if (image.header.isVideo) {
         if (exists(m_video_tex_map, image.key)) {
             ImageSlotsRef ref;
             if (auto* current = m_video_tex_map.at(image.key)->current_frame; current != nullptr) {
                 ref.slots  = { ImageParameters(current->image) };
+                for (const auto& owner : m_video_tex_map.at(image.key)->imported_frames) {
+                    if (owner.get() == current) {
+                        ref.video_frame_owner = owner;
+                        break;
+                    }
+                }
                 ref.active = 0;
             }
             return ref;
@@ -774,27 +786,7 @@ ImageSlotsRef TextureCache::CreateTex(Image& image, TextureUploadSynchronization
                       error.c_str());
             return {};
         }
-        if (! source->prime(&error)) {
-            LOG_ERROR("failed to prime FFmpeg video texture source for \"%s\": %s",
-                      image.key.c_str(),
-                      error.c_str());
-            return {};
-        }
-
-        auto video_tex             = std::make_unique<VideoTex>();
-        video_tex->sample          = image.header.sample;
-        video_tex->source          = std::move(source);
-        m_video_tex_map[image.key] = std::move(video_tex);
-
-        ImageSlotsRef ref;
-        if (! UpdateVideoFrame(image.key, video::VideoPlaybackState {}, &ref, &error)) {
-            LOG_ERROR("failed to import initial video frame for \"%s\": %s",
-                      image.key.c_str(),
-                      error.c_str());
-            m_video_tex_map.erase(image.key);
-            return {};
-        }
-        return ref;
+        return CreateVideoTex(image, std::move(source));
     }
 
     if (exists(m_tex_map, image.key)) {
@@ -802,9 +794,10 @@ ImageSlotsRef TextureCache::CreateTex(Image& image, TextureUploadSynchronization
     }
 
     ImageSlots img_slots;
-    bool       submitted_deferred_upload = false;
+    bool       submitted_upload = false;
     auto       fail_texture_upload       = [&]() -> ImageSlotsRef {
-        if (submitted_deferred_upload) {
+        if (submitted_upload) {
+            m_retired_runtime_textures.emplace_back(std::move(img_slots));
             std::string error;
             if (! waitForPendingTextureUploads(&error) && ! error.empty()) {
                 LOG_ERROR(
@@ -815,7 +808,6 @@ ImageSlotsRef TextureCache::CreateTex(Image& image, TextureUploadSynchronization
         return {};
     };
 
-    if (synchronization == TextureUploadSynchronization::Blocking && ! m_tex_cmd) allocateCmd();
 
     img_slots.slots.resize(image.slots.size());
 
@@ -881,56 +873,66 @@ ImageSlotsRef TextureCache::CreateTex(Image& image, TextureUploadSynchronization
             extents.push_back(VkExtent3D { (u32)image_data.width, (u32)image_data.height, 1 });
         }
 
-        if (synchronization == TextureUploadSynchronization::Deferred) {
-            std::string error;
-            auto*       upload_slot = acquireTextureUploadSubmissionSlot(&error);
-            if (upload_slot == nullptr) {
-                if (! error.empty()) {
-                    LOG_ERROR("failed to acquire texture upload slot for \"%s\": %s",
-                              image.key.c_str(),
-                              error.c_str());
-                }
-                return fail_texture_upload();
+        std::string error;
+        auto* upload_slot = acquireTextureUploadSubmissionSlot(&error);
+        if (upload_slot == nullptr) {
+            LOG_ERROR("failed to acquire texture upload slot for \"%s\": %s",
+                      image.key.c_str(), error.c_str());
+            return fail_texture_upload();
+        }
+        const VkResult result =
+            CopyImageData(transform<VmaBufferParameters>(stage_bufs,
+                                                         [](BufferParameters e) { return e; }),
+                          extents, m_device.graphics_queue().handle, upload_slot->command,
+                          image_paras, *upload_slot->fence);
+        if (result != VK_SUCCESS) {
+            if (upload_slot->command.Reset() != VK_SUCCESS) {
+                upload_slot->command = {};
+                upload_slot->commands = {};
             }
-
-            const VkResult result =
-                CopyImageData(transform<VmaBufferParameters>(stage_bufs,
-                                                             [](BufferParameters e) {
-                                                                 return e;
-                                                             }),
-                              extents,
-                              m_device.graphics_queue().handle,
-                              upload_slot->command,
-                              image_paras,
-                              *upload_slot->fence);
-            if (result != VK_SUCCESS) {
-                VVK_CHECK(result);
-                return fail_texture_upload();
-            }
-            upload_slot->staging_buffers  = std::move(stage_bufs);
-            upload_slot->pending          = true;
-            upload_slot->submitted_serial = ++m_texture_upload_submit_serial;
-            submitted_deferred_upload     = true;
-        } else {
-            const VkResult result =
-                CopyImageData(transform<VmaBufferParameters>(stage_bufs,
-                                                             [](BufferParameters e) {
-                                                                 return e;
-                                                             }),
-                              extents,
-                              m_device.graphics_queue().handle,
-                              m_tex_cmd,
-                              image_paras);
-            if (result != VK_SUCCESS) {
-                VVK_CHECK(result);
-                return {};
-            }
-
-            m_device.handle().WaitIdle();
+            upload_slot->fence = {};
+            LOG_ERROR("texture upload submission failed: %d", result);
+            return fail_texture_upload();
+        }
+        upload_slot->staging_buffers = std::move(stage_bufs);
+        upload_slot->pending = true;
+        upload_slot->submitted_serial = ++m_texture_upload_submit_serial;
+        submitted_upload = true;
+        if (synchronization == TextureUploadSynchronization::Blocking &&
+            !waitForTextureUploadSlot(*upload_slot, &error)) {
+            LOG_ERROR("failed waiting for texture upload for \"%s\": %s",
+                      image.key.c_str(), error.c_str());
+            return fail_texture_upload();
         }
     }
     m_tex_map[image.key] = std::move(img_slots);
     return m_tex_map[image.key];
+}
+
+ImageSlotsRef TextureCache::CreateVideoTex(
+    Image& image, std::shared_ptr<video::VideoTextureSource> source) {
+    if (m_device_lost || !source || exists(m_video_tex_map, image.key)) {
+        LOG_ERROR("cannot register video texture \"%s\"", image.key.c_str());
+        return {};
+    }
+    std::string error;
+    if (!source->prime(&error)) {
+        LOG_ERROR("failed to prime FFmpeg video texture source for \"%s\": %s",
+                  image.key.c_str(), error.c_str());
+        return {};
+    }
+    auto video_tex = std::make_unique<VideoTex>();
+    video_tex->sample = image.header.sample;
+    video_tex->source = std::move(source);
+    m_video_tex_map[image.key] = std::move(video_tex);
+    ImageSlotsRef ref;
+    if (!UpdateVideoFrame(image.key, video::VideoPlaybackState {}, &ref, &error)) {
+        LOG_ERROR("failed to import initial video frame for \"%s\": %s",
+                  image.key.c_str(), error.c_str());
+        m_video_tex_map.erase(image.key);
+        return {};
+    }
+    return ref;
 }
 
 ImageSlotsRef TextureCache::ReplaceTex(Image& image, std::string_view previous_key) {
@@ -951,7 +953,7 @@ TextureCache::TextureUploadSubmissionSlot*
 TextureCache::acquireTextureUploadSubmissionSlot(std::string* error) {
     collectCompletedTextureUploads();
     for (auto& slot : m_texture_upload_slots) {
-        if (! slot.pending) return &slot;
+        if (!slot.pending) return ensureTextureUploadSlot(slot, error) ? &slot : nullptr;
     }
 
     if (m_texture_upload_slots.size() >= kMaxPendingTextureUploads) {
@@ -966,50 +968,52 @@ TextureCache::acquireTextureUploadSubmissionSlot(std::string* error) {
             return nullptr;
         }
         if (! waitForTextureUploadSlot(*oldest, error)) return nullptr;
-        return &*oldest;
+        return ensureTextureUploadSlot(*oldest, error) ? &*oldest : nullptr;
     }
 
     TextureUploadSubmissionSlot slot;
-    const auto&                 pool = m_device.cmd_pool();
-    if (const VkResult result = pool.Allocate(1, VK_COMMAND_BUFFER_LEVEL_PRIMARY, slot.commands);
-        result != VK_SUCCESS) {
-        VVK_CHECK(result);
-        SetError(error, "failed to allocate texture upload command buffer");
-        return nullptr;
-    }
-    slot.command = vvk::CommandBuffer(slot.commands[0], m_device.handle().Dispatch());
+    if (!ensureTextureUploadSlot(slot, error)) return nullptr;
 
-    VkFenceCreateInfo fence_info {
+    m_texture_upload_slots.emplace_back(std::move(slot));
+    return &m_texture_upload_slots.back();
+}
+
+bool TextureCache::ensureTextureUploadSlot(TextureUploadSubmissionSlot& slot, std::string* error) {
+    if (slot.pending) return SetError(error, "cannot reuse pending texture upload slot");
+    if (!slot.command) {
+        if (m_device.cmd_pool().Allocate(1, VK_COMMAND_BUFFER_LEVEL_PRIMARY, slot.commands) != VK_SUCCESS) {
+            return SetError(error, "failed to allocate texture upload command buffer");
+        }
+        slot.command = vvk::CommandBuffer(slot.commands[0], m_device.handle().Dispatch());
+    }
+    if (slot.fence) return true;
+    const VkFenceCreateInfo info {
         .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
     };
-    if (const VkResult result = m_device.handle().CreateFence(fence_info, slot.fence);
-        result != VK_SUCCESS) {
-        VVK_CHECK(result);
-        SetError(error, "failed to create Vulkan fence for texture upload");
-        return nullptr;
+    if (m_device.handle().CreateFence(info, slot.fence) != VK_SUCCESS) {
+        return SetError(error, "failed to create Vulkan fence for texture upload");
     }
-
-    m_texture_upload_slots.emplace_back(std::move(slot));
-    return &m_texture_upload_slots.back();
+    return true;
 }
 
 bool TextureCache::waitForTextureUploadSlot(TextureUploadSubmissionSlot& slot, std::string* error) {
     if (! slot.pending) return true;
 
     if (const VkResult result = slot.fence.Wait(); result != VK_SUCCESS) {
-        VVK_CHECK(result);
+        LOG_ERROR("texture upload wait failed: %d", result);
         return SetError(error, "failed waiting for pending texture upload");
     }
+    slot.staging_buffers.clear();
+    slot.pending = false;
+    slot.submitted_serial = 0;
     if (const VkResult result = slot.fence.Reset(); result != VK_SUCCESS) {
-        VVK_CHECK(result);
+        slot.fence = {};
+        LOG_ERROR("texture upload fence reset failed: %d", result);
         return SetError(error, "failed resetting texture upload fence");
     }
 
-    slot.staging_buffers.clear();
-    slot.pending          = false;
-    slot.submitted_serial = 0;
     return true;
 }
 
@@ -1056,7 +1060,7 @@ TextureCache::acquireVideoImportSubmissionSlot(std::string* error) {
         if (slot.pending && slot.fence.GetStatus() == VK_SUCCESS) {
             if (! waitForVideoImportSlot(slot, error)) return nullptr;
         }
-        if (! slot.pending) return &slot;
+        if (!slot.pending) return ensureVideoImportFence(slot, error) ? &slot : nullptr;
     }
 
     VideoImportSubmissionPlan plan {
@@ -1076,36 +1080,48 @@ TextureCache::acquireVideoImportSubmissionSlot(std::string* error) {
             return nullptr;
         }
         if (! waitForVideoImportSlot(*oldest, error)) return nullptr;
-        return &*oldest;
+        return ensureVideoImportFence(*oldest, error) ? &*oldest : nullptr;
     }
 
     VideoImportSubmissionSlot slot;
     const auto&               pool = m_device.cmd_pool();
     if (const VkResult result = pool.Allocate(1, VK_COMMAND_BUFFER_LEVEL_PRIMARY, slot.commands);
         result != VK_SUCCESS) {
-        VVK_CHECK(result);
+        LOG_ERROR("video frame import command allocation failed: %d", result);
         SetError(error, "failed to allocate video frame import command buffer");
         return nullptr;
     }
     slot.command = vvk::CommandBuffer(slot.commands[0], m_device.handle().Dispatch());
     ++m_video_submission_stats.command_buffer_allocations;
 
-    VkFenceCreateInfo fence_info {
-        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-    };
-    if (const VkResult result = m_device.handle().CreateFence(fence_info, slot.fence);
-        result != VK_SUCCESS) {
-        VVK_CHECK(result);
-        SetError(error, "failed to create Vulkan fence for video frame import");
-        return nullptr;
-    }
-    ++m_video_submission_stats.fence_allocations;
+    if (!ensureVideoImportFence(slot, error)) return nullptr;
 
     m_video_import_slots.emplace_back(std::move(slot));
     m_video_submission_stats.import_submission_slots = m_video_import_slots.size();
     return &m_video_import_slots.back();
+}
+
+bool TextureCache::ensureVideoImportFence(VideoImportSubmissionSlot& slot, std::string* error) {
+    if (!slot.command) {
+        if (slot.pending) return SetError(error, "pending video import has no command buffer");
+        if (m_device.cmd_pool().Allocate(1, VK_COMMAND_BUFFER_LEVEL_PRIMARY, slot.commands) != VK_SUCCESS) {
+            return SetError(error, "failed to recreate video frame import command buffer");
+        }
+        slot.command = vvk::CommandBuffer(slot.commands[0], m_device.handle().Dispatch());
+        ++m_video_submission_stats.command_buffer_allocations;
+    }
+    if (slot.fence) return true;
+    if (slot.pending) return SetError(error, "pending video import has no fence");
+    const VkFenceCreateInfo info {
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+    };
+    if (m_device.handle().CreateFence(info, slot.fence) != VK_SUCCESS) {
+        return SetError(error, "failed to create Vulkan fence for video frame import");
+    }
+    ++m_video_submission_stats.fence_allocations;
+    return true;
 }
 
 bool TextureCache::waitForVideoImportSlot(VideoImportSubmissionSlot& slot, std::string* error) {
@@ -1113,16 +1129,18 @@ bool TextureCache::waitForVideoImportSlot(VideoImportSubmissionSlot& slot, std::
     ++m_video_submission_stats.fence_waits;
 
     if (const VkResult result = slot.fence.Wait(); result != VK_SUCCESS) {
-        VVK_CHECK(result);
+        LOG_ERROR("video frame import wait failed: %d", result);
         return SetError(error, "failed waiting for pending video frame import");
     }
+    slot.pending = false;
+    slot.submitted_serial = 0;
+    slot.image_owner.reset();
     if (const VkResult result = slot.fence.Reset(); result != VK_SUCCESS) {
-        VVK_CHECK(result);
+        slot.fence = {};
+        LOG_ERROR("video frame import fence reset failed: %d", result);
         return SetError(error, "failed resetting video frame import fence");
     }
 
-    slot.pending          = false;
-    slot.submitted_serial = 0;
     return true;
 }
 
@@ -1144,7 +1162,7 @@ VkSampler TextureCache::GetOrCreateSampler(TextureKey tex_key, std::string* erro
     if (const VkResult result =
             m_device.handle().CreateSampler(GenSamplerInfo(tex_key), entry.sampler);
         result != VK_SUCCESS) {
-        VVK_CHECK(result);
+        LOG_ERROR("cached video sampler creation failed: %d", result);
         SetError(error, "failed to create cached Vulkan sampler");
         return VK_NULL_HANDLE;
     }
@@ -1207,7 +1225,37 @@ std::optional<VmaImageParameters> TextureCache::CreateTex(TextureKey tex_key) {
 
 TextureCache::TextureCache(const Device& device): m_device(device) {}
 
-TextureCache::~TextureCache() {};
+TextureCache::~TextureCache() {
+    if (m_device_lost) return;
+    std::string error;
+    if (Clear(&error)) return;
+    // Final destruction cannot leave retained GPU owners behind. The renderer destroys
+    // its command owners before this boundary; standalone users must do the same.
+    const VkResult result = m_device.handle().WaitIdle();
+    if (result == VK_ERROR_DEVICE_LOST) {
+        DiscardAfterDeviceLoss();
+        return;
+    }
+    if (result != VK_SUCCESS) {
+        LOG_ERROR("cannot destroy renderer resources before GPU completion");
+        std::terminate();
+    }
+    InvalidateVideoDestinationPool();
+    for (auto& slot : m_video_import_slots) {
+        slot.command = {};
+        slot.commands = {};
+        slot.pending = false;
+        slot.image_owner.reset();
+    }
+    for (auto& slot : m_texture_upload_slots) {
+        slot.command = {};
+        slot.commands = {};
+        slot.pending = false;
+        slot.staging_buffers.clear();
+    }
+    m_video_frame_pins.clear();
+    m_video_frame_state = VideoFrameState::Idle;
+}
 
 void TextureCache::SetVideoPlaybackPaused(bool paused) { m_video_playback_state.paused = paused; }
 
@@ -1216,6 +1264,10 @@ void TextureCache::SetVideoPlaybackRate(float rate) { m_video_playback_state.rat
 VideoTextureSubmissionStats TextureCache::VideoSubmissionStats() const {
     auto stats                    = m_video_submission_stats;
     stats.import_submission_slots = m_video_import_slots.size();
+    if (m_video_destination_pool) {
+        stats.pool_cached_texture_count = m_video_destination_pool->CachedTextureCount();
+        stats.pool_cached_bytes = m_video_destination_pool->CachedBytes();
+    }
     return stats;
 }
 
@@ -1231,10 +1283,11 @@ double TextureCache::GetVideoDuration(std::string_view key) const {
 }
 
 bool TextureCache::CanReuseVideoFrameImport(const video::VideoTextureFrame& frame) const {
-    return frame.io_surface != nullptr && frame.plane_count <= 1;
+    const bool is_nv12 = frame.pixel_format == 0x34323076u || frame.pixel_format == 0x34323066u;
+    return !is_nv12 && frame.io_surface != nullptr && frame.plane_count <= 1;
 }
 
-TextureCache::ImportedVideoFrame*
+std::shared_ptr<TextureCache::ImportedVideoFrame>
 TextureCache::FindImportedVideoFrame(VideoTex& video_tex, const video::VideoTextureFrame& frame,
                                      void* surface_identity) const {
     const bool can_reuse_surface_import = CanReuseVideoFrameImport(frame);
@@ -1249,12 +1302,12 @@ TextureCache::FindImportedVideoFrame(VideoTex& video_tex, const video::VideoText
         if (! can_reuse_surface_import && imported_frame->generation != frame.generation) {
             continue;
         }
-        return imported_frame.get();
+        return imported_frame;
     }
     return nullptr;
 }
 
-bool TextureCache::EnsureVideoFrameCacheRoom(VideoTex& video_tex, std::string* error) {
+bool TextureCache::EnsureVideoFrameCacheRoom(VideoTex& video_tex, std::string*) {
     while (video_tex.imported_frames.size() >= kMaxImportedVideoFramesPerVideoTex) {
         auto victim = video_tex.imported_frames.end();
         for (auto iter = video_tex.imported_frames.begin(); iter != video_tex.imported_frames.end();
@@ -1266,33 +1319,124 @@ bool TextureCache::EnsureVideoFrameCacheRoom(VideoTex& video_tex, std::string* e
             }
         }
         if (victim == video_tex.imported_frames.end()) return true;
-        if (! waitForPendingVideoImports(error)) return false;
         ++m_video_submission_stats.evictions;
         video_tex.imported_frames.erase(victim);
     }
     return true;
 }
 
-void TextureCache::Clear() {
-    std::string error;
-    if (! waitForPendingTextureUploads(&error) && ! error.empty()) {
-        LOG_ERROR("failed waiting for pending texture upload before cache clear: %s",
-                  error.c_str());
-        error.clear();
+bool TextureCache::BeginVideoFrameRecording(std::string* error) {
+    if (m_device_lost || m_video_frame_state != VideoFrameState::Idle ||
+        m_video_recording_serial == std::numeric_limits<uint64_t>::max()) {
+        LOG_ERROR("cannot begin video frame recording before prior frame retirement");
+        return SetError(error, "cannot begin video frame recording before prior frame retirement");
     }
-    if (! waitForPendingVideoImports(&error) && ! error.empty()) {
-        LOG_ERROR("failed waiting for pending video import before cache clear: %s", error.c_str());
+    ++m_video_recording_serial;
+    m_video_frame_state = VideoFrameState::Recording;
+    return true;
+}
+
+void TextureCache::PinVideoFrame(const ImageSlotsRef& ref) {
+    if (!ref.video_frame_owner) return;
+    if (m_device_lost || m_video_frame_state != VideoFrameState::Recording) {
+        LOG_ERROR("cannot pin video frame outside frame recording");
+        return;
     }
+    const auto* frame = static_cast<const ImportedVideoFrame*>(ref.video_frame_owner.get());
+    if (frame->last_pinned_recording == m_video_recording_serial) return;
+    m_video_frame_pins.push_back(ref.video_frame_owner);
+    frame->last_pinned_recording = m_video_recording_serial;
+}
+
+void TextureCache::MarkVideoFrameSubmitted() {
+    if (m_device_lost || m_video_frame_state != VideoFrameState::Recording) {
+        LOG_ERROR("cannot submit video frame outside frame recording");
+        return;
+    }
+    m_video_frame_state = VideoFrameState::Submitted;
+}
+
+void TextureCache::CompleteVideoFrame() {
+    if (m_video_frame_state != VideoFrameState::Submitted) {
+        LOG_ERROR("cannot complete video frame without a submitted draw");
+        return;
+    }
+    m_video_frame_pins.clear();
+    m_video_frame_state = VideoFrameState::Idle;
+}
+
+void TextureCache::AbandonVideoFrameRecording() {
+    if (m_video_frame_state != VideoFrameState::Recording) {
+        LOG_ERROR("cannot abandon video frame outside unsubmitted recording");
+        return;
+    }
+    m_video_frame_pins.clear();
+    m_video_frame_state = VideoFrameState::Idle;
+}
+
+void TextureCache::InvalidateVideoDestinationPool() {
+    m_video_recycling_disabled = true;
+    m_video_destination_pool.reset();
+}
+
+bool TextureCache::WaitForPendingUploads(std::string* error) {
+    if (m_device_lost) return SetError(error, "cannot wait for uploads after device loss");
+    return waitForPendingTextureUploads(error) && waitForPendingVideoImports(error);
+}
+
+void TextureCache::DiscardAfterDeviceLoss() noexcept {
+    m_device_lost = true;
+    InvalidateVideoDestinationPool();
+    // No work can be submitted again on this device. Discard commands before their
+    // referenced owners, and never recycle their converted Metal destinations.
+    m_tex_cmd = {};
+    m_tex_cmds = {};
+    for (auto& slot : m_video_import_slots) {
+        slot.command = {};
+        slot.commands = {};
+        slot.pending = false;
+        slot.image_owner.reset();
+    }
+    for (auto& slot : m_texture_upload_slots) {
+        slot.command = {};
+        slot.commands = {};
+        slot.pending = false;
+        slot.staging_buffers.clear();
+    }
+    m_video_import_slots.clear();
+    m_texture_upload_slots.clear();
+    m_video_frame_pins.clear();
+    m_video_frame_state = VideoFrameState::Idle;
+    m_video_tex_map.clear();
+    m_tex_map.clear();
+    m_retired_runtime_textures.clear();
+    m_query_map.clear();
+    m_query_texs.clear();
+    m_sampler_cache.clear();
+}
+
+bool TextureCache::Clear(std::string* error) {
+    if (m_device_lost) return SetError(error, "cannot clear texture cache after device loss");
+    if (m_video_frame_state != VideoFrameState::Idle) {
+        LOG_ERROR("cannot clear texture cache before video frame retirement");
+        return SetError(error, "cannot clear texture cache before video frame retirement");
+    }
+    if (!WaitForPendingUploads(error)) return false;
+    // Weak deleters attached to old owners cannot reach a newly created pool.
+    m_video_destination_pool.reset();
     m_tex_map.clear();
     m_video_tex_map.clear();
     m_query_texs.clear();
     m_query_map.clear();
+    m_video_recycling_disabled = false;
+    return true;
 }
 
 bool TextureCache::UpdateVideoFrame(std::string_view                 key,
                                     const video::VideoPlaybackState& playback_state,
                                     ImageSlotsRef* out, std::string* error) {
     ++m_video_submission_stats.update_calls;
+    if (m_device_lost) return SetError(error, "cannot update video frame after device loss");
     if (! exists(m_video_tex_map, key)) {
         return SetError(error, std::string("video texture not registered: ") + std::string(key));
     }
@@ -1319,83 +1463,95 @@ bool TextureCache::UpdateVideoFrame(std::string_view                 key,
     }
 
     void* surface_identity = frame.io_surface != nullptr ? frame.io_surface : frame.pixel_buffer;
-    if (auto* imported_frame = FindImportedVideoFrame(video_tex, frame, surface_identity);
-        imported_frame != nullptr) {
+    auto imported_frame = FindImportedVideoFrame(video_tex, frame, surface_identity);
+    if (imported_frame) {
         ++m_video_submission_stats.cache_hits;
         imported_frame->generation = frame.generation;
-        imported_frame->last_used  = ++video_tex.frame_use_serial;
-        video_tex.current_frame    = imported_frame;
+        imported_frame->last_used = ++video_tex.frame_use_serial;
+        video_tex.current_frame = imported_frame.get();
     } else {
-        if (! EnsureVideoFrameCacheRoom(video_tex, error)) {
-            return false;
+        if (!EnsureVideoFrameCacheRoom(video_tex, error)) return false;
+        // Retire only completed imports; the other slot owners remain independent of
+        // draw pins, including when a recording is abandoned without submission.
+        for (auto& slot : m_video_import_slots) {
+            if (slot.pending && slot.fence.GetStatus() == VK_SUCCESS &&
+                !waitForVideoImportSlot(slot, error)) return false;
         }
-
         void* metal_device = GetMetalDeviceHandle(error);
-        if (metal_device == nullptr) {
-            return false;
+        if (metal_device == nullptr) return false;
+        const bool converted = frame.pixel_format == 0x34323076u || frame.pixel_format == 0x34323066u;
+        if (converted && !m_video_recycling_disabled && !m_video_destination_pool) {
+            m_video_destination_pool = std::make_shared<video::AppleVideoMetalTexturePool>(metal_device);
         }
-        void* metal_texture =
-            video::CreateAppleVideoMetalTextureForDevice(frame, metal_device, error);
-        if (metal_texture == nullptr) {
-            return false;
+        std::unique_ptr<void, decltype(&video::ReleaseAppleVideoMetalTexture)> destination(
+            converted && m_video_destination_pool
+                ? m_video_destination_pool->Take(frame.width, frame.height) : nullptr,
+            &video::ReleaseAppleVideoMetalTexture);
+        auto candidate = std::make_shared<ImportedVideoFrame>();
+        if (converted) ++m_video_submission_stats.conversion_calls;
+        void* metal_texture = video::CreateAppleVideoMetalTextureForDevice(
+            frame, metal_device, destination.get(), error);
+        if (metal_texture == nullptr) return false;
+        const bool reused = destination != nullptr;
+        destination.reset();
+        if (converted) {
+            if (reused) ++m_video_submission_stats.converted_destinations_reused;
+            else ++m_video_submission_stats.converted_destinations_created;
         }
-
+        const std::weak_ptr<video::AppleVideoMetalTexturePool> pool =
+            converted ? m_video_destination_pool : nullptr;
+        candidate->metal_texture = std::shared_ptr<void>(metal_texture, [pool](void* handle) {
+            if (auto owner = pool.lock()) owner->Recycle(handle);
+            else video::ReleaseAppleVideoMetalTexture(handle);
+        });
         TextureKey sampler_key {
-            .width        = static_cast<i32>(frame.width),
-            .height       = static_cast<i32>(frame.height),
-            .usage        = TexUsage::COLOR,
-            .format       = TextureFormat::RGBA8,
-            .sample       = video_tex.sample,
+            .width = static_cast<i32>(frame.width),
+            .height = static_cast<i32>(frame.height),
+            .usage = TexUsage::COLOR,
+            .format = TextureFormat::RGBA8,
+            .sample = video_tex.sample,
             .mipmap_level = 1,
         };
         const VkSampler sampler = GetOrCreateSampler(sampler_key, error);
-        if (sampler == VK_NULL_HANDLE) {
-            video::ReleaseAppleVideoMetalTexture(metal_texture);
-            return false;
-        }
-
+        if (sampler == VK_NULL_HANDLE) return false;
         auto imported_image = CreateImportedMetalTextureImage(
             m_device, metal_texture, video_tex.sample, sampler, frame.width, frame.height, error);
-        if (! imported_image.has_value()) {
-            video::ReleaseAppleVideoMetalTexture(metal_texture);
-            return false;
-        }
-        auto* submission_slot = acquireVideoImportSubmissionSlot(error);
-        if (submission_slot == nullptr) {
-            video::ReleaseAppleVideoMetalTexture(metal_texture);
-            return false;
-        }
-        if (const VkResult result = TransImgLayout(m_device.graphics_queue().handle,
-                                                   submission_slot->command,
-                                                   imported_image.value(),
-                                                   imported_image->layout,
-                                                   *submission_slot->fence);
-            result != VK_SUCCESS) {
-            VVK_CHECK(result);
-            video::ReleaseAppleVideoMetalTexture(metal_texture);
+        if (!imported_image) return false;
+        candidate->image = std::move(*imported_image);
+        candidate->generation = frame.generation;
+        candidate->surface_identity = surface_identity;
+        candidate->pixel_format = frame.pixel_format;
+        auto* slot = acquireVideoImportSubmissionSlot(error);
+        if (slot == nullptr) return false;
+        // Make all potentially allocating owners before submitting work.
+        video_tex.imported_frames.reserve(kMaxImportedVideoFramesPerVideoTex);
+        const VkResult result = TransImgLayout(m_device.graphics_queue().handle, slot->command,
+                                               candidate->image, candidate->image.layout, *slot->fence);
+        if (result != VK_SUCCESS) {
+            // Submit never succeeded. Free the unsubmitted command if Reset cannot
+            // make it reusable, before dropping the image it may reference.
+            if (slot->command.Reset() != VK_SUCCESS) {
+                slot->command = {};
+                slot->commands = {};
+            }
+            slot->fence = {};
+            LOG_ERROR("video frame import transition failed: %d", result);
             return SetError(error, "failed to transition imported video frame image layout");
         }
-        submission_slot->pending          = true;
-        submission_slot->submitted_serial = ++m_video_import_submit_serial;
-
-        auto new_imported_frame           = std::make_unique<ImportedVideoFrame>();
-        new_imported_frame->image         = std::move(imported_image.value());
-        new_imported_frame->metal_texture = std::shared_ptr<void>(metal_texture, [](void* handle) {
-            video::ReleaseAppleVideoMetalTexture(handle);
-        });
-        new_imported_frame->generation    = frame.generation;
-        new_imported_frame->last_used     = ++video_tex.frame_use_serial;
-        new_imported_frame->surface_identity = surface_identity;
-        new_imported_frame->pixel_format     = frame.pixel_format;
-
-        video_tex.current_frame = new_imported_frame.get();
-        video_tex.imported_frames.emplace_back(std::move(new_imported_frame));
+        slot->pending = true;
+        slot->submitted_serial = ++m_video_import_submit_serial;
+        slot->image_owner = candidate;
+        candidate->last_used = ++video_tex.frame_use_serial;
+        video_tex.current_frame = candidate.get();
+        video_tex.imported_frames.emplace_back(candidate);
+        imported_frame = std::move(candidate);
         ++m_video_submission_stats.new_imports;
     }
-
-    if (out != nullptr && video_tex.current_frame != nullptr) {
-        out->slots  = { ImageParameters(video_tex.current_frame->image) };
-        out->active = 0;
+    if (out != nullptr) {
+        ImageSlotsRef result;
+        result.slots = { ImageParameters(imported_frame->image) };
+        result.video_frame_owner = std::move(imported_frame);
+        *out = std::move(result);
     }
 
     return true;

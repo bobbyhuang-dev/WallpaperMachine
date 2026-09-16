@@ -31,17 +31,17 @@ public:
     /// The Vulkan instance, logical device, queues, and device-scoped
     /// buffers remain alive. Must be followed by `resetSurface` or `destroy`
     /// before another frame is drawn.
-    void releaseSurface();
+    bool releaseSurface();
 
     /// Rebuild the surface, swapchain, and presentation passes from a new
     /// RenderInitInfo. The scene, staging buffers, and command buffers are
     /// preserved. Returns false if surface/swapchain creation fails.
     bool resetSurface(const RenderInitInfo& info);
 
-    void drawFrame(Scene&);
+    bool drawFrame(Scene&);
 
-    void clearLastRenderGraph();
-    void compileRenderGraph(Scene&, rg::RenderGraph&);
+    bool clearLastRenderGraph();
+    bool compileRenderGraph(Scene&, rg::RenderGraph&);
     void UpdateCameraFillMode(Scene&, wallpaper::FillMode);
     void SetWallpaperScalingMode(wallpaper::WallpaperScalingMode);
     void SetWallpaperScalingFactor(double);

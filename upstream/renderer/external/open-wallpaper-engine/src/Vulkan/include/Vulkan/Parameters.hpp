@@ -5,6 +5,7 @@
 #include "Core/NoCopyMove.hpp"
 #include "vk_mem_alloc.h"
 #include "vvk/vma_wrapper.hpp"
+#include <memory>
 
 namespace wallpaper
 {
@@ -18,7 +19,7 @@ struct QueueParameters {
 
 struct VmaBufferParameters {
     vvk::VmaBuffer handle;
-    std::size_t    req_size;
+    std::size_t    req_size { 0 };
 
     VmaBufferParameters();
     ~VmaBufferParameters();
@@ -27,8 +28,8 @@ struct VmaBufferParameters {
 };
 
 struct BufferParameters {
-    VkBuffer    handle;
-    std::size_t req_size;
+    VkBuffer    handle { VK_NULL_HANDLE };
+    std::size_t req_size { 0 };
     BufferParameters()  = default;
     ~BufferParameters() = default;
     BufferParameters(const VmaBufferParameters& o) noexcept
@@ -115,6 +116,7 @@ struct ImageSlots : NoCopy {
 
 struct ImageSlotsRef {
     std::vector<ImageParameters> slots;
+    std::shared_ptr<const void> video_frame_owner;
 
     idx active { 0 };
 
@@ -124,6 +126,10 @@ struct ImageSlotsRef {
     }
     ImageSlotsRef();
     ~ImageSlotsRef();
+    ImageSlotsRef(const ImageSlotsRef&) = default;
+    ImageSlotsRef& operator=(const ImageSlotsRef&) = default;
+    ImageSlotsRef(ImageSlotsRef&&) noexcept = default;
+    ImageSlotsRef& operator=(ImageSlotsRef&&) noexcept = default;
     ImageSlotsRef(const ImageSlots&);
 };
 

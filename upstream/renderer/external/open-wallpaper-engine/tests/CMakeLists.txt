@@ -117,6 +117,17 @@ gtest_discover_tests(
     DISCOVERY_TIMEOUT 60
 )
 if(APPLE)
+    add_executable(playback_gpu_test playback_gpu_test.mm)
+    target_link_libraries(playback_gpu_test PRIVATE
+        ${PROJECT_NAME} wpScene wpVulkan wpVulkanRender wpRGraph
+        nlohmann_json::nlohmann_json GTest::gtest_main)
+    target_include_directories(playback_gpu_test PRIVATE
+        . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender)
+    target_compile_features(playback_gpu_test PRIVATE cxx_std_20)
+    set_target_properties(playback_gpu_test PROPERTIES
+        OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES)
+    target_compile_options(playback_gpu_test PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+    gtest_discover_tests(playback_gpu_test PROPERTIES TIMEOUT 60 DISCOVERY_TIMEOUT 60)
     add_test(
         NAME audio_coreaudio_backend_config
         COMMAND
@@ -219,7 +230,7 @@ gtest_discover_tests(
     DISCOVERY_TIMEOUT 60
 )
 add_executable(video_texture_submission_smoke video_texture_submission_smoke.cpp)
-target_link_libraries(video_texture_submission_smoke PRIVATE GTest::gtest_main)
+target_link_libraries(video_texture_submission_smoke PRIVATE wpVulkan GTest::gtest_main)
 target_include_directories(video_texture_submission_smoke PRIVATE
     .
     ${CMAKE_SOURCE_DIR}/src
@@ -288,9 +299,10 @@ gtest_discover_tests(
     DISCOVERY_TIMEOUT 60
 )
 add_executable(vulkan_render_batch_planner_smoke vulkan_render_batch_planner_smoke.cpp)
-target_link_libraries(vulkan_render_batch_planner_smoke PRIVATE wpVulkanRender)
+target_link_libraries(vulkan_render_batch_planner_smoke PRIVATE wpVulkanRender wpVulkan)
 target_include_directories(vulkan_render_batch_planner_smoke PRIVATE .)
 target_compile_features(vulkan_render_batch_planner_smoke PRIVATE cxx_std_20)
+target_compile_options(vulkan_render_batch_planner_smoke PRIVATE -UNDEBUG)
 add_test(NAME vulkan_render_batch_planner_smoke COMMAND vulkan_render_batch_planner_smoke)
 add_executable(vulkan_sample_count_smoke vulkan_sample_count_smoke.cpp)
 target_link_libraries(vulkan_sample_count_smoke PRIVATE ${PROJECT_NAME} wpVulkanRender wpVulkan wpScene wpRGraph GTest::gtest_main)

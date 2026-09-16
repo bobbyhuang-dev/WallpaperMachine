@@ -149,7 +149,6 @@ void WPShaderValueUpdater::UpdateUniforms(SceneNode* pNode, uint32_t material_sl
         camera = m_scene->activeCamera;
 
     if (! camera) return;
-    camera->Update();
 
     auto* material = pNode->Mesh()->MaterialForSlot(material_slot);
     if (! material) return;
@@ -203,11 +202,9 @@ void WPShaderValueUpdater::UpdateUniforms(SceneNode* pNode, uint32_t material_sl
     // used to sample the *screen* behind the layer. The effect camera and
     // identity render override lose the parent's translation/scale here.
     const bool samples_screen_background = material->name == "composelayer";
-    Matrix4d viewProTrans = camera->GetViewProjectionMatrix();
-    if (samples_screen_background && m_scene->activeCamera != nullptr) {
-        m_scene->activeCamera->Update();
-        viewProTrans = m_scene->activeCamera->GetViewProjectionMatrix();
-    }
+    SceneCamera* matrix_camera =
+        samples_screen_background && m_scene->activeCamera != nullptr ? m_scene->activeCamera : camera;
+    Matrix4d viewProTrans = matrix_camera->GetViewProjectionMatrix();
 
     if (info.has_VP) {
         updateOp(G_VP, ShaderValue::fromMatrix(viewProTrans));

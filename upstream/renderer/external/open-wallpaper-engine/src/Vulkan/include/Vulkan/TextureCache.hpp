@@ -16,6 +16,7 @@ namespace wallpaper
 {
 
 struct Image;
+namespace video { class AppleVideoMetalTexturePool; }
 
 namespace vulkan
 {
@@ -43,6 +44,11 @@ struct VideoTextureSubmissionStats {
     std::uint64_t import_submission_slots { 0 };
     std::uint64_t command_buffer_allocations { 0 };
     std::uint64_t fence_allocations { 0 };
+    std::uint64_t conversion_calls { 0 };
+    std::uint64_t converted_destinations_created { 0 };
+    std::uint64_t converted_destinations_reused { 0 };
+    std::uint64_t pool_cached_texture_count { 0 };
+    std::uint64_t pool_cached_bytes { 0 };
 };
 
 struct VideoImportSubmissionPlan {
@@ -95,7 +101,16 @@ public:
     TextureCache(const Device&);
     ~TextureCache();
 
-    void Clear();
+    enum class VideoFrameState { Idle, Recording, Submitted };
+    bool Clear(std::string* error = nullptr);
+    bool BeginVideoFrameRecording(std::string* error = nullptr);
+    void PinVideoFrame(const ImageSlotsRef&);
+    void MarkVideoFrameSubmitted();
+    void CompleteVideoFrame();
+    void AbandonVideoFrameRecording();
+    void InvalidateVideoDestinationPool();
+    bool WaitForPendingUploads(std::string* error = nullptr);
+    void DiscardAfterDeviceLoss() noexcept;
 
     std::optional<ExImageParameters> CreateExTex(uint32_t witdh, uint32_t height, VkFormat,
                                                  VkImageTiling);
@@ -121,6 +136,9 @@ public:
     void RecGenerateMipmaps(vvk::CommandBuffer& cmd, const ImageParameters& image) const;
 
 private:
+    friend struct TextureCacheVideoInteropTestAccess;
+    ImageSlotsRef CreateVideoTex(Image&, std::shared_ptr<video::VideoTextureSource>);
+    struct ImportedVideoFrame;
     ImageSlotsRef                     CreateTex(Image&, TextureUploadSynchronization);
     std::optional<VmaImageParameters> CreateTex(TextureKey);
     VkSampler                         GetOrCreateSampler(TextureKey, std::string* error);
@@ -140,10 +158,12 @@ private:
         vvk::Fence          fence;
         bool                pending { false };
         uint64_t            submitted_serial { 0 };
+        std::shared_ptr<ImportedVideoFrame> image_owner;
     };
     TextureUploadSubmissionSlot* acquireTextureUploadSubmissionSlot(std::string* error);
     bool                         waitForTextureUploadSlot(TextureUploadSubmissionSlot& slot,
                                                           std::string* error);
+    bool                         ensureTextureUploadSlot(TextureUploadSubmissionSlot&, std::string* error);
     bool                         waitForPendingTextureUploads(std::string* error);
     void                         collectCompletedTextureUploads();
     void                         retireRuntimeTexture(std::string_view key);
@@ -151,6 +171,7 @@ private:
     bool                       waitForVideoImportSlot(VideoImportSubmissionSlot& slot,
                                                       std::string* error);
     bool                       waitForPendingVideoImports(std::string* error);
+    bool                       ensureVideoImportFence(VideoImportSubmissionSlot&, std::string* error);
     vvk::CommandBuffers               m_tex_cmds;
     vvk::CommandBuffer                m_tex_cmd;
     std::vector<VideoImportSubmissionSlot> m_video_import_slots;
@@ -159,10 +180,11 @@ private:
     const Device&                m_device;
     Map<std::string, ImageSlots> m_tex_map;
     struct ImportedVideoFrame {
-        ExImageParameters     image;
         std::shared_ptr<void> metal_texture;
+        ExImageParameters     image;
         uint64_t              generation { 0 };
         uint64_t              last_used { 0 };
+        mutable uint64_t      last_pinned_recording { 0 };
         void*                 surface_identity { nullptr };
         uint32_t              pixel_format { 0 };
     };
@@ -170,20 +192,25 @@ private:
         TextureSample                                    sample;
         std::shared_ptr<video::VideoTextureSource>       source;
         ImportedVideoFrame*                              current_frame { nullptr };
-        std::vector<std::unique_ptr<ImportedVideoFrame>> imported_frames;
+        std::vector<std::shared_ptr<ImportedVideoFrame>> imported_frames;
         uint64_t                                         frame_use_serial { 0 };
     };
     static constexpr std::size_t kMaxImportedVideoFramesPerVideoTex { 4 };
     static constexpr std::size_t kMaxPendingVideoImportSubmissions { 2 };
     static constexpr std::size_t kMaxPendingTextureUploads { 8 };
     bool                CanReuseVideoFrameImport(const video::VideoTextureFrame& frame) const;
-    ImportedVideoFrame* FindImportedVideoFrame(VideoTex&                       video_tex,
-                                               const video::VideoTextureFrame& frame,
-                                               void* surface_identity) const;
+    std::shared_ptr<ImportedVideoFrame> FindImportedVideoFrame(
+        VideoTex& video_tex, const video::VideoTextureFrame& frame, void* surface_identity) const;
     bool                EnsureVideoFrameCacheRoom(VideoTex& video_tex, std::string* error);
     Map<std::string, std::unique_ptr<VideoTex>> m_video_tex_map;
     video::VideoPlaybackState                   m_video_playback_state {};
     VideoTextureSubmissionStats                 m_video_submission_stats {};
+    std::shared_ptr<video::AppleVideoMetalTexturePool> m_video_destination_pool;
+    VideoFrameState m_video_frame_state { VideoFrameState::Idle };
+    uint64_t m_video_recording_serial { 0 };
+    std::vector<std::shared_ptr<const void>> m_video_frame_pins;
+    bool m_video_recycling_disabled { false };
+    bool m_device_lost { false };
     std::vector<TextureUploadSubmissionSlot>    m_texture_upload_slots;
     uint64_t                                    m_texture_upload_submit_serial { 0 };
     std::vector<ImageSlots>                     m_retired_runtime_textures;

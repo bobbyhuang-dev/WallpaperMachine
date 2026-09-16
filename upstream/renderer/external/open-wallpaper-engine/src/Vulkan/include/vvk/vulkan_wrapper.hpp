@@ -182,6 +182,7 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkGetSemaphoreCounterValueKHR         vkGetSemaphoreCounterValueKHR {};
     PFN_vkMapMemory                           vkMapMemory {};
     PFN_vkQueueSubmit                         vkQueueSubmit {};
+    PFN_vkResetCommandBuffer                  vkResetCommandBuffer {};
     PFN_vkResetFences                         vkResetFences {};
     PFN_vkUnmapMemory                         vkUnmapMemory {};
     PFN_vkUpdateDescriptorSetWithTemplateKHR  vkUpdateDescriptorSetWithTemplateKHR {};
@@ -541,6 +542,10 @@ public:
     }
 
     VkResult End() const { return dld->vkEndCommandBuffer(handle); }
+
+    VkResult Reset(VkCommandBufferResetFlags flags = 0) const noexcept {
+        return dld->vkResetCommandBuffer(handle, flags);
+    }
 
     void BeginRenderPass(const VkRenderPassBeginInfo& renderpass_bi,
                          VkSubpassContents            contents) const noexcept {

@@ -55,6 +55,21 @@ struct CustomPassBatchPlan {
     std::vector<CustomPassBatchEntry> entries;
 };
 
+class Device;
+class VulkanPass;
+class CustomShaderPass;
+struct RenderingResources;
+
+struct CustomPassExecutionScratch {
+    std::vector<CustomShaderPass*> passes;
+    std::vector<CustomPassBatchCandidate> candidates;
+    CustomPassBatchPlan plan;
+};
+
+bool UpdatePreparedPasses(const Device&, RenderingResources&, std::span<VulkanPass* const>);
+void ExecutePreparedPasses(const Device&, RenderingResources&, std::span<VulkanPass* const>,
+                           CustomPassExecutionScratch&);
+
 struct CustomPassMsaaAttachmentPlan {
     bool                  needs_resolve_attachment { false };
     uint32_t              attachment_count { 1 };
@@ -117,9 +132,10 @@ inline bool CompatibleCustomPassAttachments(const CustomPassRenderInfo& a,
     return a.msaa_image == b.msaa_image && a.msaa_view == b.msaa_view;
 }
 
-inline CustomPassBatchPlan
-PlanCustomPassBatches(std::span<const CustomPassBatchCandidate> candidates) {
-    CustomPassBatchPlan plan;
+inline void PlanCustomPassBatches(std::span<const CustomPassBatchCandidate> candidates,
+                                  CustomPassBatchPlan& plan) {
+    plan.entries.clear();
+    plan.entries.reserve(candidates.size());
 
     for (size_t i = 0; i < candidates.size();) {
         const auto& first = candidates[i];
@@ -184,8 +200,6 @@ PlanCustomPassBatches(std::span<const CustomPassBatchCandidate> candidates) {
         plan.entries.push_back(entry);
         i = std::max(entry.last, i + 1);
     }
-
-    return plan;
 }
 
 } // namespace vulkan

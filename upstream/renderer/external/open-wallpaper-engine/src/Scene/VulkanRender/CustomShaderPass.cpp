@@ -178,37 +178,28 @@ std::optional<vvk::RenderPass> CreateRenderPass(const vvk::Device& device, VkFor
     }
 }
 
-static void UpdateUniform(StagingBuffer* buf, const StagingBufferRef& bufref,
+static bool UpdateUniform(StagingBuffer* buf, const StagingBufferRef& bufref,
                           const ShaderReflected::Block& block, std::string_view name,
                           const wallpaper::ShaderValue& value) {
     using namespace wallpaper;
-    std::span<uint8_t> value_u8 { (uint8_t*)value.data(),
-                                  value.size() * sizeof(ShaderValue::value_type) };
-    auto               uni = block.member_map.find(name);
-    if (uni == block.member_map.end()) {
-        // log
-        return;
-    }
+    std::span<uint8_t> bytes { (uint8_t*)value.data(),
+                               value.size() * sizeof(ShaderValue::value_type) };
+    const auto uniform = block.member_map.find(name);
+    if (uniform == block.member_map.end()) return true;
 
-    size_t offset    = uni->second.offset;
-    size_t type_size = sizeof(float) * uni->second.num;
-    if (uni->second.array_count > 0 && uni->second.array_stride > 0 &&
-        value_u8.size() % uni->second.array_count == 0) {
-        const size_t element_size = value_u8.size() / uni->second.array_count;
-        if (element_size > 0 && element_size <= uni->second.array_stride) {
-            for (size_t index = 0; index < uni->second.array_count; ++index) {
-                buf->writeToBuf(bufref,
-                                value_u8.subspan(index * element_size, element_size),
-                                offset + index * uni->second.array_stride);
+    const auto& member = uniform->second;
+    if (member.array_count > 0 && member.array_stride > 0 &&
+        bytes.size() % member.array_count == 0) {
+        const size_t element_size = bytes.size() / member.array_count;
+        if (element_size > 0 && element_size <= member.array_stride) {
+            for (size_t index = 0; index < member.array_count; ++index) {
+                if (! buf->writeToBuf(bufref, bytes.subspan(index * element_size, element_size),
+                                      member.offset + index * member.array_stride)) return false;
             }
-            return;
+            return true;
         }
     }
-    if (type_size != value_u8.size()) {
-        // assert(type_size == value_u8.size());
-        ; // to do
-    }
-    buf->writeToBuf(bufref, value_u8, offset);
+    return buf->writeToBuf(bufref, bytes, member.offset);
 }
 
 void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingResources& rr) {
@@ -441,7 +432,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
         LOG_ERROR("shader uniform block has no matching uniform-buffer descriptor binding");
     }
 
-    std::function<void()> update_dyn_buf_op;
+    std::function<bool()> update_dyn_buf_op;
     if (m_desc.dyn_vertex) {
         auto& mesh        = *m_desc.node->Mesh();
         auto submesh_index = m_desc.submesh_index;
@@ -451,6 +442,15 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
         auto& index_buf   = m_desc.index_buf;
         auto& draw_ranges = m_desc.draw_ranges;
         auto& uploaded_generation = m_desc.uploaded_mesh_dirty_generation;
+        const auto index_count = submesh.IndexCount();
+        std::vector<usize> strides;
+        std::vector<std::vector<SceneVertexArray::SceneVertexAttribute>> attributes;
+        strides.reserve(submesh.VertexCount());
+        attributes.reserve(submesh.VertexCount());
+        for (usize i = 0; i < submesh.VertexCount(); ++i) {
+            strides.push_back(submesh.GetVertexArray(i).OneSizeOf());
+            attributes.push_back(submesh.GetVertexArray(i).Attributes());
+        }
         update_dyn_buf_op = [&mesh,
                              submesh_index,
                              &vertex_bufs,
@@ -458,31 +458,53 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
                              &index_buf,
                              &draw_ranges,
                              &uploaded_generation,
-                             dyn_buf]() {
+                             dyn_buf,
+                             index_count,
+                             strides = std::move(strides),
+                             attributes = std::move(attributes)]() {
             const uint64_t dirty_generation = mesh.DirtyGeneration();
-            if (uploaded_generation != dirty_generation) {
-                if (submesh_index >= mesh.Submeshes().size()) return;
-                auto& submesh = mesh.Submeshes()[submesh_index];
-                for (usize i = 0; i < submesh.VertexCount(); i++) {
-                    if (i >= vertex_bufs.size()) return;
-                    const auto& vertex = submesh.GetVertexArray(i);
-                    auto&       buf    = vertex_bufs[i];
-                    if (! dyn_buf->writeToBuf(buf,
-                                              { (uint8_t*)vertex.Data(), vertex.DataSizeOf() }))
-                        return;
-                }
-                if (submesh.IndexCount() > 0) {
-                    auto& indice = submesh.GetIndexArray(0);
-                    u32   count  = (u32)((indice.RenderDataCount() * 2) / 3);
-                    draw_count   = count * 3;
-                    draw_ranges  = submesh.DrawRanges();
-                    auto& buf    = index_buf;
-                    if (! dyn_buf->writeToBuf(buf,
-                                              { (uint8_t*)indice.Data(), indice.DataSizeOf() }))
-                        return;
-                }
-                uploaded_generation = dirty_generation;
+            if (uploaded_generation == dirty_generation) return true;
+            if (submesh_index >= mesh.Submeshes().size()) return false;
+            auto& current = mesh.Submeshes()[submesh_index];
+            if (current.VertexCount() != vertex_bufs.size() ||
+                current.IndexCount() != index_count) {
+                LOG_ERROR("dynamic mesh binding topology changed after preparation");
+                return false;
             }
+            for (usize i = 0; i < current.VertexCount(); ++i) {
+                const auto& vertex = current.GetVertexArray(i);
+                const auto& attrs = vertex.Attributes();
+                if (vertex.DataSizeOf() > vertex_bufs[i].size ||
+                    vertex.OneSizeOf() != strides[i] ||
+                    ! std::equal(attrs.begin(), attrs.end(), attributes[i].begin(),
+                                  attributes[i].end(), [](const auto& a, const auto& b) {
+                                      return a.name == b.name && a.type == b.type &&
+                                             a.padding == b.padding;
+                                  })) {
+                    LOG_ERROR("dynamic mesh exceeds prepared storage or changes vertex layout");
+                    return false;
+                }
+            }
+            if (index_count > 0 && current.GetIndexArray(0).DataSizeOf() > index_buf.size) {
+                LOG_ERROR("dynamic mesh exceeds prepared index storage");
+                return false;
+            }
+            for (usize i = 0; i < current.VertexCount(); ++i) {
+                const auto& vertex = current.GetVertexArray(i);
+                if (! dyn_buf->writeToBuf(vertex_bufs[i],
+                                          { (uint8_t*)vertex.Data(), vertex.DataSizeOf() }))
+                    return false;
+            }
+            if (index_count > 0) {
+                const auto& indice = current.GetIndexArray(0);
+                if (! dyn_buf->writeToBuf(index_buf,
+                                          { (uint8_t*)indice.Data(), indice.DataSizeOf() }))
+                    return false;
+                draw_count = (u32)((indice.RenderDataCount() * 2) / 3) * 3;
+                draw_ranges = current.DrawRanges();
+            }
+            uploaded_generation = dirty_generation;
+            return true;
         };
     }
 
@@ -518,11 +540,12 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
                         camera_override,
                         material_slot,
                         update_dyn_buf_op]() {
-        auto update_unf_op = [uniform_block, buf, bufref](std::string_view       name,
+        bool writes_ok = true;
+        auto update_unf_op = [uniform_block, buf, bufref, &writes_ok](std::string_view name,
                                                           wallpaper::ShaderValue value) {
             if (uniform_block == nullptr || buf == nullptr || bufref == nullptr || ! (*bufref))
                 return;
-            UpdateUniform(buf, *bufref, *uniform_block, name, value);
+            writes_ok = UpdateUniform(buf, *bufref, *uniform_block, name, value) && writes_ok;
         };
         std::string original_camera;
         bool        restore_camera = false;
@@ -531,16 +554,18 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
             node->SetCamera(camera_override);
             restore_camera = true;
         }
-        shader_updater->UpdateUniforms(node, material_slot, sprites, update_unf_op);
-        if (restore_camera) {
-            node->SetCamera(original_camera);
+        {
+            AUTO_DELETER(camera_override, [&]() {
+                if (restore_camera) node->SetCamera(original_camera);
+            });
+            shader_updater->UpdateUniforms(node, material_slot, sprites, update_unf_op);
         }
         if (uniform_block != nullptr && node != nullptr && node->Mesh() != nullptr) {
             const auto* material = node->Mesh()->MaterialForSlot(material_slot);
-            if (material == nullptr) return;
+            if (material == nullptr) return writes_ok;
             const auto& const_values = material->customShader.constValues;
             for (const auto& [name, value] : const_values) {
-                UpdateUniform(buf, *bufref, *uniform_block, name, value);
+                writes_ok = UpdateUniform(buf, *bufref, *uniform_block, name, value) && writes_ok;
             }
         }
         {
@@ -593,7 +618,8 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
             if (i >= vk_texture_image_keys.size()) vk_texture_image_keys.resize(i + 1);
             vk_texture_image_keys[i] = image->key;
         }
-        if (update_dyn_buf_op) update_dyn_buf_op();
+        if (update_dyn_buf_op) writes_ok = update_dyn_buf_op() && writes_ok;
+        return writes_ok;
     };
 
     auto exists_unf_op = [uniform_block](std::string_view name) {
@@ -602,7 +628,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
     shader_updater->InitUniforms(node, material_slot, exists_unf_op);
 
     if (uniform_block != nullptr) {
-        buf->fillBuf(*bufref, 0, bufref->size, 0);
+        if (! buf->fillBuf(*bufref, 0, bufref->size, 0)) return;
         {
             auto&      default_values = material->customShader.shader->default_uniforms;
             auto&      const_values   = material->customShader.constValues;
@@ -610,13 +636,13 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
             for (auto& values : values_array) {
                 for (auto& v : *values) {
                     if (exists(uniform_block->member_map, v.first)) {
-                        UpdateUniform(buf, *bufref, *uniform_block, v.first, v.second);
+                        if (! UpdateUniform(buf, *bufref, *uniform_block, v.first, v.second)) return;
                     }
                 }
             }
         }
     }
-    m_desc.update_op();
+    if (! m_desc.update_op()) return;
 
     {
         m_desc.clear_value =
@@ -645,28 +671,29 @@ CustomPassRenderInfo CustomShaderPass::renderInfo() const {
     };
 }
 
-CustomPassBatchCandidate CustomShaderPass::preRecord(const Device&, RenderingResources& rr) {
-    const bool visible =
+bool CustomShaderPass::updateFrame(const Device&, RenderingResources&) {
+    m_frame_visible =
         m_desc.visibility_node == nullptr || m_desc.visibility_node->EffectiveVisible();
-    CustomPassBatchCandidate candidate {
-        .batchable  = true,
-        .visible    = visible,
-        .clear_only = ! visible && m_desc.clear_on_first_use,
-        .render     = renderInfo(),
-    };
-
-    if (! visible) {
-        return candidate;
+    m_frame_clear_only = ! m_frame_visible && m_desc.clear_on_first_use;
+    if (! m_frame_visible) return true;
+    if (m_desc.update_op && ! m_desc.update_op()) {
+        m_frame_visible = false;
+        return false;
     }
-
-    if (m_desc.update_op) m_desc.update_op();
     if (! textureDescriptorsReady()) {
-        candidate.visible   = false;
-        candidate.clear_only = false;
-        return candidate;
+        m_frame_visible = false;
+        m_frame_clear_only = false;
     }
-    recordTextureBarriers(rr);
-    return candidate;
+    return true;
+}
+
+CustomPassBatchCandidate CustomShaderPass::batchCandidate() const {
+    return CustomPassBatchCandidate {
+        .batchable = true,
+        .visible = m_frame_visible,
+        .clear_only = m_frame_clear_only,
+        .render = renderInfo(),
+    };
 }
 
 bool CustomShaderPass::textureDescriptorsReady() const {
@@ -697,7 +724,7 @@ bool CustomShaderPass::textureDescriptorsReady() const {
     return true;
 }
 
-void CustomShaderPass::recordTextureBarriers(RenderingResources& rr) const {
+void CustomShaderPass::recordTextureBarriers(const Device& device, RenderingResources& rr) const {
     auto&                   cmd = rr.command;
     VkImageSubresourceRange base_srang {
         .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -712,110 +739,106 @@ void CustomShaderPass::recordTextureBarriers(RenderingResources& rr) const {
         const auto& binding = m_desc.vk_texture_bindings[i];
         if (binding.image_binding < 0) continue;
         if (slot.slots.empty()) continue;
+        device.tex_cache().PinVideoFrame(slot);
         auto& img = slot.getActive();
 
         VkImageMemoryBarrier imb {
             .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext            = nullptr,
-            .srcAccessMask    = VK_ACCESS_MEMORY_READ_BIT,
+            .srcAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT |
+                                VK_ACCESS_SHADER_READ_BIT,
             .dstAccessMask    = VK_ACCESS_SHADER_READ_BIT,
             .oldLayout        = img.layout,
             .newLayout        = img.layout,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image            = img.handle,
             .subresourceRange = base_srang,
         };
 
-        cmd.PipelineBarrier(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        cmd.PipelineBarrier(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                             VK_DEPENDENCY_BY_REGION_BIT,
                             imb);
     }
 }
 
 void CustomShaderPass::recordDescriptors(RenderingResources& rr) const {
-    auto& cmd = rr.command;
-    for (usize i = 0; i < m_desc.vk_textures.size(); i++) {
-        auto& slot = m_desc.vk_textures[i];
+    std::array<VkDescriptorImageInfo, 2 * WE_GLTEX_NAMES.size()> images;
+    std::array<VkWriteDescriptorSet, 2 * WE_GLTEX_NAMES.size() + 1> writes;
+    VkDescriptorBufferInfo buffer;
+    size_t image_count = 0;
+    size_t write_count = 0;
+    for (usize i = 0; i < m_desc.vk_textures.size(); ++i) {
+        const auto& slot = m_desc.vk_textures[i];
         if (i >= m_desc.vk_texture_bindings.size()) continue;
         const auto& binding = m_desc.vk_texture_bindings[i];
-        if (binding.image_binding < 0) continue;
-        if (slot.slots.empty()) continue;
-        auto& img = slot.getActive();
-
-        if (binding.image_descriptor_type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) {
-            VkDescriptorImageInfo desc_img { img.sampler, img.view, img.layout };
-            VkWriteDescriptorSet  wset {
-                 .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                 .pNext           = nullptr,
-                 .dstSet          = {},
-                 .dstBinding      = (uint32_t)binding.image_binding,
-                 .descriptorCount = 1,
-                 .descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                 .pImageInfo      = &desc_img,
-            };
-            cmd.PushDescriptorSetKHR(
-                VK_PIPELINE_BIND_POINT_GRAPHICS, *m_desc.pipeline.layout, 0, wset);
-            continue;
-        }
-
-        if (binding.image_descriptor_type != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
+        if (binding.image_binding < 0 || slot.slots.empty()) continue;
+        const auto& image = slot.getActive();
+        const bool combined =
+            binding.image_descriptor_type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        if (! combined && binding.image_descriptor_type != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
             LOG_ERROR("unsupported texture descriptor type %d for binding %d",
-                      (int)binding.image_descriptor_type,
-                      binding.image_binding);
+                      (int)binding.image_descriptor_type, binding.image_binding);
             continue;
         }
-
-        VkDescriptorImageInfo desc_img { VK_NULL_HANDLE, img.view, img.layout };
-        VkWriteDescriptorSet  wset {
-             .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             .pNext           = nullptr,
-             .dstSet          = {},
-             .dstBinding      = (uint32_t)binding.image_binding,
-             .descriptorCount = 1,
-             .descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-             .pImageInfo      = &desc_img,
+        images[image_count] = {
+            combined ? image.sampler : VK_NULL_HANDLE, image.view, image.layout
         };
-        cmd.PushDescriptorSetKHR(VK_PIPELINE_BIND_POINT_GRAPHICS, *m_desc.pipeline.layout, 0, wset);
-
-        if (binding.sampler_binding >= 0 && img.sampler != VK_NULL_HANDLE) {
-            VkDescriptorImageInfo desc_sampler { img.sampler, {}, VK_IMAGE_LAYOUT_UNDEFINED };
-            VkWriteDescriptorSet  wset {
-                 .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                 .pNext           = nullptr,
-                 .dstSet          = {},
-                 .dstBinding      = (uint32_t)binding.sampler_binding,
-                 .descriptorCount = 1,
-                 .descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER,
-                 .pImageInfo      = &desc_sampler,
+        writes[write_count++] = {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = {},
+            .dstBinding = (uint32_t)binding.image_binding,
+            .descriptorCount = 1,
+            .descriptorType = binding.image_descriptor_type,
+            .pImageInfo = &images[image_count++],
+        };
+        if (! combined && binding.sampler_binding >= 0 && image.sampler != VK_NULL_HANDLE) {
+            images[image_count] = { image.sampler, {}, VK_IMAGE_LAYOUT_UNDEFINED };
+            writes[write_count++] = {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = {},
+                .dstBinding = (uint32_t)binding.sampler_binding,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
+                .pImageInfo = &images[image_count++],
             };
-            cmd.PushDescriptorSetKHR(
-                VK_PIPELINE_BIND_POINT_GRAPHICS, *m_desc.pipeline.layout, 0, wset);
         }
     }
-
     if (m_desc.ubo_buf && m_desc.uniform_block.has_value()) {
-        VkDescriptorBufferInfo desc_buf {
-            rr.dyn_buf->gpuBuf(),
-            m_desc.ubo_buf.offset,
-            m_desc.ubo_buf.size,
-        };
-        VkWriteDescriptorSet wset {
-            .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .pNext           = nullptr,
-            .dstSet          = {},
-            .dstBinding      = m_desc.uniform_block->binding,
+        buffer = { rr.dyn_buf->gpuBuf(), m_desc.ubo_buf.offset, m_desc.ubo_buf.size };
+        writes[write_count++] = {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = {},
+            .dstBinding = m_desc.uniform_block->binding,
             .descriptorCount = 1,
-            .descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .pBufferInfo     = &desc_buf,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .pBufferInfo = &buffer,
         };
-        cmd.PushDescriptorSetKHR(VK_PIPELINE_BIND_POINT_GRAPHICS, *m_desc.pipeline.layout, 0, wset);
+    }
+    if (write_count != 0) {
+        rr.command.PushDescriptorSetKHR(
+            VK_PIPELINE_BIND_POINT_GRAPHICS, *m_desc.pipeline.layout, 0,
+            std::span<const VkWriteDescriptorSet>(writes.data(), write_count));
     }
 }
 
-void CustomShaderPass::recordDraw(const Device&, RenderingResources& rr) {
+void CustomShaderPass::recordDraw(const Device& device, RenderingResources& rr) {
     auto& cmd    = rr.command;
     auto& outext = m_desc.vk_output.extent;
     cmd.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, *m_desc.pipeline.handle);
+    for (usize i = 0; i < m_desc.vk_textures.size(); ++i) {
+        if (i < m_desc.vk_texture_bindings.size() &&
+            m_desc.vk_texture_bindings[i].image_binding >= 0 &&
+            ! m_desc.vk_textures[i].slots.empty()) {
+            device.tex_cache().PinVideoFrame(m_desc.vk_textures[i]);
+        }
+    }
     recordDescriptors(rr);
     VkViewport viewport {
         .x        = 0,
@@ -914,13 +937,14 @@ void CustomShaderPass::recordClear(const Device&, RenderingResources& rr) {
 }
 
 void CustomShaderPass::execute(const Device& device, RenderingResources& rr) {
-    const auto candidate = preRecord(device, rr);
+    const auto candidate = batchCandidate();
     if (! candidate.visible) {
         if (candidate.clear_only) {
             recordClear(device, rr);
         }
         return;
     }
+    recordTextureBarriers(device, rr);
 
     const auto            info = renderInfo();
     std::array<VkClearValue, 2> clear_values { info.clear_value, VkClearValue {} };
@@ -944,6 +968,8 @@ void CustomShaderPass::execute(const Device& device, RenderingResources& rr) {
 
 void CustomShaderPass::destory(const Device&, RenderingResources& rr) {
     setPrepared(false);
+    m_frame_visible = false;
+    m_frame_clear_only = false;
     clearReleaseTexs();
     m_desc.update_op = {};
     {
@@ -977,4 +1003,67 @@ void CustomShaderPass::setDescTex(u32 index, std::string_view tex_key) {
     assert(index < m_desc.textures.size());
     if (index >= m_desc.textures.size()) return;
     m_desc.textures[index] = tex_key;
+}
+
+bool wallpaper::vulkan::UpdatePreparedPasses(const Device& device, RenderingResources& rr,
+                                             std::span<VulkanPass* const> passes) {
+    for (auto* pass : passes) {
+        if (pass != nullptr && pass->prepared() && ! pass->updateFrame(device, rr)) return false;
+    }
+    return true;
+}
+
+void wallpaper::vulkan::ExecutePreparedPasses(const Device& device, RenderingResources& rr,
+                                              std::span<VulkanPass* const> passes,
+                                              CustomPassExecutionScratch& scratch) {
+    size_t i = 0;
+    while (i < passes.size()) {
+        auto* pass = passes[i];
+        if (pass == nullptr || ! pass->prepared()) {
+            ++i;
+            continue;
+        }
+        if (dynamic_cast<CustomShaderPass*>(pass) == nullptr) {
+            pass->execute(device, rr);
+            ++i;
+            continue;
+        }
+        scratch.passes.clear();
+        scratch.candidates.clear();
+        for (; i < passes.size(); ++i) {
+            auto* current = passes[i];
+            if (current == nullptr || ! current->prepared()) break;
+            auto* custom = dynamic_cast<CustomShaderPass*>(current);
+            if (custom == nullptr) break;
+            scratch.passes.push_back(custom);
+            scratch.candidates.push_back(custom->batchCandidate());
+        }
+        PlanCustomPassBatches(scratch.candidates, scratch.plan);
+        for (const auto& entry : scratch.plan.entries) {
+            if (entry.kind == CustomPassBatchKind::ClearImage) {
+                scratch.passes[entry.first]->recordClear(device, rr);
+                continue;
+            }
+            for (size_t local = entry.first; local < entry.last; ++local) {
+                if (scratch.candidates[local].visible)
+                    scratch.passes[local]->recordTextureBarriers(device, rr);
+            }
+            std::array<VkClearValue, 2> clear_values { entry.render.clear_value, VkClearValue {} };
+            VkRenderPassBeginInfo begin {
+                .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                .pNext = nullptr,
+                .renderPass = entry.render.render_pass,
+                .framebuffer = entry.render.framebuffer,
+                .renderArea = { { 0, 0 }, { entry.render.extent.width, entry.render.extent.height } },
+                .clearValueCount = CustomPassBeginRenderPassClearValueCount(entry.render),
+                .pClearValues = clear_values.data(),
+            };
+            rr.command.BeginRenderPass(begin, VK_SUBPASS_CONTENTS_INLINE);
+            for (size_t local = entry.first; local < entry.last; ++local) {
+                if (scratch.candidates[local].visible)
+                    scratch.passes[local]->recordDraw(device, rr);
+            }
+            rr.command.EndRenderPass();
+        }
+    }
 }

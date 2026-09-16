@@ -54,57 +54,54 @@ void Ppm(const std::filesystem::path& path, const uint8_t* rgba, int w, int h) {
     file << "P6\n" << w << ' ' << h << "\n255\n";
     for (int i = 0; i < w * h; ++i) file.write(reinterpret_cast<const char*>(rgba + i * 4), 3);
 }
-void Submit(Device& device, vvk::CommandBuffer& command) {
-    Check(command.End() == VK_SUCCESS, "end command");
-    VkSubmitInfo submit { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-        .commandBufferCount = 1, .pCommandBuffers = command.address() };
-    Check(device.graphics_queue().handle.Submit(submit, {}) == VK_SUCCESS, "submit");
-    Check(device.handle().WaitIdle() == VK_SUCCESS, "wait idle");
+void Submit(Device& device, RenderingResources& rr) {
+    const auto end_result = rr.command.End();
+    VkResult submit_result = end_result;
+    if (end_result == VK_SUCCESS) {
+        VkSubmitInfo submit { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .commandBufferCount = 1, .pCommandBuffers = rr.command.address() };
+        submit_result = device.graphics_queue().handle.Submit(submit, {});
+    }
+    if (submit_result != VK_SUCCESS) {
+        if (submit_result == VK_ERROR_DEVICE_LOST) {
+            device.tex_cache().DiscardAfterDeviceLoss();
+            rr.vertex_buf->finishUpload(false);
+            rr.dyn_buf->finishUpload(false);
+        } else if (rr.command.Reset() == VK_SUCCESS) {
+            rr.vertex_buf->finishUpload(false);
+            rr.dyn_buf->finishUpload(false);
+            device.tex_cache().AbandonVideoFrameRecording();
+        }
+        Check(false, "end or submit command failed");
+    }
+    device.tex_cache().MarkVideoFrameSubmitted();
+    const auto idle_result = device.handle().WaitIdle();
+    if (idle_result == VK_ERROR_DEVICE_LOST) {
+        device.tex_cache().DiscardAfterDeviceLoss();
+        rr.vertex_buf->finishUpload(false);
+        rr.dyn_buf->finishUpload(false);
+        Check(false, "device lost during probe");
+    }
+    if (idle_result != VK_SUCCESS) {
+        LOG_ERROR("cannot destroy renderer resources before GPU completion");
+        std::terminate();
+    }
+    rr.vertex_buf->finishUpload(true);
+    rr.dyn_buf->finishUpload(true);
+    device.tex_cache().CompleteVideoFrame();
 }
 void Begin(vvk::CommandBuffer& command) {
     Check(command.Begin(VkCommandBufferBeginInfo {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }) == VK_SUCCESS, "begin command");
 }
-// Exercise production's batching plan, including reused attachments and clears.
-void ExecuteBatched(Device& device, RenderingResources& rr, const std::vector<VulkanPass*>& passes) {
-    for (std::size_t i = 0; i < passes.size();) {
-        auto* custom = dynamic_cast<CustomShaderPass*>(passes[i]);
-        if (!custom) { passes[i++]->execute(device, rr); continue; }
-        std::vector<CustomShaderPass*> run;
-        std::vector<CustomPassBatchCandidate> candidates;
-        while (i < passes.size()) {
-            custom = dynamic_cast<CustomShaderPass*>(passes[i]);
-            if (!custom) break;
-            ++i;
-            run.push_back(custom);
-            candidates.push_back(custom->preRecord(device, rr));
-        }
-        for (const auto& entry : PlanCustomPassBatches(candidates).entries) {
-            if (entry.kind == CustomPassBatchKind::ClearImage) {
-                run[entry.first]->recordClear(device, rr); continue;
-            }
-            std::array<VkClearValue, 2> values {entry.render.clear_value, {}};
-            VkRenderPassBeginInfo begin {
-                .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-                .renderPass = entry.render.render_pass,
-                .framebuffer = entry.render.framebuffer,
-                .renderArea = {{0,0}, {entry.render.extent.width, entry.render.extent.height}},
-                .clearValueCount = CustomPassBeginRenderPassClearValueCount(entry.render),
-                .pClearValues = values.data(),
-            };
-            rr.command.BeginRenderPass(begin, VK_SUBPASS_CONTENTS_INLINE);
-            for (auto j = entry.first; j < entry.last; ++j)
-                if (candidates[j].visible) run[j]->recordDraw(device, rr);
-            rr.command.EndRenderPass();
-        }
-    }
-}
 
-void ReadImage(Device& device, vvk::CommandBuffer& command, const ImageParameters& image,
+void ReadImage(Device& device, RenderingResources& rr, const ImageParameters& image,
                const std::filesystem::path& path) {
+    auto& command = rr.command;
     VmaBufferParameters buffer;
     Check(CreateReadbackBuffer(device.vma_allocator(), image.extent.width * image.extent.height * 4, buffer), "readback allocation");
+    Check(device.tex_cache().BeginVideoFrameRecording(), "begin readback pin scope");
     Begin(command);
     VkImageMemoryBarrier barrier {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -125,7 +122,7 @@ void ReadImage(Device& device, vvk::CommandBuffer& command, const ImageParameter
     barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     command.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, barrier);
-    Submit(device, command);
+    Submit(device, rr);
     void* bytes = nullptr;
     Check(buffer.handle.MapMemory(&bytes) == VK_SUCCESS, "map readback");
     Check(vmaInvalidateAllocation(device.vma_allocator(), buffer.handle.Allocation(), 0, VK_WHOLE_SIZE) == VK_SUCCESS, "invalidate readback");
@@ -292,6 +289,7 @@ int main() {
         milestone("prepared");
         auto result = device.tex_cache().Query(std::string(SpecTex_Default), ToTexKey(*scene->FindRenderTarget(SpecTex_Default)), true);
         Check(result.has_value(), "result target");
+        CustomPassExecutionScratch scratch;
         for (int frame = 0; frame < frame_count; ++frame) {
             scene->shaderValueUpdater->FrameBegin();
             if (audio_hz_env) {
@@ -314,35 +312,45 @@ int main() {
                 scene->paritileSys->Emitt();
             }
             scene->runtime->Tick(frame_step > 0.0 ? frame_step : 1.0 / 60.0);
-            // Same update/upload ordering as the production renderer initially.
+            Check(device.tex_cache().BeginVideoFrameRecording(), "begin frame pins");
+            Check(UpdatePreparedPasses(device, rr, passes), "update current frame");
             Begin(rr.command);
-            vertices.recordUpload(rr.command);
-            dynamic.recordUpload(rr.command);
-            if (!std::getenv("WE_TEST_DUMP_PASSES")) ExecuteBatched(device, rr, passes);
+            Check(vertices.recordUpload(rr.command), "upload vertices");
+            Check(dynamic.recordUpload(rr.command), "upload dynamic data");
+            if (!std::getenv("WE_TEST_DUMP_PASSES"))
+                ExecutePreparedPasses(device, rr, passes, scratch);
             else {
                 int pass_index = 0;
                 for (auto* pass : passes) {
                     pass->execute(device, rr);
                     if (auto* custom = dynamic_cast<CustomShaderPass*>(pass)) {
-                        Submit(device, rr.command);
+                        Submit(device, rr);
                         // Sequence-indexed so every pass survives; node ids repeat.
-                        ReadImage(device, rr.command, custom->desc().vk_output,
+                        ReadImage(device, rr, custom->desc().vk_output,
                                   out / ("pass-" + std::to_string(pass_index) + "-node" +
                                          std::to_string(custom->desc().node->ID()) + ".ppm"));
+                        Check(device.tex_cache().BeginVideoFrameRecording(), "begin next pass pins");
                         Begin(rr.command);
                     }
                     ++pass_index;
                 }
             }
-            Submit(device, rr.command);
-            ReadImage(device, rr.command, *result, out / ("frame-" + std::to_string(frame) + ".ppm"));
+            Submit(device, rr);
+            ReadImage(device, rr, *result, out / ("frame-" + std::to_string(frame) + ".ppm"));
             if (frame == 0) milestone("first-frame");
             if (frame_step > 0.0 || audio_hz_env)
                 scene->PassFrameTime(frame_step > 0.0 ? frame_step : 1.0 / 60.0);
             scene->shaderValueUpdater->FrameEnd();
         }
+        Check(device.handle().WaitIdle() == VK_SUCCESS, "final probe idle");
+        Check(rr.command.Reset() == VK_SUCCESS, "discard final probe command");
+        Check(device.tex_cache().WaitForPendingUploads(), "retire texture uploads");
         for (auto* pass : passes) pass->destory(device, rr);
-        device.handle().WaitIdle();
+        passes.clear();
+        scratch.passes.clear();
+        scratch.candidates.clear();
+        scratch.plan.entries.clear();
+        Check(device.tex_cache().Clear(), "clear probe cache");
         std::cout << "Offscreen scene output: " << out << '\n';
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n'; return 1;

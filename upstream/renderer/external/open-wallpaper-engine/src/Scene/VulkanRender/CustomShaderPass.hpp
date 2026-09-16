@@ -74,7 +74,7 @@ public:
 
         // uniforms
         std::optional<ShaderReflected::Block> uniform_block;
-        std::function<void()>                 update_op;
+        std::function<bool()>                 update_op;
         uint64_t uploaded_mesh_dirty_generation { std::numeric_limits<uint64_t>::max() };
     };
 
@@ -86,21 +86,24 @@ public:
     const Desc& desc() const { return m_desc; }
 
     void prepare(Scene&, const Device&, RenderingResources&) override;
+    bool updateFrame(const Device&, RenderingResources&) override;
     void execute(const Device&, RenderingResources&) override;
     void destory(const Device&, RenderingResources&) override;
 
-    CustomPassBatchCandidate preRecord(const Device&, RenderingResources&);
+    CustomPassBatchCandidate batchCandidate() const;
     CustomPassRenderInfo     renderInfo() const;
     void                     recordDraw(const Device&, RenderingResources&);
     void                     recordClear(const Device&, RenderingResources&);
+    void recordTextureBarriers(const Device&, RenderingResources&) const;
 
     bool textureDescriptorsReady() const;
 
 private:
-    void recordTextureBarriers(RenderingResources&) const;
     void recordDescriptors(RenderingResources&) const;
 
     Desc m_desc;
+    bool m_frame_visible { false };
+    bool m_frame_clear_only { false };
 };
 
 namespace detail
@@ -166,6 +169,7 @@ inline bool PlanCustomShaderDescriptors(
     std::vector<VkDescriptorSetLayoutBinding>&                             layout_bindings) {
     texture_bindings.clear();
     layout_bindings.clear();
+    if (texture_count > WE_GLTEX_NAMES.size()) return false;
 
     const auto* uniform_binding = ReflectedUniformBlockBinding(reflection);
     if (! reflection.blocks.empty() && uniform_binding == nullptr) return false;

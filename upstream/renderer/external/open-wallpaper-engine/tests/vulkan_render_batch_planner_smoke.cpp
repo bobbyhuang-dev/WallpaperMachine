@@ -35,7 +35,8 @@ void adjacentVisibleCustomPassesShareOneBatch() {
         makeCandidate(0x100, 0x200, 64),
     };
 
-    const CustomPassBatchPlan plan = PlanCustomPassBatches(candidates);
+    CustomPassBatchPlan plan;
+    PlanCustomPassBatches(candidates, plan);
 
     assert(plan.entries.size() == 1);
     assert(plan.entries[0].kind == CustomPassBatchKind::RenderPass);
@@ -51,7 +52,8 @@ void nonCustomBoundarySplitsBatches() {
         makeCandidate(0x100, 0x200, 64),
     };
 
-    const CustomPassBatchPlan plan = PlanCustomPassBatches(candidates);
+    CustomPassBatchPlan plan;
+    PlanCustomPassBatches(candidates, plan);
 
     assert(plan.entries.size() == 2);
     assert(plan.entries[0].first == 0);
@@ -66,7 +68,8 @@ void differentOutputsDoNotBatch() {
         makeCandidate(0x101, 0x201, 64),
     };
 
-    const CustomPassBatchPlan plan = PlanCustomPassBatches(candidates);
+    CustomPassBatchPlan plan;
+    PlanCustomPassBatches(candidates, plan);
 
     assert(plan.entries.size() == 2);
     assert(plan.entries[0].visible_draws == 1);
@@ -83,7 +86,8 @@ void differentSampleCountsDoNotBatch() {
         four_sample,
     };
 
-    const CustomPassBatchPlan plan = PlanCustomPassBatches(candidates);
+    CustomPassBatchPlan plan;
+    PlanCustomPassBatches(candidates, plan);
 
     assert(plan.entries.size() == 2);
     assert(plan.entries[0].visible_draws == 1);
@@ -105,7 +109,8 @@ void differentMsaaSidecarsDoNotBatch() {
         second,
     };
 
-    const CustomPassBatchPlan plan = PlanCustomPassBatches(candidates);
+    CustomPassBatchPlan plan;
+    PlanCustomPassBatches(candidates, plan);
 
     assert(plan.entries.size() == 2);
     assert(plan.entries[0].visible_draws == 1);
@@ -173,7 +178,8 @@ void invisibleClearOnlyPassFoldsIntoNextVisiblePass() {
         makeCandidate(0x100, 0x200, 64),
     };
 
-    const CustomPassBatchPlan plan = PlanCustomPassBatches(candidates);
+    CustomPassBatchPlan plan;
+    PlanCustomPassBatches(candidates, plan);
 
     assert(plan.entries.size() == 1);
     assert(plan.entries[0].kind == CustomPassBatchKind::RenderPass);
@@ -193,7 +199,8 @@ void invisibleClearOnlyMsaaPassPlansSidecarClearImage() {
 
     std::vector<CustomPassBatchCandidate> candidates { clear };
 
-    const CustomPassBatchPlan plan = PlanCustomPassBatches(candidates);
+    CustomPassBatchPlan plan;
+    PlanCustomPassBatches(candidates, plan);
 
     assert(plan.entries.size() == 1);
     assert(plan.entries[0].kind == CustomPassBatchKind::ClearImage);
@@ -224,7 +231,8 @@ void invisibleClearOnlyMsaaPassFoldsIntoNextVisiblePassWithSameSidecar() {
         visible,
     };
 
-    const CustomPassBatchPlan plan = PlanCustomPassBatches(candidates);
+    CustomPassBatchPlan plan;
+    PlanCustomPassBatches(candidates, plan);
 
     assert(plan.entries.size() == 1);
     assert(plan.entries[0].kind == CustomPassBatchKind::RenderPass);
@@ -236,6 +244,55 @@ void invisibleClearOnlyMsaaPassFoldsIntoNextVisiblePassWithSameSidecar() {
     assert(plan.entries[0].render.msaa_image == clear.render.msaa_image);
     assert(plan.entries[0].render.msaa_view == clear.render.msaa_view);
     assert(plan.entries[0].render.sample_count == VK_SAMPLE_COUNT_4_BIT);
+}
+
+void reusedPlanReplacesPreviousFrameEntries() {
+    CustomPassBatchPlan plan;
+    std::vector<CustomPassBatchCandidate> candidates {
+        makeCandidate(0x100, 0x200, 64),
+        makeCandidate(0x100, 0x200, 64),
+    };
+    PlanCustomPassBatches(candidates, plan);
+    assert(plan.entries.size() == 1);
+    assert(plan.entries[0].kind == CustomPassBatchKind::RenderPass);
+    assert(plan.entries[0].first == 0);
+    assert(plan.entries[0].last == 2);
+    assert(plan.entries[0].visible_draws == 2);
+    assert(! plan.entries[0].clear_on_begin);
+
+    candidates.clear();
+    PlanCustomPassBatches(candidates, plan);
+    assert(plan.entries.empty());
+
+    auto clear = makeCandidate(0x101, 0x201, 64, false);
+    clear.clear_only = true;
+    clear.render.load_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    candidates.push_back(clear);
+    PlanCustomPassBatches(candidates, plan);
+    assert(plan.entries.size() == 1);
+    assert(plan.entries[0].kind == CustomPassBatchKind::ClearImage);
+    assert(plan.entries[0].first == 0);
+    assert(plan.entries[0].last == 1);
+    assert(plan.entries[0].visible_draws == 0);
+    assert(plan.entries[0].clear_on_begin);
+    assert(plan.entries[0].render.image == clear.render.image);
+
+    candidates = {
+        makeCandidate(0x102, 0x202, 64),
+        makeCandidate(0x103, 0x203, 128),
+    };
+    PlanCustomPassBatches(candidates, plan);
+    assert(plan.entries.size() == 2);
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        assert(plan.entries[i].kind == CustomPassBatchKind::RenderPass);
+        assert(plan.entries[i].first == i);
+        assert(plan.entries[i].last == i + 1);
+        assert(plan.entries[i].visible_draws == 1);
+        assert(! plan.entries[i].clear_on_begin);
+        assert(plan.entries[i].render.image == candidates[i].render.image);
+        assert(plan.entries[i].render.view == candidates[i].render.view);
+        assert(plan.entries[i].render.extent.width == candidates[i].render.extent.width);
+    }
 }
 } // namespace
 
@@ -252,5 +309,6 @@ int main() {
     invisibleClearOnlyPassFoldsIntoNextVisiblePass();
     invisibleClearOnlyMsaaPassPlansSidecarClearImage();
     invisibleClearOnlyMsaaPassFoldsIntoNextVisiblePassWithSameSidecar();
+    reusedPlanReplacesPreviousFrameEntries();
     return 0;
 }

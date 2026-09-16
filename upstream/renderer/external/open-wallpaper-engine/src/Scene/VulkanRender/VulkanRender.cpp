@@ -29,6 +29,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <unistd.h>
 #include <vector>
 
@@ -88,16 +89,19 @@ struct VulkanRender::Impl {
     bool init(RenderInitInfo);
     bool initDevice(const RenderInitInfo& info);
     bool initPresentation(const RenderInitInfo& info);
-    void releasePresentation(); // Task 2
+    bool releasePresentation();
     void destroy();
 
-    void drawFrame(Scene&);
+    bool drawFrame(Scene&);
+    VkResult quiesceFrame(bool wait_for_presentation = false);
+    VkResult resetRecordings();
+    bool failFrame(VkResult result);
 
     bool CreateRenderingResource(RenderingResources&);
     void DestroyRenderingResource(RenderingResources&);
 
-    void clearLastRenderGraph();
-    void compileRenderGraph(Scene&, rg::RenderGraph&);
+    bool clearLastRenderGraph();
+    bool compileRenderGraph(Scene&, rg::RenderGraph&);
     void UpdateCameraFillMode(Scene&, wallpaper::FillMode);
     void SetWallpaperScalingMode(wallpaper::WallpaperScalingMode);
     void SetWallpaperScalingFactor(double);
@@ -105,8 +109,8 @@ struct VulkanRender::Impl {
 
     bool initRes();
     void executePreparedPasses(RenderingResources&);
-    void drawFrameSwapchain();
-    void drawFrameOffscreen();
+    bool drawFrameSwapchain();
+    bool drawFrameOffscreen();
     void setRenderTargetSize(Scene&, rg::RenderGraph&);
     void updateScalingLayout(const Scene&, uint32_t output_width, uint32_t output_height);
 
@@ -131,6 +135,14 @@ struct VulkanRender::Impl {
     bool m_with_surface { false };
     bool m_inited { false };
     bool m_pass_loaded { false };
+    bool m_frame_faulted { false };
+    bool m_device_lost { false };
+    bool m_draw_submitted { false };
+    bool m_static_upload_submitted { false };
+    bool m_draw_recording { false };
+    bool m_static_upload_recording { false };
+    bool m_destroying { false };
+    VmaBufferParameters m_frame_poster;
 
     std::unique_ptr<VulkanExSwapchain>    m_ex_swapchain;
     RenderingResources                    m_rendering_resources;
@@ -148,10 +160,11 @@ struct VulkanRender::Impl {
     std::atomic<int> m_last_sync_fd { -1 };
 
     std::vector<VulkanPass*> m_passes;
+    CustomPassExecutionScratch m_pass_scratch;
 };
 
 VulkanRender::VulkanRender(): pImpl(std::make_unique<Impl>()) {}
-VulkanRender::~VulkanRender() {};
+VulkanRender::~VulkanRender() { destroy(); }
 
 bool VulkanRender::inited() const { return pImpl->m_inited; }
 
@@ -161,16 +174,16 @@ int VulkanRender::takeLastFrameSyncFd() {
 
 bool VulkanRender::init(RenderInitInfo info) { return pImpl->init(info); }
 void VulkanRender::destroy() { pImpl->destroy(); }
-void VulkanRender::releaseSurface() { pImpl->releasePresentation(); }
+bool VulkanRender::releaseSurface() { return pImpl->releasePresentation(); }
 bool VulkanRender::resetSurface(const RenderInitInfo& info) {
-    pImpl->releasePresentation();
+    if (! pImpl->releasePresentation()) return false;
     return pImpl->initPresentation(info);
 }
-void VulkanRender::drawFrame(Scene& scene) { pImpl->drawFrame(scene); };
-void VulkanRender::clearLastRenderGraph() { pImpl->clearLastRenderGraph(); };
-void VulkanRender::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
-    pImpl->compileRenderGraph(scene, rg);
-};
+bool VulkanRender::drawFrame(Scene& scene) { return pImpl->drawFrame(scene); }
+bool VulkanRender::clearLastRenderGraph() { return pImpl->clearLastRenderGraph(); }
+bool VulkanRender::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
+    return pImpl->compileRenderGraph(scene, rg);
+}
 void VulkanRender::UpdateCameraFillMode(Scene& scene, wallpaper::FillMode fill) {
     pImpl->UpdateCameraFillMode(scene, fill);
 };
@@ -197,7 +210,8 @@ void VulkanRender::SetVideoPlaybackRate(float rate) {
 wallpaper::ExSwapchain* VulkanRender::exSwapchain() const { return pImpl->m_ex_swapchain.get(); };
 
 bool VulkanRender::Impl::init(RenderInitInfo info) {
-    if (m_inited) return true;
+    if (m_inited) return ! m_frame_faulted && ! m_device_lost;
+    if (m_device || m_instance.inst()) destroy();
     if (! initDevice(info)) return false;
     if (! initPresentation(info)) return false;
     m_inited = true;
@@ -232,6 +246,7 @@ bool VulkanRender::Impl::initDevice(const RenderInitInfo& info) {
 }
 
 bool VulkanRender::Impl::initPresentation(const RenderInitInfo& info) {
+    if (m_device_lost) return false;
     m_wants_poster = info.wants_poster;
     m_poster_ready = info.poster_ready;
     // Presentation-scoped bookkeeping: these fields are re-read on every
@@ -317,36 +332,151 @@ bool VulkanRender::Impl::initPresentation(const RenderInitInfo& info) {
     }
 
     if (! initRes()) return false;
+    m_frame_faulted = false;
     return true;
 }
 
-void VulkanRender::Impl::releasePresentation() {
-    if (!m_inited) return;
+VkResult VulkanRender::Impl::resetRecordings() {
+    if (m_draw_recording && ! m_draw_submitted) {
+        const auto result = m_render_cmd ? m_render_cmd.Reset() : VK_SUCCESS;
+        if (result != VK_SUCCESS) return result;
+        m_device->tex_cache().AbandonVideoFrameRecording();
+        if (m_dyn_buf) m_dyn_buf->finishUpload(false);
+        m_draw_recording = false;
+        m_frame_poster = {};
+    }
+    if (m_static_upload_recording && ! m_static_upload_submitted) {
+        const auto result = m_upload_cmd ? m_upload_cmd.Reset() : VK_SUCCESS;
+        if (result != VK_SUCCESS) return result;
+        if (m_vertex_buf) m_vertex_buf->finishUpload(false);
+        m_static_upload_recording = false;
+    }
+    return VK_SUCCESS;
+}
 
+VkResult VulkanRender::Impl::quiesceFrame(bool wait_for_presentation) {
+    if (! m_device || ! m_device->handle()) return VK_SUCCESS;
+    const auto discard_commands = [&]() {
+        m_rendering_resources.command = {};
+        m_render_cmd = {};
+        m_upload_cmd = {};
+        m_cmds = {};
+    };
+    const auto discard_lost_device = [&]() {
+        m_frame_faulted = true;
+        m_device_lost = true;
+        if (m_destroying) discard_commands();
+        m_device->tex_cache().DiscardAfterDeviceLoss();
+        if (m_vertex_buf) m_vertex_buf->finishUpload(false);
+        if (m_dyn_buf) m_dyn_buf->finishUpload(false);
+        m_draw_submitted = false;
+        m_static_upload_submitted = false;
+        m_draw_recording = false;
+        m_static_upload_recording = false;
+        m_frame_poster = {};
+        return VK_ERROR_DEVICE_LOST;
+    };
+    if (m_device_lost) return discard_lost_device();
+    if (wait_for_presentation || m_draw_submitted || m_static_upload_submitted || m_frame_faulted) {
+        const auto result = m_device->handle().WaitIdle();
+        if (result == VK_ERROR_DEVICE_LOST) return discard_lost_device();
+        if (result != VK_SUCCESS) {
+            LOG_ERROR("renderer quiescence failed: %s", vvk::ToString(result));
+            m_frame_faulted = true;
+            m_device->tex_cache().InvalidateVideoDestinationPool();
+            return result;
+        }
+    }
+    if (m_destroying) {
+        discard_commands();
+    } else {
+        const auto result = resetRecordings();
+        if (result == VK_ERROR_DEVICE_LOST) return discard_lost_device();
+        if (result != VK_SUCCESS) {
+            LOG_ERROR("discard renderer recording failed: %s", vvk::ToString(result));
+            m_frame_faulted = true;
+            m_device->tex_cache().InvalidateVideoDestinationPool();
+            return result;
+        }
+    }
+    if (m_draw_submitted) {
+        m_device->tex_cache().CompleteVideoFrame();
+        if (m_dyn_buf) m_dyn_buf->finishUpload(true);
+    } else if (m_draw_recording) {
+        m_device->tex_cache().AbandonVideoFrameRecording();
+        if (m_dyn_buf) m_dyn_buf->finishUpload(false);
+    }
+    if (m_static_upload_submitted) {
+        if (m_vertex_buf) m_vertex_buf->finishUpload(true);
+    } else if (m_static_upload_recording) {
+        if (m_vertex_buf) m_vertex_buf->finishUpload(false);
+    }
+    m_draw_submitted = false;
+    m_static_upload_submitted = false;
+    m_draw_recording = false;
+    m_static_upload_recording = false;
+    m_frame_poster = {};
+    return VK_SUCCESS;
+}
+
+bool VulkanRender::Impl::failFrame(VkResult result) {
+    LOG_ERROR("renderer frame stopped: %s", vvk::ToString(result));
+    m_frame_faulted = true;
+    m_device->tex_cache().InvalidateVideoDestinationPool();
+    if (result == VK_ERROR_DEVICE_LOST) m_device_lost = true;
+    if (m_device_lost || m_draw_submitted || m_static_upload_submitted) {
+        const auto idle_result = quiesceFrame();
+        if (idle_result != VK_SUCCESS && idle_result != VK_ERROR_DEVICE_LOST)
+            LOG_ERROR("renderer retains unfinished frame resources");
+    } else {
+        const auto reset_result = resetRecordings();
+        if (reset_result == VK_ERROR_DEVICE_LOST) {
+            m_device_lost = true;
+            const auto lost_result = quiesceFrame();
+            if (lost_result != VK_ERROR_DEVICE_LOST)
+                LOG_ERROR("renderer device-loss cleanup failed");
+        } else if (reset_result != VK_SUCCESS) {
+            LOG_ERROR("renderer retains failed command recording: %s", vvk::ToString(reset_result));
+        }
+    }
+    return false;
+}
+
+bool VulkanRender::Impl::releasePresentation() {
+    if (quiesceFrame(true) != VK_SUCCESS) return false;
     if (m_device && m_device->handle()) {
-        VVK_CHECK(m_device->handle().WaitIdle());
+        std::string error;
+        if (! m_device->tex_cache().WaitForPendingUploads(&error)) {
+            LOG_ERROR("cannot release presentation uploads: %s", error.c_str());
+            return failFrame(VK_ERROR_UNKNOWN);
+        }
+        for (auto* command : { &m_render_cmd, &m_upload_cmd }) {
+            if (*command) {
+                const auto result = command->Reset();
+                if (result != VK_SUCCESS) return failFrame(result);
+            }
+        }
+        for (auto* pass : m_passes) {
+            if (pass != nullptr) pass->destory(*m_device, m_rendering_resources);
+        }
+        m_passes.clear();
+        m_pass_scratch.passes.clear();
+        m_pass_scratch.candidates.clear();
+        m_pass_scratch.plan.entries.clear();
+        if (! m_device->tex_cache().Clear(&error)) {
+            LOG_ERROR("cannot clear presentation cache: %s", error.c_str());
+            return failFrame(VK_ERROR_UNKNOWN);
+        }
     }
-
-    // Destroy compiled render graph passes (they reference swapchain images).
-    for (auto& p : m_passes) {
-        p->destory(*m_device, m_rendering_resources);
-    }
-    m_passes.clear();
     m_pass_loaded = false;
-
-    // Destroy FinPass + PrePass.
+    DestroyRenderingResource(m_rendering_resources);
     m_finpass.reset();
     m_prepass.reset();
-
-    // Destroy the ex_swapchain (offscreen) or swapchain (surface mode).
     m_ex_swapchain.reset();
-    if (m_device) {
-        m_device->releaseSwapchain();
-    }
-
-    // Destroy the VkSurfaceKHR.
+    if (m_device) m_device->releaseSwapchain();
     m_instance.releaseSurface();
     m_with_surface = false;
+    return true;
 }
 
 bool VulkanRender::Impl::initRes() {
@@ -376,14 +506,15 @@ bool VulkanRender::Impl::initRes() {
                                                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         if (! m_vertex_buf->allocate()) return false;
         if (! m_dyn_buf->allocate()) return false;
-        {
-            auto& pool = m_device->cmd_pool();
-            VVK_CHECK_BOOL_RE(pool.Allocate(vk_command_num, VK_COMMAND_BUFFER_LEVEL_PRIMARY, m_cmds));
-            m_upload_cmd = vvk::CommandBuffer(m_cmds[0], m_device->handle().Dispatch());
-            m_render_cmd = vvk::CommandBuffer(m_cmds[1], m_device->handle().Dispatch());
-        }
-        if (! CreateRenderingResource(m_rendering_resources)) return false;
     }
+    if (m_cmds.data() == nullptr) {
+        const auto result = m_device->cmd_pool().Allocate(
+            vk_command_num, VK_COMMAND_BUFFER_LEVEL_PRIMARY, m_cmds);
+        if (result != VK_SUCCESS) return failFrame(result);
+        m_upload_cmd = vvk::CommandBuffer(m_cmds[0], m_device->handle().Dispatch());
+        m_render_cmd = vvk::CommandBuffer(m_cmds[1], m_device->handle().Dispatch());
+    }
+    if (! CreateRenderingResource(m_rendering_resources)) return false;
 
 #if ENABLE_RENDERDOC_API
     load_renderdoc_api();
@@ -392,71 +523,93 @@ bool VulkanRender::Impl::initRes() {
 }
 
 void VulkanRender::Impl::destroy() {
-    if (! m_inited) return;
-    if (m_device && m_device->handle()) {
-        VVK_CHECK(m_device->handle().WaitIdle());
-
-        // res
-        for (auto& p : m_passes) {
-            p->destory(*m_device, m_rendering_resources);
-        }
-        m_vertex_buf->destroy();
-        m_dyn_buf->destroy();
-
-        m_device->Destroy();
+    m_destroying = true;
+    const auto result = quiesceFrame(true);
+    if (result != VK_SUCCESS && result != VK_ERROR_DEVICE_LOST) {
+        LOG_ERROR("cannot destroy renderer resources before GPU completion");
+        std::terminate();
     }
+    if (m_device && m_device->handle()) {
+        if (! m_device_lost) {
+            std::string error;
+            if (! m_device->tex_cache().WaitForPendingUploads(&error)) {
+                LOG_ERROR("texture upload retirement failed during renderer destruction: %s",
+                          error.c_str());
+                // The cache destructor checks its remaining slots against device idle.
+            }
+        }
+        for (auto* pass : m_passes) {
+            if (pass != nullptr) pass->destory(*m_device, m_rendering_resources);
+        }
+    }
+    m_passes.clear();
+    m_pass_scratch.passes.clear();
+    m_pass_scratch.candidates.clear();
+    m_pass_scratch.plan.entries.clear();
+    m_prepass.reset();
+    m_finpass.reset();
+    m_testpass.reset();
+    m_ex_swapchain.reset();
+    DestroyRenderingResource(m_rendering_resources);
+    m_render_cmd = {};
+    m_upload_cmd = {};
+    m_cmds = {};
+    m_frame_poster = {};
+    m_vertex_buf.reset();
+    m_dyn_buf.reset();
+    m_device.reset();
     m_instance.Destroy();
+    const int fd = m_last_sync_fd.exchange(-1, std::memory_order_acq_rel);
+    if (fd >= 0) ::close(fd);
+    m_pass_loaded = false;
+    m_inited = false;
+    m_with_surface = false;
+    m_frame_faulted = false;
+    m_device_lost = false;
+    m_destroying = false;
 }
 
 bool VulkanRender::Impl::CreateRenderingResource(RenderingResources& rr) {
     rr.command = m_render_cmd;
-    VVK_CHECK_BOOL_RE(m_device->handle().CreateFence(
-        VkFenceCreateInfo {
-            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = VK_FENCE_CREATE_SIGNALED_BIT,
-        },
-        rr.fence_frame));
-
-    rr.fence_frame.Reset();
-
-    if (m_with_surface) {
-        VkSemaphoreCreateInfo ci { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-                                   .pNext = nullptr };
-        VVK_CHECK_BOOL_RE(m_device->handle().CreateSemaphore(ci, rr.sem_swap_finish));
-        VVK_CHECK_BOOL_RE(m_device->handle().CreateSemaphore(ci, rr.sem_swap_wait_image));
-    }
-
-    // Exportable SYNC_FD semaphore used by the waywallen-renderer host
-    // to ship a dma_fence sync_file to display clients on each
-    // FrameReady event. Created in both offscreen and surface modes —
-    // only the offscreen drawFrame path currently signals it, but
-    // having it always present keeps the lifetime simple.
-    {
-        VkExportSemaphoreCreateInfo export_info {
-            .sType       = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
-            .pNext       = nullptr,
-            .handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT_KHR,
-        };
-        VkSemaphoreCreateInfo ci {
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-            .pNext = &export_info,
-            .flags = 0,
-        };
-        VVK_CHECK_BOOL_RE(m_device->handle().CreateSemaphore(ci, rr.sem_export));
-    }
-
     rr.vertex_buf = m_vertex_buf.get();
-    rr.dyn_buf    = m_dyn_buf.get();
+    rr.dyn_buf = m_dyn_buf.get();
+    const auto fence_result = m_device->handle().CreateFence(
+        VkFenceCreateInfo { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO },
+        rr.fence_frame);
+    if (fence_result != VK_SUCCESS) return failFrame(fence_result);
+    VkSemaphoreCreateInfo semaphore { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+    if (m_with_surface) {
+        auto result = m_device->handle().CreateSemaphore(semaphore, rr.sem_swap_finish);
+        if (result != VK_SUCCESS) return failFrame(result);
+        result = m_device->handle().CreateSemaphore(semaphore, rr.sem_swap_wait_image);
+        if (result != VK_SUCCESS) return failFrame(result);
+    }
+    // Only offscreen Linux rendering exports SYNC_FD.
+    VkExportSemaphoreCreateInfo export_info {
+        .sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
+        .handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT_KHR,
+    };
+    if (! m_with_surface) semaphore.pNext = &export_info;
+    const auto export_result = m_device->handle().CreateSemaphore(semaphore, rr.sem_export);
+    if (export_result != VK_SUCCESS) return failFrame(export_result);
     return true;
 }
 
-void VulkanRender::Impl::DestroyRenderingResource(RenderingResources& rr) {}
+void VulkanRender::Impl::DestroyRenderingResource(RenderingResources& rr) {
+    rr.command = {};
+    rr.fence_frame.reset();
+    rr.sem_swap_wait_image.reset();
+    rr.sem_swap_finish.reset();
+    rr.sem_export.reset();
+    rr.vertex_buf = nullptr;
+    rr.dyn_buf = nullptr;
+}
 
 // VulkanExSwapchain* VulkanRender::exSwapchain() const { return m_ex_swapchain.get(); }
 
-void VulkanRender::Impl::drawFrame(Scene& scene) {
-    if (! (m_inited && m_pass_loaded)) return;
+bool VulkanRender::Impl::drawFrame(Scene& scene) {
+    if (! m_inited || ! m_pass_loaded || m_frame_faulted || m_device_lost) return false;
+    if (quiesceFrame() != VK_SUCCESS) return false;
 
     m_device->tex_cache().CollectCompletedUploads();
 
@@ -467,7 +620,14 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
     m_rendering_resources.wallpaper_scissor  = MakeWallpaperScissor(m_scaling_layout);
     m_rendering_resources.wallpaper_horizontal_flip = m_horizontal_flip;
 
-    // LOG_INFO("used ram: %fm", (m_device->GetUsage()/1024.0f)/1024.0f);
+    std::string error;
+    if (! m_device->tex_cache().BeginVideoFrameRecording(&error)) {
+        LOG_ERROR("cannot begin video frame recording: %s", error.c_str());
+        return failFrame(VK_ERROR_UNKNOWN);
+    }
+    m_draw_recording = true;
+    if (! UpdatePreparedPasses(*m_device, m_rendering_resources, m_passes))
+        return failFrame(VK_ERROR_UNKNOWN);
 
 #if ENABLE_RENDERDOC_API
     if (rdoc_api)
@@ -475,104 +635,36 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
             RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE((VkInstance)m_instance.inst()), NULL);
 #endif
 
-    if (m_instance.offscreen()) {
-        drawFrameOffscreen();
-    } else {
-        drawFrameSwapchain();
-    }
-
-    if (m_redraw_cb) m_redraw_cb();
+    const bool rendered = m_instance.offscreen() ? drawFrameOffscreen() : drawFrameSwapchain();
+    if (rendered && m_redraw_cb) m_redraw_cb();
 
 #if ENABLE_RENDERDOC_API
     if (rdoc_api)
         rdoc_api->EndFrameCapture(
             RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE((VkInstance)m_instance.inst()), NULL);
 #endif
+    return rendered;
 }
 
 void VulkanRender::Impl::executePreparedPasses(RenderingResources& rr) {
-    size_t i = 0;
-    while (i < m_passes.size()) {
-        auto* pass = m_passes[i];
-        if (pass == nullptr || ! pass->prepared()) {
-            ++i;
-            continue;
-        }
-
-        auto* custom = dynamic_cast<CustomShaderPass*>(pass);
-        if (custom == nullptr) {
-            pass->execute(*m_device, rr);
-            ++i;
-            continue;
-        }
-
-        std::vector<CustomShaderPass*>        custom_passes;
-        std::vector<CustomPassBatchCandidate> candidates;
-        for (; i < m_passes.size(); ++i) {
-            auto* run_pass = m_passes[i];
-            if (run_pass == nullptr || ! run_pass->prepared()) break;
-            auto* run_custom = dynamic_cast<CustomShaderPass*>(run_pass);
-            if (run_custom == nullptr) break;
-
-            custom_passes.push_back(run_custom);
-            candidates.push_back(run_custom->preRecord(*m_device, rr));
-        }
-
-        const auto plan = PlanCustomPassBatches(candidates);
-        for (const auto& entry : plan.entries) {
-            const size_t first = entry.first;
-            const size_t last  = entry.last;
-            if (entry.kind == CustomPassBatchKind::ClearImage) {
-                custom_passes[first]->recordClear(*m_device, rr);
-                continue;
-            }
-
-            std::array<VkClearValue, 2> clear_values { entry.render.clear_value, VkClearValue {} };
-            VkRenderPassBeginInfo pass_begin_info {
-                .sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-                .pNext       = nullptr,
-                .renderPass  = entry.render.render_pass,
-                .framebuffer = entry.render.framebuffer,
-                .renderArea =
-                    VkRect2D {
-                        .offset = { 0, 0 },
-                        .extent = { entry.render.extent.width, entry.render.extent.height },
-                    },
-                .clearValueCount = CustomPassBeginRenderPassClearValueCount(entry.render),
-                .pClearValues    = clear_values.data(),
-            };
-            rr.command.BeginRenderPass(pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
-
-            for (size_t local = first; local < last; ++local) {
-                if (! candidates[local].visible) continue;
-                custom_passes[local]->recordDraw(*m_device, rr);
-            }
-
-            rr.command.EndRenderPass();
-        }
-    }
+    ExecutePreparedPasses(*m_device, rr, m_passes, m_pass_scratch);
 }
 
-void VulkanRender::Impl::drawFrameSwapchain() {
-    static size_t resource_index = 0;
+bool VulkanRender::Impl::drawFrameSwapchain() {
 
     RenderingResources& rr = m_rendering_resources;
-    resource_index         = (resource_index + 1) % 3;
     uint32_t image_index   = 0;
-    {
-        VVK_CHECK_VOID_RE(m_device->handle().AcquireNextImageKHR(*m_device->swapchain().handle(),
-                                                                 vk_wait_time,
-                                                                 *rr.sem_swap_wait_image,
-                                                                 {},
-                                                                 &image_index));
-    }
+    const auto acquire_result = m_device->handle().AcquireNextImageKHR(
+        *m_device->swapchain().handle(), vk_wait_time, *rr.sem_swap_wait_image, {}, &image_index);
+    if (acquire_result != VK_SUCCESS && acquire_result != VK_SUBOPTIMAL_KHR)
+        return failFrame(acquire_result);
     const auto& image = m_device->swapchain().images()[image_index];
 
     m_finpass->setPresent(image);
 
     // Read back only on a host request, after the final scaling/cropping pass.
     // Never inspect another window or the desktop compositor's contents.
-    VmaBufferParameters poster;
+    auto& poster = m_frame_poster;
     const auto format = m_device->swapchain().format();
     const bool bgra = format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB;
     const bool rgba = format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_R8G8B8A8_SRGB;
@@ -580,15 +672,17 @@ void VulkanRender::Impl::drawFrameSwapchain() {
     const bool export_poster = m_poster_ready && m_wants_poster && (bgra || rgba) &&
         m_device->swapchain().supportsReadback() &&
         m_device->graphics_queue().family_index == m_device->present_queue().family_index &&
-        poster_size <= 128u * 1024u * 1024u && m_wants_poster() &&
-        CreateReadbackBuffer(m_device->vma_allocator(), poster_size, poster);
+        poster_size <= 128u * 1024u * 1024u && m_wants_poster();
+    if (export_poster && ! CreateReadbackBuffer(m_device->vma_allocator(), poster_size, poster))
+        return failFrame(VK_ERROR_OUT_OF_DEVICE_MEMORY);
 
-    (void)rr.command.Begin(VkCommandBufferBeginInfo {
+    const auto begin_result = rr.command.Begin(VkCommandBufferBeginInfo {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .pNext = nullptr,
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
     });
-    m_dyn_buf->recordUpload(rr.command);
+    if (begin_result != VK_SUCCESS) return failFrame(begin_result);
+    if (! m_dyn_buf->recordUpload(rr.command)) return failFrame(VK_ERROR_UNKNOWN);
     executePreparedPasses(rr);
     if (export_poster) {
         VkImageMemoryBarrier barrier {
@@ -629,7 +723,8 @@ void VulkanRender::Impl::drawFrameSwapchain() {
         rr.command.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
                                    VK_PIPELINE_STAGE_HOST_BIT, 0, host_barrier);
     }
-    (void)rr.command.End();
+    const auto end_result = rr.command.End();
+    if (end_result != VK_SUCCESS) return failFrame(end_result);
 
     VkPipelineStageFlags wait_dst_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo         sub_info {
@@ -644,7 +739,10 @@ void VulkanRender::Impl::drawFrameSwapchain() {
                 .pSignalSemaphores    = rr.sem_swap_finish.address(),
     };
 
-    VVK_CHECK_VOID_RE(m_device->present_queue().handle.Submit(sub_info, *rr.fence_frame));
+    const auto submit_result = m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame);
+    if (submit_result != VK_SUCCESS) return failFrame(submit_result);
+    m_draw_submitted = true;
+    m_device->tex_cache().MarkVideoFrameSubmitted();
     VkPresentInfoKHR present_info {
         .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .pNext              = nullptr,
@@ -657,41 +755,49 @@ void VulkanRender::Impl::drawFrameSwapchain() {
     // Even an out-of-date surface must finish the submitted copy before its
     // temporary readback buffer is destroyed.
     const auto present_result = m_device->present_queue().handle.Present(present_info);
-    VVK_CHECK(present_result);
     const auto wait_result = rr.fence_frame.Wait(vk_wait_time);
-    if (wait_result != VK_SUCCESS) {
-        VVK_CHECK(wait_result);
-        VVK_CHECK(m_device->handle().WaitIdle());
-        return;
-    }
-    VVK_CHECK_VOID_RE(rr.fence_frame.Reset());
-    if (export_poster && (present_result == VK_SUCCESS || present_result == VK_SUBOPTIMAL_KHR)) {
+    if (wait_result != VK_SUCCESS) return failFrame(wait_result);
+    m_device->tex_cache().CompleteVideoFrame();
+    m_dyn_buf->finishUpload(true);
+    m_draw_submitted = false;
+    m_draw_recording = false;
+    if (present_result != VK_SUCCESS && present_result != VK_SUBOPTIMAL_KHR)
+        return failFrame(present_result);
+    const auto reset_result = rr.fence_frame.Reset();
+    if (reset_result != VK_SUCCESS) return failFrame(reset_result);
+    if (export_poster) {
         void* bytes = nullptr;
-        if (poster.handle.MapMemory(&bytes) == VK_SUCCESS) {
-            if (vmaInvalidateAllocation(m_device->vma_allocator(), poster.handle.Allocation(),
-                                        0, VK_WHOLE_SIZE) == VK_SUCCESS) {
-                m_poster_ready({ static_cast<const uint8_t*>(bytes), poster_size },
-                               image.extent.width, image.extent.height, bgra);
-            }
-            poster.handle.UnMapMemory();
+        const auto map_result = poster.handle.MapMemory(&bytes);
+        if (map_result != VK_SUCCESS) return failFrame(map_result);
+        const auto invalidate_result = vmaInvalidateAllocation(
+            m_device->vma_allocator(), poster.handle.Allocation(), 0, VK_WHOLE_SIZE);
+        if (invalidate_result == VK_SUCCESS) {
+            m_poster_ready({ static_cast<const uint8_t*>(bytes), poster_size },
+                           image.extent.width, image.extent.height, bgra);
         }
+        poster.handle.UnMapMemory();
+        if (invalidate_result != VK_SUCCESS) return failFrame(invalidate_result);
     }
+    m_frame_poster = {};
+    return true;
 }
-void VulkanRender::Impl::drawFrameOffscreen() {
+bool VulkanRender::Impl::drawFrameOffscreen() {
     RenderingResources& rr    = m_rendering_resources;
     ImageParameters     image = m_ex_swapchain->GetInprogressImage();
 
     m_finpass->setPresent(image);
 
-    (void)rr.command.Begin(VkCommandBufferBeginInfo {
+    const auto begin_result = rr.command.Begin(VkCommandBufferBeginInfo {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .pNext = nullptr,
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
     });
-    m_dyn_buf->recordUpload(rr.command);
+    if (begin_result != VK_SUCCESS) return failFrame(begin_result);
+    if (! m_dyn_buf->recordUpload(rr.command)) return failFrame(VK_ERROR_UNKNOWN);
     executePreparedPasses(rr);
 
-    (void)rr.command.End();
+    const auto end_result = rr.command.End();
+    if (end_result != VK_SUCCESS) return failFrame(end_result);
 
     VkSubmitInfo sub_info {
         .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -701,10 +807,18 @@ void VulkanRender::Impl::drawFrameOffscreen() {
         .signalSemaphoreCount = 1,
         .pSignalSemaphores    = rr.sem_export.address(),
     };
-    VVK_CHECK_VOID_RE(m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame));
-
-    VVK_CHECK_VOID_RE(rr.fence_frame.Wait(vk_wait_time));
-    VVK_CHECK_VOID_RE(rr.fence_frame.Reset());
+    const auto submit_result = m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame);
+    if (submit_result != VK_SUCCESS) return failFrame(submit_result);
+    m_draw_submitted = true;
+    m_device->tex_cache().MarkVideoFrameSubmitted();
+    const auto wait_result = rr.fence_frame.Wait(vk_wait_time);
+    if (wait_result != VK_SUCCESS) return failFrame(wait_result);
+    m_device->tex_cache().CompleteVideoFrame();
+    m_dyn_buf->finishUpload(true);
+    m_draw_submitted = false;
+    m_draw_recording = false;
+    const auto reset_result = rr.fence_frame.Reset();
+    if (reset_result != VK_SUCCESS) return failFrame(reset_result);
 
     // Export the signaled semaphore as a dma_fence sync_file fd. The
     // export resets the semaphore's payload, so the next submit can
@@ -718,13 +832,15 @@ void VulkanRender::Impl::drawFrameOffscreen() {
             .semaphore  = *rr.sem_export,
             .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT_KHR,
         };
-        if (m_device->handle().GetSemaphoreFdKHR(gi, &fd) == VK_SUCCESS && fd >= 0) {
-            int old = m_last_sync_fd.exchange(fd, std::memory_order_acq_rel);
-            if (old >= 0) ::close(old);
-        }
+        const auto export_result = m_device->handle().GetSemaphoreFdKHR(gi, &fd);
+        if (export_result != VK_SUCCESS) return failFrame(export_result);
+        if (fd < 0) return failFrame(VK_ERROR_INVALID_EXTERNAL_HANDLE);
+        int old = m_last_sync_fd.exchange(fd, std::memory_order_acq_rel);
+        if (old >= 0) ::close(old);
     }
 
     m_ex_swapchain->renderFrame();
+    return true;
 }
 
 void VulkanRender::Impl::setRenderTargetSize(Scene& scene, rg::RenderGraph& rg) {
@@ -840,22 +956,52 @@ void VulkanRender::Impl::SetWallpaperHorizontalFlip(bool enabled) {
     LOG_INFO("wallpaper horizontal flip: %s", m_horizontal_flip ? "enabled" : "disabled");
 }
 
-void VulkanRender::Impl::clearLastRenderGraph() {
-    for (auto& p : m_passes) {
-        p->destory(*m_device, m_rendering_resources);
+bool VulkanRender::Impl::clearLastRenderGraph() {
+    if (quiesceFrame() != VK_SUCCESS) return false;
+    if (! m_device || ! m_device->handle()) return m_passes.empty();
+    std::string error;
+    if (! m_device->tex_cache().WaitForPendingUploads(&error)) {
+        LOG_ERROR("cannot clear render graph uploads: %s", error.c_str());
+        return failFrame(VK_ERROR_UNKNOWN);
+    }
+    for (auto* command : { &m_render_cmd, &m_upload_cmd }) {
+        if (*command) {
+            const auto result = command->Reset();
+            if (result != VK_SUCCESS) return failFrame(result);
+        }
+    }
+    for (auto* pass : m_passes) {
+        if (pass != nullptr) pass->destory(*m_device, m_rendering_resources);
     }
     m_passes.clear();
-    m_device->tex_cache().Clear();
-
+    m_pass_scratch.passes.clear();
+    m_pass_scratch.candidates.clear();
+    m_pass_scratch.plan.entries.clear();
+    m_pass_loaded = false;
+    if (! m_device->tex_cache().Clear(&error)) {
+        LOG_ERROR("cannot clear render graph cache: %s", error.c_str());
+        return failFrame(VK_ERROR_UNKNOWN);
+    }
+    if (! m_vertex_buf || ! m_dyn_buf) return false;
     m_vertex_buf->destroy();
     m_dyn_buf->destroy();
-
-    m_vertex_buf->allocate();
-    m_dyn_buf->allocate();
+    const bool vertex_allocated = m_vertex_buf->allocate();
+    const bool dynamic_allocated = m_dyn_buf->allocate();
+    return vertex_allocated && dynamic_allocated;
 }
 
-void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
-    if (! m_inited) return;
+bool VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
+    if (! m_inited || m_device_lost || m_frame_faulted) return false;
+    if (! m_passes.empty() && ! clearLastRenderGraph()) return false;
+    if (quiesceFrame() != VK_SUCCESS) return false;
+    std::string error;
+    if (! m_device->tex_cache().WaitForPendingUploads(&error)) {
+        LOG_ERROR("cannot compile render graph with pending uploads: %s", error.c_str());
+        return failFrame(VK_ERROR_UNKNOWN);
+    }
+    m_pass_scratch.passes.clear();
+    m_pass_scratch.candidates.clear();
+    m_pass_scratch.plan.entries.clear();
     m_pass_loaded = false;
 
     auto nodes             = rg.topologicalOrder();
@@ -892,14 +1038,20 @@ void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
         }
     }
     glslang::FinalizeProcess();
+    if (std::any_of(m_passes.begin(), m_passes.end(),
+                    [](const auto* pass) { return pass == nullptr || ! pass->prepared(); }))
+        return false;
 
-    VVK_CHECK_VOID_RE(m_upload_cmd.Begin(VkCommandBufferBeginInfo {
+    m_static_upload_recording = true;
+    const auto begin_result = m_upload_cmd.Begin(VkCommandBufferBeginInfo {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .pNext = nullptr,
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-    }));
-    m_vertex_buf->recordUpload(m_upload_cmd);
-    VVK_CHECK_VOID_RE(m_upload_cmd.End());
+    });
+    if (begin_result != VK_SUCCESS) return failFrame(begin_result);
+    if (! m_vertex_buf->recordUpload(m_upload_cmd)) return failFrame(VK_ERROR_UNKNOWN);
+    const auto end_result = m_upload_cmd.End();
+    if (end_result != VK_SUCCESS) return failFrame(end_result);
     {
         VkSubmitInfo sub_info {
             .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -907,8 +1059,12 @@ void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
             .commandBufferCount = 1,
             .pCommandBuffers    = m_upload_cmd.address(),
         };
-        VVK_CHECK_VOID_RE(m_device->graphics_queue().handle.Submit(sub_info, {}));
-        VVK_CHECK_VOID_RE(m_device->handle().WaitIdle());
+        const auto submit_result = m_device->graphics_queue().handle.Submit(sub_info, {});
+        if (submit_result != VK_SUCCESS) return failFrame(submit_result);
+        m_static_upload_submitted = true;
+        const auto idle_result = quiesceFrame();
+        if (idle_result != VK_SUCCESS) return false;
     }
     m_pass_loaded = true;
+    return true;
 };

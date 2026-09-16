@@ -558,14 +558,25 @@ private:
         return snapshot;
     }
 
-    void rebuildRenderGraph() {
-        if (m_scene == nullptr) return;
+    void suspendRendering() {
+        m_render_blocked = true;
+        frame_timer.Stop();
+    }
 
-        if (m_rg) m_render->clearLastRenderGraph();
+    bool rebuildRenderGraph() {
+        if (m_scene == nullptr) return true;
+
+        if (m_rg && ! m_render->clearLastRenderGraph()) {
+            suspendRendering();
+            return false;
+        }
         m_rg = sceneToRenderGraph(*m_scene);
 
         if (main_handler.isGenGraphviz()) m_rg->ToGraphviz("graph.dot");
-        m_render->compileRenderGraph(*m_scene, *m_rg);
+        if (! m_render->compileRenderGraph(*m_scene, *m_rg)) {
+            suspendRendering();
+            return false;
+        }
         m_render->SetWallpaperScalingMode(m_scalingmode);
         m_render->SetWallpaperScalingFactor(m_scalingfactor);
         m_render->SetWallpaperHorizontalFlip(m_horizontal_flip);
@@ -575,6 +586,8 @@ private:
         if (m_scene->runtime != nullptr) {
             m_scene->runtime->ConsumeSceneGraphMutationFlag();
         }
+        m_render_blocked = false;
+        return true;
     }
 
     bool applySystemMediaArtworkPayload(const SystemMediaArtworkPayload& artwork) {
@@ -592,23 +605,23 @@ private:
             m_scene->runtime->DispatchMediaEventJson(
                 R"({"type":"mediaThumbnailChanged","hasThumbnail":true})");
         }
-        rebuildRenderGraph();
-        return true;
+        return rebuildRenderGraph();
     }
 
     MHANDLER_CMD(STOP) {
         bool stop { false };
         if (msg->findBool("value", &stop)) {
             if (renderInited()) {
-                m_render->SetVideoPlaybackPaused(stop);
+                m_render->SetVideoPlaybackPaused(stop || m_render_blocked);
             }
-            if (stop)
+            if (stop || m_render_blocked)
                 frame_timer.Stop();
             else
                 frame_timer.Run();
         }
     }
     MHANDLER_CMD(DRAW) {
+        if (m_render_blocked) return;
         frame_timer.FrameBegin();
         if (m_rg) {
             const double frame_time = frame_timer.IdeaTime() * m_speed;
@@ -632,22 +645,26 @@ private:
                 }
             }
             m_scene->paritileSys->Emitt();
+            bool frame_ok = true;
             if (m_scene->runtime != nullptr) {
                 m_scene->runtime->Tick(frame_time);
                 m_scene->runtime->PumpTextLayerCache();
                 if (m_scene->runtime->ConsumeSceneGraphMutationFlag()) {
-                    rebuildRenderGraph();
+                    frame_ok = rebuildRenderGraph();
                 }
             }
 
-            m_render->drawFrame(*m_scene);
-
-            m_scene->PassFrameTime(frame_time);
+            if (frame_ok) frame_ok = m_render->drawFrame(*m_scene);
+            if (frame_ok) {
+                m_scene->PassFrameTime(frame_time);
+            } else {
+                suspendRendering();
+            }
 
             m_scene->shaderValueUpdater->FrameEnd();
             // fps_counter.RegisterFrame();
 
-            if (! m_scene->first_frame_ok) {
+            if (frame_ok && ! m_scene->first_frame_ok) {
                 m_scene->first_frame_ok = true;
                 main_handler.sendFirstFrameOk();
             }
@@ -728,15 +745,23 @@ private:
         }
     }
     MHANDLER_CMD(SET_SCENE) {
-        if (msg->findObject("scene", &m_scene)) {
+        std::shared_ptr<Scene> scene;
+        if (msg->findObject("scene", &scene)) {
+            if (m_rg && ! m_render->clearLastRenderGraph()) {
+                suspendRendering();
+                return;
+            }
+            m_rg.reset();
+            m_scene          = std::move(scene);
+            m_render_blocked = false;
             if (m_scene != nullptr && m_scene->runtime != nullptr) {
                 m_scene->runtime->SetMediaIntegrationEnabled(m_media_integration_enabled);
             }
             if (m_pending_system_media_artwork.has_value() &&
                 applySystemMediaArtworkPayload(*m_pending_system_media_artwork)) {
                 m_pending_system_media_artwork.reset();
-            } else {
-                rebuildRenderGraph();
+            } else if (! m_render_blocked && ! rebuildRenderGraph()) {
+                return;
             }
         }
     }
@@ -747,30 +772,35 @@ private:
     }
     MHANDLER_CMD(INIT_VULKAN) {
         std::shared_ptr<RenderInitInfo> info;
-        if (msg->findObject("info", &info)) {
-            m_render->init(*info);
+        if (msg->findObject("info", &info) && info != nullptr) {
+            if (! m_render->init(*info)) {
+                suspendRendering();
+                return;
+            }
+            m_render_blocked = false;
             m_render->SetWallpaperScalingMode(m_scalingmode);
             m_render->SetWallpaperScalingFactor(m_scalingfactor);
             m_render->SetWallpaperHorizontalFlip(m_horizontal_flip);
             m_render->SetVideoPlaybackRate(m_speed);
             m_render->SetVideoPlaybackPaused(! frame_timer.Running());
 
-            // inited, callback to laod scene
+            // Initialization succeeded; dispatch scene loading.
             main_handler.sendCmdLoadScene();
         }
     }
     MHANDLER_CMD(BEGIN_SURFACE_RECONFIGURE) {
         std::shared_ptr<std::promise<bool>> promise;
-        if (! msg->findObject("promise", &promise)) {
+        if (! msg->findObject("promise", &promise) || promise == nullptr) {
             return;
         }
         try {
-            frame_timer.Stop();
+            suspendRendering();
+            bool ok = true;
             if (renderInited()) {
                 m_render->SetVideoPlaybackPaused(true);
-                m_render->releaseSurface();
+                ok = m_render->releaseSurface();
             }
-            promise->set_value(true);
+            promise->set_value(ok);
         } catch (...) {
             promise->set_value(false);
         }
@@ -778,22 +808,24 @@ private:
     MHANDLER_CMD(FINISH_SURFACE_RECONFIGURE) {
         std::shared_ptr<std::promise<bool>> promise;
         std::shared_ptr<RenderInitInfo>     info;
-        if (! msg->findObject("promise", &promise)) {
+        if (! msg->findObject("promise", &promise) || promise == nullptr) {
             return;
         }
-        if (! msg->findObject("info", &info)) {
+        suspendRendering();
+        if (! msg->findObject("info", &info) || info == nullptr) {
             promise->set_value(false);
             return;
         }
         try {
-            bool ok = m_render->resetSurface(*info);
+            const bool ok = m_render->resetSurface(*info) && rebuildRenderGraph();
             if (ok) {
-                rebuildRenderGraph();
+                m_render_blocked = false;
                 m_render->SetVideoPlaybackPaused(false);
                 frame_timer.Run();
             }
             promise->set_value(ok);
         } catch (...) {
+            suspendRendering();
             promise->set_value(false);
         }
     }
@@ -808,6 +840,7 @@ private:
 
     std::unique_ptr<vulkan::VulkanRender> m_render;
     std::unique_ptr<rg::RenderGraph>      m_rg { nullptr };
+    bool                                m_render_blocked { false };
 
     FillMode                                 m_fillmode { FillMode::ASPECTFIT };
     bool                                     m_fillmode_explicit { false };

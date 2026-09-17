@@ -28,6 +28,8 @@
 #include "wpscene/WPMiscObject.hpp"
 #include "wpscene/WPParticleObject.h"
 #include "wpscene/WPScene.h"
+#include "Utils/Logging.h"
+#include "Scripting/ScriptEngine.hpp"
 
 namespace
 {
@@ -2977,6 +2979,344 @@ void main() { gl_FragColor = vec4(u_Opacity); }
     EXPECT_FLOAT_EQ(values.at("u_Opacity")[0], 1.5f);
     parsed->runtime->Tick(4.0 / 30.0);
     EXPECT_FLOAT_EQ(values.at("u_Opacity")[0], 0.0f);
+}
+
+
+// A vector shader constant carries one curve per component, and an author can
+// slave several constants to one timeline. Both go through the real material
+// pass here, so the assertions read the values a shader would be handed.
+nlohmann::json VectorConstant(std::vector<float> value, const char* animation = nullptr) {
+    nlohmann::json constant { { "value", std::move(value) } };
+    if (animation != nullptr) constant["animation"] = nlohmann::json::parse(animation);
+    return constant;
+}
+
+std::shared_ptr<Scene> ParseVectorTimelineScene(
+    const std::vector<std::pair<std::string, nlohmann::json>>& layers) {
+    std::map<std::string, std::string> files;
+    files["/shaders/foldpage.vert"] = R"(
+attribute vec3 a_Position;
+attribute vec2 a_TexCoord;
+varying vec2 v_TexCoord;
+void main() {
+  gl_Position = vec4(a_Position, 1.0);
+  v_TexCoord = a_TexCoord;
+}
+)";
+    files["/shaders/foldpage.frag"] = R"(
+uniform vec2 u_Point1; // {"material":"point1","default":"0 0"}
+uniform vec2 u_Point2; // {"material":"point2","default":"0 0"}
+varying vec2 v_TexCoord;
+void main() { gl_FragColor = vec4(u_Point1 * v_TexCoord, u_Point2); }
+)";
+    auto source       = nlohmann::json::parse(BasicImageSceneJson());
+    source["objects"] = nlohmann::json::array();
+    int32_t id        = 400;
+    for (const auto& [name, constants] : layers) {
+        files["/" + name + ".json"] = nlohmann::json {
+            { "width", 64 }, { "height", 32 }, { "material", "mat/" + name + ".json" }
+        }.dump();
+        files["/mat/" + name + ".json"] = nlohmann::json {
+            { "passes", nlohmann::json::array({ nlohmann::json {
+                  { "shader", "foldpage" },
+                  { "blending", "translucent" },
+                  { "cullmode", "nocull" },
+                  { "depthtest", "disabled" },
+                  { "depthwrite", "disabled" },
+                  { "constantshadervalues", constants },
+              } }) }
+        }.dump();
+        source["objects"].push_back(nlohmann::json {
+            { "id", id++ }, { "name", name }, { "image", name + ".json" },
+            { "origin", { 0, 0, 0 } }, { "scale", { 1, 1, 1 } },
+            { "angles", { 0, 0, 0 } }, { "visible", true } });
+    }
+    fs::VFS vfs;
+    if (! vfs.Mount("/assets", std::make_unique<MemoryFs>(std::move(files)))) return nullptr;
+    audio::SoundManager sound_manager;
+    ProjectProperties   properties;
+    SceneParseRequest   request {
+          .scene_id = "vector-material-timeline",
+          .project_properties = &properties,
+    };
+    return WPSceneParser().Parse(request, source.dump(), vfs, sound_manager);
+}
+
+const ShaderValues* LayerConstants(const Scene& scene, std::string_view name) {
+    auto node = FindRootChildByName(scene, name);
+    if (node == nullptr || node->Mesh() == nullptr || node->Mesh()->Material() == nullptr) {
+        return nullptr;
+    }
+    return &node->Mesh()->Material()->customShader.constValues;
+}
+
+// The child's static value and its first key differ, so a component that never
+// reads the curve is visible instead of being hidden behind a matching default.
+const char* const kFoldChildAnimation = R"({
+    "options":{"fps":30,"length":3,"mode":"single","parent":{"key":"point2"}},
+    "c0":[{"frame":0,"value":0.875},{"frame":3,"value":0.375}],
+    "c1":[{"frame":0,"value":0.875},{"frame":3,"value":0.875}]
+})";
+const char* const kFoldRootAnimation = R"({
+    "options":{"fps":30,"length":3,"mode":"single","startpaused":true,"name":"fold",
+               "children":[{"key":"point1"}]},
+    "c0":[{"frame":0,"value":0.75},{"frame":3,"value":0.25}],
+    "c1":[{"frame":0,"value":0.375},{"frame":3,"value":0.375}]
+})";
+
+nlohmann::json PausedFoldConstants() {
+    return nlohmann::json {
+        { "point1", VectorConstant({ 0.375f, 0.875f }, kFoldChildAnimation) },
+        { "point2", VectorConstant({ 0.75f, 0.375f }, kFoldRootAnimation) },
+    };
+}
+
+TEST(SceneSchema, PausedVectorTimelineAppliesItsFirstKeyToEveryRelatedConstant) {
+    auto parsed = ParseVectorTimelineScene({ { "fold page", PausedFoldConstants() } });
+    ASSERT_NE(parsed, nullptr);
+    ASSERT_NE(parsed->runtime, nullptr);
+    const auto* values = LayerConstants(*parsed, "fold page");
+    ASSERT_NE(values, nullptr);
+    ASSERT_TRUE(values->contains("u_Point1"));
+    ASSERT_EQ(values->at("u_Point1").size(), 2u);
+    EXPECT_FLOAT_EQ(values->at("u_Point1")[0], 0.875f);
+    EXPECT_FLOAT_EQ(values->at("u_Point1")[1], 0.875f);
+    EXPECT_FLOAT_EQ(values->at("u_Point2")[0], 0.75f);
+    EXPECT_FLOAT_EQ(values->at("u_Point2")[1], 0.375f);
+    // The parent holds the clock, so no component may drift to its last key or
+    // fall back to the static value the author only meant as a default.
+    parsed->runtime->Tick(5.0);
+    EXPECT_FLOAT_EQ(values->at("u_Point1")[0], 0.875f);
+    EXPECT_FLOAT_EQ(values->at("u_Point1")[1], 0.875f);
+    EXPECT_FLOAT_EQ(values->at("u_Point2")[0], 0.75f);
+}
+
+TEST(SceneSchema, ScriptedVectorTimelineMovesParentAndChildOnTheSameFrame) {
+    auto parsed = ParseVectorTimelineScene({ { "fold page", PausedFoldConstants() } });
+    ASSERT_NE(parsed, nullptr);
+    ASSERT_NE(parsed->runtime, nullptr);
+    const auto* values = LayerConstants(*parsed, "fold page");
+    ASSERT_NE(values, nullptr);
+    auto& runtime = *parsed->runtime;
+    const auto command = [&](std::string source) {
+        auto program = runtime.scriptEngine().CreatePropertyScriptProgram(
+            &runtime, "export function update(value) { " + source + "; return value; }",
+            "fold page", {}, DynamicValue(0.0f), runtime.hostContext());
+        ASSERT_NE(program, nullptr);
+        program->Evaluate(runtime.hostContext(), DynamicValue(0.0f));
+    };
+
+    command("thisLayer.getAnimation('fold').play()");
+    runtime.Tick(1.5 / 30.0);
+    EXPECT_FLOAT_EQ(values->at("u_Point1")[0], 0.625f);
+    EXPECT_FLOAT_EQ(values->at("u_Point2")[0], 0.5f);
+    command("thisLayer.getAnimation('fold').pause()");
+    runtime.Tick(1.0);
+    EXPECT_FLOAT_EQ(values->at("u_Point1")[0], 0.625f);
+    EXPECT_FLOAT_EQ(values->at("u_Point2")[0], 0.5f);
+    command("thisLayer.getAnimation('fold').play(); thisLayer.getAnimation('fold').rate = 2");
+    runtime.Tick(1.0 / 30.0);
+    EXPECT_FLOAT_EQ(values->at("u_Point1")[0], 0.375f);
+    EXPECT_FLOAT_EQ(values->at("u_Point2")[0], 0.25f);
+    // A finished single timeline restarts from its first key for the whole group.
+    command("thisLayer.getAnimation('fold').play()");
+    runtime.Tick(0.0);
+    EXPECT_FLOAT_EQ(values->at("u_Point1")[0], 0.875f);
+    EXPECT_FLOAT_EQ(values->at("u_Point2")[0], 0.75f);
+    command("thisLayer.getAnimation('fold').setFrame(3); thisLayer.getAnimation('fold').stop()");
+    runtime.Tick(0.0);
+    EXPECT_FLOAT_EQ(values->at("u_Point1")[0], 0.875f);
+    EXPECT_EQ(runtime.scriptErrorCount(), 0u);
+}
+
+nlohmann::json SharedClockConstants(const char* root_mode) {
+    const std::string root = std::string(R"({
+        "options":{"fps":30,"length":60,"mode":")") + root_mode + R"(","name":"fold"},
+        "c0":[{"frame":0,"value":0},{"frame":60,"value":1}]
+    })";
+    return nlohmann::json {
+        // A short looping child must follow the parent's clock instead of
+        // restarting on its own length every 15 frames.
+        { "point1", VectorConstant({ 9.0f, 9.0f }, R"({
+            "options":{"fps":30,"length":15,"mode":"loop","parent":{"key":"point2"}},
+            "c0":[{"frame":0,"value":0},{"frame":15,"value":1}],
+            "c1":[{"frame":0,"value":0},{"frame":15,"value":2}]
+        })") },
+        { "point2", VectorConstant({ 0.0f, 0.625f }, root.c_str()) },
+    };
+}
+
+TEST(SceneSchema, SharedVectorTimelineWrapsOnlyOnTheParentClock) {
+    for (const char* mode : { "single", "loop" }) {
+        auto parsed = ParseVectorTimelineScene({ { "fold page", SharedClockConstants(mode) } });
+        ASSERT_NE(parsed, nullptr);
+        ASSERT_NE(parsed->runtime, nullptr);
+        const auto* values = LayerConstants(*parsed, "fold page");
+        ASSERT_NE(values, nullptr);
+        EXPECT_FLOAT_EQ(values->at("u_Point1")[0], 0.0f);
+        // The parent animates one component; the other keeps its own value.
+        EXPECT_FLOAT_EQ(values->at("u_Point2")[1], 0.625f);
+        parsed->runtime->Tick(1.0);
+        EXPECT_FLOAT_EQ(values->at("u_Point1")[0], 1.0f);
+        EXPECT_FLOAT_EQ(values->at("u_Point1")[1], 2.0f);
+        EXPECT_FLOAT_EQ(values->at("u_Point2")[0], 0.5f);
+        EXPECT_FLOAT_EQ(values->at("u_Point2")[1], 0.625f);
+        parsed->runtime->Tick(0.5);
+        EXPECT_FLOAT_EQ(values->at("u_Point1")[0], 1.0f);
+        EXPECT_FLOAT_EQ(values->at("u_Point1")[1], 2.0f);
+        auto* clock = parsed->runtime->FindScalarAnimation("fold page", "fold");
+        ASSERT_NE(clock, nullptr);
+        clock->SetFrame(10.0);
+        parsed->runtime->Tick(0.0);
+        EXPECT_NEAR(values->at("u_Point1")[0], 2.0f / 3.0f, 1e-6);
+        EXPECT_NEAR(values->at("u_Point1")[1], 4.0f / 3.0f, 1e-6);
+        clock->SetFrame(45.0);
+        parsed->runtime->Tick(0.5);
+        const bool looping = std::string_view(mode) == "loop";
+        EXPECT_FLOAT_EQ(values->at("u_Point1")[0], looping ? 0.0f : 1.0f);
+        EXPECT_FLOAT_EQ(values->at("u_Point1")[1], looping ? 0.0f : 2.0f);
+        if (! looping) {
+            clock->Play();
+            parsed->runtime->Tick(0.0);
+            EXPECT_FLOAT_EQ(values->at("u_Point1")[0], 0.0f);
+            EXPECT_FLOAT_EQ(values->at("u_Point1")[1], 0.0f);
+        }
+    }
+}
+
+TEST(SceneSchema, UnrelatedAndBrokenVectorTimelinesKeepTheirOwnConstants) {
+    auto parsed = ParseVectorTimelineScene({
+        { "fold page", PausedFoldConstants() },
+        // The same constant name in another pass is a different parameter.
+        { "free page", nlohmann::json {
+              { "point1", VectorConstant({ 0.375f, 0.875f }, R"({
+                  "options":{"fps":30,"length":3,"mode":"single"},
+                  "c0":[{"frame":0,"value":0.875},{"frame":3,"value":0.125}],
+                  "c1":[{"frame":0,"value":0.875},{"frame":3,"value":0.875}]
+              })") },
+          } },
+        { "cyclic page", nlohmann::json {
+              { "point1", VectorConstant({ 9.0f, 0.25f }, R"({
+                  "options":{"fps":30,"length":3,"mode":"single","parent":{"key":"point2"}},
+                  "c0":[{"frame":0,"value":0.5},{"frame":3,"value":0.125}]
+              })") },
+              { "point2", VectorConstant({ 9.0f, 9.0f }, R"({
+                  "options":{"fps":30,"length":3,"mode":"single","parent":{"key":"point1"}},
+                  "c0":[{"frame":0,"value":0.25},{"frame":3,"value":0.75}],
+                  "c1":[{"frame":0,"value":0.5},{"frame":3,"value":0.75}]
+              })") },
+          } },
+        { "orphan page", nlohmann::json {
+              { "point1", VectorConstant({ 9.0f, 9.0f }, R"({
+                  "options":{"fps":30,"length":3,"mode":"single","parent":{"key":"point9"}},
+                  "c0":[{"frame":0,"value":0.25},{"frame":3,"value":0.75}],
+                  "c1":[{"frame":0,"value":0.5},{"frame":3,"value":0.75}]
+              })") },
+          } },
+    });
+    ASSERT_NE(parsed, nullptr);
+    ASSERT_NE(parsed->runtime, nullptr);
+    const auto* fold   = LayerConstants(*parsed, "fold page");
+    const auto* free   = LayerConstants(*parsed, "free page");
+    const auto* cyclic = LayerConstants(*parsed, "cyclic page");
+    const auto* orphan = LayerConstants(*parsed, "orphan page");
+    ASSERT_NE(fold, nullptr);
+    ASSERT_NE(free, nullptr);
+    ASSERT_NE(cyclic, nullptr);
+    ASSERT_NE(orphan, nullptr);
+
+    parsed->runtime->Tick(5.0);
+    // Its own unpaused timeline ran to the end instead of joining the paused group.
+    EXPECT_FLOAT_EQ(free->at("u_Point1")[0], 0.125f);
+    EXPECT_FLOAT_EQ(fold->at("u_Point1")[0], 0.875f);
+    // Broken relations freeze on their first key and keep unanimated components.
+    EXPECT_FLOAT_EQ(cyclic->at("u_Point1")[0], 0.5f);
+    EXPECT_FLOAT_EQ(cyclic->at("u_Point1")[1], 0.25f);
+    EXPECT_FLOAT_EQ(cyclic->at("u_Point2")[0], 0.25f);
+    EXPECT_FLOAT_EQ(cyclic->at("u_Point2")[1], 0.5f);
+    EXPECT_FLOAT_EQ(orphan->at("u_Point1")[0], 0.25f);
+    EXPECT_FLOAT_EQ(orphan->at("u_Point1")[1], 0.5f);
+}
+
+std::vector<std::string>* captured_parse_errors = nullptr;
+
+void CaptureParseErrors(int level, const char*, int, const char* message) {
+    if (level == LOGLEVEL_ERROR && captured_parse_errors != nullptr) {
+        captured_parse_errors->push_back(message == nullptr ? "" : message);
+    }
+}
+
+std::vector<std::string> ParseVectorTimelineErrors(
+    const std::vector<std::pair<std::string, nlohmann::json>>& layers) {
+    std::vector<std::string> logs;
+    captured_parse_errors = &logs;
+    SetWallpaperLogCallback(CaptureParseErrors);
+    auto parsed = ParseVectorTimelineScene(layers);
+    SetWallpaperLogCallback(nullptr);
+    captured_parse_errors = nullptr;
+    EXPECT_NE(parsed, nullptr);
+    return logs;
+}
+
+nlohmann::json OrphanConstant(const char* parent_key, float first_key) {
+    const std::string animation = std::string(R"({
+        "options":{"fps":30,"length":3,"mode":"single","parent":{"key":")") + parent_key + R"("}},
+        "c0":[{"frame":0,"value":)" + std::to_string(first_key) + R"(},{"frame":3,"value":0.75}]
+    })";
+    return VectorConstant({ 9.0f, 9.0f }, animation.c_str());
+}
+
+TEST(SceneSchema, OneBrokenVectorTimelineGroupIsReportedOnce) {
+    // Two constants naming the same unusable parent are one broken group.
+    const auto shared_parent = ParseVectorTimelineErrors({
+        { "orphan page", nlohmann::json {
+              { "point1", OrphanConstant("point9", 0.25f) },
+              { "point2", OrphanConstant("point9", 0.5f) },
+          } },
+    });
+    EXPECT_EQ(shared_parent.size(), 1u);
+    // Two unusable parents are two groups, so neither is silently swallowed.
+    const auto separate_parents = ParseVectorTimelineErrors({
+        { "orphan page", nlohmann::json {
+              { "point1", OrphanConstant("point8", 0.25f) },
+              { "point2", OrphanConstant("point9", 0.5f) },
+          } },
+    });
+    EXPECT_EQ(separate_parents.size(), 2u);
+}
+
+TEST(SceneSchema, ScriptedMaterialConstantsKeepTheComponentsTheShaderDeclares) {
+    // A script that swaps the components only produces the authored numbers when
+    // it is handed a vector. Reaching it as a string yields NaN on `.x`/`.y`.
+    nlohmann::json swapped { { "value", nlohmann::json::array({ 0.125f, 0.25f }) } };
+    swapped["script"] = R"JS(
+export function update(value) { return new Vec2(value.y, value.x); }
+)JS";
+    nlohmann::json doubled { { "value", nlohmann::json::array({ 0.5f, 0.75f }) } };
+    doubled["script"] = R"JS(
+export function update(value) { return value; }
+)JS";
+    auto parsed = ParseVectorTimelineScene({
+        { "scripted page", nlohmann::json { { "point1", swapped }, { "point2", doubled } } },
+    });
+    ASSERT_NE(parsed, nullptr);
+    ASSERT_NE(parsed->runtime, nullptr);
+    const auto* values = LayerConstants(*parsed, "scripted page");
+    ASSERT_NE(values, nullptr);
+    ASSERT_TRUE(values->contains("u_Point1"));
+
+    parsed->runtime->Tick(1.0 / 60.0);
+    ASSERT_EQ(values->at("u_Point1").size(), 2u);
+    EXPECT_FLOAT_EQ(values->at("u_Point1")[0], 0.25f);
+    EXPECT_FLOAT_EQ(values->at("u_Point1")[1], 0.125f);
+    parsed->runtime->Tick(1.0 / 60.0);
+    EXPECT_FLOAT_EQ(values->at("u_Point1")[0], 0.125f);
+    EXPECT_FLOAT_EQ(values->at("u_Point1")[1], 0.25f);
+    // A script that returns its input unchanged still uploads both components.
+    ASSERT_EQ(values->at("u_Point2").size(), 2u);
+    EXPECT_FLOAT_EQ(values->at("u_Point2")[0], 0.5f);
+    EXPECT_FLOAT_EQ(values->at("u_Point2")[1], 0.75f);
+    EXPECT_EQ(parsed->runtime->scriptErrorCount(), 0u);
 }
 
 TEST(SceneSchema, ParserRegistersEveryVideoTextureInImageMaterialForLayerControls) {

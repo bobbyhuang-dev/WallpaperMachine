@@ -1171,6 +1171,8 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
         << "    if (capturedError !== undefined) throw capturedError;\n"
         << "  };\n"
         << "  globalThis.__layerCache = globalThis.__layerCache || Object.create(null);\n"
+        << "  globalThis.__sceneAnimations = globalThis.__sceneAnimations || "
+           "Object.create(null);\n"
         << "  globalThis.__layerOrder = globalThis.__layerOrder || [];\n"
         << "  globalThis.__videoTextureCache = globalThis.__videoTextureCache || "
            "Object.create(null);\n"
@@ -1355,6 +1357,12 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
         << "      if (!globalThis.__layerCache[name]) globalThis.__layerCache[name] = "
            "__createLayer(name);\n"
         << "      return globalThis.__layerCache[name];\n"
+        << "    },\n"
+        << "    getAnimation: function(animationName) {\n"
+        << "      var key = String(animationName || '');\n"
+        << "      if (!globalThis.__sceneAnimations[key]) globalThis.__sceneAnimations[key] = "
+           "__makeAnimation(null, key);\n"
+        << "      return globalThis.__sceneAnimations[key];\n"
         << "    },\n"
         << "    getObject: function(name) {\n"
         << "      return this.getLayer(name);\n"
@@ -2125,11 +2133,17 @@ JSValue JsSoundSetMuted(JSContext* context, JSValueConst, int argc, JSValueConst
 JSValue JsAnimationControl(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
     auto* bridge = GetBridgeState(context);
     if (bridge == nullptr || bridge->runtime == nullptr || argc < 3) return JS_UNDEFINED;
-    const char* layer = JS_ToCString(context, argv[0]);
-    const char* name = JS_ToCString(context, argv[1]);
-    const char* operation = JS_ToCString(context, argv[2]);
-    auto* playback = layer != nullptr && name != nullptr
-        ? bridge->runtime->FindScalarAnimation(layer, name) : nullptr;
+    // A null layer means `scene.getAnimation(name)`: the authored name is looked
+    // up across the scene instead of inside one layer.
+    const bool  scene_wide = JS_IsNull(argv[0]) || JS_IsUndefined(argv[0]);
+    const char* layer      = scene_wide ? nullptr : JS_ToCString(context, argv[0]);
+    const char* name       = JS_ToCString(context, argv[1]);
+    const char* operation  = JS_ToCString(context, argv[2]);
+    auto*       playback =
+        name == nullptr ? nullptr
+        : scene_wide    ? bridge->runtime->FindAnimationByName(name)
+        : layer != nullptr ? bridge->runtime->FindScalarAnimation(layer, name)
+                           : nullptr;
     double result = 0.0;
     if (playback != nullptr && operation != nullptr) {
         const std::string_view command(operation);
@@ -2330,6 +2344,17 @@ void CallSceneExport(JSContext* context, const char* export_name, int argc, JSVa
     JS_FreeValue(context, result);
 }
 
+// The authored AnimationEvent carries the marker's name and its frame.
+JSValue BuildAnimationEventObject(JSContext* context, std::string_view event_name, double frame) {
+    JSValue event = JS_NewObject(context);
+    JS_SetPropertyStr(context,
+                      event,
+                      "name",
+                      JS_NewStringLen(context, event_name.data(), event_name.size()));
+    JS_SetPropertyStr(context, event, "frame", JS_NewFloat64(context, frame));
+    return event;
+}
+
 void RunSceneCallbacks(JSContext* context, const char* event_name,
                        JSValueConst payload = JS_UNDEFINED) {
     JSValue global_object = JS_GetGlobalObject(context);
@@ -2425,6 +2450,8 @@ std::string BuildPropertyScriptFactorySource(const ScriptFrontEndResult& front_e
             << "    cursorLeave: (typeof cursorLeave === 'function') ? cursorLeave : null,\n"
             << "    cursorMove: (typeof cursorMove === 'function') ? cursorMove : null,\n"
             << "    cursorUp: (typeof cursorUp === 'function') ? cursorUp : null,\n"
+            << "    animationEvent: (typeof animationEvent === 'function') ? animationEvent : "
+               "null,\n"
             << "    mediaPlaybackChanged: (typeof mediaPlaybackChanged === 'function') ? "
                "mediaPlaybackChanged : null,\n"
             << "    mediaPropertiesChanged: (typeof mediaPropertiesChanged === 'function') ? "
@@ -2467,6 +2494,8 @@ std::string BuildSceneScriptFactorySource(const ScriptFrontEndResult& front_end)
             << "    cursorLeave: (typeof cursorLeave === 'function') ? cursorLeave : null,\n"
             << "    cursorMove: (typeof cursorMove === 'function') ? cursorMove : null,\n"
             << "    cursorUp: (typeof cursorUp === 'function') ? cursorUp : null,\n"
+            << "    animationEvent: (typeof animationEvent === 'function') ? animationEvent : "
+               "null,\n"
             << "    applyUserProperties: (typeof applyUserProperties === 'function') ? "
                "applyUserProperties : null,\n"
             << "    mediaPlaybackChanged: (typeof mediaPlaybackChanged === 'function') ? "
@@ -2794,6 +2823,9 @@ ScriptProgramCapabilities ReadCompiledCapabilities(JSContext* context, const cha
         if (JS_IsFunction(context, handler)) capabilities.cursor_handlers |= uint8_t(1u << index);
         JS_FreeValue(context, handler);
     }
+    JSValue animation_event = JS_GetPropertyStr(context, exports, "animationEvent");
+    capabilities.animation_event = JS_IsFunction(context, animation_event);
+    JS_FreeValue(context, animation_event);
     JS_FreeValue(context, exports);
     JS_FreeValue(context, global);
     return capabilities;
@@ -3065,6 +3097,21 @@ void PropertyScriptProgram::DispatchCursorUp(const ScriptHostContext& host_conte
     JS_FreeValue(context_handle, event_object);
 }
 
+void PropertyScriptProgram::DispatchAnimationEvent(const ScriptHostContext& host_context,
+                                                   std::string_view event_name, double frame) {
+    if (! m_valid || ! m_capabilities.animation_event) return;
+    auto* context_handle = static_cast<JSContext*>(m_impl_context);
+    if (context_handle == nullptr) return;
+
+    UpdateHostContext(host_context);
+    JSValue      event_object = BuildAnimationEventObject(context_handle, event_name, frame);
+    JSValueConst argv[]       = { event_object };
+    JSValue      result =
+        CallStoredExport(context_handle, m_exports_object_name.c_str(), "animationEvent", 1, argv);
+    JS_FreeValue(context_handle, result);
+    JS_FreeValue(context_handle, event_object);
+}
+
 void PropertyScriptProgram::DispatchMediaThumbnailChanged(const Eigen::Vector3f& primary_color,
                                                           const Eigen::Vector3f& text_color) {
     if (! m_valid) return;
@@ -3313,6 +3360,23 @@ void SceneScriptProgram::DispatchCursorUp(const ScriptHostContext& host_context)
     JS_FreeValue(context_handle, event_object);
 }
 
+void SceneScriptProgram::DispatchAnimationEvent(const ScriptHostContext& host_context,
+                                                std::string_view event_name, double frame) {
+    if (! m_valid || ! m_capabilities.animation_event) return;
+    auto* context_handle = static_cast<JSContext*>(m_impl_context);
+    if (context_handle == nullptr) return;
+
+    // The global callback list is shared by every program on this context, so
+    // the runtime runs it once per event instead of once per scene script.
+    UpdateHostContext(host_context);
+    JSValue      event_object = BuildAnimationEventObject(context_handle, event_name, frame);
+    JSValueConst argv[]       = { event_object };
+    JSValue      result =
+        CallStoredExport(context_handle, m_exports_object_name.c_str(), "animationEvent", 1, argv);
+    JS_FreeValue(context_handle, result);
+    JS_FreeValue(context_handle, event_object);
+}
+
 void SceneScriptProgram::DispatchMediaThumbnailChanged(const Eigen::Vector3f& primary_color,
                                                        const Eigen::Vector3f& text_color) {
     if (! m_valid) return;
@@ -3439,6 +3503,19 @@ std::unique_ptr<SceneScriptProgram> ScriptEngine::CreateSceneScriptProgram(
                                              "__sceneExports_" + std::to_string(program_id));
     if (! program->Valid()) return nullptr;
     return program;
+}
+
+void ScriptEngine::RunAnimationEventCallbacks(const ScriptHostContext& host_context,
+                                              std::string_view event_name, double frame) {
+    if (m_context == nullptr) return;
+    // A global listener can be the only consumer of a marker, so `engine` is
+    // refreshed here instead of relying on a program having run this tick.
+    JSValue global_object = JS_GetGlobalObject(m_context);
+    UpdateEngineObject(m_context, global_object, host_context);
+    JS_FreeValue(m_context, global_object);
+    JSValue event_object = BuildAnimationEventObject(m_context, event_name, frame);
+    RunSceneCallbacks(m_context, "animationEvent", event_object);
+    JS_FreeValue(m_context, event_object);
 }
 
 } // namespace wallpaper

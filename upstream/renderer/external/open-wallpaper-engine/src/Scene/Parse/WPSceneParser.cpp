@@ -1605,10 +1605,12 @@ MakeMaterialConstantDynamicValue(SceneRuntimeContext& context,
                                  const wpscene::WPConstantShaderValue& source,
                                  std::string_view current_layer_name) {
     if (source.script.empty()) return MakeMaterialConstantValue(source);
-    if (source.value.size() >= 3) {
-        return ResolveVec3Setting(context, MaterialConstantSettingJson(source), current_layer_name);
+    const auto setting = MaterialConstantSettingJson(source);
+    // Without an authored value there is no component count to preserve.
+    if (source.value.empty()) {
+        return ResolveStringSetting(context, setting, current_layer_name);
     }
-    return ResolveStringSetting(context, MaterialConstantSettingJson(source), current_layer_name);
+    return ResolveVectorSetting(context, setting, source.value.size(), current_layer_name);
 }
 
 void LoadMaterialConstantShaderValuesImpl(SceneMaterial& material, const wpscene::WPMaterial& wpmat,
@@ -1639,10 +1641,115 @@ void AddConstantValue(wpscene::WPMaterial& material, std::string name, std::vect
     };
 }
 
+// Vector shader constants carry one curve per component, and an author can drive
+// several of them from one timeline through `options.parent`. Both the curves and
+// the relations are read per material pass: a corner of the same name in another
+// pass is a different parameter and must never join this group.
+struct MaterialConstantAnimationSource {
+    std::array<ScalarAnimation, 4> components;
+    std::size_t                    component_count { 0 };
+    std::size_t                    first_curve { 4 };
+    double                         last_frame { 0.0 };
+    std::string                    parent_key;
+};
+
+std::unordered_map<std::string, MaterialConstantAnimationSource>
+CollectMaterialConstantAnimations(const wpscene::WPMaterial& wpmat) {
+    std::unordered_map<std::string, MaterialConstantAnimationSource> collected;
+    for (const auto& [name, value] : wpmat.constantshadervalues) {
+        if (! value.animation.is_object()) continue;
+        if (value.value.empty() || value.value.size() > 4) continue;
+
+        const auto                      setting = MaterialConstantSettingJson(value);
+        MaterialConstantAnimationSource source;
+        source.component_count = value.value.size();
+        for (std::size_t index = 0; index < source.component_count; ++index) {
+            auto curve = ResolveScalarAnimation(setting, index);
+            if (! curve.has_value()) {
+                // A component the author left unanimated keeps its own value.
+                source.components[index].initial_value = value.value[index];
+                continue;
+            }
+            if (source.first_curve == source.components.size()) source.first_curve = index;
+            source.last_frame = std::max(source.last_frame, curve->keyframes.back().frame);
+            source.components[index] = std::move(*curve);
+        }
+        if (source.first_curve == source.components.size()) continue;
+
+        const auto options = value.animation.find("options");
+        if (options != value.animation.end() && options->is_object()) {
+            const auto parent = options->find("parent");
+            if (parent != options->end() && parent->is_object()) {
+                const auto key = parent->find("key");
+                if (key != parent->end() && key->is_string()) {
+                    source.parent_key = key->get<std::string>();
+                }
+            }
+        }
+        collected.emplace(name, std::move(source));
+    }
+    return collected;
+}
+
 void RegisterMaterialConstants(ParseContext& context, std::shared_ptr<SceneMaterial> material,
                                const wpscene::WPMaterial& wpmat, const WPShaderInfo& info,
                                std::string_view runtime_name = {}) {
     if (material == nullptr || context.scene->runtime == nullptr) return;
+
+    const auto animations = CollectMaterialConstantAnimations(wpmat);
+    // Constants arrive in hash order, so every relation is walked to its root
+    // with memoized results; an empty root marks a group that cannot be played.
+    std::unordered_map<std::string, std::string> roots;
+    const auto resolve_root = [&](const std::string& start) {
+        std::vector<std::string> chain;
+        std::string              current = start;
+        while (true) {
+            if (const auto known = roots.find(current); known != roots.end()) {
+                const std::string resolved = known->second;
+                for (const auto& key : chain) roots[key] = resolved;
+                return resolved;
+            }
+            const bool cycle = std::find(chain.begin(), chain.end(), current) != chain.end();
+            if (cycle || animations.find(current) == animations.end()) {
+                LOG_ERROR("invalid material animation parent for '%s': '%s'",
+                          (chain.empty() ? start : chain.back()).c_str(), current.c_str());
+                // The unusable parent is memoized too, so every sibling that
+                // names it joins this group instead of reporting it again.
+                roots[current] = std::string();
+                for (const auto& key : chain) roots[key] = std::string();
+                return std::string();
+            }
+            chain.push_back(current);
+            const auto& source = animations.at(current);
+            if (source.parent_key.empty()) {
+                for (const auto& key : chain) roots[key] = current;
+                return current;
+            }
+            current = source.parent_key;
+        }
+    };
+    for (const auto& [name, source] : animations) {
+        (void)source;
+        resolve_root(name);
+    }
+
+    // One clock per root, long enough for the whole group unless the author
+    // gave the root an explicit length.
+    std::unordered_map<std::string, double> group_last_frame;
+    for (const auto& [name, source] : animations) {
+        const auto root = roots.find(name);
+        if (root == roots.end() || root->second.empty()) continue;
+        auto& last_frame = group_last_frame[root->second];
+        last_frame = std::max(last_frame, source.last_frame);
+    }
+    std::unordered_map<std::string, std::shared_ptr<ScalarAnimationPlayback>> clocks;
+    for (const auto& [root_key, last_frame] : group_last_frame) {
+        const auto&     source = animations.at(root_key);
+        ScalarAnimation clock  = source.components[source.first_curve];
+        if (! (clock.length_frames > 0.0)) clock.length_frames = last_frame;
+        clocks.emplace(root_key,
+                       context.scene->runtime->RegisterScalarAnimation(runtime_name, std::move(clock)));
+    }
 
     for (const auto& cs : wpmat.constantshadervalues) {
         const auto& name  = cs.first;
@@ -1660,14 +1767,25 @@ void RegisterMaterialConstants(ParseContext& context, std::shared_ptr<SceneMater
                 dynamic_value->connect(property_value);
             }
         }
-        std::shared_ptr<ScalarAnimationPlayback> playback;
-        if (value.value.size() == 1 && !value.animation.is_null()) {
-            if (auto animation = ResolveScalarAnimation(MaterialConstantSettingJson(value))) {
-                playback = context.scene->runtime->RegisterScalarAnimation(runtime_name, std::move(*animation));
+        std::shared_ptr<const MaterialConstantAnimation> animation;
+        if (const auto source = animations.find(name); source != animations.end()) {
+            auto resolved             = std::make_shared<MaterialConstantAnimation>();
+            resolved->component_count = source->second.component_count;
+            resolved->components      = source->second.components;
+            // Only the shared clock advances, loops and restarts; the component
+            // copies just read its frame, so none of them wraps a second time.
+            for (auto& component : resolved->components) {
+                component.mode = ScalarAnimationMode::Single;
             }
+            if (const auto root = roots.find(name); root != roots.end()) {
+                if (const auto clock = clocks.find(root->second); clock != clocks.end()) {
+                    resolved->playback = clock->second;
+                }
+            }
+            animation = std::move(resolved);
         }
         context.scene->runtime->RegisterMaterialConstant(
-            material, glname, std::move(dynamic_value), std::move(playback));
+            material, glname, std::move(dynamic_value), std::move(animation));
     }
 }
 

@@ -1020,8 +1020,12 @@ TEST(ScriptRuntimeCompat, PausedMaterialTimelinePlaysOnlyWhenScriptRequestsIt) {
     })");
     const auto animation = ResolveScalarAnimation(setting);
     ASSERT_TRUE(animation.has_value());
+    auto timeline             = std::make_shared<MaterialConstantAnimation>();
+    timeline->components[0]   = *animation;
+    timeline->component_count = 1;
+    timeline->playback        = runtime->RegisterScalarAnimation("subject", *animation);
     runtime->RegisterMaterialConstant(material, "u_Opacity", std::make_unique<DynamicValue>(1.5f),
-        runtime->RegisterScalarAnimation("subject", *animation));
+                                      timeline);
     const auto command = [&](std::string source) {
         auto program = runtime->scriptEngine().CreatePropertyScriptProgram(
             runtime.get(), "export function update(value) { " + source + "; return value; }",
@@ -1053,6 +1057,472 @@ TEST(ScriptRuntimeCompat, PausedMaterialTimelinePlaysOnlyWhenScriptRequestsIt) {
     command("thisLayer.getAnimation('transition').setFrame(5)");
     runtime->Tick(0.0);
     EXPECT_FLOAT_EQ(material->customShader.constValues.at("u_Opacity")[0], 1.5f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+// Vector constants animate per component, so a shader reading `xyzw` has to see
+// every animated channel move and every unanimated channel keep its own value.
+std::shared_ptr<MaterialConstantAnimation> BuildComponentTimeline(const nlohmann::json& setting,
+                                                                  std::size_t components) {
+    auto timeline             = std::make_shared<MaterialConstantAnimation>();
+    timeline->component_count = components;
+    for (std::size_t index = 0; index < components; ++index) {
+        if (auto curve = ResolveScalarAnimation(setting, index)) {
+            timeline->components[index] = std::move(*curve);
+        } else {
+            timeline->components[index].initial_value =
+                setting.at("value").at(index).get<float>();
+        }
+    }
+    return timeline;
+}
+
+TEST(ScriptRuntimeCompat, VectorMaterialTimelineDrivesEveryComponentSeparately) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    ASSERT_NE(runtime, nullptr);
+    auto material = std::make_shared<SceneMaterial>();
+    auto node     = std::make_shared<SceneNode>();
+    runtime->RegisterNode("subject", node.get());
+    const auto setting = nlohmann::json::parse(R"({
+        "value":[0,0,0.25,0],
+        "animation":{
+            "options":{"fps":30,"length":6,"mode":"single","startpaused":true,"name":"fold"},
+            "c0":[{"frame":0,"value":1},{"frame":6,"value":2}],
+            "c1":[{"frame":0,"value":-1},{"frame":6,"value":-4}],
+            "c3":[{"frame":0,"value":10},{"frame":3,"value":16}]
+        }
+    })");
+    auto timeline      = BuildComponentTimeline(setting, 4);
+    timeline->playback = runtime->RegisterScalarAnimation("subject", timeline->components[0]);
+    runtime->RegisterMaterialConstant(
+        material, "u_Fold", std::make_unique<DynamicValue>(Eigen::Vector4f(0.0f, 0.0f, 0.0f, 0.0f)),
+        timeline);
+    const auto component = [&](std::size_t index) {
+        return material->customShader.constValues.at("u_Fold")[index];
+    };
+    const auto command = [&](std::string source) {
+        auto program = runtime->scriptEngine().CreatePropertyScriptProgram(
+            runtime.get(), "export function update(value) { " + source + "; return value; }",
+            "subject", {}, DynamicValue(0.0f), runtime->hostContext());
+        EXPECT_TRUE(program->Valid());
+        program->Evaluate(runtime->hostContext(), DynamicValue(0.0f));
+    };
+
+    ASSERT_EQ(material->customShader.constValues.at("u_Fold").size(), 4u);
+    EXPECT_FLOAT_EQ(component(0), 1.0f);
+    EXPECT_FLOAT_EQ(component(1), -1.0f);
+    EXPECT_FLOAT_EQ(component(2), 0.25f);
+    EXPECT_FLOAT_EQ(component(3), 10.0f);
+    command("thisLayer.getAnimation('fold').play()");
+    runtime->Tick(3.0 / 30.0);
+    EXPECT_FLOAT_EQ(component(0), 1.5f);
+    EXPECT_FLOAT_EQ(component(1), -2.5f);
+    EXPECT_FLOAT_EQ(component(2), 0.25f);
+    EXPECT_FLOAT_EQ(component(3), 16.0f);
+    command("thisLayer.getAnimation('fold').setFrame(6)");
+    runtime->Tick(0.0);
+    EXPECT_FLOAT_EQ(component(0), 2.0f);
+    EXPECT_FLOAT_EQ(component(1), -4.0f);
+    EXPECT_FLOAT_EQ(component(2), 0.25f);
+    // The short curve holds its last key instead of restarting on its own.
+    EXPECT_FLOAT_EQ(component(3), 16.0f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, ClonedTemplateLayersShareOneTimelineAndKeepEveryBinding) {
+    Scene scene;
+    auto  runtime = MakeRuntimeWithScene(scene);
+    ASSERT_NE(runtime, nullptr);
+
+    auto source_node = std::make_shared<SceneNode>(Eigen::Vector3f(100.0f, 50.0f, 0.0f),
+                                                   Eigen::Vector3f::Ones(),
+                                                   Eigen::Vector3f::Zero(), "source");
+    auto source_mesh = std::make_shared<SceneMesh>();
+    source_mesh->AddMaterial(SceneMaterial {});
+    source_node->AddMesh(source_mesh);
+    scene.sceneGraph->AppendChild(source_node);
+    runtime->RegisterNode("source", source_node.get());
+    runtime->RegisterLayerTemplate("models/workshop/123456/bar.json", source_node,
+                                   Eigen::Vector2f(20.0f, 10.0f));
+    runtime->RegisterMaterialConstant(
+        source_mesh->MaterialSlotPtr(), "g_Tint",
+        std::make_unique<DynamicValue>(Eigen::Vector3f(0.25f, 0.5f, 0.75f)));
+    const auto setting = nlohmann::json::parse(R"({
+        "value":[0,0.625],
+        "animation":{
+            "options":{"fps":1,"length":4,"mode":"single","name":"slide"},
+            "c0":[{"frame":0,"value":0},{"frame":4,"value":1}]
+        }
+    })");
+    auto timeline      = BuildComponentTimeline(setting, 2);
+    timeline->playback = runtime->RegisterScalarAnimation("source", timeline->components[0]);
+    runtime->RegisterMaterialConstant(source_mesh->MaterialSlotPtr(), "g_Point",
+                                      std::make_unique<DynamicValue>(Eigen::Vector2f(0.0f, 0.0f)),
+                                      timeline);
+
+    runtime->Tick(2.0);
+    ASSERT_FALSE(runtime->CreateLayerFromTemplate("models/bar.json", "source").empty());
+    // A clone joins the running timeline; it must not rewind or restart it.
+    auto* clock = runtime->FindScalarAnimation("source", "slide");
+    ASSERT_NE(clock, nullptr);
+    EXPECT_DOUBLE_EQ(clock->frame, 2.0);
+    ASSERT_EQ(scene.sceneGraph->GetChildren().size(), 2u);
+    const auto expect_layer = [](SceneNode& node, float slide) {
+        ASSERT_NE(node.Mesh(), nullptr);
+        ASSERT_NE(node.Mesh()->Material(), nullptr);
+        const auto& values = node.Mesh()->Material()->customShader.constValues;
+        ASSERT_TRUE(values.contains("g_Tint"));
+        ASSERT_EQ(values.at("g_Tint").size(), 3u);
+        EXPECT_FLOAT_EQ(values.at("g_Tint")[0], 0.25f);
+        EXPECT_FLOAT_EQ(values.at("g_Tint")[2], 0.75f);
+        ASSERT_TRUE(values.contains("g_Point"));
+        ASSERT_EQ(values.at("g_Point").size(), 2u);
+        EXPECT_FLOAT_EQ(values.at("g_Point")[0], slide);
+        EXPECT_FLOAT_EQ(values.at("g_Point")[1], 0.625f);
+    };
+    for (const auto& child : scene.sceneGraph->GetChildren()) expect_layer(*child, 0.5f);
+    runtime->Tick(2.0);
+    for (const auto& child : scene.sceneGraph->GetChildren()) expect_layer(*child, 1.0f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+// An authored timeline can name frames; the layer's own scripts react to them.
+// The handler counts on the marker's scale so a missed or repeated event shows.
+nlohmann::json TimelineEventSetting(const char* options) {
+    auto setting = nlohmann::json::parse(std::string(R"({
+        "value":[0,0],
+        "animation":{
+            "options":)") + options + R"(,
+            "c0":[{"frame":0,"value":0},{"frame":9,"value":1}],
+            "c1":[{"frame":0,"value":0},{"frame":9,"value":2}]
+        }
+    })");
+    setting["script"] = R"JS(
+let fired = 0;
+export function animationEvent(event) {
+  if (event.name === 'half') {
+    fired += 1;
+    thisScene.getLayer('marker').scale = new Vec3(fired, 1, 1);
+  }
+  if (event.name === 'done') thisScene.getLayer('subject').visible = false;
+}
+)JS";
+    return setting;
+}
+
+TEST(ScriptRuntimeCompat, TimelineEventsFireWhenThePlayheadCrossesTheirFrame) {
+    Scene scene;
+    auto  runtime = MakeRuntimeWithScene(scene);
+    ASSERT_NE(runtime, nullptr);
+    auto subject = std::make_shared<SceneNode>();
+    auto marker  = std::make_shared<SceneNode>();
+    runtime->RegisterNode("subject", subject.get());
+    runtime->RegisterNode("marker", marker.get());
+    marker->SetScale(Eigen::Vector3f(0.0f, 1.0f, 1.0f));
+    const auto setting = TimelineEventSetting(
+        R"({"fps":30,"length":9,"mode":"single","startpaused":true,"name":"fold",
+            "events":[{"frame":5,"name":"half"},{"frame":9,"name":"done"}]})");
+    auto material      = std::make_shared<SceneMaterial>();
+    auto timeline      = BuildComponentTimeline(setting, 2);
+    timeline->playback = runtime->RegisterScalarAnimation("subject", timeline->components[0]);
+    runtime->RegisterMaterialConstant(material, "g_Point",
+                                      ResolveVectorSetting(*runtime, setting, 2, "subject"),
+                                      timeline);
+    const auto command = [&](std::string source) {
+        auto program = runtime->scriptEngine().CreatePropertyScriptProgram(
+            runtime.get(), "export function update(value) { " + source + "; return value; }",
+            "subject", {}, DynamicValue(0.0f), runtime->hostContext());
+        EXPECT_TRUE(program->Valid());
+        program->Evaluate(runtime->hostContext(), DynamicValue(0.0f));
+    };
+
+    runtime->Tick(1.0);
+    EXPECT_FLOAT_EQ(marker->Scale().x(), 0.0f);
+    EXPECT_TRUE(subject->Visible());
+    command("thisLayer.getAnimation('fold').play()");
+    runtime->Tick(4.0 / 30.0);
+    EXPECT_FLOAT_EQ(marker->Scale().x(), 0.0f);
+    runtime->Tick(1.0 / 30.0);
+    EXPECT_FLOAT_EQ(marker->Scale().x(), 1.0f);
+    EXPECT_TRUE(subject->Visible());
+    runtime->Tick(4.0 / 30.0);
+    // The last frame of a single timeline still crosses its event.
+    EXPECT_FALSE(subject->Visible());
+    runtime->Tick(1.0);
+    EXPECT_FLOAT_EQ(marker->Scale().x(), 1.0f);
+    // Seeking is an explicit jump, not playback, so it replays nothing.
+    command("thisLayer.getAnimation('fold').stop()");
+    command("thisLayer.getAnimation('fold').setFrame(9)");
+    runtime->Tick(0.0);
+    EXPECT_FLOAT_EQ(marker->Scale().x(), 1.0f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, LoopingTimelineEventsFireOncePerLapAndOncePerStall) {
+    Scene scene;
+    auto  runtime = MakeRuntimeWithScene(scene);
+    ASSERT_NE(runtime, nullptr);
+    auto subject = std::make_shared<SceneNode>();
+    auto marker  = std::make_shared<SceneNode>();
+    runtime->RegisterNode("subject", subject.get());
+    runtime->RegisterNode("marker", marker.get());
+    marker->SetScale(Eigen::Vector3f(0.0f, 1.0f, 1.0f));
+    const auto setting = TimelineEventSetting(
+        R"({"fps":30,"length":10,"mode":"loop","name":"fold",
+            "events":[{"frame":5,"name":"half"}]})");
+    auto material      = std::make_shared<SceneMaterial>();
+    auto timeline      = BuildComponentTimeline(setting, 2);
+    timeline->playback = runtime->RegisterScalarAnimation("subject", timeline->components[0]);
+    runtime->RegisterMaterialConstant(material, "g_Point",
+                                      ResolveVectorSetting(*runtime, setting, 2, "subject"),
+                                      timeline);
+
+    runtime->Tick(4.0 / 30.0);
+    EXPECT_FLOAT_EQ(marker->Scale().x(), 0.0f);
+    runtime->Tick(2.0 / 30.0);
+    EXPECT_FLOAT_EQ(marker->Scale().x(), 1.0f);
+    // Wrapping past the end and back over the event counts one more crossing.
+    runtime->Tick(10.0 / 30.0);
+    EXPECT_FLOAT_EQ(marker->Scale().x(), 2.0f);
+    // A stall longer than the whole loop reports each event once, not per lap.
+    runtime->Tick(100.0 / 30.0);
+    EXPECT_FLOAT_EQ(marker->Scale().x(), 3.0f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+// The handler records how many markers it saw, the frame of the last one and
+// the sum of all their frames, so a missed, repeated or misordered marker and a
+// missing `event.frame` all show up in one Vec3.
+nlohmann::json MarkerTallySetting(const char* options) {
+    auto setting = nlohmann::json::parse(std::string(R"({
+        "value":[0,0],
+        "animation":{"options":)") + options + R"(,
+            "c0":[{"frame":0,"value":0},{"frame":10,"value":1}],
+            "c1":[{"frame":0,"value":0},{"frame":10,"value":2}]}
+    })");
+    setting["script"] = R"JS(
+let seen = 0;
+let total = 0;
+export function animationEvent(event) {
+  seen += 1;
+  total += event.frame;
+  thisScene.getLayer('marker').scale = new Vec3(seen, event.frame, total);
+}
+)JS";
+    return setting;
+}
+
+std::shared_ptr<ScalarAnimationPlayback> AttachMarkerTally(SceneRuntimeContext& runtime,
+                                                           const nlohmann::json& setting,
+                                                           std::shared_ptr<SceneMaterial> material) {
+    auto timeline      = BuildComponentTimeline(setting, 2);
+    timeline->playback = runtime.RegisterScalarAnimation("subject", timeline->components[0]);
+    runtime.RegisterMaterialConstant(std::move(material), "g_Point",
+                                     ResolveVectorSetting(runtime, setting, 2, "subject"),
+                                     timeline);
+    return timeline->playback;
+}
+
+TEST(ScriptRuntimeCompat, OneTickReportsEveryCrossedMarkerWithItsAuthoredFrame) {
+    Scene scene;
+    auto  runtime = MakeRuntimeWithScene(scene);
+    ASSERT_NE(runtime, nullptr);
+    auto subject = std::make_shared<SceneNode>();
+    auto marker  = std::make_shared<SceneNode>();
+    runtime->RegisterNode("subject", subject.get());
+    runtime->RegisterNode("marker", marker.get());
+    auto playback = AttachMarkerTally(
+        *runtime,
+        MarkerTallySetting(R"({"fps":1,"length":10,"mode":"single","name":"fold",
+            "events":[{"frame":7,"name":"c"},{"frame":2,"name":"a"},{"frame":3,"name":"b"}]})"),
+        std::make_shared<SceneMaterial>());
+
+    runtime->Tick(8.0);
+    EXPECT_FLOAT_EQ(marker->Scale().x(), 3.0f);
+    // Ascending frame order, so the last marker seen is the furthest one.
+    EXPECT_FLOAT_EQ(marker->Scale().y(), 7.0f);
+    EXPECT_FLOAT_EQ(marker->Scale().z(), 12.0f);
+    EXPECT_DOUBLE_EQ(playback->frame, 8.0);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, LoopMarkersSurviveReverseTravelAndExactWraps) {
+    Scene scene;
+    auto  runtime = MakeRuntimeWithScene(scene);
+    ASSERT_NE(runtime, nullptr);
+    auto subject = std::make_shared<SceneNode>();
+    auto marker  = std::make_shared<SceneNode>();
+    runtime->RegisterNode("subject", subject.get());
+    runtime->RegisterNode("marker", marker.get());
+    auto playback = AttachMarkerTally(
+        *runtime,
+        MarkerTallySetting(R"({"fps":1,"length":10,"mode":"loop","name":"fold",
+            "events":[{"frame":0,"name":"seam"},{"frame":8,"name":"late"}]})"),
+        std::make_shared<SceneMaterial>());
+
+    // Running backwards past the seam still meets the late marker on the far
+    // side, in the order the playhead reaches them.
+    playback->SetFrame(1.0);
+    playback->rate = -1.0;
+    runtime->Tick(4.0);
+    EXPECT_DOUBLE_EQ(playback->frame, 7.0);
+    EXPECT_FLOAT_EQ(marker->Scale().x(), 2.0f);
+    EXPECT_FLOAT_EQ(marker->Scale().y(), 8.0f);
+    EXPECT_FLOAT_EQ(marker->Scale().z(), 8.0f);
+
+    // Landing exactly on the seam counts as reaching frame 0.
+    playback->SetFrame(6.0);
+    playback->rate = 1.0;
+    runtime->Tick(4.0);
+    EXPECT_DOUBLE_EQ(playback->frame, 0.0);
+    EXPECT_FLOAT_EQ(marker->Scale().x(), 4.0f);
+    EXPECT_FLOAT_EQ(marker->Scale().y(), 0.0f);
+    EXPECT_FLOAT_EQ(marker->Scale().z(), 16.0f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, TimelineMarkersReachInitializedScriptsOnTheFirstTick) {
+    Scene scene;
+    auto  runtime = MakeRuntimeWithScene(scene);
+    ASSERT_NE(runtime, nullptr);
+    auto subject = std::make_shared<SceneNode>();
+    auto marker  = std::make_shared<SceneNode>();
+    runtime->RegisterNode("subject", subject.get());
+    runtime->RegisterNode("marker", marker.get());
+    auto setting = nlohmann::json::parse(R"({
+        "value":[0,0],
+        "animation":{"options":{"fps":1,"length":10,"mode":"single","name":"fold",
+                                "events":[{"frame":1,"name":"tick"}]},
+                     "c0":[{"frame":0,"value":0},{"frame":10,"value":1}],
+                     "c1":[{"frame":0,"value":0},{"frame":10,"value":2}]}
+    })");
+    // The handler can only report 7 if `init` ran before the marker arrived.
+    setting["script"] = R"JS(
+let ready;
+export function init(value) { ready = 7; return value; }
+export function animationEvent(event) {
+  thisScene.getLayer('marker').scale = new Vec3(ready === undefined ? -1 : ready, 1, 1);
+}
+)JS";
+    auto timeline      = BuildComponentTimeline(setting, 2);
+    timeline->playback = runtime->RegisterScalarAnimation("subject", timeline->components[0]);
+    runtime->RegisterMaterialConstant(std::make_shared<SceneMaterial>(), "g_Point",
+                                      ResolveVectorSetting(*runtime, setting, 2, "subject"),
+                                      timeline);
+
+    runtime->Tick(2.0);
+    EXPECT_FLOAT_EQ(marker->Scale().x(), 7.0f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, GlobalAnimationListenersRunOncePerMarkerWhateverIsBound) {
+    for (const int scene_scripts : { 0, 2 }) {
+        Scene scene;
+        auto  runtime = MakeRuntimeWithScene(scene);
+        ASSERT_NE(runtime, nullptr);
+        auto subject  = std::make_shared<SceneNode>();
+        auto marker   = std::make_shared<SceneNode>();
+        auto listener = std::make_shared<SceneNode>();
+        runtime->RegisterNode("subject", subject.get());
+        runtime->RegisterNode("marker", marker.get());
+        runtime->RegisterNode("listener", listener.get());
+        // The global list lives on the shared context, so it must run once per
+        // marker whether nothing or several scene scripts are bound here.
+        runtime->RegisterSceneScript(R"JS(
+let heard = 0;
+engine.on('animationEvent', function(event) {
+  heard += 1;
+  thisScene.getLayer('listener').scale = new Vec3(heard, event.frame, 1);
+});
+function update() {}
+)JS",
+                                     "elsewhere");
+        for (int index = 0; index < scene_scripts; ++index) {
+            runtime->RegisterSceneScript(R"JS(
+function update() {}
+export function animationEvent(event) {
+  var layer = thisScene.getLayer('marker');
+  layer.scale = new Vec3(layer.scale.x + 1, 1, 1);
+}
+)JS",
+                                         "subject");
+        }
+        AttachMarkerTally(
+            *runtime,
+            MarkerTallySetting(R"({"fps":1,"length":10,"mode":"single","name":"fold",
+                "events":[{"frame":2,"name":"only"}]})"),
+            std::make_shared<SceneMaterial>());
+
+        runtime->Tick(3.0);
+        EXPECT_FLOAT_EQ(listener->Scale().x(), 1.0f) << "scene scripts: " << scene_scripts;
+        EXPECT_FLOAT_EQ(listener->Scale().y(), 2.0f) << "scene scripts: " << scene_scripts;
+        EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+    }
+}
+
+TEST(ScriptRuntimeCompat, GlobalOnlyAnimationListenerSeesTheCurrentTickTime) {
+    Scene scene;
+    auto  runtime = MakeRuntimeWithScene(scene);
+    ASSERT_NE(runtime, nullptr);
+    auto listener = std::make_shared<SceneNode>();
+    runtime->RegisterNode("listener", listener.get());
+    // No property script and no layer export: the global listener is the only
+    // consumer, so nothing else refreshes `engine` before it runs.
+    runtime->RegisterSceneScript(R"JS(
+engine.on('animationEvent', function(event) {
+  thisScene.getLayer('listener').scale =
+      new Vec3(engine.runtime, engine.frametime, event.frame);
+});
+function update() {}
+)JS",
+                                 "elsewhere");
+    ScalarAnimation clock;
+    clock.fps           = 1.0;
+    clock.length_frames = 10.0;
+    clock.name          = "fold";
+    clock.keyframes     = { { .frame = 0.0, .value = 0.0f }, { .frame = 10.0, .value = 1.0f } };
+    clock.events        = { { .frame = 1.0, .name = "tick" } };
+    runtime->RegisterScalarAnimation("subject", clock);
+
+    runtime->Tick(2.0);
+    EXPECT_FLOAT_EQ(listener->Scale().x(), 2.0f);
+    EXPECT_FLOAT_EQ(listener->Scale().y(), 2.0f);
+    EXPECT_FLOAT_EQ(listener->Scale().z(), 1.0f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(ScriptRuntimeCompat, SceneGetAnimationFindsATimelineOnAnotherLayer) {
+    Scene scene;
+    auto  runtime = MakeRuntimeWithScene(scene);
+    ASSERT_NE(runtime, nullptr);
+    auto page = std::make_shared<SceneNode>();
+    runtime->RegisterNode("page", page.get());
+    const auto setting = nlohmann::json::parse(R"({
+        "value":[0,0],
+        "animation":{"options":{"fps":30,"length":30,"mode":"single","startpaused":true,
+                                "name":"111"},
+                     "c0":[{"frame":0,"value":0},{"frame":30,"value":1}],
+                     "c1":[{"frame":0,"value":0},{"frame":30,"value":2}]}
+    })");
+    auto timeline      = BuildComponentTimeline(setting, 2);
+    timeline->playback = runtime->RegisterScalarAnimation("page", timeline->components[0]);
+    auto material      = std::make_shared<SceneMaterial>();
+    runtime->RegisterMaterialConstant(material, "g_Point",
+                                      std::make_unique<DynamicValue>(Eigen::Vector2f(0.0f, 0.0f)),
+                                      timeline);
+    auto other = std::make_shared<SceneNode>();
+    runtime->RegisterNode("other", other.get());
+    auto program = runtime->scriptEngine().CreatePropertyScriptProgram(
+        runtime.get(),
+        "export function update(value) { thisScene.getAnimation('111').play(); return value; }",
+        "other", {}, DynamicValue(0.0f), runtime->hostContext());
+    ASSERT_NE(program, nullptr);
+
+    EXPECT_FALSE(timeline->playback->playing);
+    program->Evaluate(runtime->hostContext(), DynamicValue(0.0f));
+    EXPECT_TRUE(timeline->playback->playing);
+    runtime->Tick(15.0 / 30.0);
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_Point")[0], 0.5f);
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 

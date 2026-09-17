@@ -212,7 +212,7 @@ gtest_discover_tests(
     DISCOVERY_TIMEOUT 60
 )
 add_executable(media_thumbnail_texture_smoke media_thumbnail_texture_smoke.cpp)
-target_link_libraries(media_thumbnail_texture_smoke PRIVATE ${PROJECT_NAME} wpScene GTest::gtest_main)
+target_link_libraries(media_thumbnail_texture_smoke PRIVATE ${PROJECT_NAME} wpScene nlohmann_json::nlohmann_json GTest::gtest_main)
 target_include_directories(media_thumbnail_texture_smoke PRIVATE .)
 target_compile_features(media_thumbnail_texture_smoke PRIVATE cxx_std_20)
 gtest_discover_tests(

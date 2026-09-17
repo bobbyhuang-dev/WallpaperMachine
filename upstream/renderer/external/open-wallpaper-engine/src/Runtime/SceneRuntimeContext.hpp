@@ -144,7 +144,7 @@ public:
                            bool apply_current_value = true);
     void RegisterMaterialConstant(std::shared_ptr<SceneMaterial> material, std::string name,
                                   std::unique_ptr<DynamicValue> value,
-                                  std::shared_ptr<ScalarAnimationPlayback> animation = {});
+                                  std::shared_ptr<const MaterialConstantAnimation> animation = {});
     void RegisterSceneClearColor(std::unique_ptr<DynamicValue> value);
     void RegisterSceneZoomAnimation(std::shared_ptr<ScalarAnimationPlayback> animation);
     void RegisterDynamicValueListener(std::unique_ptr<DynamicValue> value,
@@ -157,6 +157,9 @@ public:
                                                                    ScalarAnimation animation);
     ScalarAnimationPlayback* FindScalarAnimation(std::string_view layer_name,
                                                  std::string_view animation_name) const;
+    // `scene.getAnimation(name)` is not scoped to a layer: the authored name is
+    // matched across every registered timeline.
+    ScalarAnimationPlayback* FindAnimationByName(std::string_view animation_name) const;
     void RegisterSceneScript(std::string script_source, std::string layer_name);
     void RegisterNodeVideoTexture(std::string name, std::string texture_key);
     void RegisterSoundLayer(std::string name, std::shared_ptr<WPSoundStream> stream);
@@ -268,8 +271,9 @@ private:
         std::weak_ptr<SceneMaterial> material;
         std::string                  name;
         DynamicValue*                value { nullptr };
-        std::shared_ptr<ScalarAnimationPlayback> animation;
+        std::shared_ptr<const MaterialConstantAnimation> animation;
         uint64_t observed_generation { 0 };
+        double sampled_animation_frame { std::numeric_limits<double>::quiet_NaN() };
         bool cached_value_valid { false };
         ShaderValue cached_value;
     };
@@ -359,6 +363,7 @@ private:
     void ApplyNodeTransform(SceneNode& node, NodeAlignmentBinding& binding, const Eigen::Vector2f& size);
     void ApplyMaterialConstantBinding(MaterialConstantBinding& binding);
     void ApplySceneZoomAnimation();
+    void DispatchPendingAnimationEvents();
     bool                           CursorInsidePresentedContent() const;
     bool CursorHitsLayer(std::string_view name) const;
     bool CursorHitsScriptLayer(const ScriptedDynamicValue& value) const;

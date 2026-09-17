@@ -60,6 +60,7 @@ enum class ScriptCursorEvent : uint8_t {
 struct ScriptProgramCapabilities {
     bool update { false };
     uint8_t cursor_handlers { 0 };
+    bool animation_event { false };
 };
 
 class PropertyScriptProgram {
@@ -85,6 +86,8 @@ public:
     void                  DispatchCursorLeave(const ScriptHostContext& host_context);
     void                  DispatchCursorMove(const ScriptHostContext& host_context);
     void                  DispatchCursorUp(const ScriptHostContext& host_context);
+    void                  DispatchAnimationEvent(const ScriptHostContext& host_context,
+                                                 std::string_view event_name, double frame);
     void                  DispatchMediaThumbnailChanged(const Eigen::Vector3f& primary_color,
                                                         const Eigen::Vector3f& text_color);
     void                  DispatchMediaEventJson(std::string_view event_json);
@@ -128,6 +131,8 @@ public:
     void               DispatchCursorLeave(const ScriptHostContext& host_context);
     void               DispatchCursorMove(const ScriptHostContext& host_context);
     void               DispatchCursorUp(const ScriptHostContext& host_context);
+    void               DispatchAnimationEvent(const ScriptHostContext& host_context,
+                                              std::string_view event_name, double frame);
     void               DispatchMediaThumbnailChanged(const Eigen::Vector3f& primary_color,
                                                      const Eigen::Vector3f& text_color);
     void               DispatchMediaEventJson(std::string_view event_json);
@@ -173,6 +178,11 @@ public:
     CreateSceneScriptProgram(SceneRuntimeContext& runtime, std::string script_source,
                              std::string current_layer_name, ProjectProperties project_properties,
                              ScriptHostContext host_context);
+    // The global `engine.on`/`scene.on` list lives on the shared context, so it
+    // is run once per event rather than once per program that owns a handler.
+    // Nothing else may have refreshed `engine` this tick, so it is updated here.
+    void RunAnimationEventCallbacks(const ScriptHostContext& host_context,
+                                    std::string_view event_name, double frame);
 
 private:
     JSRuntime* m_runtime         = nullptr;

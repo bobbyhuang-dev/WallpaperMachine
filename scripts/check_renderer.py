@@ -14,7 +14,7 @@ import subprocess
 from build import build_environment
 from lib.paths import RENDERER, RENDERER_ARTIFACTS, ROOT
 
-GENERATED_CASE_COUNT = 9
+GENERATED_CASE_COUNT = 10
 
 
 def run(command, log, env, timeout=180, cwd=ROOT):
@@ -124,6 +124,98 @@ void main() {
     return folder / "project.json"
 
 
+def perspective_animation_fixture(root):
+    """A quad corner driven by a paused parent timeline, read back as geometry."""
+    folder = root / "generated-perspective-animation"
+    vertex = """uniform mat4 g_ModelViewProjectionMatrix;
+attribute vec3 a_Position;
+attribute vec2 a_TexCoord;
+varying vec2 v_TexCoord;
+void main() {
+    gl_Position = g_ModelViewProjectionMatrix * vec4(a_Position, 1.0);
+    v_TexCoord = a_TexCoord;
+}
+"""
+    # Original homography: the unit square maps onto the four authored corners,
+    # so only fragments whose inverse-mapped point is in front of the projection
+    # plane and inside the square are drawn. A corner stuck on its static value
+    # inverts the quad and leaks a wedge across the empty margin instead.
+    fragment = """uniform vec2 g_Point0; // {"material":"point0","default":"0.25 0.5"}
+uniform vec2 g_Point1; // {"material":"point1","default":"0.75 0.375"}
+uniform vec2 g_Point2; // {"material":"point2","default":"0.375 0.875"}
+uniform vec2 g_Point3; // {"material":"point3","default":"0.375 1"}
+varying vec2 v_TexCoord;
+void main() {
+    vec2 span = g_Point0 - g_Point1 + g_Point2 - g_Point3;
+    vec2 edge1 = g_Point1 - g_Point2;
+    vec2 edge2 = g_Point3 - g_Point2;
+    float basis = edge1.x * edge2.y - edge2.x * edge1.y;
+    if (abs(basis) < 1e-9) discard;
+    float g = (span.x * edge2.y - edge2.x * span.y) / basis;
+    float h = (edge1.x * span.y - span.x * edge1.y) / basis;
+    float a = g_Point1.x - g_Point0.x + g * g_Point1.x;
+    float b = g_Point3.x - g_Point0.x + h * g_Point3.x;
+    float c = g_Point0.x;
+    float d = g_Point1.y - g_Point0.y + g * g_Point1.y;
+    float e = g_Point3.y - g_Point0.y + h * g_Point3.y;
+    float f = g_Point0.y;
+    float det = a * (e - f * h) - b * (d - f * g) + c * (d * h - e * g);
+    if (abs(det) < 1e-9) discard;
+    vec3 row0 = vec3(e - f * h, c * h - b, b * f - c * e) / det;
+    vec3 row1 = vec3(f * g - d, a - c * g, c * d - a * f) / det;
+    vec3 row2 = vec3(d * h - e * g, b * g - a * h, a * e - b * d) / det;
+    vec3 point = vec3(v_TexCoord, 1.0);
+    float w = dot(row2, point);
+    if (w <= 0.0) discard;
+    vec2 square = vec2(dot(row0, point), dot(row1, point)) / w;
+    if (square.x < 0.0 || square.x > 1.0 || square.y < 0.0 || square.y > 1.0) discard;
+    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+}
+"""
+    # The root is paused on its first key, so the child corner must hold
+    # (0.875, 0.875). An independent child clock would autoplay through the
+    # probe warm-up and settle on the static (0.375, 0.875) instead.
+    corners = {
+        "point0": {"value": [0.25, 0.5]},
+        "point1": {"value": [0.75, 0.375], "animation": {
+            "options": {"fps": 30, "length": 3, "mode": "single", "startpaused": True,
+                        "name": "fold", "children": [{"key": "point2"}]},
+            "c0": [{"frame": 0, "value": 0.75}, {"frame": 3, "value": 0.75}],
+            "c1": [{"frame": 0, "value": 0.375}, {"frame": 3, "value": 0.375}],
+        }},
+        "point2": {"value": [0.375, 0.875], "animation": {
+            "options": {"fps": 30, "length": 3, "mode": "single", "parent": {"key": "point1"}},
+            "c0": [{"frame": 0, "value": 0.875}, {"frame": 3, "value": 0.375}],
+            "c1": [{"frame": 0, "value": 0.875}, {"frame": 3, "value": 0.875}],
+        }},
+        "point3": {"value": [0.375, 1.0]},
+    }
+    files = {
+        "project.json": {"title": "Perspective corner timeline", "type": "scene",
+                         "file": "layout.json", "general": {"properties": {}}},
+        "models/page.json": {"width": 384, "height": 256, "material": "materials/page.json"},
+        "materials/page.json": {"passes": [{"shader": "page", "blending": "translucent",
+                                            "cullmode": "nocull", "depthtest": "disabled",
+                                            "depthwrite": "disabled",
+                                            "constantshadervalues": corners}]},
+        "shaders/page.vert": vertex,
+        "shaders/page.frag": fragment,
+        "layout.json": {
+            "camera": {"center": [0, 0, 0], "eye": [0, 0, 1], "up": [0, 1, 0]},
+            "general": {"clearcolor": [0.1, 0.2, 0.3], "cameraparallax": False,
+                        "orthogonalprojection": {"width": 384, "height": 256}},
+            "objects": [{"id": 1, "name": "page", "image": "models/page.json",
+                         "origin": [192, 128, 0], "scale": [1, 1, 1], "angles": [0, 0, 0],
+                         "visible": True}],
+        },
+    }
+    for name, contents in files.items():
+        path = folder / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents if isinstance(contents, str) else json.dumps(contents))
+    return folder / "project.json"
+
+
 def check_generated_pixels(data, index):
     """Independent assertions so two equally blank/corrupt outputs cannot pass."""
     magic, dimensions, maximum, pixels = data.split(b"\n", 3)
@@ -141,6 +233,13 @@ def check_generated_pixels(data, index):
         return all(abs(channel - expected) <= 1
                    for x, expected in [(96, 128), (192, 191), (288, 255)]
                    for channel in pixel(x, 128))
+    if index == 9:
+        # The page has to cover the centre and the margin has to stay exactly the
+        # authored clear colour, so a blank, inverted or recoloured frame fails.
+        return (all(channel >= 254 for channel in pixel(192, 128)) and
+                all(abs(channel - expected) <= 1
+                    for x, y in [(48, 32), (48, 224)]
+                    for channel, expected in zip(pixel(x, y), (26, 51, 77))))
     background = pixel(0, 0)
     # First effect must really draw; empty/hidden nested layers must not leak
     # that earlier effect's pixels. Visible children must survive their clears.
@@ -177,7 +276,8 @@ def main():
     for binary in ["render_target_lifetime_test", "text_object_runtime_test", "shader_cache_metadata_test"]:
         status = run([build / "tests" / binary], out / (binary + ".log"), env)
         report[ binary ] = status
-    for project in [*fixtures(out / "fixtures"), alpha_composite_fixture(out / "fixtures"), *args.project]:
+    for project in [*fixtures(out / "fixtures"), alpha_composite_fixture(out / "fixtures"),
+                    perspective_animation_fixture(out / "fixtures"), *args.project]:
         project = project.resolve()
         manifest_bytes = project.read_bytes()
         manifest = json.loads(manifest_bytes)

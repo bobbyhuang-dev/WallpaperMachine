@@ -395,7 +395,11 @@ int main() {
             Begin(rr.command);
             Check(vertices.recordUpload(rr.command), "upload vertices");
             Check(dynamic.recordUpload(rr.command), "upload dynamic data");
-            if (!std::getenv("WE_TEST_DUMP_PASSES"))
+            // Long samples would otherwise rewrite thousands of intermediate
+            // images, so only the final frame is broken out pass by pass.
+            const bool dump_passes =
+                std::getenv("WE_TEST_DUMP_PASSES") && frame == frame_count - 1;
+            if (!dump_passes)
                 CheckRecording(device, rr, ExecutePreparedPasses(device, rr, passes, scratch));
             else {
                 int pass_index = 0;
@@ -407,6 +411,21 @@ int main() {
                         ReadImage(device, rr, custom->desc().vk_output,
                                   out / ("pass-" + std::to_string(pass_index) + "-node" +
                                          std::to_string(custom->desc().node->ID()) + ".ppm"));
+                        const auto& d = custom->desc();
+                        trace << "frame " << frame << " pass " << pass_index
+                              << " id=" << d.node->ID() << " slot=" << d.material_slot
+                              << " visible="
+                              << (!d.visibility_node || d.visibility_node->EffectiveVisible());
+                        if (auto* slot = d.node->Mesh()->MaterialForSlot(d.material_slot)) {
+                            for (const auto& [name, value] : slot->customShader.constValues) {
+                                trace << ' ' << name << "=[";
+                                for (std::size_t c = 0; c < value.size(); ++c) {
+                                    trace << (c != 0 ? "," : "") << value[c];
+                                }
+                                trace << ']';
+                            }
+                        }
+                        trace << '\n';
                         Check(device.tex_cache().BeginVideoFrameRecording(), "begin next pass pins");
                         Begin(rr.command);
                     }

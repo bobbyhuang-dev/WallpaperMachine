@@ -50,7 +50,7 @@ generated pixel assertion failed. `report.json` records
 authored-reference comparison, so rendering without a crash does not prove all
 authored effects loaded.
 
-The generated matrix is nine original synthetic scenes; it contains no workshop
+The generated matrix is ten original synthetic scenes; it contains no workshop
 identifiers and no workshop-specific rendering rules.
 
 ## Probes
@@ -82,7 +82,7 @@ artifacts/renderer/bin/tests/offscreen_scene_probe
 | `WE_TEST_FRAMES` | `offscreen_scene_probe` | Number of sampled frames |
 | `WE_TEST_FRAME_STEP` | `offscreen_scene_probe` | Sampling interval, to look past an intro |
 | `WE_TEST_DUMP_SOURCE=1` | `offscreen_scene_probe` | Write the packaged scene JSON beneath `WE_TEST_OUTPUT`; `nodes.txt` also records per-node visibility, translate and scale, which diffs layer placement between builds without comparing pixels |
-| `WE_TEST_DUMP_PASSES` | `offscreen_scene_probe` | Dump per-pass detail |
+| `WE_TEST_DUMP_PASSES` | `offscreen_scene_probe` | Dump per-pass detail for the last sampled frame only: one image per custom pass, plus that pass's material slot, its live visibility and its full `constValues` appended to `passes.txt`. The prepare-time listing at the top of that file is a snapshot; only these `frame N` lines show what a sampled frame actually drew |
 | `WE_TEST_PROPERTIES` | `offscreen_scene_probe` | Flat JSON property overrides, in memory only |
 | `WE_TEST_CLICK_LAYER` | `offscreen_scene_probe` | Image-layer ID to click |
 | `WE_TEST_CLICK_COUNT` | `offscreen_scene_probe` | `1..10` synthetic clicks, no desktop input |
@@ -133,6 +133,9 @@ executable directly from the renderer check build directory.
 | Large-scene first-frame startup | `offscreen_scene_probe` cold/warm startup timings; staging-buffer growth must stay geometric (see below) |
 | JPEG/EXIF orientation | `tex_schema_tests`: all eight EXIF display transforms on asymmetric RGBA pixels, both TIFF byte orders, truncated JPEG/EXIF data, invalid IFD offsets |
 | Translucent coverage / alpha compositing | the `generated-alpha` case in `scripts/check_renderer.py` |
+| Vector material constant timelines | `SceneSchema.*VectorTimeline*` and `SceneSchema.SharedVectorTimelineWrapsOnlyOnTheParentClock` in `scene_schema_tests`, `ScriptRuntimeCompat.VectorMaterialTimelineDrivesEveryComponentSeparately` and `ScriptRuntimeCompat.ClonedTemplateLayersShareOneTimelineAndKeepEveryBinding` in `script_runtime_compat_test`, and the `generated-perspective-animation` case in `scripts/check_renderer.py` (see below) |
+| Scripted vector material constants | `SceneSchema.ScriptedMaterialConstantsKeepTheComponentsTheShaderDeclares` in `scene_schema_tests`: a script that swaps a `vec2`'s components only produces the authored numbers when it is handed a vector (see below) |
+| Timeline events | `ScriptRuntimeCompat.*Timeline*Event*`, `*Marker*`, `GlobalAnimationListenersRunOncePerMarkerWhateverIsBound`, `GlobalOnlyAnimationListenerSeesTheCurrentTickTime` and `SceneGetAnimationFindsATimelineOnAnotherLayer` in `script_runtime_compat_test`: crossing, `event.frame`, reverse travel and exact loop wraps, delivery after `init`, one global listener run per marker with zero and two bound scene scripts, a fresh host context for a global-only listener, and scene-wide `getAnimation` (see below) |
 | Clock/text corruption | `render_target_lifetime_test`, `text_object_runtime_test`, `shader_cache_metadata_test` |
 | Continuous-playback resource reuse | `playback_gpu_test` |
 | Download-speed sampling | `DownloaderTests` in `Tests/Unit/Workshop/`: real `nettop` streaming over a private PTY with local-socket traffic; CRLF and split line endings. LF-only fixtures do not verify live delivery. |
@@ -216,6 +219,101 @@ exactly as before. The `generated-alpha` case composites a half-covered source
 over transparent, half-covered and opaque destinations inside a compose layer
 and samples the composed alpha back as RGB: expected readback is 128/191/255,
 and the pre-fix binary produces 64/96/191. It uses synthetic shaders only.
+
+### Vector material constant timelines
+
+`RegisterMaterialConstants` only resolved an animation when a constant had
+exactly one component, and `ResolveScalarAnimation` only read `c0`. A `vec2`
+book-page corner therefore lost its authored `c0`/`c1` curves, the group of
+corners an author drives from one timeline through `options.parent.key` lost
+that relation, and no `ScalarAnimationPlayback` was registered at all — so the
+layer's own `thisObject.getAnimation(name).play()` found nothing to play.
+
+On the local "猫猫的耳朵可以摸吗？" package that is the whole page-turn
+interaction. Clicking `page首` runs the `cursorClick` export on its perspective
+`point1` constant, which sets `thisLayer.visible = true` and plays the `900`
+timeline. Without a registered timeline the page appeared with its corners
+frozen, and the four homogeneous `w` terms of the authored `squareToQuad` were
+`[1, 0.333, -0.819, -0.152]`: two corners behind the projection plane invert
+the quad into a white spike that shoots off the top of the screen. With the
+curves resolved the same corners measure `[1, 1.025, 1.069, 1.044]` on the
+paused first key, `[1, 0.977, 0.965, 0.988]` mid-fold and `[1, 0.825, 0.469,
+0.644]` on the authored last key — a valid quad for the whole fold.
+
+Each component now resolves its own curve (`c0`–`c3`) and its own entry of the
+initial value, and unanimated components keep that value. The constants of one
+material pass are collected first, `options.parent.key` is walked to its root
+with memoized results, and the whole group shares the root's single
+`ScalarAnimationPlayback` — so `thisLayer.getAnimation(name)` still drives it,
+and looping and restarting happen once, on the root. The sampled component
+copies are single-shot, so a short child curve holds its last key instead of
+wrapping on its own length. A missing parent, a parent without a usable
+animation, or a cycle logs once and freezes that group on frame 0; relations
+never cross material passes, so a corner of the same name elsewhere is a
+different parameter.
+
+The `generated-perspective-animation` case draws an original four-corner
+homography mask whose third corner is animated from a paused parent timeline.
+With the authored first key the page covers the centre and the margin stays
+clear; with the static corner the page disappears and a wedge covers the
+top-left margin instead. Both readings are asserted, so a blank frame and an
+all-white frame fail too.
+
+### Scripted material constants keep their component count
+
+`MakeMaterialConstantDynamicValue` only treated a constant as a vector at three
+or more components; everything else reached its property script through
+`ResolveStringSetting`. A `vec2` corner was therefore handed to the script as
+the text `[0.79139,0.44186]`, so `value.x` was `undefined` and the handler
+returned `NaN`. On the local package that produced `g_Point2=[nan,nan,0]` on the
+visible `workshop/2872021376/effects/perspective` pass of layer 503
+`中-菜单-浮动`, and `g_Point1=[0]` — one component, parsed off a string that
+starts with `[` — on the page-fold pass. Constants now resolve at the authored
+component count: one component as a float, two and four through
+`ResolveVectorSetting`, three unchanged through `ResolveVec3Setting`. A constant
+with no authored value has no count to preserve and still resolves as a string.
+
+### Timeline events
+
+`options.events` is parsed into `ScalarAnimation::events`, and
+`ScalarAnimationPlayback::Advance` queues every marker the playhead crosses as a
+whole `ScalarAnimationEvent` — the authored `AnimationEvent` carries `frame`
+beside `name`. Departure is exclusive and arrival inclusive, in both directions.
+A loop runs on a circle, so the distance to each marker is measured along the
+direction of travel: that makes a wrap, an exact landing on the seam and a
+marker authored at the period the same point, and it keeps reverse travel
+symmetric. Travelling at least a whole period reports each marker once rather
+than once per lap, so a stalled frame cannot flood the queue. Markers arrive in
+the order the playhead met them. Seeking is an explicit jump, not playback, so
+`SetFrame` reports nothing.
+
+`SceneRuntimeContext::Tick` drains the queue after advancing the clocks *and*
+re-evaluating the scripted values, because a property script initializes lazily
+on its first evaluation and a marker crossed by the very first tick must still
+reach an initialized handler. Each queued marker calls the `animationEvent`
+export on the property scripts and scene scripts bound to that timeline's layer.
+The `engine.on`/`scene.on` list is global to the shared context, so the runtime
+runs it once per marker instead of once per matching program — otherwise two
+bound scene scripts would repeat every listener and none would silence them.
+That runner also refreshes the `engine` object itself, because a global listener
+can be a marker's only consumer and nothing else would have updated
+`engine.runtime`/`engine.frametime` before it runs.
+Handlers routinely create, hide or destroy layers, so every crossed marker is
+collected before any handler runs and the script lists are re-checked while
+dispatching.
+
+`scene.getAnimation(name)` was missing: `getAnimation` existed only on the layer
+object, so the authored `thisScene.getAnimation('111').play()` threw
+`TypeError: not a function`. A null layer argument to `__animationControl` now
+means "match this name across every registered timeline"
+(`SceneRuntimeContext::FindAnimationByName`).
+
+Together these complete the local package's two-phase page turn. Clicking
+`page首` plays `900`; at frame 30 `houye` swaps the layers — `page首` goes
+`visible=0`, `page` goes `visible=1` — and starts `111` on `page`; at frame 45
+that second fold is mid-flight with its own corners moving; at frame 60 `yeshu`
+hides `page` and the book is back at rest. The probe logs no `animationEvent`
+errors, and the thin white sliver that used to be left at the page edge is gone.
 
 ### Cursor coordinates and presentation
 

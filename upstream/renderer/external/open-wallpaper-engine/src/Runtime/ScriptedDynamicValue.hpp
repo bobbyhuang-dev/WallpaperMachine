@@ -38,6 +38,8 @@ public:
     void DispatchCursorLeave(const ScriptHostContext& host_context);
     void DispatchCursorMove(const ScriptHostContext& host_context);
     void DispatchCursorUp(const ScriptHostContext& host_context);
+    void DispatchAnimationEvent(const ScriptHostContext& host_context,
+                                std::string_view event_name, double frame);
     void DispatchMediaThumbnailChanged(const Eigen::Vector3f& primary_color,
                                        const Eigen::Vector3f& text_color);
     void DispatchMediaEventJson(std::string_view event_json);

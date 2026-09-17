@@ -442,9 +442,12 @@ void SceneRuntimeContext::Tick(double frame_time) {
         playback.absolute_seconds += scaled_delta;
     }
     for (auto& binding : m_scalar_animations) binding.playback->Advance(frame_time);
+    // Property scripts initialize lazily on their first evaluation, so markers
+    // crossed by this very tick are delivered to an initialized script.
     for (auto* value : m_scripted_values) {
         if (value != nullptr) value->reevaluate();
     }
+    DispatchPendingAnimationEvents();
     for (auto& [name, binding] : m_node_visibility) {
         (void)name;
         if (binding.node != nullptr && binding.value != nullptr) {
@@ -1090,10 +1093,10 @@ void SceneRuntimeContext::RegisterTextValue(std::string name,
     });
 }
 
-void SceneRuntimeContext::RegisterMaterialConstant(std::shared_ptr<SceneMaterial> material,
-                                                   std::string name,
-                                                   std::unique_ptr<DynamicValue> value,
-                                                   std::shared_ptr<ScalarAnimationPlayback> animation) {
+void SceneRuntimeContext::RegisterMaterialConstant(
+    std::shared_ptr<SceneMaterial> material, std::string name,
+    std::unique_ptr<DynamicValue> value,
+    std::shared_ptr<const MaterialConstantAnimation> animation) {
     if (material == nullptr || name.empty() || value == nullptr) return;
 
     auto* raw = value.get();
@@ -1104,11 +1107,9 @@ void SceneRuntimeContext::RegisterMaterialConstant(std::shared_ptr<SceneMaterial
         .value = raw,
         .animation = std::move(animation),
     };
-    if (binding.animation != nullptr) {
-        material->customShader.constValues[binding.name] = { binding.animation->Value() };
-    } else {
-        ApplyMaterialConstantBinding(binding);
-    }
+    // A shared timeline may already be running when a clone registers, so the
+    // binding samples its current frame instead of resetting anyone's clock.
+    ApplyMaterialConstantBinding(binding);
     m_material_constants.push_back(std::move(binding));
 }
 
@@ -1210,6 +1211,15 @@ ScalarAnimationPlayback* SceneRuntimeContext::FindScalarAnimation(
         if (binding.layer_name == layer_name && binding.playback->animation.name == animation_name) {
             return binding.playback.get();
         }
+    }
+    return nullptr;
+}
+
+ScalarAnimationPlayback* SceneRuntimeContext::FindAnimationByName(
+    std::string_view animation_name) const {
+    if (animation_name.empty()) return nullptr;
+    for (const auto& binding : m_scalar_animations) {
+        if (binding.playback->animation.name == animation_name) return binding.playback.get();
     }
     return nullptr;
 }
@@ -1426,13 +1436,7 @@ std::string SceneRuntimeContext::CreateLayerFromTemplate(std::string_view reques
                 .value = constant_binding.value,
                 .animation = constant_binding.animation,
             };
-            if (cloned_binding.animation != nullptr) {
-                material_binding.cloned_material->customShader.constValues[cloned_binding.name] = {
-                    cloned_binding.animation->Value(),
-                };
-            } else {
-                ApplyMaterialConstantBinding(cloned_binding);
-            }
+            ApplyMaterialConstantBinding(cloned_binding);
             m_material_constants.push_back(std::move(cloned_binding));
         }
     }
@@ -1781,14 +1785,29 @@ void SceneRuntimeContext::ApplyMaterialConstantBinding(MaterialConstantBinding& 
     auto material = binding.material.lock();
     if (material == nullptr || (binding.value == nullptr && binding.animation == nullptr)) return;
     if (binding.animation != nullptr) {
-        material->customShader.constValues[binding.name][0] = binding.animation->Value();
-        return;
-    }
-    const uint64_t generation = binding.value->Generation();
-    if (! binding.cached_value_valid || binding.observed_generation != generation) {
-        binding.cached_value = ShaderValueFromDynamicValue(*binding.value);
-        binding.observed_generation = generation;
-        binding.cached_value_valid = true;
+        // Components share the timeline's frame but keep their own curves, so a
+        // stable frame reuses the sampled value instead of re-solving Beziers.
+        const double frame =
+            binding.animation->playback != nullptr ? binding.animation->playback->frame : 0.0;
+        if (! binding.cached_value_valid || ! (binding.sampled_animation_frame == frame)) {
+            const std::size_t count =
+                std::max<std::size_t>(binding.animation->component_count, 1);
+            binding.cached_value.setSize(count);
+            for (std::size_t index = 0; index < count; ++index) {
+                const auto& curve = binding.animation->components[index];
+                binding.cached_value[index] =
+                    curve.Evaluate(curve.fps > 0.0 ? frame / curve.fps : 0.0);
+            }
+            binding.sampled_animation_frame = frame;
+            binding.cached_value_valid      = true;
+        }
+    } else {
+        const uint64_t generation = binding.value->Generation();
+        if (! binding.cached_value_valid || binding.observed_generation != generation) {
+            binding.cached_value = ShaderValueFromDynamicValue(*binding.value);
+            binding.observed_generation = generation;
+            binding.cached_value_valid = true;
+        }
     }
     auto& values = material->customShader.constValues;
     const auto current = values.find(binding.name);
@@ -1883,6 +1902,46 @@ bool SceneRuntimeContext::CursorHitsScriptLayer(const ScriptedDynamicValue& valu
 
 bool SceneRuntimeContext::CursorHitsScriptLayer(const SceneScriptProgram& script) const {
     return CursorHitsLayer(script.LayerName());
+}
+
+// An authored timeline can name frames its layer's scripts react to. Handlers
+// may create, hide or destroy layers, so every crossed marker is collected
+// before any of them runs and the script lists are re-checked while dispatching.
+void SceneRuntimeContext::DispatchPendingAnimationEvents() {
+    struct QueuedEvent {
+        std::string layer_name;
+        std::string name;
+        double      frame { 0.0 };
+    };
+    std::vector<QueuedEvent> events;
+    for (auto& binding : m_scalar_animations) {
+        if (binding.playback == nullptr || binding.playback->pending_events.empty()) continue;
+        for (auto& event : binding.playback->pending_events) {
+            events.push_back(QueuedEvent {
+                .layer_name = binding.layer_name,
+                .name       = std::move(event.name),
+                .frame      = event.frame,
+            });
+        }
+        binding.playback->pending_events.clear();
+    }
+    if (events.empty()) return;
+
+    for (const auto& event : events) {
+        for (std::size_t index = 0; index < m_scripted_values.size(); ++index) {
+            auto* value = m_scripted_values[index];
+            if (value == nullptr || value->LayerName() != event.layer_name) continue;
+            value->DispatchAnimationEvent(*m_host_context, event.name, event.frame);
+        }
+        for (std::size_t index = 0; index < m_scene_scripts.size(); ++index) {
+            auto* script = m_scene_scripts[index].script.get();
+            if (script == nullptr || script->LayerName() != event.layer_name) continue;
+            script->DispatchAnimationEvent(*m_host_context, event.name, event.frame);
+        }
+        // One shared global listener list, so it runs once per event whether or
+        // not a scene script happens to be bound to this layer.
+        m_script_engine->RunAnimationEventCallbacks(*m_host_context, event.name, event.frame);
+    }
 }
 
 void SceneRuntimeContext::DispatchCursorClick(int button) {

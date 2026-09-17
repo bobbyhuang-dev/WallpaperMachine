@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <sstream>
 
@@ -58,6 +59,27 @@ float parse_float(const nlohmann::json& value)
         }
     }
     return 0.0f;
+}
+
+// Vector settings carry one initial value per component, either as an array or
+// as a space-separated string. Scalars keep the plain single-value reading.
+float parse_component(const nlohmann::json& value, std::size_t component)
+{
+    const auto& source = unwrap_value(value);
+    if (source.is_array()) {
+        return component < source.size() && source.at(component).is_number()
+                   ? source.at(component).get<float>()
+                   : 0.0f;
+    }
+    if (source.is_string()) {
+        std::istringstream stream(source.get<std::string>());
+        float              parsed = 0.0f;
+        for (std::size_t index = 0; index <= component; ++index) {
+            if (! (stream >> parsed)) return 0.0f;
+        }
+        return parsed;
+    }
+    return component == 0 ? parse_float(value) : 0.0f;
 }
 
 bool parse_bool(const nlohmann::json& value)
@@ -264,10 +286,67 @@ double ScalarAnimation::FrameCount() const
     return length_frames > 0.0 ? length_frames : (keyframes.empty() ? 0.0 : keyframes.back().frame);
 }
 
+namespace
+{
+// Markers fire as the playhead travels across their frame: departure exclusive,
+// arrival inclusive, in the order they are met. A loop runs on a circle, so the
+// distance is measured along the direction of travel — that makes a wrap, an
+// exact landing on the seam and a marker authored at the period the same point.
+// Travelling at least a whole period reports each marker once, never once per
+// lap, so one stalled frame cannot flood the queue.
+void CollectCrossedEvents(const ScalarAnimation& animation, double previous, double travelled,
+                          double length, std::vector<ScalarAnimationEvent>& out)
+{
+    if (animation.events.empty() || travelled == 0.0 || !std::isfinite(travelled)) return;
+
+    if (animation.mode != ScalarAnimationMode::Loop || !(length > 0.0)) {
+        const double arrival = std::clamp(previous + travelled, 0.0, std::max(0.0, length));
+        if (travelled > 0.0) {
+            for (const auto& event : animation.events) {
+                if (!event.name.empty() && event.frame > previous && event.frame <= arrival) {
+                    out.push_back(event);
+                }
+            }
+        } else {
+            for (auto event = animation.events.rbegin(); event != animation.events.rend(); ++event) {
+                if (!event->name.empty() && event->frame >= arrival && event->frame < previous) {
+                    out.push_back(*event);
+                }
+            }
+        }
+        return;
+    }
+
+    const auto wrap = [length](double value) {
+        const double wrapped = std::fmod(value, length);
+        return wrapped < 0.0 ? wrapped + length : wrapped;
+    };
+    const double start    = wrap(previous);
+    const double distance = std::abs(travelled);
+    const bool   forward  = travelled > 0.0;
+    std::vector<std::pair<double, const ScalarAnimationEvent*>> met;
+    for (const auto& event : animation.events) {
+        if (event.name.empty()) continue;
+        const double delta = wrap(forward ? event.frame - start : start - event.frame);
+        if (distance >= length) {
+            // A full lap returns to the departure frame, so that marker is last.
+            met.emplace_back(delta == 0.0 ? length : delta, &event);
+        } else if (delta > 0.0 && delta <= distance) {
+            met.emplace_back(delta, &event);
+        }
+    }
+    std::sort(met.begin(), met.end(), [](const auto& left, const auto& right) {
+        return left.first < right.first;
+    });
+    for (const auto& [delta, event] : met) out.push_back(*event);
+}
+} // namespace
+
 void ScalarAnimationPlayback::Advance(double seconds)
 {
     if (!playing || !std::isfinite(seconds) || seconds <= 0.0) return;
     const double length = animation.FrameCount();
+    const double previous = frame;
     const double next = frame + seconds * animation.fps * rate;
     if (animation.mode == ScalarAnimationMode::Loop && length > 0.0) {
         frame = std::fmod(next, length);
@@ -276,6 +355,7 @@ void ScalarAnimationPlayback::Advance(double seconds)
         frame = std::clamp(next, 0.0, std::max(0.0, length));
         if ((rate > 0.0 && next >= length) || (rate < 0.0 && next <= 0.0)) playing = false;
     }
+    CollectCrossedEvents(animation, previous, next - previous, length, pending_events);
 }
 
 void ScalarAnimationPlayback::Play()
@@ -356,6 +436,37 @@ std::unique_ptr<DynamicValue> ResolveVec3Setting(
     return value;
 }
 
+std::unique_ptr<DynamicValue> ResolveVectorSetting(
+    SceneRuntimeContext& context,
+    const nlohmann::json& setting,
+    std::size_t components,
+    std::string_view current_layer_name)
+{
+    if (components == 3) return ResolveVec3Setting(context, setting, current_layer_name);
+    if (components != 2 && components != 4) {
+        return ResolveFloatSetting(context, setting, current_layer_name);
+    }
+
+    // A single authored number fills every component, matching parse_vec3.
+    const auto& source = unwrap_value(setting);
+    const auto  component = [&](std::size_t index) {
+        return source.is_number() ? parse_float(setting) : parse_component(setting, index);
+    };
+    auto value = components == 2
+                     ? std::make_unique<DynamicValue>(
+                           Eigen::Vector2f(component(0), component(1)))
+                     : std::make_unique<DynamicValue>(
+                           Eigen::Vector4f(component(0), component(1), component(2), component(3)));
+    value = wrap_script_if_needed(
+        context,
+        setting,
+        current_layer_name,
+        std::move(value),
+        ScriptedValueSemantic::Generic);
+    bind_user_property(context, setting, *value);
+    return value;
+}
+
 std::unique_ptr<DynamicValue> ResolveStringSetting(
     SceneRuntimeContext& context,
     const nlohmann::json& setting,
@@ -372,15 +483,18 @@ std::unique_ptr<DynamicValue> ResolveStringSetting(
     return value;
 }
 
-std::optional<ScalarAnimation> ResolveScalarAnimation(const nlohmann::json& setting)
+std::optional<ScalarAnimation> ResolveScalarAnimation(const nlohmann::json& setting,
+                                                      std::size_t component)
 {
+    static constexpr std::array<const char*, 4> curve_keys { "c0", "c1", "c2", "c3" };
+    if (component >= curve_keys.size()) return std::nullopt;
     if (!setting.is_object() || !setting.contains("animation")) return std::nullopt;
 
     const auto& animation = setting.at("animation");
     if (!animation.is_object()) return std::nullopt;
 
     const auto options_iterator = animation.find("options");
-    const auto curve_iterator   = animation.find("c0");
+    const auto curve_iterator   = animation.find(curve_keys[component]);
     if (options_iterator == animation.end() || curve_iterator == animation.end()) {
         return std::nullopt;
     }
@@ -389,7 +503,7 @@ std::optional<ScalarAnimation> ResolveScalarAnimation(const nlohmann::json& sett
     }
 
     ScalarAnimation result;
-    result.initial_value = parse_float(setting);
+    result.initial_value = parse_component(setting, component);
 
     const auto& options = *options_iterator;
     if (options.contains("fps")) {
@@ -407,6 +521,25 @@ std::optional<ScalarAnimation> ResolveScalarAnimation(const nlohmann::json& sett
         result.name = options.at("name").get<std::string>();
     }
     if (options.contains("startpaused")) result.start_paused = parse_bool(options.at("startpaused"));
+    if (const auto events = options.find("events");
+        events != options.end() && events->is_array()) {
+        for (const auto& entry : *events) {
+            if (!entry.is_object() || !entry.contains("name") || !entry.at("name").is_string()) {
+                continue;
+            }
+            ScalarAnimationEvent parsed;
+            parsed.name = entry.at("name").get<std::string>();
+            if (entry.contains("frame")) {
+                parsed.frame = static_cast<double>(parse_float(entry.at("frame")));
+            }
+            result.events.push_back(std::move(parsed));
+        }
+        std::sort(result.events.begin(),
+                  result.events.end(),
+                  [](const ScalarAnimationEvent& left, const ScalarAnimationEvent& right) {
+                      return left.frame < right.frame;
+                  });
+    }
 
     for (const auto& keyframe : *curve_iterator) {
         if (!keyframe.is_object() || !keyframe.contains("frame") || !keyframe.contains("value")) {

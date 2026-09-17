@@ -80,6 +80,11 @@ void ScriptedDynamicValue::DispatchCursorUp(const ScriptHostContext& host_contex
     if (m_program != nullptr) m_program->DispatchCursorUp(host_context);
 }
 
+void ScriptedDynamicValue::DispatchAnimationEvent(const ScriptHostContext& host_context,
+                                                  std::string_view event_name, double frame) {
+    if (m_program != nullptr) m_program->DispatchAnimationEvent(host_context, event_name, frame);
+}
+
 void ScriptedDynamicValue::DispatchMediaThumbnailChanged(const Eigen::Vector3f& primary_color,
                                                          const Eigen::Vector3f& text_color) {
     if (m_program != nullptr) {

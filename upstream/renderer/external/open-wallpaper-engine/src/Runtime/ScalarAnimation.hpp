@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -27,6 +30,14 @@ enum class ScalarAnimationMode
     Loop,
 };
 
+// An authored timeline can carry named events. They belong to the timeline, not
+// to a curve, so a group driven by one clock reports each of them once.
+struct ScalarAnimationEvent
+{
+    double      frame { 0.0 };
+    std::string name;
+};
+
 struct ScalarAnimation
 {
     float                               initial_value { 0.0f };
@@ -36,6 +47,7 @@ struct ScalarAnimation
     std::string                         name;
     bool                                start_paused { false };
     std::vector<ScalarAnimationKeyframe> keyframes;
+    std::vector<ScalarAnimationEvent>    events;
 
     [[nodiscard]] float Evaluate(double seconds) const;
     [[nodiscard]] double FrameCount() const;
@@ -47,12 +59,26 @@ struct ScalarAnimationPlayback
     double frame { 0.0 };
     double rate { 1.0 };
     bool playing { false };
+    // Markers crossed by the last Advance, in the order the playhead met them.
+    // The runtime drains them each tick. A seek is an explicit jump, not
+    // playback, so it reports nothing.
+    std::vector<ScalarAnimationEvent> pending_events;
 
     void Advance(double seconds);
     void Play();
     void Stop();
     void SetFrame(double value);
     [[nodiscard]] float Value() const;
+};
+
+// A vector shader constant animates one curve per component, and several
+// constants may be driven by one authored timeline. The components keep their
+// own curves and initial values while sharing that timeline's playback state.
+struct MaterialConstantAnimation
+{
+    std::shared_ptr<ScalarAnimationPlayback> playback;
+    std::array<ScalarAnimation, 4>           components;
+    std::size_t                              component_count { 0 };
 };
 
 } // namespace wallpaper

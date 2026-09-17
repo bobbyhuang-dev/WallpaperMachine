@@ -11,6 +11,232 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-17 — Scripted vector constants and timeline events
+
+Follow-up to the entry below, which reported both defects and deferred them.
+Source-only. No Release build, application launch, desktop automation,
+screenshot, wallpaper change, audio hardware, permission prompt or install.
+
+### Scripted material constants kept their component count
+
+`MakeMaterialConstantDynamicValue` treated only three-or-more components as a
+vector and sent everything else through `ResolveStringSetting`. `WPJson`'s
+`std::vector<float>` overload converts the authored `"0.79139 0.44186"` through
+`utils::StrToArray`, so these constants really do have two components; the
+script was still handed `parse_string` of the array — the text
+`[0.79139,0.44186]` — and `value.x` was `undefined`. That is both reported
+symptoms: `g_Point2=[nan,nan,0]` on layer 503 `中-菜单-浮动`, and
+`g_Point1=[0]` on the page-fold pass, where `ShaderValueFromDynamicValue` parses
+a string that starts with `[` and yields one zero.
+
+Constants now resolve at the authored count through the new
+`ResolveVectorSetting`: one component as a float, two and four as vectors, three
+unchanged. After the change the same probe run reports `g_Point2=[0,0]` — the
+authored `"0.00000 0.00000"` — and no `nan` appears anywhere in either package's
+dumped pass constants. Diffing all 146 dumped passes of `3292361861` before and
+after gives **0 changed constants**, so its four scripted scalars and three
+scripted `vec3`s are unaffected.
+
+### Timeline events now reach the layer
+
+`options.events` is parsed into `ScalarAnimation::events`, and
+`ScalarAnimationPlayback::Advance` queues each crossed marker as a whole
+`ScalarAnimationEvent`: the authored `AnimationEvent` carries `frame` beside
+`name`, so a handler can tell two markers apart in one tick. Departure is
+exclusive and arrival inclusive. A loop is treated as a circle and the distance
+to each marker is measured along the direction of travel, which keeps reverse
+travel symmetric and makes a wrap, an exact landing on the seam and a marker
+authored at the period the same point; travelling a whole period reports each
+marker once, not once per lap; `SetFrame` reports nothing because a seek is not
+playback.
+
+`SceneRuntimeContext::Tick` drains the queue after advancing the clocks **and**
+re-evaluating the scripted values: a property script initializes lazily on its
+first evaluation, so a marker crossed by the first tick would otherwise reach an
+uninitialized handler. The `engine.on`/`scene.on` list is global to the shared
+context, so it is run once per marker from the runtime rather than inside each
+matching `SceneScriptProgram` — two bound scene scripts would otherwise repeat
+every listener, and none would silence them entirely. That runner also
+refreshes the `engine` object before calling the listeners: a global listener
+can be a marker's only consumer, and nothing else would have updated
+`engine.runtime`/`engine.frametime` this tick.
+
+`scene.getAnimation(name)` did not exist: `getAnimation` was only on the layer
+object. A null layer argument to `__animationControl` now means a scene-wide
+name match (`SceneRuntimeContext::FindAnimationByName`).
+
+### Commands and results
+
+- `cmake --build artifacts/renderer/bin --target scene_schema_tests
+  script_runtime_compat_test media_thumbnail_texture_smoke mouse_input_test
+  mdl_schema_tests playback_gpu_test render_target_lifetime_test
+  text_object_runtime_test shader_cache_metadata_test
+  scenescript_sound_layer_smoke particle_mouse_controlpoint_test` then each
+  binary: **68 / 66+1 / 10 / 11 / 52 / 31 / 4 / 60 / 1 / 8 / 38 passed**. The
+  single failure is the documented pre-existing
+  `ScriptRuntimeCompat.HostVectorUpdatesDoNotCallMutableGlobalVectorConstructors`.
+  `tex_schema_tests` does not build in this checkout (`lz4.h` not found) before
+  or after this change and was not touched.
+- Non-vacuity, one targeted mutation at a time with a rebuild between each:
+  restoring the old `value.size() >= 3` rule fails the scripted-vector test;
+  removing the `DispatchPendingAnimationEvents()` call fails both crossing
+  tests; forcing the loop direction forward or making arrival exclusive fails
+  the reverse/exact-wrap test; dropping `frame` from the event object fails the
+  marker-tally test; removing the runtime's single
+  `RunAnimationEventCallbacks` call fails the global-listener test; pinning
+  `scene_wide` to false fails the scene-wide lookup test; and moving the drain
+  back ahead of `reevaluate()` fails the initialization test (`-1` instead of
+  `7`); and dropping the `UpdateEngineObject` call from the global runner makes
+  a global-only listener read `engine.runtime`/`engine.frametime` as `0`
+  instead of `2`.
+- `python3 scripts/check_renderer.py --project …/2887099508/project.json
+  --project …/3292361861/project.json`: ten generated cases pass with no
+  diagnostics; `2887099508` `pixels_equal=true` with **7** pre-existing
+  SceneScript diagnostics (8 before: the `animationEvent` `TypeError` is gone);
+  `3292361861` `pixels_equal=false` with its 28 pre-existing diagnostics.
+  Reload cycles: 0.
+- `python3 scripts/build.py --renderer-only`: succeeded. `python3
+  scripts/test.py`: Python **39 passed**, native **246 passed, 0 failed,
+  0 skipped**.
+
+### The two-phase page turn now completes on the original package
+
+`offscreen_scene_probe` on `2887099508` with its saved overrides,
+`WE_TEST_CLICK_LAYER=384`, `WE_TEST_FRAME_STEP=0.0333` and
+`WE_TEST_DUMP_PASSES=1`. The dumped pass lines now also carry live visibility,
+which the prepare-time listing and `nodes.txt` cannot show — `nodes.txt` is
+written once before the frame loop.
+
+The first attempt looked finished at the layer swap but was not: the probe log
+still carried `ScriptEngine[animationEvent]: TypeError: not a function` at
+`<property-script-factory>:25:8526`, the `thisScene.getAnimation('111')` call
+that starts the second fold. The swap happens before that line, so it succeeded
+while the rest of the handler did not.
+
+With the scene-wide lookup in place the probe logs **zero** `animationEvent`
+errors and the whole authored sequence runs:
+
+- frame 28: `page首`'s perspective pass is `visible=1` mid-fold
+  (`g_Point1=[0.280963, 0.344198]`); `page` is `visible=0`.
+- frame 30, `houye`: the two swap, and `111` starts on `page`.
+- frame 45: `page` is `visible=1` with its own corners moving —
+  `g_Point0` has left its static `0.26795,0.34444` for `0.187791,0.399638` and
+  `g_Point3` `0.38914,0.94238` for `0.358402,0.855579`.
+- frame 60, `yeshu`: `page` goes `visible=0`. Frame 90 holds it, and the thin
+  white sliver that the unfinished handoff left at the page edge is gone.
+
+Desktop presentation is still **unverified**; no application was launched.
+
+## 2026-09-17 — Vector material constant timelines (page-fold corners)
+
+Source-only work on the local tree. No Release build, application launch,
+desktop automation, screenshot, wallpaper change, audio hardware, permission
+prompt or install. Scaling settings were read, never written: both reported
+wallpapers keep `fill` at factor `1.0` and their saved property overrides.
+
+### What changed
+
+`ResolveScalarAnimation` takes a component index and reads `c0`–`c3` plus the
+matching entry of a vector initial value. `MaterialConstantAnimation` holds one
+`ScalarAnimation` per component beside the single shared
+`ScalarAnimationPlayback`; `SceneRuntimeContext` binds and samples every
+component, reusing the sampled `ShaderValue` while the shared frame is
+unchanged. `WPSceneParser::RegisterMaterialConstants` resolves
+`options.parent.key` to a root inside one material pass and registers one clock
+per root. `offscreen_scene_probe`'s `WE_TEST_DUMP_PASSES` now dumps only the
+last sampled frame and appends each dumped pass's material slot constants to
+`passes.txt`. `tests/CMakeLists.txt` links `nlohmann_json` into
+`media_thumbnail_texture_smoke`, which failed to compile before this change too.
+
+### Commands and results
+
+- `python3 scripts/check_renderer.py` **before** the C++ change: the new
+  `generated-perspective-animation` case failed its pixel assertions while the
+  other nine passed. Its `frame-2.ppm` had the clear colour at the centre
+  (26,51,77) and white at (48,32) — no page, wedge in the margin, 9984 white
+  pixels. **After**: all ten generated cases pass; the same frame has white at
+  the centre, the clear colour at both margin samples and 26112 white pixels,
+  which is exactly the authored quad's area (0.265625 × 384 × 256).
+- `python3 scripts/check_renderer.py --project …/2887099508/project.json
+  --project …/3292361861/project.json`: ten generated cases pass with no
+  diagnostics; `2887099508` `pixels_equal=true` with 8 pre-existing SceneScript
+  `TypeError` diagnostics; `3292361861` `pixels_equal=false` with 28
+  pre-existing diagnostics (SceneScript errors plus one workshop clipping-mask
+  shader that fails to compile). Those two scenes run clock- and random-driven
+  scripts, so their pooled/isolated pixels are not expected to match and the
+  criterion was not relaxed. Reload cycles: 0.
+- `cmake --build artifacts/renderer/bin --target scene_schema_tests
+  script_runtime_compat_test media_thumbnail_texture_smoke mouse_input_test
+  mdl_schema_tests playback_gpu_test` then each binary: **67 / 58+1 / 10 / 11 /
+  52 / 31 passed**. The single failure is the documented pre-existing
+  `ScriptRuntimeCompat.HostVectorUpdatesDoNotCallMutableGlobalVectorConstructors`.
+- Non-vacuity was checked by stashing only the changed sources and rebuilding:
+  the four new parser cases fail there, reading the static values (0.375, 9),
+  and `SceneSchema.OneBrokenVectorTimelineGroupIsReportedOnce` reports 2 errors
+  instead of 1 when the unusable parent is not memoized.
+- `python3 scripts/build.py --renderer-only`: succeeded, regenerated bindings.
+- `python3 scripts/test.py`: Python **39 passed** (1 + 24 + 4 + 10), native
+  **246 passed, 0 failed, 0 skipped**.
+
+### Original-asset attribution: the reported wedge, reproduced and fixed
+
+All `offscreen_scene_probe` runs used `2887099508` with its saved overrides
+(`audioline`/`insert`/`randomchat`/`renwu`) and exited 0.
+
+The authored trigger was traced by running every script-bearing setting of the
+packaged scene under a recording stub (80 settings). The page turn is not a
+timed effect: the `cursorClick` export on node 384's perspective `point1`
+constant does `thisLayer.visible = true`, `thisObject.getAnimation('900').play()`
+and plays the `翻页mp3` layer, while the `cursorClick` on the same node's
+`visible` setting plays the `hand turn` puppet animation on `hand book`. Node
+384's `visible` is authored `value:false` with a script that exports only
+`cursorClick` and `animationEvent` — no `update` — so the layer is simply hidden
+until a click, and the 164 `ScriptEngine[update]` errors in the log belong to
+other layers, not to this one. An idle sample therefore cannot show the page at
+all, and `nodes.txt` is written once before the frame loop, so it is a snapshot
+at the click point, not proof about the whole sample.
+
+Driving that trigger with `WE_TEST_CLICK_LAYER=384`, `WE_TEST_FRAME_STEP=0.0333`
+and `WE_TEST_DUMP_PASSES=1` reproduces the report and shows it fixed. `nodes.txt`
+records `384 page首 visible=1 effective=1` and the perspective pass turns
+`visible=1` in both builds, so this is not a hidden layer:
+
+- pre-fix, frames 14 and 30: `g_Point1=[0]` — a one-component value, because no
+  timeline was ever registered for a two-component constant, so the layer's own
+  `getAnimation('900').play()` found nothing — and `g_Point2=[0.44054, 0.89494]`,
+  the static value. The corners never move. `squareToQuad` gives
+  `w = [1, 0.333, -0.819, -0.152]`; the two negative terms invert the quad, and
+  both the perspective pass and the final composite show a large white spike
+  shooting off the top of the screen — the reported 巨大白色尖三角 and the
+  content that leaves the frame.
+- post-fix: `g_Point1=[0.79139, 0.44186]`/`g_Point2=[0.90044, 0.95983]` while
+  paused (`w = [1, 1.025, 1.069, 1.044]`), `[0.524352, 0.390766]`/
+  `[0.662799, 0.9263]` mid-fold (`w = [1, 0.977, 0.965, 0.988]`), and the
+  authored last key `[0.2746, 0.34298]`/`[0.44054, 0.89494]` at frame 30
+  (`w = [1, 0.825, 0.469, 0.644]`). Every sampled pose is a valid quad; the
+  spike is gone from the perspective pass and from the final composite, and the
+  page renders and folds as a page. Near-white in the final frame drops from
+  4.24% to 3.36% mid-fold and 4.14% to 3.00% at the end.
+
+Idle sampling (`WE_TEST_FRAMES=21`, `WE_TEST_FRAME_STEP=1`, cold then warm cache
+in one directory plus a separate `WE_TEST_NO_REUSE=1` directory) holds the paused
+first key for all 21 seconds instead of running to the last key. The author's
+opening zoom is intact: the first sampled frame is still zoomed in at 3× and the
+21-second frame is fully zoomed out. `3292361861` has no perspective pass at all
+and renders unchanged; its source canvas stays 3840×2160 and no camera, layer or
+scaling behaviour was touched.
+
+### Residual defects found here
+
+Both were left for a separate change and are resolved in the next entry above:
+the page turn never completed because `options.events` was not read and no
+`animationEvent` export was dispatched, and the visible
+`workshop/2872021376/effects/perspective` pass on layer 503 `中-菜单-浮动`
+reported `g_Point2=[nan,nan,0]` identically before and after this change.
+
+The SceneScript `TypeError` diagnostics were not silenced or worked around; no
+wallpaper ID branch, hidden layer or asset edit was used.
+
 ## 2026-09-17 — Playback optimization rebased onto web-wallpaper main
 
 Before publishing, remote `main` advanced to `6a7ce92` (the Web wallpaper

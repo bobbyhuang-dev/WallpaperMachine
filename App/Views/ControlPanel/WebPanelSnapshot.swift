@@ -81,6 +81,19 @@ extension WebPanelController {
     if workshop.downloader.errorMessage == nil { dismissedDownloadError = nil }
   }
 
+  /// Width the page keeps clear for the traffic lights when the window draws them over
+  /// the page's top bar. Zero when the page is windowless or the lights are hidden.
+  var windowControlsInset: Double {
+    guard let window = webView?.window,
+      window.styleMask.contains(.fullSizeContentView),
+      !window.styleMask.contains(.fullScreen),
+      window.titleVisibility == .hidden,
+      let zoom = window.standardWindowButton(.zoomButton), let superview = zoom.superview,
+      !zoom.isHidden
+    else { return 0 }
+    return max(0, superview.convert(zoom.frame, to: nil).maxX.rounded(.up))
+  }
+
   func snapshot() -> [String: Any] {
     let settings = store.settingsSnapshot
     let setup = workshop.steamCMDSetup
@@ -104,6 +117,13 @@ extension WebPanelController {
       ]
     }
     assets.previews = previews
+    var thumbnails: [String: URL] = [:]
+    for item in workshop.items + workshop.downloader.downloads.compactMap(\.item) + workshop.downloadRequests.compactMap(\.item)
+    where item.previewURL?.scheme == "https" {
+      thumbnails[item.id] = item.previewURL
+    }
+    assets.thumbnails = thumbnails
+    let titles = displayTitles.resolved()
     let displays: [[String: Any]] = settings.displays.map { display in
       let active = store.monitorInformationSnapshot.rows.first { $0.displayId == display.displayId }
       let wallpaperOptions = active.flatMap { row in
@@ -115,11 +135,12 @@ extension WebPanelController {
         display.mode == .standalone
         ? wallpaperOptions?.displayConfigurations.first { $0.displayId == display.displayId } : nil
       return [
-        "id": display.displayId, "title": display.title, "enabled": display.enabled,
-        "mode": display.mode == .mirror ? "mirror" : "standalone",
+        "id": display.displayId, "title": titles.title(display.title, displayId: display.displayId),
+        "enabled": display.enabled, "mode": display.mode == .mirror ? "mirror" : "standalone",
         "mirrorTarget": display.selectedMirrorTarget as Any? ?? null,
         "mirrorTargets": display.mirrorTargets.map { id in
-          ["id": id, "title": settings.displays.first { $0.displayId == id }?.title ?? id]
+          let title = settings.displays.first { $0.displayId == id }?.title ?? id
+          return ["id": id, "title": titles.title(title, displayId: id)]
         }, "scalingMode": Self.scaling(config?.scalingMode ?? display.scalingMode),
         "scalingFactor": config?.scalingFactor ?? display.scalingFactor,
         "fps": config?.targetFps ?? display.targetFps, "maxFps": display.maxFps,
@@ -161,7 +182,8 @@ extension WebPanelController {
       return [
         "id": job.id, "wallpaperID": job.item?.id as Any? ?? null,
         "title": job.item?.title ?? "Scene assets", "status": job.status,
-        "preview": job.item?.previewURL?.absoluteString as Any? ?? null, "account": job.account,
+        "preview": job.item?.previewURL?.absoluteString as Any? ?? null,
+        "thumbnail": job.item.flatMap(Self.thumbnailAddress) as Any? ?? null, "account": job.account,
         "progress": job.progress as Any? ?? null, "pending": job.isPending, "queued": job.isQueued,
         "bytesReceived": job.bytesReceived as Any? ?? null,
         "bytesExpected": job.bytesExpected as Any? ?? null,
@@ -180,6 +202,7 @@ extension WebPanelController {
         "id": request.id, "wallpaperID": request.item?.id as Any? ?? null,
         "title": request.item?.title ?? "Scene assets",
         "preview": request.item?.previewURL?.absoluteString as Any? ?? null,
+        "thumbnail": request.item.flatMap(Self.thumbnailAddress) as Any? ?? null,
         "account": request.account, "rememberSession": request.rememberSession,
         "stage": workshop.stage(for: request).rawValue,
       ]
@@ -206,6 +229,8 @@ extension WebPanelController {
     return [
       "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         ?? "",
+      "repositoryURL": AppUpdateConfiguration.repositoryURL.absoluteString,
+      "windowControlsInset": windowControlsInset,
       "page": page, "targetDisplayID": navigation.targetDisplayID,
       "settingsSection": navigation.settingsSection.rawValue,
       "settingsSectionToken": Int(navigation.settingsSectionToken),
@@ -217,8 +242,10 @@ extension WebPanelController {
         ?? (store.latestBridgeErrorRevision > dismissedErrorRevision
         ? store.latestBridgeErrorMessage : nil) as Any? ?? null,
       "libraryLoading": loading, "favorites": favoriteIDs.sorted(), "wallpapers": wallpapers,
+      "workshopFiltersCollapsed": workshopFiltersCollapsed,
+      "inspectorWidth": inspectorWidth as Any? ?? null,
       "displays": displays,
-      "options": store.wallpaperOptionsSnapshot.map(Self.options) as Any? ?? null,
+      "options": store.wallpaperOptionsSnapshot.map { Self.options($0, titles: titles) } as Any? ?? null,
       "settings": [
         "launchAtLogin": settings.launchAtLoginEnabled,
         "launchAtLoginAvailable": settings.launchAtLoginAvailable,
@@ -240,6 +267,7 @@ extension WebPanelController {
         "tags": workshop.tags, "items": workshop.items.map(Self.workshopItem),
         "selectedID": workshop.selectedItem?.id as Any? ?? null, "page": workshop.page,
         "totalPages": workshop.totalPages, "totalCount": workshop.totalCount,
+        "pageSize": WorkshopService.pageSize,
         "loading": workshop.isLoading, "loaded": workshop.hasLoaded,
         "error": workshop.errorMessage as Any? ?? null,
       ],
@@ -399,14 +427,17 @@ extension WebPanelController {
     }
   }
 
-  static func options(_ value: BridgeWallpaperOptionsSnapshot) -> [String: Any] {
+  static func options(
+    _ value: BridgeWallpaperOptionsSnapshot, titles: ResolvedDisplayTitles
+  ) -> [String: Any] {
     [
       "id": value.wallpaperId, "supported": value.supported, "dirty": value.dirty,
       "volume": value.volume, "muted": value.muted,
       "audioResponseEnabled": value.audioResponseEnabled,
       "displays": value.displayConfigurations.map { row -> [String: Any] in
         [
-          "id": row.displayId, "title": row.title, "enabled": row.enabled,
+          "id": row.displayId, "title": titles.title(row.title, displayId: row.displayId),
+          "enabled": row.enabled,
           "scalingMode": scaling(row.scalingMode), "scalingFactor": row.scalingFactor,
           "fps": row.targetFps, "maxFps": row.maxFps,
         ]
@@ -460,8 +491,19 @@ extension WebPanelController {
   static func workshopItem(_ value: WorkshopItem) -> [String: Any] {
     [
       "id": value.id, "title": value.title, "creator": value.creator, "summary": value.summary,
-      "preview": value.previewURL?.absoluteString as Any? ?? NSNull(), "tags": value.tags,
+      "preview": value.previewURL?.absoluteString as Any? ?? NSNull(),
+      "thumbnail": thumbnailAddress(for: value) as Any? ?? NSNull(), "tags": value.tags,
       "size": value.size, "subscriptions": value.subscriptions, "kind": value.kind.rawValue,
     ]
+  }
+
+  /// The panel-local address of the item's cached still thumbnail; nil when Steam gave no preview.
+  static func thumbnailAddress(for value: WorkshopItem) -> String? {
+    guard value.previewURL?.scheme == "https" else { return nil }
+    var components = URLComponents()
+    components.scheme = "mwe-ui"
+    components.host = "thumbnail"
+    components.path = "/" + value.id
+    return components.url?.absoluteString
   }
 }

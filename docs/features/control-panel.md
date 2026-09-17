@@ -11,13 +11,22 @@ a system dialog and renderer content is never loaded into the web view.
 | Region | Contents |
 | --- | --- |
 | Top tabs | **Discover**, **Installed**, **Settings** |
-| Top bar | Product name and version, target-display picker, downloads button, link to the renderer source |
-| Browser column | Search field, sort menu, filters, tile grid, result summary, Workshop pagination |
-| Left sidebar | Workshop tag filters (Discover only) |
-| Inspector | Preview, title, kind, creator, tags, actions, and the selected wallpaper's options and properties |
+| Top bar | Sits in the window's title-bar strip beside the traffic lights: tabs on the left, product name, version and a GitHub button (opens the repository in the default browser) centered, target-display picker, downloads button and renderer-source link on the right. Its background drags the window and follows the system double-click action |
+| Browser column | Search field, sort menu, filters, tile grid, result summary, Workshop pagination with an editable page number |
+| Left sidebar | Workshop tag filters (Discover only). Fixed width; the arrow in its heading collapses it to a narrow rail whose arrow expands it again, and that choice is remembered across launches |
+| Inspector | Preview, title, kind, creator, tags, actions, and the selected wallpaper's options and properties. Grows from 280px to 340px with the window width by default; dragging its left edge sets a width (240px to 45% of the window) that is remembered, and double-clicking the edge restores the fluid width. The edge is keyboard-focusable: arrow keys resize, `Home` resets |
 | Activity bar | Pause/resume playback, import status, download progress |
 
 Wallpapers appear as square, image-first tiles with a transparent title overlay.
+Discover tiles show cached still thumbnails rather than Steam's full previews
+(see [Workshop downloads](workshop-downloads.md#tile-thumbnails)).
+Both tabs fill the grid with as many columns as the browser column can hold at a
+minimum tile size that shrinks with the column, so a narrower window shows
+smaller tiles and more of them rather than fewer, larger ones. The window
+itself never shrinks below a 760×560 content area (capped by the visible screen
+on small displays): `ControlPanelWindow` owns that floor and `AppDelegate`
+enforces it in `windowWillResize`, because the SwiftUI hosting controller
+resets `contentMinSize` once it attaches.
 Arrow keys, `Home` and `End` move focus across the grid; `Escape` closes an open
 filter disclosure or popover.
 
@@ -45,8 +54,27 @@ screen. Activation is explicit.
   display, or when the wallpaper kind cannot be rendered (Web, Application,
   Unknown).
 
-The inspector also offers favorites, **Show in Finder** and moving the wallpaper
-to the Trash.
+The inspector's action row also offers favorites, **Show in Finder** and moving
+the wallpaper to the Trash.
+
+## Deleting wallpapers
+
+Deletion always moves the managed library copy to the Mac's Trash after a
+confirmation sheet; imported source folders are never touched, and a wallpaper
+playing on a display is ejected first.
+
+- Single: the trash button in the inspector's action row (next to **Apply
+  wallpaper**), or `Delete`/`Backspace` on a focused tile.
+- Batch: **Select** in the Installed toolbar switches the grid into selection
+  mode, where every tile shows a check box and clicking a tile toggles it;
+  `Shift`-click extends across the visible range and **Select all** in the
+  summary row selects every tile matching the current filters. Outside
+  selection mode the check box appears on hover and `Cmd`-click toggles it. The
+  summary row shows the count with **Clear** and **Move N to Trash**; `Delete`
+  acts on the selection from the grid, `Escape` or **Done** leaves selection
+  mode. One confirmation covers the whole batch, every wallpaper is trashed
+  independently, the library refreshes once, and any wallpaper that could not
+  be removed is reported in the error banner while the rest are gone.
 
 ## Target display
 
@@ -55,6 +83,20 @@ displays are listed but not selectable, annotated `(disabled)` or `(mirrored)`.
 Per-display enablement, independent/mirror mode, mirror source, scaling, scale
 factor, frame rate, mute and volume live in **Settings -> Displays**.
 
+Display titles come from the renderer as `Vendor 1552 - Model 41055 (1 - Primary)`
+because the vendored renderer only reads CoreGraphics vendor/model numbers.
+`DisplayTitleResolver` (App/Services/Desktop) replaces that label with
+`NSScreen.localizedName` — the name System Settings shows, such as
+**Built-in Retina Display** — keeping the renderer's `(id - Primary)` suffix.
+Renderer display ids are `primary`, a live CoreGraphics id or
+`identity:{json}` (never the screen number for configured displays), so the
+resolver matches the live id inside the title suffix and the identity UUID
+against `NSScreenNumber` / `CGDisplayCreateUUIDFromDisplayID`. It applies to the
+target picker, Settings -> Displays, mirror-source menus and the inspector's
+per-display sections; a display without a matching screen (or an empty system
+name) keeps the renderer label. The renderer's own titles and ids
+are unchanged, so nothing persisted or sent over the bridge moves.
+
 ## Filtering
 
 - Installed: a compact filter popover narrows the collection by wallpaper type,
@@ -62,6 +104,10 @@ factor, frame rate, mute and volume live in **Settings -> Displays**.
   activates a wallpaper. **Clear filters** resets the popover.
 - Discover: the sidebar carries the Workshop type menu and multi-select tag
   groups; sort is Trending this week, Most subscribed, Newest or Relevance.
+  The arrow beside the sidebar heading collapses it to a 30px rail that keeps
+  showing the active filter count; the rail's arrow expands it again.
+  Collapsing never changes the search; the choice is stored natively (the
+  panel's web storage is not persistent) and restored on the next launch.
 
 ## Properties
 

@@ -56,6 +56,9 @@ struct WorkshopFailure: LocalizedError, Sendable {
 }
 
 actor WorkshopService {
+    /// Steam's public browse page clamps `numperpage` to 30 and `total_pages` to 1000, so a single
+    /// query can only ever expose the first 30,000 results; the panel explains that cap.
+    static let pageSize = 30
     private let session: URLSession
 
     init(session: URLSession = .shared) { self.session = session }
@@ -68,7 +71,7 @@ actor WorkshopService {
             URLQueryItem(name: "browsesort", value: sort.rawValue),
             URLQueryItem(name: "searchtext", value: search),
             URLQueryItem(name: "p", value: String(max(1, page))),
-            URLQueryItem(name: "numperpage", value: "30"),
+            URLQueryItem(name: "numperpage", value: String(Self.pageSize)),
             URLQueryItem(name: "days", value: "7"),
             URLQueryItem(name: "l", value: "english")
         ]

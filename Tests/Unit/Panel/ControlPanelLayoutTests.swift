@@ -433,6 +433,216 @@ final class ControlPanelLayoutTests: XCTestCase {
     await workshop.steamCMDSetup.shutdown()
   }
 
+  /// Discover's filter sidebar collapses to an arrow rail to give the grid its column
+  /// back, and the inspector grows with wide windows or follows a dragged edge. Both
+  /// choices are stored natively because the page's website data store is not persistent.
+  func testWorkshopFilterSidebarCollapsesPersistsAndInspectorGrowsWithWidth() async throws {
+    let fixture = makeStore()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "web-filters-\(UUID().uuidString)")
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+    defer {
+      defaults.removePersistentDomain(forName: root.lastPathComponent)
+      try? FileManager.default.removeItem(at: root)
+    }
+    let workshop = WorkshopStore(
+      downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
+      defaults: defaults)
+    let navigation = ControlPanelNavigation()
+    let controller = WebPanelController(
+      store: fixture.store, navigation: navigation, workshop: workshop, defaults: defaults)
+    XCTAssertFalse(controller.workshopFiltersCollapsed)
+    let web = controller.makeWebView()
+    defer { controller.stop() }
+    web.setFrameSize(NSSize(width: 960, height: 640))
+    let deadline = Date().addingTimeInterval(15)
+    while !controller.isReady && Date() < deadline {
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    XCTAssertTrue(controller.isReady)
+    guard controller.isReady else { return }
+    let script = """
+      const waitFor = async predicate => {
+        const deadline = Date.now() + 5000;
+        while (!predicate()) {
+          if (Date.now() > deadline) throw new Error('Filter sidebar did not settle');
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+      };
+      const native = { postMessage: async body => {
+        try { return await window.webkit.messageHandlers.native.postMessage(body); }
+        catch (error) { throw new Error(`${body.action} failed: ${error?.message || error}`); }
+      } };
+      const showDiscover = snapshot => window.wallpaperUI.receive(Object.assign({}, snapshot, {
+        page: 'discover',
+        workshop: Object.assign({}, snapshot.workshop, {
+          page: 1, totalPages: 1, loaded: true, loading: false, items: [], error: null
+        })
+      }));
+      const columns = () => getComputedStyle(document.getElementById('library-page')).gridTemplateColumns.split(' ').map(v => Math.round(parseFloat(v)));
+      const measure = () => {
+        const page = document.getElementById('library-page');
+        const toggle = document.querySelector('[data-action="toggleWorkshopFilters"]');
+        return {
+          hidden: document.getElementById('workshop-filters').hidden,
+          collapsed: page.classList.contains('filters-collapsed'),
+          expanded: toggle ? toggle.getAttribute('aria-expanded') : null,
+          columns: columns()
+        };
+      };
+      showDiscover(await native.postMessage({action:'ready'}));
+      const before = measure();
+      document.querySelector('[data-action="toggleWorkshopFilters"]').click();
+      // The native reply re-renders on its own page (Installed), which hides the sidebar
+      // without re-rendering it; either outcome means the round trip completed.
+      await waitFor(() => document.getElementById('workshop-filters').hidden
+        || document.querySelector('[data-action="toggleWorkshopFilters"]')?.getAttribute('aria-expanded') === 'false');
+      const reply = await native.postMessage({action:'ready'});
+      showDiscover(reply);
+      const after = measure();
+      window.wallpaperUI.receive(Object.assign({}, reply, {page: 'installed'}));
+      const installed = measure();
+      showDiscover(reply);
+      // Drag the inspector edge 60px to the left, then double-click it back to the fluid width.
+      const resizer = document.getElementById('inspector-resizer');
+      const pointer = (type, clientX) => resizer.dispatchEvent(new PointerEvent(type, {bubbles: true, pointerId: 7, button: 0, clientX, clientY: 300}));
+      const edge = resizer.getBoundingClientRect().left + 4;
+      const dragStart = columns().at(-1);
+      pointer('pointerdown', edge);
+      pointer('pointermove', edge - 60);
+      const duringDrag = columns().at(-1);
+      pointer('pointerup', edge - 60);
+      const dragged = await native.postMessage({action:'ready'});
+      showDiscover(dragged);
+      const afterDrag = columns().at(-1);
+      resizer.dispatchEvent(new MouseEvent('dblclick', {bubbles: true}));
+      const reset = await native.postMessage({action:'ready'});
+      showDiscover(reset);
+      return {before, after, installed, flag: reply.workshopFiltersCollapsed,
+              dragStart, duringDrag, afterDrag, draggedWidth: dragged.inspectorWidth,
+              resetWidth: reset.inspectorWidth, afterReset: columns().at(-1)};
+      """
+    let result =
+      try await web.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page)
+      as? [String: Any]
+    let before = result?["before"] as? [String: Any]
+    XCTAssertEqual(before?["hidden"] as? Bool, false)
+    XCTAssertEqual(before?["expanded"] as? String, "true")
+    XCTAssertEqual((before?["columns"] as? [Int])?.count, 3, "Discover starts with the sidebar column")
+    XCTAssertEqual((before?["columns"] as? [Int])?.last, 260, "Windows under 1040px use the compact 260px inspector")
+    let after = result?["after"] as? [String: Any]
+    XCTAssertEqual(after?["hidden"] as? Bool, false, "The collapsed sidebar stays as an arrow rail")
+    XCTAssertEqual(after?["collapsed"] as? Bool, true)
+    XCTAssertEqual(after?["expanded"] as? String, "false")
+    XCTAssertEqual((after?["columns"] as? [Int])?.count, 3)
+    XCTAssertEqual((after?["columns"] as? [Int])?.first, 30, "Collapsing shrinks the sidebar to its rail")
+    XCTAssertEqual(result?["dragStart"] as? Int, 260)
+    XCTAssertEqual(result?["duringDrag"] as? Int, 320, "The inspector follows the pointer while dragging")
+    XCTAssertEqual(result?["afterDrag"] as? Int, 320, "The dragged width survives a native snapshot")
+    XCTAssertEqual(result?["draggedWidth"] as? Double, 320)
+    XCTAssertTrue(result?["resetWidth"] is NSNull, "Double-click clears the stored width")
+    XCTAssertEqual(result?["afterReset"] as? Int, 260, "Reset returns to the fluid stylesheet width")
+    let installed = result?["installed"] as? [String: Any]
+    XCTAssertEqual(installed?["collapsed"] as? Bool, false, "Installed never carries the Discover-only class")
+    XCTAssertEqual(result?["flag"] as? Bool, true)
+    XCTAssertNil(controller.actionError)
+    XCTAssertTrue(controller.workshopFiltersCollapsed)
+    XCTAssertTrue(defaults.bool(forKey: WebPanelController.workshopFiltersCollapsedKey))
+    XCTAssertNil(defaults.object(forKey: WebPanelController.inspectorWidthKey))
+    XCTAssertNil(controller.inspectorWidth)
+    defaults.set(300.0, forKey: WebPanelController.inspectorWidthKey)
+    let relaunched = WebPanelController(
+      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
+      defaults: defaults)
+    XCTAssertTrue(relaunched.workshopFiltersCollapsed, "The choice must survive a relaunch")
+    XCTAssertEqual(relaunched.snapshot()["workshopFiltersCollapsed"] as? Bool, true)
+    XCTAssertEqual(relaunched.inspectorWidth, 300, "A stored width must survive a relaunch")
+    XCTAssertEqual(relaunched.snapshot()["inspectorWidth"] as? Double, 300)
+    defaults.removeObject(forKey: WebPanelController.inspectorWidthKey)
+
+    web.setFrameSize(NSSize(width: 1600, height: 900))
+    let wide =
+      try await web.callAsyncJavaScript(
+        """
+        const deadline = Date.now() + 5000;
+        const last = () => Math.round(parseFloat(getComputedStyle(document.getElementById('library-page')).gridTemplateColumns.split(' ').pop()));
+        while (last() === 280) {
+          if (Date.now() > deadline) throw new Error('Inspector did not grow with the window');
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        return last();
+        """, arguments: [:], in: nil, contentWorld: .page) as? Int
+    XCTAssertEqual(wide, 340, "At 1600px the inspector reaches its 340px cap")
+    XCTAssertNil(web.window)
+    await workshop.steamCMDSetup.shutdown()
+  }
+
+  /// Steam clamps every public query to 1,000 pages of 30, so the panel must let people
+  /// jump straight to a page, clamp typed numbers to that range, and explain the cap
+  /// instead of pretending millions of results are reachable.
+  func testWorkshopPageJumpClampsToSteamsPageLimitAndExplainsTheCap() async throws {
+    let fixture = makeStore()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "web-page-jump-\(UUID().uuidString)")
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+    defer {
+      defaults.removePersistentDomain(forName: root.lastPathComponent)
+      try? FileManager.default.removeItem(at: root)
+    }
+    let workshop = WorkshopStore(
+      downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
+      defaults: defaults)
+    let navigation = ControlPanelNavigation()
+    let controller = WebPanelController(
+      store: fixture.store, navigation: navigation, workshop: workshop)
+    let web = controller.makeWebView()
+    defer { controller.stop() }
+    web.setFrameSize(NSSize(width: 960, height: 640))
+    let deadline = Date().addingTimeInterval(15)
+    while !controller.isReady && Date() < deadline {
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    XCTAssertTrue(controller.isReady)
+    guard controller.isReady else { return }
+    let result =
+      try await web.callAsyncJavaScript(
+        """
+        const snapshot = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+        const sent = [];
+        const original = window.webkit.messageHandlers.native.postMessage.bind(window.webkit.messageHandlers.native);
+        window.webkit.messageHandlers.native.postMessage = message => { sent.push(message); return original(message); };
+        const show = workshop => window.wallpaperUI.receive(Object.assign({}, snapshot, {
+          page: 'discover',
+          workshop: Object.assign({}, snapshot.workshop, {
+            page: 1, totalPages: 1000, totalCount: 2891159, pageSize: 30,
+            loaded: true, loading: false, items: [], error: null
+          }, workshop)
+        }));
+        show({});
+        const form = document.querySelector('form[data-form="workshopPage"]');
+        if (!form) throw new Error('Page jump form missing');
+        const input = form.elements.page;
+        const note = document.querySelector('.pagination-note')?.textContent || '';
+        const max = input.getAttribute('max');
+        input.value = '5000';
+        form.requestSubmit();
+        await new Promise(resolve => setTimeout(resolve, 50));
+        const request = sent.find(message => message.action === 'workshopPage');
+        show({ totalPages: 1, totalCount: 12 });
+        const smallNote = document.querySelector('.pagination-note');
+        const single = document.querySelector('form[data-form="workshopPage"] input[name="page"]');
+        return { note, requestedPage: request ? request.page : null, max, smallNote: Boolean(smallNote), disabled: Boolean(single && single.disabled) };
+        """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+    XCTAssertEqual(result?["max"] as? String, "1000")
+    XCTAssertEqual(result?["requestedPage"] as? Int, 1000, "Typed pages must clamp to Steam's last page")
+    let note = try XCTUnwrap(result?["note"] as? String)
+    XCTAssertTrue(note.contains("30,000") && note.contains("2,891,159"), "Cap note was: \(note)")
+    XCTAssertEqual(result?["smallNote"] as? Bool, false, "A fully reachable result set needs no cap note")
+    XCTAssertEqual(result?["disabled"] as? Bool, true, "A single page leaves nothing to jump to")
+    XCTAssertNil(controller.actionError)
+    await workshop.steamCMDSetup.shutdown()
+  }
+
   func testDownloadSetupCanBeDismissedAndResumedWithoutLosingIntent() async throws {
     let fixture = makeStore()
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -708,6 +918,30 @@ final class ControlPanelLayoutTests: XCTestCase {
     }
   }
 
+  func testDisplayTitlesUseTheSystemNameEverywhereTheRendererLabelAppears() async throws {
+    let names = DisplayTitleResolver(names: { ["primary": "Built-in Retina Display"] })
+    try await withPanel(displayTitles: names) { panel in
+      panel.configureDisplays()
+      panel.store.settingsSnapshot.displays[1].mirrorTargets = ["primary"]
+      panel.store.settingsSnapshot.displays[0].title = "Vendor 1552 - Model 41055 (primary - Primary)"
+      panel.store.snapshotRevision &+= 1
+      panel.navigation.selection = .settings
+      panel.show()
+      try await panel.waitJS("powerProbe.received.at(-1)?.displays[1]?.fps === 48")
+      let titles = try await panel.js("""
+        const state = powerProbe.received.at(-1);
+        return [state.displays[0].title, state.displays[1].title,
+          state.displays[1].mirrorTargets[0].title, state.options.displays[0].title];
+        """) as? [String]
+      XCTAssertEqual(
+        titles,
+        [
+          "Built-in Retina Display (primary - Primary)", "secondary",
+          "Built-in Retina Display (primary - Primary)", "Built-in Retina Display",
+        ])
+    }
+  }
+
   func testOptionsFailureFallsBackWithoutLoopingAndRetriesOnReentry() async throws {
     try await withPanel { panel in
       panel.configureDisplays()
@@ -765,9 +999,61 @@ final class ControlPanelLayoutTests: XCTestCase {
     }
   }
 
-  private func withPanel(_ body: (PanelFixture) async throws -> Void) async throws {
+  func testTopBarCentersTheBrandBesideARepositoryLinkAndOwnsTitleBarGesturesWithoutWindow()
+    async throws
+  {
+    try await withPanel { panel in
+      // The default window width; narrower panels hide the identity entirely.
+      panel.web.setFrameSize(NSSize(width: 1240, height: 640))
+      panel.show()
+      try await panel.waitJS("document.querySelector('#app-identity [data-action=\"openExternal\"]') !== null")
+      let link = try await panel.js("""
+        const bar = document.querySelector('.topbar');
+        const link = document.querySelector('#app-identity [data-action="openExternal"]');
+        const barRect = bar.getBoundingClientRect();
+        const identity = document.getElementById('app-identity').getBoundingClientRect();
+        return {
+          url: link.dataset.url,
+          inset: getComputedStyle(document.documentElement).getPropertyValue('--window-controls-inset').trim(),
+          offCenter: Math.abs((identity.left + identity.right) / 2 - (barRect.left + barRect.right) / 2),
+          title: bar.querySelector('.app-name').textContent,
+        };
+        """) as? [String: Any]
+      let url = try XCTUnwrap(URL(string: link?["url"] as? String ?? ""))
+      XCTAssertEqual(url, AppUpdateConfiguration.repositoryURL)
+      XCTAssertTrue(
+        WebPanelController.allowedExternalURL(url),
+        "The repository link must pass the same allowlist as every other external link")
+      XCTAssertEqual(link?["inset"] as? String, "0px", "No window means no traffic lights to clear")
+      XCTAssertLessThanOrEqual(
+        link?["offCenter"] as? Double ?? .infinity, 1,
+        "The product name must sit on the window's horizontal center, not after the tabs")
+      XCTAssertEqual(link?["title"] as? String, "MacWallpaperEngine")
+      XCTAssertEqual(panel.controller.windowControlsInset, 0)
+      // Title-bar gestures reply without a snapshot and never fail when there is no window.
+      for action in ["dragWindow", "titleDoubleClick"] {
+        let reply = try await panel.js(
+          "return await window.webkit.messageHandlers.native.postMessage({action:'\(action)'});")
+        XCTAssertNil(reply, "\(action) must not push a state snapshot")
+      }
+      try await panel.expectJS(
+        """
+        const before = window.powerProbe.received.length;
+        document.querySelector('.topbar').dispatchEvent(new MouseEvent('mousedown', {bubbles: true, button: 0}));
+        document.querySelector('#app-identity [data-action="openExternal"]').dispatchEvent(new MouseEvent('mousedown', {bubbles: true, button: 0}));
+        await new Promise(resolve => setTimeout(resolve, 150));
+        return window.powerProbe.received.length - before;
+        """, equals: 0)
+      XCTAssertNil(panel.controller.actionError)
+    }
+  }
+
+  private func withPanel(
+    displayTitles: DisplayTitleResolver = .renderer, _ body: (PanelFixture) async throws -> Void
+  ) async throws {
     let fixture = makeStore()
-    let panel = try PanelFixture(store: fixture.store, bridge: fixture.bridge)
+    let panel = try PanelFixture(
+      store: fixture.store, bridge: fixture.bridge, displayTitles: displayTitles)
     do {
       try await panel.start()
       try await body(panel)
@@ -998,7 +1284,7 @@ private final class PanelFixture {
   var web: WKWebView
   let executable: URL
 
-  init(store: BridgeStore, bridge: LayoutSnapshotBridge) throws {
+  init(store: BridgeStore, bridge: LayoutSnapshotBridge, displayTitles: DisplayTitleResolver) throws {
     self.store = store
     self.bridge = bridge
     defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
@@ -1024,7 +1310,7 @@ private final class PanelFixture {
     let visibility = self.visibility
     controller = WebPanelController(
       store: store, navigation: navigation, workshop: workshop,
-      isPresentationVisible: { visibility.visible })
+      isPresentationVisible: { visibility.visible }, displayTitles: displayTitles)
     web = controller.makeWebView()
     web.setFrameSize(NSSize(width: 960, height: 640))
   }

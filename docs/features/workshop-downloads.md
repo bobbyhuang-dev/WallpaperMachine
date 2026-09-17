@@ -10,7 +10,11 @@ Credentials for a download are entered only in the app's own local prompts.
 
 ## Discover
 
-The **Discover** tab searches the Workshop and pages through results. A left
+The **Discover** tab searches the Workshop and pages through results with
+previous/next buttons or by typing a page number and pressing Return. Steam's
+public browse page clamps every query to 1,000 pages of 30 items, so at most
+30,000 results are reachable per query; when the result count is larger the
+pagination row says so and suggests narrowing the search or filters. A left
 filter sidebar groups multi-select tags:
 
 | Group | Values |
@@ -26,6 +30,27 @@ matching *every* selected tag. Tags that are selected but not in the known
 groups are kept in an **Other selected tags** group. **Clear filters** removes
 them. Results can be sorted by Trending this week, Most subscribed, Newest or
 Relevance, and a type menu narrows to Scene, Video, Web or Application.
+
+### Tile thumbnails
+
+Steam's `preview_url` is the full-size preview, and most trending previews are
+animated GIFs of roughly a megabyte each, so a page of 30 tiles weighed 20 MB
+or more and stayed blank for a minute on slow links. Tiles therefore load
+`mwe-ui://thumbnail/<id>` instead: the panel's scheme handler asks
+`WorkshopThumbnailCache` for the item, which downloads the preview once (asking
+Steam's image CDN for a 512px version, falling back to the original if the CDN
+refuses the scaling query), decodes only the first frame with ImageIO, and
+stores it as a JPEG under `Cache/WorkshopThumbnails` in the app-support folder.
+At most four previews download at once, concurrent requests for the same tile
+share one download, cache hits cost no network at all and survive relaunches,
+and the folder is trimmed to 128 MB oldest-first. Only ids announced in the
+current snapshot (results, queued downloads and pending requests) resolve; a
+tile pulses its placeholder until its image arrives and hides a failed image.
+Animation is on demand: the tile under the mouse pointer (after a short dwell,
+so sweeping across the grid downloads nothing) or under keyboard focus streams
+Steam's full preview over its still and fades it in once loaded, so only one
+animated preview downloads at a time on any connection. The inspector keeps the
+full-size preview for the selected item.
 
 ## One decision per download
 

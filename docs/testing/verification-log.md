@@ -11,6 +11,233 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-17 — Filter sidebar arrow rail and draggable inspector edge
+
+Follow-up to the collapse/fluid-width entry below: the toolbar **Filters**
+toggle moved into the sidebar as an arrow (heading arrow collapses to a 30px
+rail, rail arrow expands), and the inspector's left edge became a drag handle
+(`#inspector-resizer`, `role="separator"`, arrow keys and `Home`). A dragged
+width is clamped to 240px–45vw, sent natively once on release
+(`inspectorWidth` action, `UserDefaults`, snapshot field `inspectorWidth`,
+double-click clears it). Sidebar widths in the narrow media queries moved to
+`--filters-width` so the rail width wins there too.
+
+- `python3 scripts/test.py`: Python suite, XcodeGen and native unit tests
+  passed (267 tests, 0 failures). The extended
+  `testWorkshopFilterSidebarCollapsesPersistsAndInspectorGrowsWithWidth`
+  now also drives the rail (first column 30px while collapsed), a synthetic
+  60px pointer drag (260px → 320px, persisted as 320), a double-click reset
+  back to the fluid width, and a stored width surviving a relaunched controller.
+- Two earlier single-test runs failed on the way: a wait condition that could
+  never be met once the native reply re-rendered on Installed, and the 148px
+  sidebar literal in the ≤1040px media query overriding the rail; both fixed.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED; the bundled WebUI files match the source tree.
+- Not verified: pointer feel of the drag handle in the live window (no desktop
+  run requested).
+
+## 2026-09-17 — Panel icons switch to vendored Lucide glyphs
+
+The hand-drawn SVG path map in `panel.js` is replaced by `WebUI/icons.js`,
+22 glyphs copied from the locally cached `lucide-react` 1.45.0 package (ISC
+notice in the file header; the GitHub brand mark stays as before because
+Lucide ships no brand icons). `icon(name)` now renders Lucide's 2px stroke
+and `WebPanelAssets` serves the new module.
+
+- `python3 scripts/test.py`: Python suite, XcodeGen and native unit tests
+  passed (267 tests, 0 failures). The new
+  `testServesEveryBundledPanelModule` checks every bundled page module,
+  including `icons.js`, routes to a file and an unknown name is refused.
+- `node --check WebUI/panel.js` and importing `icons.js` under Node both
+  succeed (22 glyph entries, none empty).
+- Not checked: visual rendering in the app; no build or desktop run was
+  requested.
+
+## 2026-09-17 — Discover filter sidebar collapses; inspector width is fluid
+
+Instead of drag-resizable sidebars, Discover's toolbar gained a **Filters**
+toggle that hides the fixed-width filter column (stored in `UserDefaults`
+because the panel's website data store is non-persistent, exposed as
+`workshopFiltersCollapsed` in the snapshot), and the inspector column now uses
+`clamp(280px, 22vw, 340px)` so wide windows stop leaving a fixed strip.
+
+- `python3 scripts/test.py`: Python suite, XcodeGen and native unit tests
+  passed (266 tests, 0 failures). The new
+  `testWorkshopFilterSidebarCollapsesPersistsAndInspectorGrowsWithWidth`
+  checks the toggle releases the grid column, the flag persists across a
+  relaunched controller, Installed never carries the Discover-only class, and
+  the inspector measures 260px at 960px and 340px at 1600px.
+- First run of the same command failed
+  `ControlPanelWindowSizingTests/testHostedPanelWindowKeepsItsSizeFloor`
+  (untracked test from concurrent minimum-size work, unrelated to this
+  change); it passed on the immediate re-run.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD SUCCEEDED;
+  the delivered app bundles the updated `panel.js`.
+- Not verified: the live window (no desktop run requested).
+
+## 2026-09-17 — Control-panel window can no longer shrink below 760×560
+
+The window set `contentMinSize` to 760×560, but the panel could still be
+dragged down to a stub showing only the traffic lights. A hosted test showed
+why: after `NSHostingController` attaches, it resets `contentMinSize` to
+`(0, 0)` even with `sizingOptions = []`. Window construction now lives in
+`ControlPanelWindow`, and `AppDelegate.windowWillResize` clamps every user
+resize to the floor (minimum content size plus chrome, capped by the visible
+screen frame). `constrainToScreen` still grows a restored frame on reopen.
+
+- `python3 scripts/test.py`: Python suite, XcodeGen and native unit tests
+  passed (266 tests, 0 failures), including the new
+  `ControlPanelWindowSizingTests` (offscreen hosted window: resize proposals
+  clamp to the floor, larger proposals pass through, reopen grows a shrunken
+  frame). A first full run failed once in the pre-existing
+  `testWorkshopFilterSidebarCollapsesPersistsAndInspectorGrowsWithWidth`
+  (inspector 260 vs 280 px); it passed alone and on the second full run.
+- Not verified: dragging the live window by hand (no desktop run requested);
+  no Release build was made.
+
+## 2026-09-17 — Display titles use the system display name
+
+The panel showed the renderer's raw `Vendor 1552 - Model 41055 (1 - Primary)`
+label for the built-in display because the vendored renderer never fills a
+display name. `DisplayTitleResolver` now maps a display to
+`NSScreen.localizedName` and rewrites the title in the page snapshot (target
+picker, Settings -> Displays, mirror targets, inspector display sections),
+keeping the `(id - Primary)` suffix. A first cut keyed only on the settings
+row id and changed nothing in the delivered app: configured rows carry
+`primary` / `identity:{json}` ids, not the screen number. The resolver now also
+matches the live id in the title suffix and the identity UUID against
+`NSScreenNumber` / `CGDisplayCreateUUIDFromDisplayID`. Unmatched ids keep the
+renderer label; the bridge and persisted state are untouched.
+
+- `python3 scripts/test.py`: Python suite, XcodeGen and native unit tests
+  passed (264 tests, 0 failures), including the new
+  `DisplayTitleResolverTests` (suffix handling, primary/identity selector
+  ids, unmatched ids, blank names, system names keyed by screen number and
+  UUID) and `testDisplayTitlesUseTheSystemNameEverywhereTheRendererLabelAppears`.
+- `python3 scripts/build.py --swift-only --configuration Release` after the
+  fix: BUILD SUCCEEDED, delivered to
+  `build/Build/Products/Release/MacWallpaperEngine.app`. The user's own
+  Release build of the first cut still showed the vendor/model label, which
+  is what exposed the id mismatch.
+- Not run: a desktop check of the rebuilt panel; the name shown depends on
+  `NSScreen.localizedName` on the user's Mac.
+
+## 2026-09-17 — Tile grid density follows the browser column width
+
+The Discover grid no longer switches between fixed column counts that divide
+the 30-item page (2 / 3 / 5 / 6 / 10) at hard container breakpoints, which made
+tiles balloon just below each breakpoint (two ~227px tiles per row in a 890px
+window). Both grids now use `repeat(auto-fill, minmax(var(--tile-min), 1fr))`
+with a container-driven minimum (154px, 130px under 560px, 116px under 440px),
+so a narrower browser column shows smaller tiles and more of them. A full
+Workshop page may end in a partial row.
+
+- `python3 scripts/test.py`: Python suite, XcodeGen and native unit tests
+  passed (250 tests, 0 failures).
+- Not checked: the live layout in a running window (no desktop run was
+  requested); the sizes above are computed from the CSS.
+
+## 2026-09-17 — Cached still thumbnails for Discover tiles
+
+Discover tiles used Steam's full-size `preview_url` directly. Measured on the
+live "Trending this week · Scene" page 1: 30 items, 22.8 MB, 17 of them GIFs
+(14.7 MB); the CDN's `imw/imh` scaling shrinks JPEG/PNG about 9× but leaves
+GIFs at 12.7 MB. Tiles now load `mwe-ui://thumbnail/<id>`, served by the new
+`WorkshopThumbnailCache` actor (scaled download, first frame via ImageIO, JPEG
+on disk under `Cache/WorkshopThumbnails`, four downloads at a time, oldest-first
+pruning at 128 MB). The scheme handler only resolves ids in the current
+snapshot; tiles pulse their placeholder while loading.
+
+- `curl` probes against `images.steamusercontent.com`: the scaling query
+  returns 200 for JPEG and GIF previews; no query parameter converts a GIF to a
+  still image, hence the local first-frame extraction.
+- `python3 scripts/test.py`: Python script tests OK, XcodeGen OK, native
+  suite 258 passed, 0 failed, 0 skipped (adds `WorkshopThumbnailCacheTests`
+  ×7 and `WebPanelAssetsTests` ×1). First run failed only on a synthetic
+  size assertion (a flat test GIF compresses smaller than its JPEG); the
+  assertion was removed and the suite re-run.
+- Follow-up the same day: animated previews return on demand. The tile under
+  the mouse pointer (180 ms dwell) or keyboard focus renders a `tile-live`
+  `<img>` with Steam's full preview over its still and fades it in on load;
+  leaving removes it. `node --check WebUI/panel.js` OK;
+  `python3 scripts/test.py` re-run after the change (see result below).
+- Not verified: the thumbnails and hover animation inside the running app on a
+  throttled link (no desktop run, no Release build requested).
+
+## 2026-09-17 — Top bar in the title-bar strip, centered brand, GitHub link
+
+The control-panel window now hides its native title (transparent title bar, an
+empty unified toolbar sizing the strip to 52px) and the page's top bar occupies
+that strip: tabs after the traffic lights, whose measured inset arrives in every
+snapshot as `windowControlsInset`; product name, version and a GitHub button
+(`repositoryURL`, opened through the existing `openExternal` allowlist) on the
+window's horizontal center; picker, downloads and renderer link on the right.
+Background presses on the bar post `dragWindow` / `titleDoubleClick`, which the
+host answers without a snapshot (`performDrag`, system double-click action).
+
+- `python3 scripts/test.py` (twice, after the final test edit): Python script
+  tests OK; native **250 passed, 0 failed, 0 skipped**, including the new
+  `testTopBarCentersTheBrandBesideARepositoryLinkAndOwnsTitleBarGesturesWithoutWindow`
+  (repository link equals `AppUpdateConfiguration.repositoryURL` and passes the
+  allowlist, brand center within 1px of the bar center at 1240px, inset 0 and
+  gesture replies empty without a window, background press posts no snapshot).
+- No Release build or desktop run. Unchecked on a real window: traffic-light
+  vertical alignment against the 52px bar on macOS 26, click pass-through in
+  the toolbar strip, and the measured inset value.
+
+## 2026-09-17 — Workshop page jump and Steam's 1,000-page cap
+
+The Discover pagination showed **Page 1 of 1000** against millions of results.
+Live probes of `steamcommunity.com/workshop/browse` (app 431960, trend sort)
+confirmed the cap is Steam's: `total_pages` is 1000 for `total_count`
+2,891,159, `p=1001` and `p=5000` both return page 1000, and `numperpage`
+above 30 is clamped back to 30. The panel now exposes an editable page number
+(Return or **Go**, clamped to the last page) and, when the count exceeds
+`totalPages × pageSize`, a note that only the first 30,000 results are
+reachable. `WorkshopService.pageSize` feeds both the browse URL and the
+snapshot's new `pageSize` field.
+
+- `python3 scripts/test.py`: Python script tests OK; native **249 passed,
+  0 failed, 0 skipped**, including the new
+  `testWorkshopPageJumpClampsToSteamsPageLimitAndExplainsTheCap` (typed 5000
+  requests page 1000, cap note names 30,000 of 2,891,159, no note and a
+  disabled field for a single page).
+- No Release build or desktop run; visual layout of the inline number field is
+  unchecked on a real window.
+
+## 2026-09-17 — Delete affordances moved into view
+
+Moved the inspector's **Show in Finder** / trash buttons into the heading
+action row beside **Apply wallpaper** (previously below the options, off-screen
+once options loaded) and added a toolbar **Select** / **Done** toggle that keeps
+every tile's check box visible and makes plain clicks toggle selection.
+
+- `python3 scripts/test.py`: native **248 passed, 0 failed, 0 skipped**.
+- Headless-Chromium smoke with the stubbed `native` handler: trash button
+  renders in the inspector action row without scrolling; **Select** turned on
+  persistent check boxes, two plain tile clicks produced
+  `2 selected · Select all · Clear · Move 2 to Trash`; **Done**/`Escape` leave
+  the mode. Harness removed afterwards. No Release build or desktop run.
+
+## 2026-09-17 — Library batch deletion and tile multi-select
+
+Added `BridgeStore.deleteWallpapersAsync(ids:recycle:)` (per-wallpaper failure
+tolerance, one library refresh), the `deleteMany` panel action with a single
+confirmation and a combined failure message, and WebUI selection (tile check
+buttons, Cmd/Shift-click, Select all, Clear, `Delete`/`Escape` on the grid).
+
+- `python3 scripts/test.py`: native **248 passed, 0 failed, 0 skipped**,
+  including new `BatchDeletionTests` (continues past an invalid id and a
+  recycle failure, refreshes once; skips refresh when nothing was trashed).
+- WebUI smoke in a headless Chromium against a throwaway copy of `WebUI/` with
+  a stubbed `native` handler: check click + Shift-click selected `w1…w3`, the
+  summary row showed `3 selected · Select all · Clear · Move 3 to Trash`,
+  **Move to Trash** posted `{action:"deleteMany", ids:["w1","w2","w3"]}` and the
+  grid dropped the returned ids; `Escape` cleared the selection and `Delete` on a
+  focused tile posted a one-id `deleteMany`. Harness removed afterwards.
+- Not exercised: the native NSAlert confirmation sheet (needs a window), the
+  real Trash move inside the app, and Release build/desktop run.
+
 ## 2026-09-17 — Scripted vector constants and timeline events
 
 Follow-up to the entry below, which reported both defects and deferred them.

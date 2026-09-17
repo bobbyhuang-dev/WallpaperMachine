@@ -26,6 +26,7 @@ enum ClientPaths {
         return candidates.first(where: { hasSceneAssets(at: $0) }) ?? managedAssetsURL
     }
     static var managedSteamCMDURL: URL { supportURL.appendingPathComponent("SteamCMD", isDirectory: true) }
+    static var thumbnailCacheURL: URL { supportURL.appendingPathComponent("Cache/WorkshopThumbnails", isDirectory: true) }
 
     static func prepare() throws {
         try FileManager.default.createDirectory(at: libraryURL, withIntermediateDirectories: true)

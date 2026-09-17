@@ -95,7 +95,12 @@ Swift tests cover, without starting the app:
 - **Workshop** — search and pagination beneath the UI, committed-query
   pagination, superseded requests, cancellation, and exact failed-request retry
   through the real page parser. Two tests use live Steam responses and therefore
-  require network access.
+  require network access. Thumbnail cache: CDN scaling only for Steam image
+  hosts, first-frame JPEG extraction from animated previews, one download per
+  URL under concurrent requests, disk hits across instances, fallback when the
+  CDN refuses scaling, no cache entry after a failed fetch, the concurrency cap
+  and oldest-first pruning; the scheme handler refuses thumbnail ids it has not
+  announced.
 - **Downloads** — serial private terminals, per-job secrets, saved-sign-in
   handoff to the next job, cancellation, duplicate-click suppression, FIFO
   handoff after failure/cancel, shutdown without launching queued work, staging

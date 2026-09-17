@@ -95,6 +95,10 @@ Adding a new target, source directory, resource or build setting means editing
   `:root`; `theme.js` sets `data-theme`, `data-theme-mode` and `data-tone` on
   `<html>` and injects contrast-fitted accent tokens. Never hardcode a hex value
   in a component rule.
+- Icons are Lucide glyphs vendored in `WebUI/icons.js` (ISC, version noted in the
+  file header) and rendered through `panel.js`'s `icon(name)` helper. To add one, copy
+  its node list from the Lucide package under the panel's name; never hand-draw SVG
+  paths or load an icon font.
 - Keep the accessibility scaffolding: `aria-label` on landmarks, `role="alert"`
   and `aria-live` on status regions, real `<button>`/`<dialog>` elements.
 

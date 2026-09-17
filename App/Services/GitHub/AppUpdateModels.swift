@@ -6,6 +6,10 @@ enum AppUpdateConfiguration {
     static let applicationName = "MacWallpaperEngine.app"
     static let maximumDownloadBytes: Int64 = 1_073_741_824
 
+    static var repositoryURL: URL {
+        URL(string: "https://github.com/\(repository)")!
+    }
+
     static var releasesURL: URL {
         URL(string: "https://github.com/\(repository)/releases")!
     }

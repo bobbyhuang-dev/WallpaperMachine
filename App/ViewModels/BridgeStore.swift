@@ -89,17 +89,37 @@ final class BridgeStore {
     }
 
     func deleteWallpaperAsync(id: String) async throws {
-        // Validate before stopping playback; never touch an external source folder.
-        _ = try WallpaperDeletionService.wallpaperURL(id: id, library: ClientPaths.libraryURL)
-        let displayIDs = Set(monitorInformationSnapshot.rows.filter {
-            $0.wallpaperId == id && $0.mirrorTargetDisplayId == nil
-        }.map(\.displayId))
-        for displayID in displayIDs.sorted() {
-            try await ejectWallpaperFromDisplayAsync(displayId: displayID, wallpaperId: id)
+        let report = try await deleteWallpapersAsync(ids: [id])
+        if let failure = report.failures.first { throw failure.error }
+    }
+
+    /// Trashes each wallpaper independently so one failure never blocks the rest;
+    /// the library refreshes once after the whole batch.
+    func deleteWallpapersAsync(
+        ids: [String],
+        recycle: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
+    ) async throws -> WallpaperDeletionReport {
+        var report = WallpaperDeletionReport()
+        for id in ids {
+            do {
+                // Validate before stopping playback; never touch an external source folder.
+                _ = try WallpaperDeletionService.wallpaperURL(id: id, library: ClientPaths.libraryURL)
+                let displayIDs = Set(monitorInformationSnapshot.rows.filter {
+                    $0.wallpaperId == id && $0.mirrorTargetDisplayId == nil
+                }.map(\.displayId))
+                for displayID in displayIDs.sorted() {
+                    try await ejectWallpaperFromDisplayAsync(displayId: displayID, wallpaperId: id)
+                }
+                try WallpaperDeletionService.moveToTrash(id: id, library: ClientPaths.libraryURL, recycle: recycle)
+                report.deleted.append(id)
+            } catch {
+                report.failures.append((id: id, error: error))
+            }
         }
-        try WallpaperDeletionService.moveToTrash(id: id, library: ClientPaths.libraryURL)
+        guard !report.deleted.isEmpty else { return report }
         try await refreshLibraryAsync()
-        editorState.discard(wallpaperID: id)
+        for id in report.deleted { editorState.discard(wallpaperID: id) }
+        return report
     }
 
     func refreshDisplaysAsync() async throws {

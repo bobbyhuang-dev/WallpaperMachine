@@ -36,6 +36,7 @@ Swift hosts it, but the page is app-owned: the renderer never draws into this we
 | `App/Views/ControlPanel/WebPanelSnapshot.swift` | Builds the single `[String: Any]` state payload handed to the page |
 | `App/Views/ControlPanel/WebPanelActions.swift` | Decodes and executes page-originated actions (`WebPanelRequest`) |
 | `WebUI/index.html`, `panel.js`, `settings.js`, `theme.js`, `panel.css`, `settings.css` | The page itself |
+| `WebUI/icons.js` | Vendored [Lucide](https://lucide.dev) glyphs (ISC) behind the page's `icon(name)` helper |
 
 Protocol, both directions:
 
@@ -85,7 +86,7 @@ Services are grouped by domain under `App/Services/`.
 | `Library/` | `ClientPaths`, `WallpaperImportService`, `WallpaperDeletionService` | App-support layout, non-destructive import, guarded deletion |
 | `LockScreen/` | `LockScreenWallpaperSelection`, `LockScreenWallpaperService` | System lock-screen selection overrides and configuration publishing |
 | `Steam/` | `SteamCMDRuntime`, `SteamCMDSetupStore` | SteamCMD discovery, download, validation, security approval |
-| `Workshop/` | `WorkshopService`, `WorkshopStore`, `WorkshopDownloader`, `WorkshopDownloadManager` | Workshop query model, browse state, SteamCMD-driven downloads, queue |
+| `Workshop/` | `WorkshopService`, `WorkshopStore`, `WorkshopDownloader`, `WorkshopDownloadManager`, `WorkshopThumbnailCache` | Workshop query model, browse state, SteamCMD-driven downloads, queue, on-disk still thumbnails for Discover tiles |
 | `WebWallpaper/` | `WebWallpaperHost`, `WebWallpaperWindow`, `WebWallpaperPage` | Desktop-level `WKWebView` windows for `type: "web"` projects, driven by the bridge's `webWallpapers()`; see [features/web-wallpapers.md](features/web-wallpapers.md) |
 
 `ClientPaths` fixes the on-disk contract: everything lives under

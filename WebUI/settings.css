@@ -12,7 +12,7 @@
 
 .settings-layout {
   display: grid;
-  grid-template-columns: 140px minmax(0, 1fr);
+  grid-template-columns: 172px minmax(0, 1fr);
   height: 100%;
   min-height: 0;
   min-width: 0;
@@ -38,6 +38,7 @@
   text-align: left;
   font: inherit;
   line-height: 1.25;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -167,7 +168,7 @@
 .settings-footnote { margin: 16px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; max-width: 70ch; }
 
 @media (max-width: 800px) {
-  .settings-layout { grid-template-columns: 124px minmax(0, 1fr); }
+  .settings-layout { grid-template-columns: 152px minmax(0, 1fr); }
   .settings-nav { padding: 17px 8px; }
   .settings-nav [role="tab"] { font-size: 12px; padding: 8px; }
   .settings-scroll { padding: 21px 20px 32px; }

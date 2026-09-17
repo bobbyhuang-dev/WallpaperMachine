@@ -65,7 +65,7 @@ Things that must not appear:
 | App service or domain logic | `App/Services/<Domain>/` | Reuse an existing domain folder before creating one; a new domain needs a new folder plus a matching `Tests/Unit/<Domain>/` |
 | View or panel-hosting feature | `App/Views/ControlPanel/` | Page state belongs in the snapshot builder, actions in the action handlers |
 | Observable app state | `App/ViewModels/` | Keep renderer calls behind `BridgeStore`; no views here |
-| Web-panel UI | `WebUI/` | Extend `panel.js`/`settings.js` plus the matching CSS; new files must be added to the served allow list in `WebPanelAssets` |
+| Web-panel UI | `WebUI/` | Extend `panel.js`/`settings.js` plus the matching CSS; new files must be added to the served allow list in `WebPanelAssets`. Icons come from the vendored Lucide set in `icons.js`, never hand-drawn SVG |
 | Code shared with the extension | `Shared/` | Only if both targets genuinely need it, and it must build extension-API-only |
 | Lock-screen extension behaviour | `Extension/` | Nothing here may depend on app-only APIs or app-private files |
 | Unit test | `Tests/Unit/<Domain>/` | Same domain folder name as the code under test |

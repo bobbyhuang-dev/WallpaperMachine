@@ -233,21 +233,38 @@ p { overflow-wrap: anywhere; }
 small, .muted { color: var(--muted); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 #app { height: 100%; display: flex; flex-direction: column; }
-.topbar { display: flex; justify-content: space-between; align-items: center; padding: 0 18px; min-height: 54px; border-bottom: 1px solid var(--line); gap: 16px; flex: none; }
-.tabs { display: flex; align-self: stretch; gap: 22px; }
+/* The top bar occupies the window's title-bar strip (52px unified height): the tabs start
+   after the traffic lights, whose measured inset the page receives in every snapshot, and
+   equal outer columns keep the product name centered on the window. */
+:root { --window-controls-inset: 70px; }
+.topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; padding: 0 18px; min-height: 52px; border-bottom: 1px solid var(--line); gap: 16px; flex: none; user-select: none; -webkit-user-select: none; }
+.tabs { display: flex; align-self: stretch; justify-self: start; gap: 22px; padding-left: var(--window-controls-inset); }
 .tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); font-weight: 600; padding: 0 2px; font-size: 14px; }
 .tabs button[aria-current="page"] { border-bottom-color: var(--accent); color: var(--text); }
 .tabs button:hover:not(:disabled) { border-color: var(--accent); background: transparent; color: var(--text); }
-.app-identity { display: flex; align-items: baseline; gap: 7px; min-width: 0; flex: 1; overflow: hidden; }
+.app-identity { display: flex; align-items: center; justify-self: center; gap: 4px; min-width: 0; overflow: hidden; }
+.app-title { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
 .app-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .app-version { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.top-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.github-link { color: var(--muted); min-height: 26px; min-width: 26px; padding: 4px; }
+.github-link:hover:not(:disabled) { color: var(--text); }
+.top-actions { display: flex; align-items: center; justify-self: end; gap: 8px; min-width: 0; }
 .top-actions select { max-width: 180px; }
 .error-banner { display: flex; align-items: center; gap: 10px; padding: 9px 18px; color: var(--danger); background: var(--danger-surface); border-bottom: 1px solid var(--danger-line); flex: none; }
 .error-banner p { flex: 1; }
 #main { flex: 1; min-height: 0; overflow: hidden; }
-.library-page { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 280px; }
-.library-page.discover { grid-template-columns: 174px minmax(0, 1fr) 280px; }
+/* The inspector grows with wide windows instead of leaving a fixed 280px strip; the
+   filter sidebar keeps its fixed width because its controls gain nothing from more. */
+.library-page { --inspector-width: clamp(280px, 22vw, 340px); --filters-width: 174px; position: relative; height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) var(--inspector-width); }
+.library-page.discover { grid-template-columns: var(--filters-width) minmax(0, 1fr) var(--inspector-width); }
+.library-page.discover.filters-collapsed { --filters-width: 30px; }
+/* Dragging the inspector edge overrides the fluid width; it stays clamped so the grid
+   keeps room at the 760px window minimum. */
+.inspector-resizer { position: absolute; top: 0; bottom: 0; right: calc(var(--inspector-width) - 4px); width: 9px; cursor: col-resize; z-index: 2; touch-action: none; }
+.inspector-resizer::after { content: ""; position: absolute; inset: 0 3px; border-radius: 2px; background: var(--accent); opacity: 0; transition: opacity 120ms ease-out; }
+.inspector-resizer:hover::after, .inspector-resizer:focus-visible::after, .library-page.inspector-resizing .inspector-resizer::after { opacity: 1; }
+.inspector-resizer:focus-visible { outline: none; }
+.library-page.inspector-resizing, .library-page.inspector-resizing * { cursor: col-resize !important; user-select: none; -webkit-user-select: none; }
 .browser-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; }
 .browser-toolbar { padding: 16px 16px 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .search-form { flex: 1 1 150px; display: flex; align-items: center; position: relative; }
@@ -256,31 +273,52 @@ small, .muted { color: var(--muted); }
 .search-form button { margin-left: 6px; }
 .browser-toolbar select { max-width: 180px; }
 .browser-summary { min-height: 27px; padding: 0 16px 8px; color: var(--muted); font-size: 12px; }
-.wallpaper-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(154px, 1fr)); gap: 12px; padding: 2px 16px 16px; overflow: auto; align-content: start; flex: 1; min-height: 0; }
-/* Workshop pages hold 30 items (WorkshopService numperpage); column counts divide 30 so a full page leaves no partial row. */
-.discover .wallpaper-grid { grid-template-columns: repeat(var(--page-columns, 2), minmax(0, 1fr)); }
-@container (min-width: 518px) { .discover .wallpaper-grid { --page-columns: 3; } }
-@container (min-width: 850px) { .discover .wallpaper-grid { --page-columns: 5; } }
-@container (min-width: 1016px) { .discover .wallpaper-grid { --page-columns: 6; } }
-@container (min-width: 1680px) { .discover .wallpaper-grid { --page-columns: 10; } }
+.selection-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-height: 27px; }
+.selection-bar .selection-count { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.selection-bar button { font-size: 12px; min-height: 24px; padding: 2px 8px; }
+.selection-bar button.link { padding: 2px 0; }
+/* Tiles fill as many columns as the browser column (the size container) can hold at the
+   minimum tile size, which shrinks with the column so a narrower window shows smaller tiles
+   and more of them instead of fewer, larger ones. */
+.wallpaper-grid { --tile-min: 154px; display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile-min), 1fr)); gap: 12px; padding: 2px 16px 16px; overflow: auto; align-content: start; flex: 1; min-height: 0; }
+@container (max-width: 560px) { .wallpaper-grid { --tile-min: 130px; gap: 9px; } }
+@container (max-width: 440px) { .wallpaper-grid { --tile-min: 116px; } }
 .wallpaper-tile { position: relative; min-width: 0; }
 .tile-select { display: block; position: relative; width: 100%; aspect-ratio: 1; padding: 0; border: 1px solid transparent; border-radius: 3px; overflow: hidden; text-align: left; background: var(--media-well); }
 .tile-select:hover:not(:disabled) { background: var(--media-well); border-color: var(--line-strong); }
 .tile-select[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .tile-select img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .tile-select img.failed { visibility: hidden; }
+.tile-select img.tile-live { position: absolute; inset: 0; opacity: 0; transition: opacity .2s ease; }
+.tile-select img.tile-live.loaded { opacity: 1; }
 .tile-placeholder { position: absolute; inset: 0; display: flex; justify-content: center; align-items: center; color: var(--faint); z-index: 0; }
+.tile-select:has(img:not(.loaded):not(.failed)) .tile-placeholder { animation: tile-pulse 1.6s ease-in-out infinite; }
+@keyframes tile-pulse { 50% { opacity: .35; } }
 .tile-select img { position: relative; }
 .tile-caption { position: absolute; left: 0; right: 0; bottom: 0; padding: 25px 9px 8px; background: var(--media-scrim); text-shadow: var(--media-shadow); pointer-events: none; }
 .tile-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--media-ink); font-size: 12px; font-weight: 500; line-height: 1.3; }
 .tile-kind { font-size: 10px; color: var(--media-ink-dim); display: block; margin-top: 3px; }
-.tile-favorite { position: absolute; right: 5px; top: 5px; min-height: 25px; min-width: 25px; padding: 4px; background: var(--media-chip); color: var(--media-ink); border: 0; opacity: 0; }
-.wallpaper-tile:hover .tile-favorite, .wallpaper-tile:focus-within .tile-favorite, .tile-favorite[aria-pressed="true"] { opacity: 1; }
-.tile-favorite:hover:not(:disabled) { background: var(--media-chip); color: var(--media-ink); }
+.tile-favorite, .tile-check { position: absolute; top: 5px; min-height: 25px; min-width: 25px; padding: 4px; background: var(--media-chip); color: var(--media-ink); border: 0; opacity: 0; }
+.tile-favorite { right: 5px; }
+.tile-check { left: 5px; z-index: 1; }
+.wallpaper-tile:hover :is(.tile-favorite, .tile-check), .wallpaper-tile:focus-within :is(.tile-favorite, .tile-check), .tile-favorite[aria-pressed="true"], .tile-check[aria-pressed="true"], .wallpaper-grid.selecting .tile-check { opacity: 1; }
+.wallpaper-grid.selecting .tile-check:not([aria-pressed="true"]) { color: transparent; box-shadow: inset 0 0 0 1.5px var(--media-ink); }
+.wallpaper-grid.selecting .tile-check:not([aria-pressed="true"]):hover { color: var(--media-ink); }
+.browser-toolbar button[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+.browser-toolbar button.selecting { background: var(--primary); border-color: var(--primary-line); color: var(--on-primary); }
+.tile-favorite:hover:not(:disabled), .tile-check:hover:not(:disabled) { background: var(--media-chip); color: var(--media-ink); }
 .tile-favorite[aria-pressed="true"] { color: var(--media-star); }
+.tile-check[aria-pressed="true"], .tile-check[aria-pressed="true"]:hover:not(:disabled) { background: var(--primary); color: var(--on-primary); }
+.wallpaper-tile.checked .tile-select { box-shadow: inset 0 0 0 2px var(--primary); border-color: var(--primary); }
+.wallpaper-tile.checked .active-badge, .wallpaper-grid.selecting .active-badge, .wallpaper-tile:hover .active-badge, .wallpaper-tile:focus-within .active-badge { left: 35px; }
 .active-badge { position: absolute; left: 6px; top: 6px; border-radius: 3px; background: var(--media-badge); color: var(--media-badge-ink); font-size: 10px; padding: 3px 5px; pointer-events: none; }
 .workshop-filters { overflow: auto; padding: 16px 13px; border-right: 1px solid var(--line); }
+.workshop-filters.collapsed { padding: 10px 0; display: flex; flex-direction: column; align-items: center; gap: 8px; overflow: hidden; }
 .filter-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; gap: 6px; }
+.filter-heading h3 { flex: 1; min-width: 0; }
+.filter-toggle { padding: 3px; min-height: 24px; min-width: 24px; color: var(--muted); background: transparent; border-color: transparent; }
+.filter-toggle:hover:not(:disabled) { color: var(--text); background: var(--raised); }
+.filter-rail-count { font-size: 10px; font-weight: 600; min-width: 16px; height: 16px; line-height: 16px; padding: 0 4px; border-radius: 8px; text-align: center; background: var(--badge); color: var(--badge-ink); font-variant-numeric: tabular-nums; }
 .filter-group { border-top: 1px solid var(--line); padding: 10px 0; }
 summary { list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 6px; font-weight: 600; min-height: 24px; }
 summary::-webkit-details-marker { display: none; }
@@ -325,8 +363,14 @@ details[open] > summary svg { transform: rotate(90deg); }
 .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 12px; }
 .empty-state h1 { font-size: 18px; }
 .empty-state p { max-width: 44ch; color: var(--muted); }
-.pagination { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--line); min-height: 50px; font-variant-numeric: tabular-nums; }
+.pagination { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 12px; padding: 10px 16px; border-top: 1px solid var(--line); min-height: 50px; font-variant-numeric: tabular-nums; }
 .pagination:empty { display: none; }
+.page-jump { display: inline-flex; align-items: center; gap: 6px; }
+.page-jump label { display: inline-flex; align-items: center; gap: 6px; }
+.page-jump input { width: 7ch; min-height: 26px; padding: 3px 6px; text-align: center; -moz-appearance: textfield; appearance: textfield; }
+.page-jump input::-webkit-inner-spin-button, .page-jump input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.page-jump button.link { padding: 2px 4px; }
+.pagination-note { flex-basis: 100%; text-align: center; font-size: 11px; color: var(--muted); }
 #settings-content { height: 100%; overflow: auto; }
 .activity-bar { min-height: 43px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 15px; border-top: 1px solid var(--line); background: var(--footer); flex: none; }
 .activity-left, .activity-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -389,9 +433,9 @@ progress:indeterminate::-webkit-progress-bar { background: transparent; }
 .output { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, monospace; font-size: 11px; max-height: 180px; overflow: auto; padding: 8px; background: var(--well); }
 .import-controls { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
 @media (max-width: 1040px) {
-  .library-page.discover { grid-template-columns: 148px minmax(0, 1fr) 260px; }
-  .library-page { grid-template-columns: minmax(0, 1fr) 270px; }
-  .wallpaper-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 9px; padding-left: 12px; padding-right: 12px; }
+  .library-page { --inspector-width: 270px; }
+  .library-page.discover { --inspector-width: 260px; --filters-width: 148px; }
+  .wallpaper-grid { padding-left: 12px; padding-right: 12px; }
   .browser-toolbar { padding-left: 12px; padding-right: 12px; }
   .topbar { padding: 0 14px; }
   .tabs { gap: 18px; }
@@ -399,10 +443,10 @@ progress:indeterminate::-webkit-progress-bar { background: transparent; }
   .renderer-link .button-label { display: none; }
 }
 @media (max-width: 840px) {
-  .library-page.discover { grid-template-columns: 142px minmax(0, 1fr) 260px; }
-  .wallpaper-grid { grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); }
+  .library-page.discover { --filters-width: 142px; }
   .browser-toolbar select { flex: 1; max-width: 100%; }
   .top-actions select { max-width: 150px; }
   .popover { width: 318px; }
 }
+.library-page.inspector-sized { --inspector-width: clamp(240px, var(--inspector-user-width), 45vw); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

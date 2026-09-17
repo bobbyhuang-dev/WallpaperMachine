@@ -31,6 +31,7 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
   let workshop: WorkshopStore
   let updater: AppUpdateStore
   let theme: AppThemeStore
+  let displayTitles: DisplayTitleResolver
   weak var webView: WKWebView?
   let assets = WebPanelAssets()
   var subscriptions = Set<AnyCancellable>()
@@ -48,6 +49,11 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
   var importReport: WallpaperImportService.Report?
   var remembersSession = true
   var favoriteIDs: Set<String>
+  /// Discover hides its filter sidebar when the user collapses it; the choice outlives the page.
+  var workshopFiltersCollapsed: Bool
+  /// User-dragged inspector width in CSS pixels; nil means the stylesheet's fluid width.
+  var inspectorWidth: Double?
+  let defaults: UserDefaults
   var displayOptions: [String: BridgeWallpaperOptionsSnapshot] = [:]
   var displayOptionsRevision: UInt64?
   var displayOptionsTask: Task<Void, Never>?
@@ -57,20 +63,33 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
   var dismissedLibraryError: String?
   var dismissedDownloadError: String?
   static let favoriteKey = "MacWallpaperEngine.favoriteWallpaperIDs"
+  static let workshopFiltersCollapsedKey = "MacWallpaperEngine.workshopFiltersCollapsed"
+  static let inspectorWidthKey = "MacWallpaperEngine.inspectorWidth"
+  static let inspectorWidthRange: ClosedRange<Double> = 200...1200
 
   init(
     store: BridgeStore, navigation: ControlPanelNavigation, workshop: WorkshopStore,
     updater: AppUpdateStore? = nil,
     isPresentationVisible: (@MainActor () -> Bool)? = nil,
-    theme: AppThemeStore? = nil
+    theme: AppThemeStore? = nil,
+    displayTitles: DisplayTitleResolver = .system,
+    defaults: UserDefaults = .standard
   ) {
     self.store = store
     self.navigation = navigation
     self.workshop = workshop
     self.updater =
       updater ?? AppUpdateStore(currentVersion: "0.0.0", client: DisabledAppUpdateClient())
+    self.displayTitles = displayTitles
     self.isPresentationVisible = isPresentationVisible
     self.theme = theme ?? .shared
+    self.defaults = defaults
+    workshopFiltersCollapsed = defaults.bool(forKey: Self.workshopFiltersCollapsedKey)
+    if let width = defaults.object(forKey: Self.inspectorWidthKey) as? Double,
+      Self.inspectorWidthRange.contains(width)
+    {
+      inspectorWidth = width
+    }
     favoriteIDs = Set(
       (try? JSONDecoder().decode(
         [String].self, from: UserDefaults.standard.data(forKey: Self.favoriteKey) ?? Data())) ?? [])
@@ -99,6 +118,7 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
     for name in [
       NSWindow.didChangeOcclusionStateNotification, NSWindow.didBecomeKeyNotification,
       NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification,
+      NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification,
     ] {
       NotificationCenter.default.publisher(for: name)
         .sink { [weak self] note in
@@ -293,6 +313,13 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
       reply(nil, "This page is not allowed to control the application.")
       return
     }
+    // Title-bar gestures reply immediately: a drag must start on the mouse event that
+    // caused it, and neither gesture changes any state worth pushing back to the page.
+    if action == "dragWindow" || action == "titleDoubleClick" {
+      handleTitleBarGesture(action)
+      reply(nil, nil)
+      return
+    }
     Task { @MainActor in
       do {
         try await perform(action, body: body)
@@ -303,6 +330,29 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
         reply(nil, error.localizedDescription)
       }
       scheduleUpdate()
+    }
+  }
+
+  private func handleTitleBarGesture(_ action: String) {
+    guard let window = webView?.window, window.titleVisibility == .hidden,
+      !window.styleMask.contains(.fullScreen)
+    else { return }
+    switch action {
+    case "dragWindow":
+      guard let event = NSApp.currentEvent,
+        event.window === window,
+        event.type == .leftMouseDown || event.type == .leftMouseDragged
+      else { return }
+      window.performDrag(with: event)
+    case "titleDoubleClick":
+      // Mirror the Desktop & Dock preference that native title bars follow.
+      switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+      case "None": break
+      case "Minimize": window.miniaturize(nil)
+      case "Fill": window.zoom(nil)
+      default: window.zoom(nil)
+      }
+    default: break
     }
   }
 
@@ -385,42 +435,57 @@ private final class WebPanelMessageProxy: NSObject, WKScriptMessageHandlerWithRe
 @MainActor
 final class WebPanelAssets: NSObject, WKURLSchemeHandler {
   static let indexURL = URL(string: "mwe-ui://app/index.html")!
+  /// Library preview files by wallpaper id, served as `mwe-ui://preview/<id>`.
   var previews: [String: URL] = [:]
+  /// Workshop preview URLs by item id, served as still thumbnails at `mwe-ui://thumbnail/<id>`.
+  var thumbnails: [String: URL] = [:]
+  let thumbnailCache: WorkshopThumbnailCache
   private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
   private static let files: Set<String> = [
-    "index.html", "panel.js", "panel.css", "settings.js", "settings.css", "theme.js",
+    "index.html", "panel.js", "panel.css", "settings.js", "settings.css", "theme.js", "icons.js",
   ]
+
+  enum Route: Equatable {
+    case file(URL)
+    case thumbnail(URL)
+  }
+
+  init(thumbnailCache: WorkshopThumbnailCache = WorkshopThumbnailCache()) {
+    self.thumbnailCache = thumbnailCache
+    super.init()
+  }
 
   func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
     let key = ObjectIdentifier(task)
-    guard let url = task.request.url, let file = resourceURL(url) else {
+    guard let url = task.request.url, let route = route(url) else {
       task.didFailWithError(URLError(.fileDoesNotExist))
       return
     }
     tasks[key] = Task { @MainActor in
       do {
-        let data = try await Task.detached(priority: .utility) {
-          let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-          guard size <= 32 * 1024 * 1024 else { throw URLError(.dataLengthExceedsMaximum) }
-          return try Data(contentsOf: file, options: .mappedIfSafe)
-        }.value
-        guard tasks.removeValue(forKey: key) != nil, !Task.isCancelled else { return }
-        let mime: String
-        switch file.pathExtension.lowercased() {
-        case "html": mime = "text/html"
-        case "js": mime = "text/javascript"
-        case "css": mime = "text/css"
-        default:
-          mime =
-            UTType(filenameExtension: file.pathExtension)?.preferredMIMEType
-            ?? "application/octet-stream"
+        let data: Data
+        var headers = [
+          "Access-Control-Allow-Origin": "mwe-ui://app", "X-Content-Type-Options": "nosniff",
+        ]
+        switch route {
+        case .file(let file):
+          data = try await Task.detached(priority: .utility) {
+            let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size <= 32 * 1024 * 1024 else { throw URLError(.dataLengthExceedsMaximum) }
+            return try Data(contentsOf: file, options: .mappedIfSafe)
+          }.value
+          headers["Content-Type"] = Self.mimeType(for: file)
+        case .thumbnail(let preview):
+          data = try await thumbnailCache.thumbnail(for: preview)
+          headers["Content-Type"] = "image/jpeg"
+          // The disk cache is the source of truth; this only lets WebKit skip re-asking for
+          // tiles that scroll in and out of view within one session.
+          headers["Cache-Control"] = "max-age=86400"
         }
+        guard tasks.removeValue(forKey: key) != nil, !Task.isCancelled else { return }
+        headers["Content-Length"] = String(data.count)
         let response = HTTPURLResponse(
-          url: url, statusCode: 200, httpVersion: "HTTP/1.1",
-          headerFields: [
-            "Content-Type": mime, "Content-Length": String(data.count),
-            "Access-Control-Allow-Origin": "mwe-ui://app", "X-Content-Type-Options": "nosniff",
-          ])!
+          url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!
         task.didReceive(response)
         task.didReceive(data)
         task.didFinish()
@@ -429,6 +494,26 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
         task.didFailWithError(error)
       }
     }
+  }
+
+  private static func mimeType(for file: URL) -> String {
+    switch file.pathExtension.lowercased() {
+    case "html": "text/html"
+    case "js": "text/javascript"
+    case "css": "text/css"
+    default:
+      UTType(filenameExtension: file.pathExtension)?.preferredMIMEType
+        ?? "application/octet-stream"
+    }
+  }
+
+  func route(_ url: URL) -> Route? {
+    if let file = resourceURL(url) { return .file(file) }
+    guard url.scheme == "mwe-ui", url.host == "thumbnail", url.user == nil, url.password == nil,
+      url.port == nil, let preview = thumbnails[String(url.path.dropFirst())],
+      preview.scheme == "https"
+    else { return nil }
+    return .thumbnail(preview)
   }
 
   func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {

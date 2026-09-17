@@ -53,6 +53,21 @@ extension WebPanelController {
     case "workshopRetry":
       workshop.retrySearch()
       return
+    case "workshopFilters":
+      guard let collapsed = body["collapsed"] as? Bool else { throw WebPanelRequest.invalid }
+      workshopFiltersCollapsed = collapsed
+      defaults.set(collapsed, forKey: Self.workshopFiltersCollapsedKey)
+      return
+    case "inspectorWidth":
+      if body["width"] == nil || body["width"] is NSNull {
+        inspectorWidth = nil
+        defaults.removeObject(forKey: Self.inspectorWidthKey)
+      } else {
+        let width = try request.number("width", range: Self.inspectorWidthRange).rounded()
+        inspectorWidth = width
+        defaults.set(width, forKey: Self.inspectorWidthKey)
+      }
+      return
     case "workshopSelect":
       guard let id = body["id"] as? String, let item = workshop.workshopItem(id: id) else {
         throw WebPanelRequest.invalid
@@ -138,9 +153,31 @@ extension WebPanelController {
         button: "Move to Trash")
       {
         try await store.deleteWallpaperAsync(id: id)
-        favoriteIDs.remove(id)
-        UserDefaults.standard.set(
-          try JSONEncoder().encode(favoriteIDs.sorted()), forKey: Self.favoriteKey)
+        try forgetFavorites([id])
+      }
+    case "deleteMany":
+      let ids = try wallpaperIDs(request)
+      let title =
+        ids.count == 1
+        ? "Move \(store.librarySnapshot.wallpapers.first(where: { $0.id == ids[0] })?.title ?? ids[0]) to Trash?"
+        : "Move \(ids.count) wallpapers to Trash?"
+      if await confirm(
+        title,
+        detail:
+          "This removes the library copies and stops them on their displays. Original imports stay untouched.",
+        button: "Move to Trash")
+      {
+        let report = try await store.deleteWallpapersAsync(ids: ids)
+        try forgetFavorites(report.deleted)
+        if !report.failures.isEmpty {
+          let titles = Dictionary(
+            store.librarySnapshot.wallpapers.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+          let details = report.failures.map { "\(titles[$0.id] ?? $0.id): \($0.error.localizedDescription)" }
+          throw WallpaperActionError(
+            message:
+              "Moved \(report.deleted.count) of \(ids.count) wallpapers to Trash. Couldn't move \(details.joined(separator: "; "))"
+          )
+        }
       }
     case "reveal":
       NSWorkspace.shared.activateFileViewerSelecting([
@@ -334,6 +371,28 @@ extension WebPanelController {
         message: "This wallpaper is no longer installed. Refresh your library.")
     }
     return id
+  }
+
+  /// Distinct installed ids, in request order; any unknown id rejects the whole batch.
+  func wallpaperIDs(_ request: WebPanelRequest) throws -> [String] {
+    guard let raw = request.body["ids"] as? [String], !raw.isEmpty, raw.count <= 4096 else {
+      throw WebPanelRequest.invalid
+    }
+    let installed = Set(store.librarySnapshot.wallpapers.map(\.id))
+    var seen = Set<String>()
+    let ids = raw.filter { seen.insert($0).inserted }
+    guard ids.allSatisfy(installed.contains) else {
+      throw WallpaperActionError(
+        message: "Some selected wallpapers are no longer installed. Refresh your library.")
+    }
+    return ids
+  }
+
+  func forgetFavorites(_ ids: [String]) throws {
+    guard ids.contains(where: favoriteIDs.contains) else { return }
+    favoriteIDs.subtract(ids)
+    UserDefaults.standard.set(
+      try JSONEncoder().encode(favoriteIDs.sorted()), forKey: Self.favoriteKey)
   }
 
   func download(_ request: WebPanelRequest) throws -> WorkshopDownload {

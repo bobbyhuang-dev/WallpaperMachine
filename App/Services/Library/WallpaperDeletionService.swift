@@ -28,3 +28,9 @@ enum WallpaperDeletionService {
                 userInfo: [NSLocalizedDescriptionKey: message])
     }
 }
+
+/// Outcome of a batch deletion; ids keep the order they were requested in.
+struct WallpaperDeletionReport {
+    var deleted: [String] = []
+    var failures: [(id: String, error: Error)] = []
+}

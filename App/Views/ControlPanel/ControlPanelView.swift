@@ -44,5 +44,7 @@ struct ControlPanelView: View {
   var body: some View {
     WebControlPanel(store: store, navigation: navigation, workshop: workshop, updater: updater)
       .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+      // The page owns the title-bar strip; the window only keeps the traffic lights there.
+      .ignoresSafeArea()
   }
 }

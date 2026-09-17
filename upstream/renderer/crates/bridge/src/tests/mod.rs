@@ -2,6 +2,7 @@ mod activation_plan;
 mod api_smoke;
 mod apply_options;
 mod bridge_intents;
+mod display_presentation;
 mod display_validation;
 mod filter_snapshot;
 mod library_scan;

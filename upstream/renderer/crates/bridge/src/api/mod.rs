@@ -44,6 +44,7 @@ use crate::{
             PollMousePosition,
             RefreshDisplays, RefreshLibrary, RestorePropertyDefault, SelectWallpaper,
             SetAudioResponseEnabled, SetDisplayConfigEnabled, SetDisplayEnabled, SetDisplayMode,
+            SetDisplayPresentationSuspended,
             SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMirrorMuted, SetMirrorScalingFactor,
             SetMirrorScalingMode, SetMirrorTarget, SetMirrorTargetFps, SetMirrorVolume, SetMuted,
             SetPauseOnBatteryPower, SetPresentationSuspended, SetScalingFactor, SetScalingMode,
@@ -423,6 +424,14 @@ impl EngineFacade for ArcEngineFacade {
         paused: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), wallpaper_core::EngineError>> + Send>> {
         self.0.set_all_paused(paused)
+    }
+
+    fn set_display_paused(
+        &self,
+        display_id: u32,
+        paused: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<(), wallpaper_core::EngineError>> + Send>> {
+        self.0.set_display_paused(display_id, paused)
     }
 
     fn set_audio_volume(
@@ -1009,6 +1018,28 @@ impl WallpaperBridge {
     /// to apply the pause.
     pub async fn set_presentation_suspended(&self, suspended: bool) -> Result<(), BridgeError> {
         self.actor.ask(SetPresentationSuspended { suspended }).await
+    }
+
+    /// Suspends or resumes rendering for one display without touching the
+    /// others or the user-visible playback state. Used for conditions that are
+    /// specific to a screen, such as a window fully covering that wallpaper:
+    /// one display being hidden must not stop a display that is still visible.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the display id is not a known display, or the
+    /// engine fails to apply the pause.
+    pub async fn set_display_presentation_suspended(
+        &self,
+        display_id: String,
+        suspended: bool,
+    ) -> Result<(), BridgeError> {
+        self.actor
+            .ask(SetDisplayPresentationSuspended {
+                display_id,
+                suspended,
+            })
+            .await
     }
 
     /// # Errors

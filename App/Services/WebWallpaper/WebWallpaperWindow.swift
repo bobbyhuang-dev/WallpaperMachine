@@ -25,9 +25,16 @@ final class WebWallpaperWindow: NSWindow {
         isExcludedFromWindowsMenu = true
         animationBehavior = .none
         backgroundColor = .black
-        contentView = page.webView
-        page.webView.frame = NSRect(origin: .zero, size: frame.size)
-        page.webView.autoresizingMask = [.width, .height]
+        // The web view is a subview of a stable container rather than the
+        // content view itself: suspension removes it from the window tree, and
+        // the desktop poster sync identifies this surface by the content
+        // layer, which must survive that.
+        let container = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.black.cgColor
+        container.autoresizesSubviews = true
+        contentView = container
+        page.attach(to: container)
     }
 
     override var canBecomeKey: Bool { false }
@@ -46,16 +53,57 @@ final class WebWallpaperWindow: NSWindow {
 /// of the `wallpaperPropertyListener` protocol.
 @MainActor
 final class WebWallpaperPage: NSObject, WKNavigationDelegate {
+    /// How often a crashing page may be restarted, and what earns the budget
+    /// back. A page that keeps dying after a successful load must stop being
+    /// restarted; only a stable run clears its history.
+    struct RecoveryPolicy {
+        var maximumRestarts = 3
+        var window: Duration = .seconds(120)
+        var stableRun: Duration = .seconds(60)
+        var initialBackoff: Duration = .seconds(2)
+        var maximumBackoff: Duration = .seconds(30)
+    }
+
+    /// Everything the host has committed to this wallpaper. A reloaded document
+    /// starts with none of it, so the whole snapshot is replayed on each new
+    /// document generation rather than only the values that changed since.
+    private struct CommittedState {
+        var propertiesJSON: String?
+        var fps: UInt32?
+        var userPaused = false
+        var presentationSuspended = false
+
+        /// The page pauses when the user paused playback or the presentation
+        /// policy suspended rendering; either alone is sufficient.
+        var isPaused: Bool { userPaused || presentationSuspended }
+    }
+
     let webView: WKWebView
     let projectURL: URL
     let entryURL: URL
+    /// Symlink-resolved entry path, used for identity only: two descriptors name
+    /// the same page when this matches, whatever spelling the entry file used.
+    let canonicalEntryURL: URL
     private(set) var isLoaded = false
-    private var recoveryAttempted = false
-    private var pendingProperties: String?
-    private var pendingGeneral: [String: Any] = [:]
-    private var pendingPaused: Bool?
-    private var suspended = false
-    private var paused = false
+    /// Increments on every `load()`. Async host calls carry the generation they
+    /// were issued for, so a late completion cannot write into a newer document.
+    private(set) var documentGeneration: UInt64 = 0
+    private var committed = CommittedState()
+    private let surface: RuntimeSurfaceKey
+    private let counters: RuntimeCounters
+    private let recovery: RecoveryPolicy
+    private let now: @MainActor () -> ContinuousClock.Instant
+    private let wait: @Sendable (Duration) async throws -> Void
+    private var restartHistory: [ContinuousClock.Instant] = []
+    private var restartTask: Task<Void, Never>?
+    /// When the current document finished loading, so a crash can tell a page
+    /// that ran stably from one that died shortly after every load.
+    private var lastLoadFinished: ContinuousClock.Instant?
+    private weak var container: NSView?
+    private var placeholder: NSImageView?
+    private var hostSuspended = false
+    /// Invalidates an in-flight suspension poster when the decision changes.
+    private var suspensionGeneration: UInt64 = 0
     var onFailure: (@MainActor (String) -> Void)?
     var onLoaded: (@MainActor () -> Void)?
 
@@ -102,9 +150,46 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
     static var supportsHover: Bool { WKWebView.instancesRespond(to: simulateMove) }
     private static var hoverUnavailableLogged = false
 
-    init(projectURL: URL, entryFile: String) {
+    /// Resolves a project-relative entry file to the path identity used for
+    /// comparison, or nil when it leaves the project folder once symlinks are
+    /// resolved. Comparing only the last path component instead makes a nested
+    /// entry such as `sub/index.html` never equal to itself, which rebuilds the
+    /// page on every reconcile.
+    static func canonicalEntryURL(projectURL: URL, entryFile: String) -> URL? {
+        // A manifest entry is always relative to its project. An absolute path
+        // would otherwise be appended as a component and silently resolve to a
+        // file inside the project that the author never named.
+        guard !entryFile.isEmpty, !entryFile.hasPrefix("/") else { return nil }
+        let root = projectURL.standardizedFileURL.resolvingSymlinksInPath()
+        let entry = projectURL.appendingPathComponent(entryFile)
+            .standardizedFileURL.resolvingSymlinksInPath()
+        let rootComponents = root.pathComponents
+        guard entry.pathComponents.count > rootComponents.count,
+              Array(entry.pathComponents.prefix(rootComponents.count)) == rootComponents
+        else { return nil }
+        return entry
+    }
+
+    /// Closures are optional so their `@MainActor` defaults are built inside
+    /// this initializer rather than in a caller-evaluated default argument.
+    init(
+        projectURL: URL,
+        entryFile: String,
+        surface: RuntimeSurfaceKey = RuntimeSurfaceKey(kind: .desktopWeb, displayID: 0),
+        counters: RuntimeCounters? = nil,
+        recovery: RecoveryPolicy = RecoveryPolicy(),
+        now: (@MainActor () -> ContinuousClock.Instant)? = nil,
+        wait: (@Sendable (Duration) async throws -> Void)? = nil
+    ) {
         self.projectURL = projectURL
         self.entryURL = projectURL.appendingPathComponent(entryFile)
+        self.canonicalEntryURL = Self.canonicalEntryURL(projectURL: projectURL, entryFile: entryFile)
+            ?? self.entryURL.standardizedFileURL
+        self.surface = surface
+        self.counters = counters ?? .shared
+        self.recovery = recovery
+        self.now = now ?? { ContinuousClock.now }
+        self.wait = wait ?? { try await Task.sleep(for: $0) }
         let configuration = WKWebViewConfiguration()
         // Persistent: web wallpapers keep their own state (tasks, favourites) in
         // localStorage exactly as they do under Wallpaper Engine.
@@ -115,6 +200,10 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
         // relaxation WebKit only exposes through these preference keys.
         configuration.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
         configuration.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
+        // Lets WebKit throttle this page's own work once it leaves the window
+        // tree. Media playback and capture are documented exceptions, which is
+        // why suspension also suspends media explicitly.
+        configuration.preferences.inactiveSchedulingPolicy = .suspend
         let content = WKUserContentController()
         content.addUserScript(WKUserScript(source: Self.hostScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         configuration.userContentController = content
@@ -132,10 +221,19 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
 
     func load() {
         isLoaded = false
+        documentGeneration += 1
+        lastLoadFinished = nil
         webView.loadFileURL(entryURL, allowingReadAccessTo: projectURL)
     }
 
     func stop() {
+        restartTask?.cancel()
+        restartTask = nil
+        lastLoadFinished = nil
+        // Invalidate any host call still in flight for the document being torn
+        // down, so it cannot reach the blank page that replaces it.
+        documentGeneration += 1
+        isLoaded = false
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.loadHTMLString("", baseURL: nil)
@@ -143,49 +241,140 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
 
     /// `propertiesJSON` is the bridge's `{ id: { value } }` payload.
     func applyUserProperties(json propertiesJSON: String) {
-        pendingProperties = propertiesJSON
-        flush()
+        committed.propertiesJSON = propertiesJSON
+        deliverUserProperties()
     }
 
     func applyGeneralProperties(fps: UInt32) {
-        pendingGeneral["fps"] = Int(fps)
-        flush()
+        committed.fps = fps
+        deliverGeneralProperties()
     }
 
-    /// The page pauses when the user paused playback or the presentation policy
-    /// suspended rendering; either alone is sufficient.
     func setPaused(_ paused: Bool) {
-        self.paused = paused
-        pendingPaused = paused || suspended
-        flush()
+        committed.userPaused = paused
+        deliverPaused()
+    }
+
+    /// Hosts the web view inside its window's container and remembers it, so
+    /// suspension can take the view out of the window tree and put it back.
+    func attach(to container: NSView) {
+        self.container = container
+        webView.frame = container.bounds
+        webView.autoresizingMask = [.width, .height]
+        guard !hostSuspended else { return }
+        container.addSubview(webView)
     }
 
     func setPresentationSuspended(_ suspended: Bool) {
-        self.suspended = suspended
-        pendingPaused = paused || suspended
-        flush()
+        committed.presentationSuspended = suspended
+        deliverPaused()
+        applyHostSuspension(suspended)
     }
 
-    private func flush() {
+    /// Suspension the page cannot opt out of.
+    ///
+    /// `wallpaperPropertyListener.setPaused` is cooperative: a page that does
+    /// not implement it, or that only stops part of its animation, keeps its
+    /// timers, workers, WebGL and media running. Two host-side controls do not
+    /// depend on the page at all — suspending media playback, and taking the
+    /// web view out of the window tree, which is the documented condition for
+    /// WebKit's inactive scheduling policy. Neither wraps
+    /// `requestAnimationFrame` and neither touches the shared WebContent
+    /// process, which other wallpapers and the control panel also use.
+    private func applyHostSuspension(_ suspended: Bool) {
+        guard suspended != hostSuspended else { return }
+        hostSuspended = suspended
+        suspensionGeneration += 1
+        let generation = suspensionGeneration
+        if suspended {
+            // Suspend, never pause: unsuspending restores what each element was
+            // doing, so media the user had paused stays paused.
+            webView.setAllMediaPlaybackSuspended(true)
+            counters.record(.webMediaSuspended, for: surface)
+            captureDetachPoster(generation: generation)
+        } else {
+            reattachWebView()
+            webView.setAllMediaPlaybackSuspended(false)
+            counters.record(.webMediaResumed, for: surface)
+        }
+    }
+
+    /// Keeps the last frame on screen while the web view is out of the window.
+    /// The snapshot is asynchronous, so a resume that arrives first cancels it.
+    private func captureDetachPoster(generation: UInt64) {
+        guard container != nil else { return }
+        webView.takeSnapshot(with: nil) { [weak self] image, error in
+            MainActor.assumeIsolated {
+                guard let self, self.suspensionGeneration == generation, self.hostSuspended else { return }
+                if let error {
+                    AppLog.debug("""
+                        web wallpaper \(self.projectURL.lastPathComponent): \
+                        suspension poster unavailable: \(error.localizedDescription)
+                        """)
+                }
+                self.detachWebView(poster: image)
+            }
+        }
+    }
+
+    private func detachWebView(poster: NSImage?) {
+        guard let container, webView.superview === container else { return }
+        let placeholder = NSImageView(frame: container.bounds)
+        placeholder.autoresizingMask = [.width, .height]
+        placeholder.imageScaling = .scaleAxesIndependently
+        placeholder.image = poster
+        placeholder.wantsLayer = true
+        container.addSubview(placeholder)
+        self.placeholder = placeholder
+        webView.removeFromSuperview()
+        counters.record(.webDetached, for: surface)
+    }
+
+    private func reattachWebView() {
+        guard let container else { return }
+        if webView.superview !== container {
+            webView.frame = container.bounds
+            container.addSubview(webView)
+            counters.record(.webAttached, for: surface)
+        }
+        placeholder?.removeFromSuperview()
+        placeholder = nil
+    }
+
+    /// Whether the web view is currently in its window's view tree. WebKit's
+    /// inactive scheduling policy keys off exactly this.
+    var isInWindowTree: Bool { container != nil && webView.superview === container }
+
+    private func deliverUserProperties() {
+        guard isLoaded, let json = committed.propertiesJSON else { return }
+        run("window.__mweWallpaperHost.applyUserProperties(JSON.parse(json))", arguments: ["json": json])
+    }
+
+    private func deliverGeneralProperties() {
+        guard isLoaded, let fps = committed.fps else { return }
+        run("window.__mweWallpaperHost.applyGeneralProperties(general)",
+            arguments: ["general": ["fps": Int(fps)]])
+    }
+
+    private func deliverPaused() {
         guard isLoaded else { return }
-        if let json = pendingProperties {
-            pendingProperties = nil
-            run("window.__mweWallpaperHost.applyUserProperties(JSON.parse(json))", arguments: ["json": json])
-        }
-        if !pendingGeneral.isEmpty {
-            let general = pendingGeneral
-            pendingGeneral = [:]
-            run("window.__mweWallpaperHost.applyGeneralProperties(general)", arguments: ["general": general])
-        }
-        if let paused = pendingPaused {
-            pendingPaused = nil
-            run("window.__mweWallpaperHost.setPaused(paused)", arguments: ["paused": paused])
-        }
+        run("window.__mweWallpaperHost.setPaused(paused)", arguments: ["paused": committed.isPaused])
+    }
+
+    /// Replays the whole committed snapshot into a freshly loaded document. A
+    /// descriptor diff cannot do this: after a crash and reload nothing has
+    /// changed, so nothing would be sent and the page would start blank.
+    private func replayCommittedState() {
+        counters.record(.webStateReplayed, for: surface)
+        deliverUserProperties()
+        deliverGeneralProperties()
+        deliverPaused()
     }
 
     private func run(_ script: String, arguments: [String: Any]) {
+        let generation = documentGeneration
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, self.documentGeneration == generation else { return }
             do {
                 _ = try await self.webView.callAsyncJavaScript(script, arguments: arguments, in: nil, contentWorld: .page)
             } catch {
@@ -194,8 +383,12 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
         }
     }
 
-    /// Replays a pointer event already rebased into the page's window.
+    /// Replays a pointer event already rebased into the page's window. A
+    /// suspended page consumes nothing: delivering to a view outside the window
+    /// tree would both restart work and hit-test against stale geometry.
     func deliverMouse(_ event: NSEvent) {
+        guard !hostSuspended else { return }
+        counters.record(.pointerDelivered, for: surface)
         switch event.type {
         case .mouseMoved:
             guard Self.supportsHover else {
@@ -233,8 +426,8 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         isLoaded = true
-        recoveryAttempted = false
-        flush()
+        lastLoadFinished = now()
+        replayCommittedState()
         onLoaded?()
     }
 
@@ -251,13 +444,41 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         isLoaded = false
-        guard !recoveryAttempted else {
+        let moment = now()
+        // A load that finishes proves nothing on its own: a page that crashes
+        // shortly after every load would otherwise clear its budget forever.
+        // Only an uninterrupted run returns the restarts.
+        if let finished = lastLoadFinished, moment - finished >= recovery.stableRun {
+            restartHistory.removeAll()
+        }
+        lastLoadFinished = nil
+        restartHistory.removeAll { moment - $0 >= recovery.window }
+        guard restartHistory.count < recovery.maximumRestarts else {
+            counters.record(.webRecoveryBudgetExhausted, for: surface)
+            AppLog.error("""
+                web wallpaper \(projectURL.lastPathComponent): content process terminated \
+                \(restartHistory.count) times; restart budget exhausted
+                """)
             onFailure?(String(localized: "The web wallpaper stopped unexpectedly and could not be restarted."))
             return
         }
-        recoveryAttempted = true
-        AppLog.warn("web wallpaper \(projectURL.lastPathComponent): content process terminated; reloading once")
-        load()
+        // Back off exponentially so a page that dies immediately after loading
+        // cannot spin the content process at full speed.
+        let attempt = restartHistory.count
+        restartHistory.append(moment)
+        counters.record(.webRecoveryStarted, for: surface)
+        let delay = min(recovery.initialBackoff * (1 << attempt), recovery.maximumBackoff)
+        AppLog.warn("""
+            web wallpaper \(projectURL.lastPathComponent): content process terminated; \
+            restart \(attempt + 1) of \(recovery.maximumRestarts) in \(delay)
+            """)
+        restartTask?.cancel()
+        restartTask = Task { @MainActor [weak self, wait] in
+            try? await wait(delay)
+            guard let self, !Task.isCancelled else { return }
+            self.restartTask = nil
+            self.load()
+        }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {

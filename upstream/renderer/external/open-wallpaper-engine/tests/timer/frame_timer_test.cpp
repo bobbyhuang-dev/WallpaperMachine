@@ -141,5 +141,84 @@ TEST(FrameTimerTest, LongDeliveryGapDoesNotCatchUpSuspendedTime) {
     timer.FrameEnd(start + 8h + 110ms);
 }
 
+TEST(FrameTimerTest, ContentThatChangesLessOftenLowersTheTickRate) {
+    FrameTimer timer;
+    timer.SetRequiredFps(60);
+    EXPECT_EQ(timer.TickInterval(), 16666us) << "no demand keeps the configured cadence";
+
+    // A 30 fps video behind a 60 fps ceiling: rendering 60 times a second would
+    // present every decoded frame twice.
+    timer.SetFrameDemand({ .content_period = 33333us });
+    EXPECT_EQ(timer.TickInterval(), 33333us);
+
+    // Raising the ceiling does not raise the content's rate.
+    timer.SetRequiredFps(120);
+    EXPECT_EQ(timer.TickInterval(), 33333us);
+}
+
+TEST(FrameTimerTest, TheConfiguredFpsStaysTheCeiling) {
+    FrameTimer timer;
+    timer.SetRequiredFps(30);
+
+    // A 60 fps video must not make a 30 fps wallpaper render at 60: the user's
+    // and the display's limit wins.
+    timer.SetFrameDemand({ .content_period = 16666us });
+    EXPECT_EQ(timer.TickInterval(), 33333us);
+
+    // A period equal to the ideal frame time changes nothing either.
+    timer.SetFrameDemand({ .content_period = 33333us });
+    EXPECT_EQ(timer.TickInterval(), 33333us);
+}
+
+TEST(FrameTimerTest, AnUnknownOrAbsurdPeriodCannotStallTheScene) {
+    FrameTimer timer;
+    timer.SetRequiredFps(30);
+
+    // Zero is how a source says it does not know its own rate.
+    timer.SetFrameDemand({ .content_period = 0us });
+    EXPECT_EQ(timer.TickInterval(), 33333us);
+    timer.SetFrameDemand({ .content_period = -5s });
+    EXPECT_EQ(timer.TickInterval(), 33333us) << "a negative period is not a licence to stop";
+
+    // A wildly long period is clamped to the longest gap the frame clock still
+    // treats as continuous playback, so the scene keeps a heartbeat.
+    timer.SetFrameDemand({ .content_period = 1h });
+    EXPECT_EQ(timer.TickInterval(), 5s);
+}
+
+TEST(FrameTimerTest, DroppingTheDemandRestoresTheFixedCadence) {
+    FrameTimer timer;
+    timer.SetRequiredFps(60);
+    timer.SetFrameDemand({ .content_period = 500ms });
+    EXPECT_EQ(timer.TickInterval(), 500ms);
+
+    // Switching to a scene that cannot prove its rate must go back to ticking
+    // at the configured rate rather than inheriting the previous scene's.
+    timer.SetFrameDemand({});
+    EXPECT_EQ(timer.TickInterval(), 16666us);
+}
+
+TEST(FrameTimerTest, ContentPacingKeepsTheSingleDrawInFlightLimit) {
+    int  draws { 0 };
+    FrameTimer timer([&draws]() {
+        draws++;
+    });
+    timer.SetRequiredFps(60);
+    timer.SetFrameDemand({ .content_period = 100ms });
+    const auto start = std::chrono::steady_clock::time_point(1s);
+
+    // Pacing changes when a draw is posted, never how many may be outstanding.
+    timer.m_timer.m_callback();
+    EXPECT_EQ(draws, 1);
+    timer.m_timer.m_callback();
+    EXPECT_EQ(draws, 1) << "a frame still in flight must not be joined by another";
+
+    timer.FrameBegin(start);
+    timer.FrameEnd(start + 10ms);
+    timer.m_timer.m_callback();
+    EXPECT_EQ(draws, 2);
+    EXPECT_EQ(timer.TickInterval(), 100ms);
+}
+
 } // namespace
 } // namespace wallpaper

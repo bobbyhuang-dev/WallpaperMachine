@@ -48,6 +48,9 @@ public:
     void SetWallpaperHorizontalFlip(bool enabled);
     void SetVideoPlaybackPaused(bool paused);
     void SetVideoPlaybackRate(float rate);
+    /// Shortest frame period among the live video sources, in seconds, or 0
+    /// when any of them cannot report one. Read on the render thread only.
+    [[nodiscard]] double ShortestVideoFramePeriod() const;
 
     /// World rectangle the presented wallpaper covers, for mapping
     /// window-normalized cursor input onto scene coordinates. Invalid before

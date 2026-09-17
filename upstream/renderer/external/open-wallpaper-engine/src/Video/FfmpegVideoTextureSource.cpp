@@ -1,6 +1,7 @@
 #include "Video/FfmpegVideoTextureSource.hpp"
 
 #include "Image.hpp"
+#include "Video/VideoDecodePump.hpp"
 #include "Video/VideoMetadata.hpp"
 #include "Platform/Apple/FfmpegVideoInterop.hpp"
 #include "Utils/Logging.h"
@@ -20,6 +21,7 @@ extern "C" {
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -128,6 +130,27 @@ double ProbeDurationSeconds(AVFormatContext* format_context, AVStream* stream)
         if (std::isfinite(format_duration) && format_duration > 0.0) return format_duration;
     }
     return 0.0;
+}
+
+/// Shortest period between frames this stream can plausibly produce.
+///
+/// Pacing has to use the shortest, not the average: a variable-frame-rate clip
+/// whose average period is longer than its tightest gap would lose the frames
+/// inside that gap. `r_frame_rate` is libavformat's upper bound on the frame
+/// rate, so the smaller of the two periods is the safe one — it can only make
+/// the clock render more often than needed, never less.
+double ProbeShortestFrameDurationSeconds(AVStream* stream)
+{
+    if (stream == nullptr) return 0.0;
+    double shortest = 0.0;
+    for (const AVRational rate : { stream->avg_frame_rate, stream->r_frame_rate }) {
+        if (rate.num <= 0 || rate.den <= 0) continue;
+        const double fps = av_q2d(rate);
+        if (!std::isfinite(fps) || !(fps > 0.0)) continue;
+        const double period = 1.0 / fps;
+        if (shortest == 0.0 || period < shortest) shortest = period;
+    }
+    return shortest;
 }
 
 double ProbeFrameDurationSeconds(AVStream* stream)
@@ -416,8 +439,18 @@ public:
         return m_loop_count;
     }
 
+    [[nodiscard]] double frameDurationSeconds() const
+    {
+        std::lock_guard lock(m_mutex);
+        // Zero until the container has been probed, which reads as "unknown".
+        return m_primed ? m_pacing_frame_duration_seconds : 0.0;
+    }
+
 private:
     static constexpr size_t kDecodedFrameQueueCapacity = 8;
+    /// Packets of other streams consumed within one `ReadPacket` call before
+    /// yielding, so a badly interleaved container cannot monopolize the step.
+    static constexpr int kMaxForeignPacketsPerRead = 64;
 
     struct DecodedFrameSlot {
         VideoTextureFrame frame {};
@@ -427,12 +460,110 @@ private:
         bool              ready { false };
     };
 
+    enum class DecodeOutcome {
+        Frame,
+        /// `stop()` was requested. Not an error: no failure is recorded and the
+        /// thread exits without surfacing a message to the user.
+        Cancelled,
+        Failed,
+    };
+
+    /// libavcodec-backed source for `VideoDecodePump`. It borrows the decoder
+    /// objects owned by `Impl` and is only ever touched by the decode thread.
+    class DecodeSource final : public VideoDecodeSource {
+    public:
+        explicit DecodeSource(Impl& owner) : m_owner(owner) {}
+
+        DecodeStatus ReadPacket(std::string* error) override
+        {
+            for (int skipped = 0; skipped <= kMaxForeignPacketsPerRead; ++skipped) {
+                const int result = av_read_frame(m_owner.m_format_context, m_owner.m_packet);
+                if (result == AVERROR_EOF) return DecodeStatus::EndOfStream;
+                if (result == AVERROR(EAGAIN)) return DecodeStatus::Again;
+                if (result < 0) {
+                    // An interrupted read is cancellation, not a stream defect.
+                    if (m_owner.m_cancel_requested.load(std::memory_order_relaxed)) {
+                        return DecodeStatus::Again;
+                    }
+                    SetError(error, "failed to read FFmpeg packet: " + AvErrorString(result));
+                    return DecodeStatus::Error;
+                }
+                if (m_owner.m_packet->stream_index == m_owner.m_video_stream_index) {
+                    return DecodeStatus::Ok;
+                }
+                av_packet_unref(m_owner.m_packet);
+            }
+            return DecodeStatus::Again;
+        }
+
+        DecodeStatus SendPacket(std::string* error) override
+        {
+            const int result = avcodec_send_packet(m_owner.m_codec_context, m_owner.m_packet);
+            if (result == 0) return DecodeStatus::Ok;
+            if (result == AVERROR(EAGAIN)) return DecodeStatus::Again;
+            if (result == AVERROR_EOF) return DecodeStatus::EndOfStream;
+            SetError(error,
+                     "failed to submit FFmpeg packet to decoder: " + AvErrorString(result));
+            return DecodeStatus::Error;
+        }
+
+        void ReleasePacket() override { av_packet_unref(m_owner.m_packet); }
+
+        DecodeStatus SendDrainRequest(std::string* error) override
+        {
+            const int result = avcodec_send_packet(m_owner.m_codec_context, nullptr);
+            // A decoder that is already draining reports EOF for a second null
+            // packet; both mean draining is under way.
+            if (result == 0 || result == AVERROR_EOF) return DecodeStatus::Ok;
+            SetError(error, "failed to start FFmpeg decoder drain: " + AvErrorString(result));
+            return DecodeStatus::Error;
+        }
+
+        DecodeStatus ReceiveFrame(std::string* error) override
+        {
+            const int result = avcodec_receive_frame(m_owner.m_codec_context, m_owner.m_frame);
+            if (result == 0) return DecodeStatus::Ok;
+            if (result == AVERROR(EAGAIN)) return DecodeStatus::Again;
+            if (result == AVERROR_EOF) return DecodeStatus::EndOfStream;
+            SetError(error,
+                     "failed to receive FFmpeg decoded frame: " + AvErrorString(result));
+            return DecodeStatus::Error;
+        }
+
+        bool RestartAtStreamStart(std::string* error) override
+        {
+            return m_owner.seekToSeconds(0.0, error);
+        }
+
+        [[nodiscard]] bool IsCancelled() const override
+        {
+            return m_owner.m_cancel_requested.load(std::memory_order_relaxed);
+        }
+
+    private:
+        Impl& m_owner;
+    };
+
+    /// Aborts blocking libavformat I/O once cancellation is requested, so
+    /// `stop()` does not wait on a stalled read before joining the thread.
+    static int InterruptDecoder(void* opaque)
+    {
+        const auto* impl = static_cast<const Impl*>(opaque);
+        return impl != nullptr && impl->m_cancel_requested.load(std::memory_order_relaxed) ? 1 : 0;
+    }
+
     bool openDecoder(std::string* error)
     {
         m_media_path = WriteVideoPayloadToTemp(m_debug_label, m_payload, error);
         if (m_media_path.empty()) return false;
 
-        AVFormatContext* format_context = nullptr;
+        AVFormatContext* format_context = avformat_alloc_context();
+        if (format_context == nullptr) {
+            return SetError(error, "failed to allocate FFmpeg format context");
+        }
+        // Installed before opening so a stalled open is cancellable too.
+        format_context->interrupt_callback.callback = &Impl::InterruptDecoder;
+        format_context->interrupt_callback.opaque = this;
         if (const int result = avformat_open_input(&format_context, m_media_path.c_str(), nullptr, nullptr);
             result < 0) {
             return SetError(error, "failed to open FFmpeg input: " + AvErrorString(result));
@@ -534,6 +665,7 @@ private:
         m_frame = frame;
         m_duration_seconds = ProbeDurationSeconds(format_context, video_stream);
         m_frame_duration_seconds = ProbeFrameDurationSeconds(video_stream);
+        m_pacing_frame_duration_seconds = ProbeShortestFrameDurationSeconds(video_stream);
         return true;
     }
 
@@ -550,6 +682,9 @@ private:
 
     void stop()
     {
+        // Published before the lock so the decode thread's inner loops and the
+        // libavformat interrupt callback observe it without waiting on us.
+        m_cancel_requested.store(true, std::memory_order_relaxed);
         {
             std::lock_guard lock(m_mutex);
             if (!m_running && !m_decode_thread.joinable()) return;
@@ -666,12 +801,13 @@ private:
         const double wrapped_seconds = WrapSeconds(clamped_absolute_seconds, m_duration_seconds);
         if (!seekToSeconds(wrapped_seconds, error)) return false;
 
-        if (m_duration_seconds > 0.0) {
-            m_decode_loop_index = static_cast<uint64_t>(
-                std::floor(clamped_absolute_seconds / m_duration_seconds));
-        } else {
-            m_decode_loop_index = 0;
-        }
+        // The packet the pump may still be holding belongs to the position we
+        // just left, so the seek is what releases it.
+        m_pump.ResetForSeek();
+        m_pump.setLoopIndex(
+            m_duration_seconds > 0.0
+                ? static_cast<uint64_t>(std::floor(clamped_absolute_seconds / m_duration_seconds))
+                : 0);
         return true;
     }
 
@@ -700,80 +836,62 @@ private:
         return true;
     }
 
-    bool decodeNextFrame(double minimum_absolute_seconds,
-                         DecodedFrameSlot* out,
-                         std::string* error)
+    DecodeOutcome decodeNextFrame(double minimum_absolute_seconds,
+                                  DecodedFrameSlot* out,
+                                  std::string* error)
     {
-        if (out == nullptr) return SetError(error, "decoded frame output must not be null");
-        const bool enforce_minimum =
+        if (out == nullptr) {
+            SetError(error, "decoded frame output must not be null");
+            return DecodeOutcome::Failed;
+        }
+        bool enforce_minimum =
             std::isfinite(minimum_absolute_seconds) && minimum_absolute_seconds > 0.0;
+        const uint64_t loop_index_at_entry = m_pump.loopIndex();
 
         while (true) {
-            const int read_result = av_read_frame(m_format_context, m_packet);
-            if (read_result == AVERROR_EOF) {
-                if (!seekToSeconds(0.0, error)) return false;
-                ++m_decode_loop_index;
-                continue;
-            }
-            if (read_result < 0) {
-                return SetError(error, "failed to read FFmpeg packet: " + AvErrorString(read_result));
-            }
-
-            if (m_packet->stream_index != m_video_stream_index) {
-                av_packet_unref(m_packet);
-                continue;
+            switch (m_pump.NextFrame(error)) {
+            case VideoDecodePump::Outcome::Cancelled:
+                return DecodeOutcome::Cancelled;
+            case VideoDecodePump::Outcome::Failed:
+                return DecodeOutcome::Failed;
+            case VideoDecodePump::Outcome::Frame:
+                break;
             }
 
-            const int send_result = avcodec_send_packet(m_codec_context, m_packet);
-            av_packet_unref(m_packet);
-            if (send_result < 0 && send_result != AVERROR(EAGAIN)) {
-                return SetError(error, "failed to submit FFmpeg packet to decoder: " + AvErrorString(send_result));
-            }
-
-            while (true) {
-                const int receive_result = avcodec_receive_frame(m_codec_context, m_frame);
-                if (receive_result == AVERROR(EAGAIN)) break;
-                if (receive_result == AVERROR_EOF) {
-                    if (!seekToSeconds(0.0, error)) return false;
-                    ++m_decode_loop_index;
-                    break;
-                }
-                if (receive_result < 0) {
-                    return SetError(
-                        error,
-                        "failed to receive FFmpeg decoded frame: " + AvErrorString(receive_result));
-                }
-
-                const double frame_pts_seconds =
-                    FramePtsSeconds(
-                        m_frame,
-                        m_video_stream->time_base,
-                        WrapSeconds(minimum_absolute_seconds, m_duration_seconds));
-                const double frame_absolute_seconds =
-                    (m_duration_seconds > 0.0
-                         ? static_cast<double>(m_decode_loop_index) * m_duration_seconds
-                         : 0.0) + frame_pts_seconds;
-                if (enforce_minimum &&
-                    frame_absolute_seconds + m_frame_duration_seconds < minimum_absolute_seconds) {
-                    av_frame_unref(m_frame);
-                    continue;
-                }
-
-                VideoTextureFrame frame {};
-                if (!ExtractAppleVideoFrame(m_frame, &frame, error)) {
-                    av_frame_unref(m_frame);
-                    return false;
-                }
-
-                frame.pts_seconds = frame_absolute_seconds;
-                out->frame = frame;
-                out->pts_seconds = frame_absolute_seconds;
-                out->absolute_seconds = frame_absolute_seconds;
-                out->loop_index = m_decode_loop_index;
-                out->ready = true;
+            const uint64_t loop_index = m_pump.loopIndex();
+            const double frame_pts_seconds =
+                FramePtsSeconds(
+                    m_frame,
+                    m_video_stream->time_base,
+                    WrapSeconds(minimum_absolute_seconds, m_duration_seconds));
+            const double frame_absolute_seconds =
+                (m_duration_seconds > 0.0
+                     ? static_cast<double>(loop_index) * m_duration_seconds
+                     : 0.0) + frame_pts_seconds;
+            if (enforce_minimum &&
+                frame_absolute_seconds + m_frame_duration_seconds < minimum_absolute_seconds) {
                 av_frame_unref(m_frame);
-                return true;
+                // A requested position past everything this stream contains
+                // must not filter frames forever: once a full loop has been
+                // decoded without a match, take the next frame.
+                if (loop_index > loop_index_at_entry) enforce_minimum = false;
+                continue;
             }
+
+            VideoTextureFrame frame {};
+            if (!ExtractAppleVideoFrame(m_frame, &frame, error)) {
+                av_frame_unref(m_frame);
+                return DecodeOutcome::Failed;
+            }
+
+            frame.pts_seconds = frame_absolute_seconds;
+            out->frame = frame;
+            out->pts_seconds = frame_absolute_seconds;
+            out->absolute_seconds = frame_absolute_seconds;
+            out->loop_index = loop_index;
+            out->ready = true;
+            av_frame_unref(m_frame);
+            return DecodeOutcome::Frame;
         }
     }
 
@@ -837,7 +955,10 @@ private:
 
             DecodedFrameSlot frame_slot {};
             std::string      error;
-            if (!decodeNextFrame(minimum_absolute_seconds, &frame_slot, &error)) {
+            const DecodeOutcome outcome =
+                decodeNextFrame(minimum_absolute_seconds, &frame_slot, &error);
+            if (outcome == DecodeOutcome::Cancelled) break;
+            if (outcome == DecodeOutcome::Failed) {
                 fail(std::move(error));
                 break;
             }
@@ -859,6 +980,9 @@ private:
     bool                             m_clock_initialized { false };
     double                           m_duration_seconds { 0.0 };
     double                           m_frame_duration_seconds { 1.0 / 60.0 };
+    /// Shortest plausible period, used only to pace the frame clock. Zero until
+    /// probed, which the clock reads as "unknown" and ignores.
+    double                           m_pacing_frame_duration_seconds { 0.0 };
     uint64_t                         m_loop_count { 0 };
     uint64_t                         m_next_generation { 1 };
     std::deque<DecodedFrameSlot>     m_pending_frames;
@@ -867,9 +991,11 @@ private:
     bool                             m_seek_requested { false };
     double                           m_requested_seek_absolute_seconds { 0.0 };
     uint64_t                         m_seek_ticket { 0 };
-    uint64_t                         m_decode_loop_index { 0 };
     bool                             m_running { false };
     bool                             m_stop_requested { false };
+    /// Read by the decode thread's inner loops and by the libavformat
+    /// interrupt callback, so it cannot be guarded by `m_mutex`.
+    std::atomic<bool>                m_cancel_requested { false };
     bool                             m_primed { false };
     std::thread                      m_decode_thread;
     std::string                      m_last_error;
@@ -881,6 +1007,10 @@ private:
     AVPacket*                        m_packet { nullptr };
     AVFrame*                         m_frame { nullptr };
     AVPixelFormat                    m_hw_pixel_format { AV_PIX_FMT_NONE };
+    /// Declared last so the decoder handles above are initialized before the
+    /// source that borrows them. Both are owned by the decode thread.
+    DecodeSource                     m_decode_source { *this };
+    VideoDecodePump           m_pump { m_decode_source };
 };
 
 FfmpegVideoTextureSource::FfmpegVideoTextureSource(const Image& image)
@@ -923,6 +1053,11 @@ double FfmpegVideoTextureSource::playbackSeconds() const
 uint64_t FfmpegVideoTextureSource::loopCount() const
 {
     return m_impl->loopCount();
+}
+
+double FfmpegVideoTextureSource::frameDurationSeconds() const
+{
+    return m_impl->frameDurationSeconds();
 }
 
 std::shared_ptr<VideoTextureSource> CreateVideoTextureSource(const Image& image,

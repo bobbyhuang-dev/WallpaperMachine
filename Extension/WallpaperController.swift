@@ -139,7 +139,8 @@ final class WallpaperController {
       let revision = (revisions[id] ?? 0) &+ 1
       revisions[id] = revision
       let surface = try WallpaperSurface(
-        scene: scene, displayID: displayID, size: size, scale: scale, preview: preview)
+        scene: scene, displayID: displayID, size: size, scale: scale, preview: preview,
+        generation: revision)
       if let mode = WallpaperRuntime.field("presentationMode", in: request) {
         surface.presentation = WallpaperRuntime.enumCase(mode)
       }

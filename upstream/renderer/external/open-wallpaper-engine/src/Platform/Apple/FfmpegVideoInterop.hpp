@@ -22,13 +22,28 @@ bool ExtractAppleVideoFrame(const AVFrame* frame,
 void ReleaseAppleVideoFrame(VideoTextureFrame* frame);
 std::string DescribeAppleVideoFrame(const VideoTextureFrame& frame);
 
-void* CreateAppleVideoMetalTexture(const VideoTextureFrame& frame, std::string* error);
-// reusable_destination is borrowed; success always returns an independent +1 retain.
-// Failure never consumes the caller's retain.
-void* CreateAppleVideoMetalTextureForDevice(const VideoTextureFrame& frame,
-                                            void* metal_device,
-                                            void* reusable_destination,
-                                            std::string* error);
+// Imports one decoded frame and returns an opaque owned lease, or null on
+// failure. The lease retains every object the Metal texture's validity depends
+// on — the Core Video texture wrapper and the pixel buffer, not just the
+// MTLTexture — and must be released exactly once with
+// ReleaseAppleVideoFrameLease once the GPU is finished with the frame.
+//
+// reusable_destination is borrowed; success always takes an independent +1
+// retain, and failure never consumes the caller's retain.
+void* CreateAppleVideoFrameLease(const VideoTextureFrame& frame,
+                                 void* metal_device,
+                                 void* reusable_destination,
+                                 std::string* error);
+// Borrowed id<MTLTexture> of a lease. Valid until the lease is released.
+void* AppleVideoFrameLeaseTexture(void* lease);
+// Moves ownership of a recyclable conversion destination out of the lease, so
+// it can be handed to AppleVideoMetalTexturePool::Recycle. Returns null when
+// the lease holds no poolable destination; the lease never releases a
+// destination it has given away.
+void* TakeAppleVideoFrameLeaseDestination(void* lease);
+void ReleaseAppleVideoFrameLease(void* lease);
+// Releases a retained destination texture owned outside a lease, which is what
+// AppleVideoMetalTexturePool stores.
 void ReleaseAppleVideoMetalTexture(void* handle);
 
 class AppleVideoMetalTexturePool {

@@ -106,23 +106,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     }
                 }
             }
-            let policy = WallpaperPresentationPolicy { [weak self] suspended, completion in
-                guard let self, let store = self.store,
-                      !self.shutdownInProgress, !self.shutdownComplete else {
-                    completion(.failure(CancellationError()))
-                    return
-                }
-                self.webWallpaperHost?.setPresentationSuspended(suspended)
-                Task {
-                    do {
-                        try await store.setPresentationSuspendedAsync(suspended)
-                        completion(.success(()))
-                    } catch {
-                        AppLog.error("presentation suspend failed: \(error.localizedDescription)")
-                        completion(.failure(error))
+            let policy = WallpaperPresentationPolicy(
+                applyGlobal: { [weak self] suspended, completion in
+                    guard let self, let store = self.store,
+                          !self.shutdownInProgress, !self.shutdownComplete else {
+                        completion(.failure(CancellationError()))
+                        return
                     }
-                }
-            }
+                    self.webWallpaperHost?.setPresentationSuspended(suspended)
+                    Task {
+                        do {
+                            try await store.setPresentationSuspendedAsync(suspended)
+                            completion(.success(()))
+                        } catch {
+                            AppLog.error("presentation suspend failed: \(error.localizedDescription)")
+                            completion(.failure(error))
+                        }
+                    }
+                },
+                applyDisplay: { [weak self] displayID, suspended, completion in
+                    guard let self, let store = self.store,
+                          !self.shutdownInProgress, !self.shutdownComplete else {
+                        completion(.failure(CancellationError()))
+                        return
+                    }
+                    self.webWallpaperHost?.setPresentationSuspended(suspended, forDisplay: displayID)
+                    Task {
+                        do {
+                            try await store.setDisplayPresentationSuspendedAsync(
+                                displayID: displayID, suspended: suspended)
+                            completion(.success(()))
+                        } catch {
+                            AppLog.error("""
+                                presentation suspend for display \(displayID) failed: \
+                                \(error.localizedDescription)
+                                """)
+                            completion(.failure(error))
+                        }
+                    }
+                })
             presentationPolicy = policy
             policy.start()
             do {

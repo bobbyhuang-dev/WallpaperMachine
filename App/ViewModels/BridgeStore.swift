@@ -497,6 +497,11 @@ final class BridgeStore {
         try await bridge.setPresentationSuspended(suspended: suspended)
     }
 
+    func setDisplayPresentationSuspendedAsync(displayID: UInt32, suspended: Bool) async throws {
+        try await bridge.setDisplayPresentationSuspended(
+            displayId: String(displayID), suspended: suspended)
+    }
+
     func ejectWallpaperFromDisplayAsync(
         displayId: String,
         wallpaperId: String

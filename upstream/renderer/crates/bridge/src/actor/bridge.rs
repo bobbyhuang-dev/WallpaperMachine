@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs,
     sync::Arc,
 };
@@ -30,6 +30,7 @@ use crate::{
             ReconcileFailed, RefreshDisplays, RefreshLibrary, ReplaceLibraryForTest,
             ReplaceWallpaperConfigForTest, RestorePropertyDefault, SelectWallpaper,
             SetAudioResponseEnabled, SetDisplayConfigEnabled, SetDisplayEnabled, SetDisplayMode,
+            SetDisplayPresentationSuspended,
             SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMirrorMuted, SetMirrorScalingFactor,
             SetMirrorScalingMode, SetMirrorTarget, SetMirrorTargetFps, SetMirrorVolume, SetMuted,
             SetPauseOnBatteryPower, SetPowerSource, SetPresentationSuspended, SetScalingFactor,
@@ -196,14 +197,34 @@ fn duplicate_error(error: &BridgeError) -> BridgeError {
 }
 
 impl<E: EngineFacade> BridgeActor<E> {
+    /// Conditions that stop every display at once. Per-display occlusion is in
+    /// `state.suspended_displays` and is composed on top of this.
     fn playback_paused(&self) -> bool {
         self.state.presentation_suspended
             || self.state.playback_state == crate::api::BridgePlaybackState::Paused
     }
 
+    /// True when no connected display can present: either a global reason, or
+    /// every connected display suspended on its own.
+    fn every_display_paused(&self) -> bool {
+        if self.playback_paused() {
+            return true;
+        }
+        if self.state.suspended_displays.is_empty() {
+            return false;
+        }
+        let displays = self.engine.display_snapshot();
+        !displays.is_empty()
+            && displays.iter().all(|entry| {
+                self.state
+                    .suspended_displays
+                    .contains(&entry.desc.display_id)
+            })
+    }
+
     fn refresh_mouse_polling_policy(&self) {
         self.mouse_polling
-            .set_policy_enabled(!self.playback_paused());
+            .set_policy_enabled(!self.every_display_paused());
     }
 }
 
@@ -664,6 +685,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             wallpapers: &self.state.wallpaper_configs,
             displays,
             paused,
+            suspended_displays: &self.state.suspended_displays,
             paths: &self.paths,
             force_shader_refresh: false,
             project_models: &self.state.project_models,
@@ -835,11 +857,36 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         Ok(())
     }
 
+    /// System audio capture only needs to run while some display that is
+    /// actually presenting consumes it. Volume and mute are separate controls:
+    /// silencing a wallpaper does not switch off its audio response, and an
+    /// audio-response scene on a hidden display is not a consumer.
+    fn audio_capture_suspended(&self) -> bool {
+        let displays = self.engine.display_snapshot();
+        let Ok(scenes) = self
+            .activation_inputs(&displays, self.playback_paused())
+            .build()
+        else {
+            // Without a resolvable scene list, fall back to the coarse global
+            // condition rather than guessing that nothing consumes audio.
+            return self.playback_paused();
+        };
+        !scenes
+            .iter()
+            .any(|scene| scene.audio_response_enabled && !scene.paused)
+    }
+
     async fn apply_engine_pause(&self, previous_paused: bool) -> Result<(), BridgeError> {
         let paused = self.playback_paused();
+        let audio_suspended = self.audio_capture_suspended();
         let result = async {
             self.engine.set_all_paused(paused).await?;
-            self.engine.set_audio_capture_suspended(paused).await
+            // A global resume must not restart a display that is still hidden
+            // on its own, so per-display suspension is re-applied on top.
+            for display_id in &self.state.suspended_displays {
+                self.engine.set_display_paused(*display_id, true).await?;
+            }
+            self.engine.set_audio_capture_suspended(audio_suspended).await
         }
         .await;
         if let Err(error) = result {
@@ -874,6 +921,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         let wallpaper_configs = self.state.wallpaper_configs.clone();
         let project_models = self.state.configured_project_models(&app_config);
         let paused = self.playback_paused();
+        let suspended_displays = self.state.suspended_displays.clone();
         let paths = self.paths.clone();
         tokio::spawn(async move {
             let result = reconcile_with(
@@ -882,6 +930,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                 wallpaper_configs,
                 project_models,
                 paused,
+                suspended_displays,
                 paths,
                 false,
             )
@@ -923,6 +972,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             wallpaper_configs,
             project_models,
             self.playback_paused(),
+            self.state.suspended_displays.clone(),
             self.paths.clone(),
             false,
         )
@@ -939,6 +989,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         let project_models = self.state.configured_project_models(&app_config);
         let generation = self.reserve_reconcile();
         let paused = self.playback_paused();
+        let suspended_displays = self.state.suspended_displays.clone();
         let actor = ctx.actor_ref().clone();
         let engine = self.engine.clone();
         let paths = self.paths.clone();
@@ -949,6 +1000,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                 wallpaper_configs.clone(),
                 project_models,
                 paused,
+                suspended_displays,
                 paths,
                 false,
             )
@@ -1278,6 +1330,7 @@ async fn reconcile_with<E: EngineFacade>(
     wallpaper_configs: BTreeMap<String, WallpaperConfig>,
     project_models: BTreeMap<String, ProjectModel>,
     paused: bool,
+    suspended_displays: BTreeSet<u32>,
     paths: BridgePaths,
     force_shader_refresh: bool,
 ) -> Result<Vec<SceneDesc>, BridgeError> {
@@ -1285,6 +1338,7 @@ async fn reconcile_with<E: EngineFacade>(
     let scenes = ActivationInputs {
         app_config: &app_config,
         wallpapers: &wallpaper_configs,
+        suspended_displays: &suspended_displays,
         displays: &displays,
         paused,
         paths: &paths,
@@ -1501,6 +1555,7 @@ impl<E: EngineFacade + Clone> Message<ClearShaderCache> for BridgeActor<E> {
             wallpaper_configs,
             project_models,
             self.playback_paused(),
+            self.state.suspended_displays.clone(),
             self.paths.clone(),
             true,
         )
@@ -2236,6 +2291,72 @@ impl<E: EngineFacade + Clone> Message<SetPresentationSuspended> for BridgeActor<
     }
 }
 
+impl<E: EngineFacade + Clone> Message<SetDisplayPresentationSuspended> for BridgeActor<E> {
+    type Reply = messages::SetDisplayPresentationSuspendedReply;
+
+    async fn handle(
+        &mut self,
+        msg: SetDisplayPresentationSuspended,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let display_id: u32 = msg.display_id.parse().map_err(|_| {
+            BridgeError::invalid_input(format!("unknown display id {}", msg.display_id))
+        })?;
+        let was_suspended = self.state.suspended_displays.contains(&display_id);
+        if was_suspended == msg.suspended {
+            return Ok(());
+        }
+        let previous_paused = self.playback_paused();
+        if msg.suspended {
+            self.state.suspended_displays.insert(display_id);
+        } else {
+            self.state.suspended_displays.remove(&display_id);
+        }
+        // The scene on this display takes the new state; the others keep
+        // whatever they already had, so a hidden screen cannot stop a visible
+        // one and a visible screen cannot restart a hidden one.
+        let paused = self.playback_paused() || msg.suspended;
+        let audio_suspended = self.audio_capture_suspended();
+        let result = async {
+            self.engine.set_display_paused(display_id, paused).await?;
+            self.engine
+                .set_audio_capture_suspended(audio_suspended)
+                .await
+        }
+        .await;
+        if let Err(error) = result {
+            let mut message = error.to_string();
+            if msg.suspended {
+                self.state.suspended_displays.remove(&display_id);
+            } else {
+                self.state.suspended_displays.insert(display_id);
+            }
+            if let Err(rollback) = self
+                .engine
+                .set_display_paused(display_id, previous_paused || was_suspended)
+                .await
+            {
+                message.push_str(&format!("; display pause rollback failed: {rollback}"));
+            }
+            if let Err(rollback) = self
+                .engine
+                .set_audio_capture_suspended(self.audio_capture_suspended())
+                .await
+            {
+                message.push_str(&format!("; audio capture rollback failed: {rollback}"));
+            }
+            return Err(BridgeError::engine(message));
+        }
+        self.refresh_mouse_polling_policy();
+        self.bump_generation();
+        log::info!(
+            "display {display_id} presentation {}",
+            if msg.suspended { "suspended" } else { "resumed" }
+        );
+        Ok(())
+    }
+}
+
 impl<E: EngineFacade + Clone> Message<SetPowerSource> for BridgeActor<E> {
     type Reply = messages::SetPowerSourceReply;
 
@@ -2753,6 +2874,7 @@ impl<E: EngineFacade + Clone> Message<ApplyWallpaperOptions> for BridgeActor<E> 
         let wallpaper_configs = candidates.wallpaper_configs.clone();
         let requires_reconcile = candidates.requires_reconcile;
         let paused = self.playback_paused();
+        let suspended_displays = self.state.suspended_displays.clone();
         let predicted_scenes = reply_try!(
             requires_reconcile
                 .then(|| {
@@ -2761,6 +2883,7 @@ impl<E: EngineFacade + Clone> Message<ApplyWallpaperOptions> for BridgeActor<E> 
                         wallpapers: &wallpaper_configs,
                         displays: &displays,
                         paused,
+                        suspended_displays: &suspended_displays,
                         paths: &self.paths,
                         force_shader_refresh: false,
                         project_models: &self.state.project_models,
@@ -2784,6 +2907,7 @@ impl<E: EngineFacade + Clone> Message<ApplyWallpaperOptions> for BridgeActor<E> 
                     wallpaper_configs,
                     project_models,
                     paused,
+                    suspended_displays,
                     paths,
                     false,
                 )

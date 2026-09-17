@@ -323,6 +323,36 @@ target_link_libraries(rendergraph_smoke PRIVATE ${PROJECT_NAME} wpVulkanRender w
 target_include_directories(rendergraph_smoke PRIVATE . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender)
 target_compile_features(rendergraph_smoke PRIVATE cxx_std_20)
 add_test(NAME rendergraph_smoke COMMAND rendergraph_smoke)
+# The decode pump is codec-agnostic on purpose, so its state machine is tested
+# without linking FFmpeg or opening a real stream.
+add_executable(video_decode_pump_test
+    video_decode_pump_test.cpp
+    ${CMAKE_SOURCE_DIR}/src/Video/VideoDecodePump.cpp)
+target_link_libraries(video_decode_pump_test PRIVATE GTest::gtest_main)
+target_include_directories(video_decode_pump_test PRIVATE . ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(video_decode_pump_test PRIVATE cxx_std_20)
+gtest_discover_tests(
+    video_decode_pump_test
+    TEST_PREFIX video_decode_pump_test.
+    PROPERTIES TIMEOUT 30
+    DISCOVERY_TIMEOUT 60
+)
+
+# Color conversion is pure arithmetic, so its known-pixel regressions need no
+# GPU, no codec and no surface.
+add_executable(video_color_conversion_test
+    video_color_conversion_test.cpp
+    ${CMAKE_SOURCE_DIR}/src/Video/VideoColorConversion.cpp)
+target_link_libraries(video_color_conversion_test PRIVATE GTest::gtest_main)
+target_include_directories(video_color_conversion_test PRIVATE . ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(video_color_conversion_test PRIVATE cxx_std_20)
+gtest_discover_tests(
+    video_color_conversion_test
+    TEST_PREFIX video_color_conversion_test.
+    PROPERTIES TIMEOUT 30
+    DISCOVERY_TIMEOUT 60
+)
+
 add_executable(timer_tests timer/frame_timer_test.cpp)
 target_link_libraries(timer_tests PRIVATE wpTimer GTest::gtest_main)
 target_include_directories(timer_tests PRIVATE . ${CMAKE_SOURCE_DIR}/src)

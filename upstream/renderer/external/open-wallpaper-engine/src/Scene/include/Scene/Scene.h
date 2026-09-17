@@ -66,6 +66,12 @@ public:
 
     bool                 first_frame_ok { false };
     bool                 accepts_pointer_input { true };
+    /// Set only by the engine's own plain-video scene: one video texture, a
+    /// copy shader, a no-op shader value updater, and no script, particle,
+    /// audio or pointer input. Its only time-varying input is therefore that
+    /// video, which is what lets the frame clock follow the video's own rate
+    /// instead of the display's. Authored scenes never set it.
+    bool                 single_video_source { false };
     std::array<float, 2> pointerPosition { 0.5f, 0.5f };
 
     SceneMesh default_effect_mesh;

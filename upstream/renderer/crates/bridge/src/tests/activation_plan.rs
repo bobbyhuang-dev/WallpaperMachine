@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use wallpaper_core::{
     DisplayDesc, DisplayIdentity, DisplaySelector, DisplaySnapshotEntry, project::ScalingMode,
@@ -47,6 +47,7 @@ fn activation_plan_marks_scenes_paused_when_global_playback_is_paused() {
         app_config: &config,
         wallpapers: &wallpapers,
         displays: &displays,
+        suspended_displays: &BTreeSet::new(),
         paused: true,
         paths: &paths,
         force_shader_refresh: false,
@@ -100,6 +101,7 @@ fn activation_plan_gives_primary_wallpaper_to_current_primary_display() {
         app_config: &config,
         wallpapers: &wallpapers,
         displays: &displays,
+        suspended_displays: &BTreeSet::new(),
         paused: false,
         paths: &paths,
         force_shader_refresh: false,
@@ -116,6 +118,7 @@ fn activation_plan_gives_primary_wallpaper_to_current_primary_display() {
         app_config: &config,
         wallpapers: &wallpapers,
         displays: &displays,
+        suspended_displays: &BTreeSet::new(),
         paused: false,
         paths: &paths,
         force_shader_refresh: false,
@@ -156,6 +159,7 @@ fn activation_plan_uses_primary_render_override_for_identity_primary_monitor() {
         app_config: &app_config,
         wallpapers: &wallpapers,
         displays: &[display],
+        suspended_displays: &BTreeSet::new(),
         paused: false,
         paths: &paths,
         force_shader_refresh: false,
@@ -200,6 +204,7 @@ fn activation_plan_uses_identity_render_override_for_primary_monitor() {
         app_config: &app_config,
         wallpapers: &wallpapers,
         displays: &[display],
+        suspended_displays: &BTreeSet::new(),
         paused: false,
         paths: &paths,
         force_shader_refresh: false,
@@ -270,6 +275,7 @@ fn mirror_scene_follows_source_wallpaper_with_monitor_overrides() {
         app_config: &app_config,
         wallpapers: &wallpapers,
         displays: &displays,
+        suspended_displays: &BTreeSet::new(),
         paused: false,
         paths: &paths,
         force_shader_refresh: false,

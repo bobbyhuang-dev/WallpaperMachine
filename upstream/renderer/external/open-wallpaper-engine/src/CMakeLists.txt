@@ -89,6 +89,8 @@ add_library(
   Project/ProjectProperties.cpp
   Runtime/VirtualAssetRegistry.cpp
   Video/FfmpegVideoTextureSource.cpp
+  Video/VideoColorConversion.cpp
+  Video/VideoDecodePump.cpp
   ${PLATFORM_APPLE_SOURCES}
   SceneSourceResolver.cpp
   Scene/SceneWallpaper.cpp)

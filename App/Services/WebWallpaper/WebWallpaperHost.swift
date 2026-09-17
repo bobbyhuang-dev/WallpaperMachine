@@ -20,7 +20,14 @@ final class WebWallpaperHost {
     private var reconcileInFlight = false
     private var reconcileRequested = false
     private var suspended = false
+    /// Displays suspended on their own, kept apart from the global flag so one
+    /// occluded screen cannot suspend a page on a visible screen.
+    private var suspendedDisplays: Set<UInt32> = []
     private var stopped = false
+    private let counters: RuntimeCounters
+    /// Distinguishes surfaces that reused one display id across a wallpaper
+    /// switch, so their counters are not merged.
+    private var surfaceGeneration: UInt64 = 0
     /// Surfaced to the app the same way renderer failures are.
     var onError: (@MainActor (String) -> Void)?
     /// Fired after windows open, close, or finish loading their page, so the
@@ -30,11 +37,13 @@ final class WebWallpaperHost {
     init(
         fetch: @escaping @MainActor () async throws -> [BridgeWebWallpaper],
         screens: (@MainActor () -> [(id: UInt32, frame: NSRect)])? = nil,
-        frameCenter: NotificationCenter = .default
+        frameCenter: NotificationCenter = .default,
+        counters: RuntimeCounters? = nil
     ) {
         self.fetch = fetch
         self.screens = screens ?? { Self.systemScreens() }
         self.frameCenter = frameCenter
+        self.counters = counters ?? .shared
     }
 
     convenience init(bridge: WallpaperBridge) {
@@ -106,8 +115,25 @@ final class WebWallpaperHost {
         for (displayID, wallpaper) in next {
             guard let frame = screens[displayID] else { continue }
             let projectURL = URL(fileURLWithPath: wallpaper.projectPath, isDirectory: true)
-            if let window = windows[displayID], window.page.projectURL == projectURL,
-               window.page.entryURL.lastPathComponent == wallpaper.entryFile {
+            // Identity is the resolved entry path, not its last component: a
+            // nested entry compared by file name alone never matches itself, so
+            // every reconcile would discard a working page and build a new one.
+            guard let canonicalEntry = WebWallpaperPage.canonicalEntryURL(
+                projectURL: projectURL, entryFile: wallpaper.entryFile) else {
+                AppLog.error("""
+                    web wallpaper \(wallpaper.wallpaperId): entry file \(wallpaper.entryFile) \
+                    resolves outside its project folder
+                    """)
+                onError?(String(localized: "Web wallpaper “\(wallpaper.title)” could not load: its entry file is outside the project folder."))
+                if let window = windows[displayID] {
+                    close(window)
+                    windows[displayID] = nil
+                    descriptors[displayID] = nil
+                    changed = true
+                }
+                continue
+            }
+            if let window = windows[displayID], window.page.canonicalEntryURL == canonicalEntry {
                 if window.frame != frame {
                     window.setFrame(frame, display: true)
                     changed = true
@@ -115,7 +141,13 @@ final class WebWallpaperHost {
                 push(wallpaper, into: window.page, previous: descriptors[displayID])
             } else {
                 if let window = windows[displayID] { close(window) }
-                let page = WebWallpaperPage(projectURL: projectURL, entryFile: wallpaper.entryFile)
+                surfaceGeneration += 1
+                let surface = RuntimeSurfaceKey(
+                    kind: .desktopWeb, displayID: displayID, generation: surfaceGeneration)
+                let page = WebWallpaperPage(
+                    projectURL: projectURL, entryFile: wallpaper.entryFile,
+                    surface: surface, counters: counters)
+                counters.record(.webPageCreated, for: surface)
                 page.onFailure = { [weak self] message in
                     AppLog.error("web wallpaper \(wallpaper.wallpaperId) on display \(displayID): \(message)")
                     self?.onError?(String(localized: "Web wallpaper “\(wallpaper.title)” could not load: \(message)"))
@@ -161,14 +193,31 @@ final class WebWallpaperHost {
         if previous?.paused != wallpaper.paused {
             page.setPaused(wallpaper.paused)
         }
-        page.setPresentationSuspended(suspended)
+        page.setPresentationSuspended(isSuspended(displayID: wallpaper.displayId))
     }
 
-    /// Mirrors `WallpaperPresentationPolicy`: pages pause while no pixel can
-    /// reach a display, without touching the user's play/pause choice.
+    private func isSuspended(displayID: UInt32) -> Bool {
+        suspended || suspendedDisplays.contains(displayID)
+    }
+
+    /// Mirrors `WallpaperPresentationPolicy`: pages suspend while no pixel can
+    /// reach any display, without touching the user's play/pause choice.
     func setPresentationSuspended(_ suspended: Bool) {
         self.suspended = suspended
-        for window in windows.values { window.page.setPresentationSuspended(suspended) }
+        for (displayID, window) in windows {
+            window.page.setPresentationSuspended(isSuspended(displayID: displayID))
+        }
+    }
+
+    /// Suspends the page on one display only. A window covering the wallpaper
+    /// on one screen must not stop the page on another.
+    func setPresentationSuspended(_ suspended: Bool, forDisplay displayID: UInt32) {
+        if suspended {
+            suspendedDisplays.insert(displayID)
+        } else {
+            suspendedDisplays.remove(displayID)
+        }
+        windows[displayID]?.page.setPresentationSuspended(isSuspended(displayID: displayID))
     }
 
     func shutdown() {

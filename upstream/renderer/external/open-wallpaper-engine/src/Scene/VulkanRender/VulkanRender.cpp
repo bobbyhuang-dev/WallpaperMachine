@@ -213,6 +213,10 @@ void VulkanRender::SetVideoPlaybackRate(float rate) {
         pImpl->m_device->tex_cache().SetVideoPlaybackRate(rate);
     }
 }
+double VulkanRender::ShortestVideoFramePeriod() const {
+    if (pImpl->m_device == nullptr) return 0.0;
+    return pImpl->m_device->tex_cache().ShortestVideoFramePeriod();
+}
 
 wallpaper::ExSwapchain* VulkanRender::exSwapchain() const { return pImpl->m_ex_swapchain.get(); };
 

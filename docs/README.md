@@ -37,6 +37,7 @@ live under `testing/`.
 | [testing/README.md](testing/README.md) | Test strategy, how to run each layer, evidence policy |
 | [testing/renderer.md](testing/renderer.md) | Headless renderer/GPU checks, probe environment variables, known regressions |
 | [testing/manual-smoke.md](testing/manual-smoke.md) | Manual release smoke checklist |
+| [testing/power-benchmark.md](testing/power-benchmark.md) | Configuration manifest, runtime counters, condition matrix and comparison rules for power claims |
 | [testing/verification-log.md](testing/verification-log.md) | Dated verification history |
 | [testing/wallpaper-corpus.md](testing/wallpaper-corpus.md) | Local regression corpus checklist |
 

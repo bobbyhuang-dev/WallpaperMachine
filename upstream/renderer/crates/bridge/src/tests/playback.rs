@@ -299,7 +299,10 @@ async fn presentation_suspension_pauses_without_changing_playback_state() {
 
     bridge.set_presentation_suspended(false).await.unwrap();
     wait_for_paused_calls(&engine, &[true, false]);
-    assert_eq!(engine.audio_capture_suspend_calls(), vec![true, false]);
+    // No wallpaper is configured here, so nothing consumes system audio and
+    // resuming presentation must not start the capture tap. Audio follows the
+    // visible consumers, not the pause flag.
+    assert_eq!(engine.audio_capture_suspend_calls(), vec![true, true]);
 }
 
 #[tokio::test]
@@ -416,6 +419,14 @@ impl EngineFacade for FailingPlaybackEngine {
     }
 
     fn close_all_scenes(&self) -> BoxFuture<'static, Result<(), EngineError>> {
+        async move { Ok(()) }.boxed()
+    }
+
+    fn set_display_paused(
+        &self,
+        _display_id: u32,
+        _paused: bool,
+    ) -> BoxFuture<'static, Result<(), EngineError>> {
         async move { Ok(()) }.boxed()
     }
 
@@ -596,6 +607,14 @@ impl EngineFacade for ShutdownEngine {
             engine.fake.close_all_scenes().await
         }
         .boxed()
+    }
+
+    fn set_display_paused(
+        &self,
+        _display_id: u32,
+        _paused: bool,
+    ) -> BoxFuture<'static, Result<(), EngineError>> {
+        async move { Ok(()) }.boxed()
     }
 
     fn set_all_paused(&self, _paused: bool) -> BoxFuture<'static, Result<(), EngineError>> {

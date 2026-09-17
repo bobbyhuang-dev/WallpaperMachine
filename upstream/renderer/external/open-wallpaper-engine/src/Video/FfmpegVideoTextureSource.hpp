@@ -19,6 +19,7 @@ public:
     [[nodiscard]] double durationSeconds() const override;
     [[nodiscard]] double playbackSeconds() const override;
     [[nodiscard]] uint64_t loopCount() const override;
+    [[nodiscard]] double frameDurationSeconds() const override;
 
 private:
     class Impl;

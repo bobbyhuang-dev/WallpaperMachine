@@ -184,6 +184,11 @@ pub struct SetPresentationSuspended {
     pub suspended: bool,
 }
 
+pub struct SetDisplayPresentationSuspended {
+    pub display_id: String,
+    pub suspended: bool,
+}
+
 pub struct SetPowerSource {
     pub source: PowerSource,
     pub initial_sample: bool,
@@ -270,6 +275,7 @@ pub type EjectWallpaperFromDisplayReply = DisplayMutationReply;
 pub type SetGlobalPlaybackReply = AllSnapshotsReply;
 pub type SetPauseOnBatteryPowerReply = AllSnapshotsReply;
 pub type SetPresentationSuspendedReply = Result<(), BridgeError>;
+pub type SetDisplayPresentationSuspendedReply = Result<(), BridgeError>;
 pub type SetPowerSourceReply = AllSnapshotsReply;
 pub type InitialFrameReadyReply = AllSnapshotsReply;
 pub type ShutdownReply = Result<(), BridgeError>;

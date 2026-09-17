@@ -355,6 +355,11 @@ CreateVideoProjectScene(std::unique_ptr<wallpaper::fs::VFS> vfs,
 
     auto scene                = std::make_shared<wallpaper::Scene>();
     scene->accepts_pointer_input = false;
+    // Everything below this line is what makes the claim true: one video
+    // texture, a copy shader, a no-op shader value updater, and no script,
+    // particle or audio layer. Keep them together so the marker cannot drift
+    // away from the construction that justifies it.
+    scene->single_video_source   = true;
     scene->scene_id           = scene_id;
     scene->clearColor         = { 0.0f, 0.0f, 0.0f };
     scene->shaderValueUpdater = std::make_unique<NoOpShaderValueUpdater>();
@@ -527,6 +532,30 @@ public:
 
     bool renderInited() const { return m_render->inited(); }
 
+    /// Tells the frame clock how often this scene's content can actually
+    /// change. Only the engine's own plain-video scene can answer: it is one
+    /// video texture behind a copy shader with a no-op shader value updater and
+    /// no script, particle, audio or pointer input, so the video's frame period
+    /// is the whole scene's period. Rendering faster than that presents
+    /// identical pixels. Every other scene reports nothing and keeps the fixed
+    /// cadence, because an authored scene may change on a time uniform, a
+    /// script, a particle system, audio or a feedback texture that this code
+    /// does not enumerate.
+    ///
+    /// Runs on the render thread; the frame clock only reads the value it
+    /// stores.
+    void refreshFrameDemand() {
+        FrameTimer::FrameDemand demand {};
+        if (m_scene != nullptr && m_scene->single_video_source && renderInited()) {
+            const double period_seconds = m_render->ShortestVideoFramePeriod();
+            if (period_seconds > 0.0) {
+                demand.content_period = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::duration<double>(period_seconds));
+            }
+        }
+        frame_timer.SetFrameDemand(demand);
+    }
+
     struct MouseButtonSnapshot {
         uint32_t down { 0 };
         uint32_t pressed { 0 };
@@ -633,6 +662,7 @@ private:
                 frame_timer.Stop();
             else
                 frame_timer.Run();
+            refreshFrameDemand();
         }
     }
     MHANDLER_CMD(DRAW) {
@@ -700,6 +730,7 @@ private:
             }
         }
         frame_timer.FrameEnd();
+        refreshFrameDemand();
     }
     MHANDLER_CMD(SET_FILLMODE) {
         int32_t value;

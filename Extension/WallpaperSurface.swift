@@ -26,10 +26,26 @@ final class WallpaperSurface {
   private var stopped = false
   var hasRenderer: Bool { renderer != nil }
   private var rendererPaused = false
+  /// When this surface started presenting, set once its first frame arrived.
+  /// Kept apart from readiness so rendering one frame for a snapshot or a
+  /// readiness reply cannot become a permanent right to keep rendering.
+  private var presentingSince: ContinuousClock.Instant?
+  private var previewExpiry: Task<Void, Never>?
+  /// An explicit opt-in for a preview that has to keep animating. No host
+  /// request sets it today; it exists so the bounded behaviour has a documented
+  /// escape hatch rather than being unconditional.
+  var continuousPreviewRequested = false
+  private let counters: RuntimeCounters
+  private var surfaceKey: RuntimeSurfaceKey {
+    RuntimeSurfaceKey(
+      kind: preview ? .preview : .lockScreen, displayID: scene.displayID, generation: generation)
+  }
+  private let generation: UInt64
 
-  init(scene: LockScreenScene, displayID: UInt32?, size: CGSize, scale: CGFloat, preview: Bool)
-    throws
-  {
+  init(
+    scene: LockScreenScene, displayID: UInt32?, size: CGSize, scale: CGFloat, preview: Bool,
+    generation: UInt64 = 0, counters: RuntimeCounters? = nil
+  ) throws {
     guard size.width.isFinite, size.height.isFinite, scale.isFinite,
       size.width > 0, size.height > 0, scale > 0,
       size.width * scale <= 16_384, size.height * scale <= 16_384,
@@ -42,6 +58,8 @@ final class WallpaperSurface {
     self.size = size
     self.scale = scale
     self.preview = preview
+    self.generation = generation
+    self.counters = counters ?? .shared
     context = try WallpaperRuntime.context(displayID: displayID)
     root = CALayer()
     root.frame = CGRect(origin: .zero, size: size)
@@ -151,6 +169,8 @@ final class WallpaperSurface {
         firstFrameReply = nil
         deadline?.cancel()
         deadline = nil
+        presentingSince = ContinuousClock.now
+        counters.record(.readinessFrameRendered, for: surfaceKey)
         applyPolicy()
         WallpaperRuntime.log(
           "Frame ready display=\(scene.displayID) context=\(context.contextId) pixels=\(width)x\(height)"
@@ -214,23 +234,57 @@ final class WallpaperSurface {
     applyPolicy()
   }
 
-  func applyPolicy() {
-    guard let renderer, firstFrameReply == nil, !stopped else { return }
+  /// Presentation eligibility for this surface, decided by the rules both
+  /// processes share. A preview is bounded in time: producing the readiness
+  /// frame must not buy it the right to animate for as long as a settings
+  /// window happens to stay open.
+  private var authorityRequest: WallpaperPresentationAuthority.Request {
     // Native desktop is a frozen poster; the ordinary desktop renderer remains live.
     let locked =
       (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool
       ?? false
-    let shouldPause =
-      scene.paused || WallpaperController.shared.displaysAsleep || activity == "suspended"
-      || (!preview && !locked && presentation != "locked" && presentation != "idle")
+    return WallpaperPresentationAuthority.Request(
+      role: preview ? .preview : .lockScreen,
+      userPaused: scene.paused,
+      displaysAsleep: WallpaperController.shared.displaysAsleep,
+      sessionLocked: locked,
+      presentationMode: presentation,
+      hostActivity: activity == "suspended" ? .suspended : .active,
+      presentedFor: presentingSince.map { ContinuousClock.now - $0 },
+      continuousPreviewRequested: continuousPreviewRequested)
+  }
+
+  func applyPolicy() {
+    guard let renderer, firstFrameReply == nil, !stopped else { return }
+    let request = authorityRequest
+    let reasons = WallpaperPresentationAuthority.suspensionReasons(for: request)
+    let shouldPause = !reasons.isEmpty
+    schedulePreviewExpiry(for: request)
     guard shouldPause != rendererPaused else { return }
     do {
       try check(owe_scene_wallpaper_set_paused(renderer, shouldPause))
       rendererPaused = shouldPause
+      counters.record(shouldPause ? .presentationSuspended : .presentationAuthorized, for: surfaceKey)
       WallpaperRuntime.log(
-        "Playback display=\(scene.displayID) mode=\(presentation) activity=\(activity) locked=\(locked) paused=\(shouldPause)"
+        "Playback display=\(scene.displayID) mode=\(presentation) activity=\(activity) locked=\(request.sessionLocked) paused=\(shouldPause) reasons=\(reasons.rawValue)"
       )
     } catch { WallpaperRuntime.log(error.localizedDescription) }
+  }
+
+  /// Re-evaluates a preview when its budget runs out, so it stops on its own
+  /// rather than waiting for a host update that may never come.
+  private func schedulePreviewExpiry(for request: WallpaperPresentationAuthority.Request) {
+    previewExpiry?.cancel()
+    previewExpiry = nil
+    guard let remaining = WallpaperPresentationAuthority.nextReevaluation(for: request) else {
+      return
+    }
+    previewExpiry = Task { [weak self] in
+      do { try await Task.sleep(for: remaining) } catch { return }
+      guard let self, !Task.isCancelled else { return }
+      self.previewExpiry = nil
+      self.applyPolicy()
+    }
   }
 
   func snapshot(reply: @escaping (Any?, Error?) -> Void) {
@@ -295,6 +349,9 @@ final class WallpaperSurface {
   private func releaseRenderer() {
     deadline?.cancel()
     deadline = nil
+    previewExpiry?.cancel()
+    previewExpiry = nil
+    presentingSince = nil
     if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
     frameObserver = nil
     if let renderer {

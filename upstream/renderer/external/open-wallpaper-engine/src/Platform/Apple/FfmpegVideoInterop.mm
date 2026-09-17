@@ -1,4 +1,5 @@
 #include "Platform/Apple/FfmpegVideoInterop.hpp"
+#include "Video/VideoColorConversion.hpp"
 #include "Utils/Logging.h"
 
 #include <CoreVideo/CoreVideo.h>
@@ -80,14 +81,6 @@ OSType CvPixelFormatForSoftwareFrame(const AVFrame* frame)
     }
 }
 
-struct Nv12ConversionParams {
-    float y_offset;
-    float y_scale;
-    float r_cr;
-    float g_cb;
-    float g_cr;
-    float b_cb;
-};
 
 struct PlaneStats {
     uint8_t min_value { 255 };
@@ -160,40 +153,92 @@ void AppendPlaneStats(std::ostringstream& stream, const char* name, const PlaneS
            << '}';
 }
 
-Nv12ConversionParams ConversionParamsForFrame(const AVFrame* frame)
+/// Reads the colorimetry a decoded frame declares. Unknown metadata is
+/// inferred from the resolution and reported, rather than silently treated as
+/// BT.601 for everything.
+YuvColorDescription ColorDescriptionForFrame(const AVFrame* frame)
 {
-    Nv12ConversionParams params {
-        .y_offset = frame != nullptr && frame->color_range != AVCOL_RANGE_JPEG ? (16.0f / 255.0f) : 0.0f,
-        .y_scale = frame != nullptr && frame->color_range != AVCOL_RANGE_JPEG ? (255.0f / 219.0f) : 1.0f,
-        .r_cr = 1.402f,
-        .g_cb = -0.344136f,
-        .g_cr = -0.714136f,
-        .b_cb = 1.772f,
-    };
+    YuvColorDescription description {};
+    if (frame == nullptr) return description;
 
-    if (frame == nullptr) {
-        return params;
-    }
-
+    description.range =
+        frame->color_range == AVCOL_RANGE_JPEG ? YuvRange::Full : YuvRange::Limited;
     switch (frame->colorspace) {
     case AVCOL_SPC_BT709:
-        params.r_cr = 1.5748f;
-        params.g_cb = -0.187324f;
-        params.g_cr = -0.468124f;
-        params.b_cb = 1.8556f;
+        description.matrix = YuvMatrix::Bt709;
+        break;
+    case AVCOL_SPC_BT2020_NCL:
+        description.matrix = YuvMatrix::Bt2020NonConstantLuminance;
         break;
     case AVCOL_SPC_BT2020_CL:
-    case AVCOL_SPC_BT2020_NCL:
-        params.r_cr = 1.4746f;
-        params.g_cb = -0.164553f;
-        params.g_cr = -0.571353f;
-        params.b_cb = 1.8814f;
+        // Constant-luminance BT.2020 needs a different transform. Report the
+        // substitution instead of claiming support for it.
+        description.matrix = YuvMatrix::Bt2020NonConstantLuminance;
+        description.matrix_inferred = true;
+        break;
+    case AVCOL_SPC_BT470BG:
+    case AVCOL_SPC_SMPTE170M:
+    case AVCOL_SPC_SMPTE240M:
+        description.matrix = YuvMatrix::Bt601;
         break;
     default:
+        description.matrix = InferYuvMatrix(static_cast<uint32_t>(std::max(0, frame->width)),
+                                            static_cast<uint32_t>(std::max(0, frame->height)));
+        description.matrix_inferred = true;
         break;
     }
+    return description;
+}
 
-    return params;
+/// Colorimetry of a Core Video pixel buffer, which is what the hardware
+/// decoder hands over. The pixel format decides the range; the attachment, when
+/// present, decides the matrix.
+YuvColorDescription ColorDescriptionForPixelBuffer(CVPixelBufferRef pixel_buffer,
+                                                   OSType pixel_format,
+                                                   uint32_t width,
+                                                   uint32_t height)
+{
+    YuvColorDescription description {};
+    description.range = pixel_format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        ? YuvRange::Full
+        : YuvRange::Limited;
+
+    CFTypeRef matrix_attachment =
+        CVBufferCopyAttachment(pixel_buffer, kCVImageBufferYCbCrMatrixKey, nullptr);
+    if (matrix_attachment == nullptr) {
+        description.matrix = InferYuvMatrix(width, height);
+        description.matrix_inferred = true;
+        return description;
+    }
+    if (CFEqual(matrix_attachment, kCVImageBufferYCbCrMatrix_ITU_R_709_2)) {
+        description.matrix = YuvMatrix::Bt709;
+    } else if (CFEqual(matrix_attachment, kCVImageBufferYCbCrMatrix_ITU_R_2020)) {
+        description.matrix = YuvMatrix::Bt2020NonConstantLuminance;
+    } else if (CFEqual(matrix_attachment, kCVImageBufferYCbCrMatrix_ITU_R_601_4) ||
+               CFEqual(matrix_attachment, kCVImageBufferYCbCrMatrix_SMPTE_240M_1995)) {
+        description.matrix = YuvMatrix::Bt601;
+    } else {
+        description.matrix = InferYuvMatrix(width, height);
+        description.matrix_inferred = true;
+    }
+    CFRelease(matrix_attachment);
+    return description;
+}
+
+/// One line per distinct colorimetry so an inferred matrix is visible in the
+/// log without printing anything per frame.
+void ReportInferredColor(const YuvColorDescription& description)
+{
+    if (!description.matrix_inferred) return;
+    static std::mutex mutex;
+    static std::unordered_map<uint32_t, bool> reported;
+    const uint32_t key = (static_cast<uint32_t>(description.matrix) << 8) |
+        static_cast<uint32_t>(description.range);
+    std::lock_guard lock(mutex);
+    if (!reported.try_emplace(key, true).second) return;
+    LOG_INFO("video color metadata missing or unsupported; using %s %s range",
+             YuvMatrixName(description.matrix),
+             YuvRangeName(description.range));
 }
 
 bool CopySoftwareFrameToPixelBuffer(const AVFrame* frame,
@@ -248,21 +293,19 @@ bool CopySoftwareFrameToPixelBuffer(const AVFrame* frame,
         }
         const int destination_stride =
             static_cast<int>(CVPixelBufferGetBytesPerRow(pixel_buffer));
-        const auto params = ConversionParamsForFrame(frame);
+        const auto description = ColorDescriptionForFrame(frame);
+        ReportInferredColor(description);
+        const auto params = MakeYuvColorParams(description);
         for (int y = 0; y < height; ++y) {
             const uint8_t* src_y = frame->data[0] + y * frame->linesize[0];
             const uint8_t* src_uv = frame->data[1] + (y / 2) * frame->linesize[1];
             uint8_t* dst = destination + y * destination_stride;
             for (int x = 0; x < width; ++x) {
-                const float luma = std::clamp((static_cast<float>(src_y[x]) / 255.0f - params.y_offset) * params.y_scale, 0.0f, 1.0f);
-                const float cb = static_cast<float>(src_uv[(x / 2) * 2]) / 255.0f - 0.5f;
-                const float cr = static_cast<float>(src_uv[(x / 2) * 2 + 1]) / 255.0f - 0.5f;
-                const float r = std::clamp(luma + params.r_cr * cr, 0.0f, 1.0f);
-                const float g = std::clamp(luma + params.g_cb * cb + params.g_cr * cr, 0.0f, 1.0f);
-                const float b = std::clamp(luma + params.b_cb * cb, 0.0f, 1.0f);
-                dst[x * 4] = static_cast<uint8_t>(std::lround(b * 255.0f));
-                dst[x * 4 + 1] = static_cast<uint8_t>(std::lround(g * 255.0f));
-                dst[x * 4 + 2] = static_cast<uint8_t>(std::lround(r * 255.0f));
+                const Rgb8 rgb = ConvertYuvCodeToRgb8(
+                    params, src_y[x], src_uv[(x / 2) * 2], src_uv[(x / 2) * 2 + 1]);
+                dst[x * 4] = rgb.blue;
+                dst[x * 4 + 1] = rgb.green;
+                dst[x * 4 + 2] = rgb.red;
                 dst[x * 4 + 3] = 255;
             }
         }
@@ -279,22 +322,20 @@ bool CopySoftwareFrameToPixelBuffer(const AVFrame* frame,
         }
         const int destination_stride =
             static_cast<int>(CVPixelBufferGetBytesPerRow(pixel_buffer));
-        const auto params = ConversionParamsForFrame(frame);
+        const auto description = ColorDescriptionForFrame(frame);
+        ReportInferredColor(description);
+        const auto params = MakeYuvColorParams(description);
         for (int y = 0; y < height; ++y) {
             const uint8_t* src_y = frame->data[0] + y * frame->linesize[0];
             const uint8_t* src_u = frame->data[1] + (y / 2) * frame->linesize[1];
             const uint8_t* src_v = frame->data[2] + (y / 2) * frame->linesize[2];
             uint8_t* dst = destination + y * destination_stride;
             for (int x = 0; x < width; ++x) {
-                const float luma = std::clamp((static_cast<float>(src_y[x]) / 255.0f - params.y_offset) * params.y_scale, 0.0f, 1.0f);
-                const float cb = static_cast<float>(src_u[x / 2]) / 255.0f - 0.5f;
-                const float cr = static_cast<float>(src_v[x / 2]) / 255.0f - 0.5f;
-                const float r = std::clamp(luma + params.r_cr * cr, 0.0f, 1.0f);
-                const float g = std::clamp(luma + params.g_cb * cb + params.g_cr * cr, 0.0f, 1.0f);
-                const float b = std::clamp(luma + params.b_cb * cb, 0.0f, 1.0f);
-                dst[x * 4] = static_cast<uint8_t>(std::lround(b * 255.0f));
-                dst[x * 4 + 1] = static_cast<uint8_t>(std::lround(g * 255.0f));
-                dst[x * 4 + 2] = static_cast<uint8_t>(std::lround(r * 255.0f));
+                const Rgb8 rgb =
+                    ConvertYuvCodeToRgb8(params, src_y[x], src_u[x / 2], src_v[x / 2]);
+                dst[x * 4] = rgb.blue;
+                dst[x * 4 + 1] = rgb.green;
+                dst[x * 4 + 2] = rgb.red;
                 dst[x * 4 + 3] = 255;
             }
         }
@@ -363,9 +404,13 @@ static constexpr const char* kNv12ConversionShaderSource = R"(
 #include <metal_stdlib>
 using namespace metal;
 
-struct Nv12ConversionParams {
+// Field order and meaning are fixed by wallpaper::video::YuvColorParams, so the
+// kernel and the CPU reference conversion cannot disagree about range or matrix.
+struct YuvColorParams {
     float y_offset;
     float y_scale;
+    float chroma_offset;
+    float chroma_scale;
     float r_cr;
     float g_cb;
     float g_cr;
@@ -375,7 +420,7 @@ struct Nv12ConversionParams {
 kernel void nv12_to_bgra(texture2d<float, access::sample> y_texture [[texture(0)]],
                          texture2d<float, access::sample> uv_texture [[texture(1)]],
                          texture2d<half, access::write> output_texture [[texture(2)]],
-                         constant Nv12ConversionParams& params [[buffer(0)]],
+                         constant YuvColorParams& params [[buffer(0)]],
                          uint2 gid [[thread_position_in_grid]])
 {
     if (gid.x >= output_texture.get_width() || gid.y >= output_texture.get_height()) {
@@ -386,7 +431,10 @@ kernel void nv12_to_bgra(texture2d<float, access::sample> y_texture [[texture(0)
     const float2 uv = (float2(gid) + 0.5f) /
         float2(output_texture.get_width(), output_texture.get_height());
     const float  y = y_texture.sample(sample_state, uv).r;
-    const float2 cbcr = uv_texture.sample(sample_state, uv).rg - float2(0.5f, 0.5f);
+    // Limited-range chroma spans 224 code values around the midpoint, so the
+    // offset and the scale are both part of the contract.
+    const float2 cbcr = (uv_texture.sample(sample_state, uv).rg - params.chroma_offset) *
+        params.chroma_scale;
     const float  luma = clamp((y - params.y_offset) * params.y_scale, 0.0f, 1.0f);
 
     const float r = saturate(luma + params.r_cr * cbcr.y);
@@ -490,13 +538,21 @@ id<MTLTexture> CreateDirectMetalTexture(id<MTLDevice> device,
     return texture;
 }
 
+/// On success the caller owns `*out_wrapper` and must keep it alive for as long
+/// as the returned texture can be used by the GPU: Core Video documents the
+/// wrapper, not the vended MTLTexture, as the object whose lifetime governs the
+/// texture's validity.
 id<MTLTexture> CreatePixelBufferBackedMetalTexture(id<MTLDevice> device,
                                                    CVPixelBufferRef pixel_buffer,
                                                    MTLPixelFormat pixel_format,
                                                    uint32_t width,
                                                    uint32_t height,
+                                                   CVMetalTextureRef* out_wrapper,
                                                    std::string* error)
 {
+    if (out_wrapper == nullptr) {
+        return SetError(error, "Core Video texture wrapper output must not be null"), nil;
+    }
     CVMetalTextureCacheRef texture_cache = GetTextureCacheForDevice(device, error);
     if (texture_cache == nullptr) return nil;
 
@@ -521,7 +577,7 @@ id<MTLTexture> CreatePixelBufferBackedMetalTexture(id<MTLDevice> device,
         return SetError(error, "CVMetalTextureCache returned a null BGRA texture"), nil;
     }
 
-    CFRelease(texture_ref);
+    *out_wrapper = texture_ref;
     return texture;
 }
 
@@ -629,30 +685,10 @@ id<MTLTexture> CreateConvertedMetalTexture(id<MTLDevice>    device,
         return nil;
     }
 
-    Nv12ConversionParams params {
-        .y_offset = pixel_format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ? (16.0f / 255.0f) : 0.0f,
-        .y_scale = pixel_format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ? (255.0f / 219.0f) : 1.0f,
-        .r_cr = 1.402f,
-        .g_cb = -0.344136f,
-        .g_cr = -0.714136f,
-        .b_cb = 1.772f,
-    };
-    CFTypeRef matrix_attachment =
-        CVBufferCopyAttachment(pixel_buffer, kCVImageBufferYCbCrMatrixKey, nullptr);
-    if (matrix_attachment != nullptr && CFEqual(matrix_attachment, kCVImageBufferYCbCrMatrix_ITU_R_709_2)) {
-        params.r_cr = 1.5748f;
-        params.g_cb = -0.187324f;
-        params.g_cr = -0.468124f;
-        params.b_cb = 1.8556f;
-    } else if (matrix_attachment != nullptr && CFEqual(matrix_attachment, kCVImageBufferYCbCrMatrix_ITU_R_2020)) {
-        params.r_cr = 1.4746f;
-        params.g_cb = -0.164553f;
-        params.g_cr = -0.571353f;
-        params.b_cb = 1.8814f;
-    }
-    if (matrix_attachment != nullptr) {
-        CFRelease(matrix_attachment);
-    }
+    const YuvColorDescription description =
+        ColorDescriptionForPixelBuffer(pixel_buffer, pixel_format, width, height);
+    ReportInferredColor(description);
+    const YuvColorParams params = MakeYuvColorParams(description);
 
     [encoder setComputePipelineState:pipeline];
     [encoder setTexture:y_texture atIndex:0];
@@ -684,6 +720,24 @@ id<MTLTexture> CreateConvertedMetalTexture(id<MTLDevice>    device,
 }
 
 } // namespace
+
+/// One imported video frame and everything its Metal texture is derived from.
+///
+/// Core Video requires the texture wrapper returned by
+/// `CVMetalTextureCacheCreateTextureFromImage` to outlive GPU use of the
+/// texture it vends; retaining the `MTLTexture` alone does not satisfy that
+/// contract. The pixel buffer is retained for the same reason, because an
+/// imported frame outlives the decoder slot it came from. A lease is released
+/// exactly once, through `ReleaseAppleVideoFrameLease`.
+struct AppleVideoFrameLease {
+    void*             pixel_buffer { nullptr };
+    /// Retained wrapper per plane; a single-plane import uses only the first.
+    CVMetalTextureRef plane_wrappers[2] { nullptr, nullptr };
+    /// Retained id<MTLTexture>, or null once the destination was handed back.
+    void*             texture { nullptr };
+    /// Set when `texture` is a conversion destination the pool can reuse.
+    bool              recyclable_destination { false };
+};
 
 struct AppleVideoMetalTexturePool::Impl {
     id<MTLDevice> device;
@@ -882,10 +936,10 @@ std::string DescribeAppleVideoFrame(const VideoTextureFrame& frame)
     return stream.str();
 }
 
-void* CreateAppleVideoMetalTextureForDevice(const VideoTextureFrame& frame,
-                                            void* metal_device,
-                                            void* reusable_destination,
-                                            std::string* error)
+void* CreateAppleVideoFrameLease(const VideoTextureFrame& frame,
+                                 void* metal_device,
+                                 void* reusable_destination,
+                                 std::string* error)
 {
     if (!frame.valid()) {
         return SetError(error, "video frame metadata is incomplete"), nullptr;
@@ -900,7 +954,9 @@ void* CreateAppleVideoMetalTextureForDevice(const VideoTextureFrame& frame,
             return nullptr;
         }
 
-        id<MTLTexture> texture = nil;
+        id<MTLTexture>    texture = nil;
+        CVMetalTextureRef wrapper = nullptr;
+        bool              recyclable_destination = false;
         const OSType pixel_format = static_cast<OSType>(frame.pixel_format);
         const bool is_nv12 = pixel_format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
             pixel_format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
@@ -913,6 +969,8 @@ void* CreateAppleVideoMetalTextureForDevice(const VideoTextureFrame& frame,
             return SetError(error, "NV12 conversion requires a pixel buffer"), nullptr;
         }
         if (pixel_format == kCVPixelFormatType_32BGRA && frame.io_surface != nullptr) {
+            // An IOSurface-backed texture owns its own backing; no Core Video
+            // wrapper is involved.
             texture = CreateDirectMetalTexture(
                 device,
                 reinterpret_cast<IOSurfaceRef>(frame.io_surface),
@@ -926,10 +984,12 @@ void* CreateAppleVideoMetalTextureForDevice(const VideoTextureFrame& frame,
                 MTLPixelFormatBGRA8Unorm,
                 frame.width,
                 frame.height,
+                &wrapper,
                 error);
-        } else if ((pixel_format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
-                    pixel_format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) &&
-                   frame.pixel_buffer != nullptr) {
+        } else if (is_nv12) {
+            // The conversion writes an ordinary destination texture and waits
+            // for completion, so its plane wrappers are already retired; the
+            // destination itself is what the pool can take back.
             texture = CreateConvertedMetalTexture(
                 device,
                 reinterpret_cast<CVPixelBufferRef>(frame.pixel_buffer),
@@ -938,6 +998,7 @@ void* CreateAppleVideoMetalTextureForDevice(const VideoTextureFrame& frame,
                 frame.height,
                 destination,
                 error);
+            recyclable_destination = texture != nil;
         } else if (frame.io_surface != nullptr && frame.pixel_buffer == nullptr) {
             texture = CreateDirectMetalTexture(
                 device,
@@ -947,19 +1008,66 @@ void* CreateAppleVideoMetalTextureForDevice(const VideoTextureFrame& frame,
                 error);
         }
         if (texture == nil) {
+            if (wrapper != nullptr) CFRelease(wrapper);
             if (error != nullptr && error->empty()) {
                 SetError(error, "failed to create Metal texture for imported video frame");
             }
             return nullptr;
         }
 
-        return (__bridge_retained void*)texture;
+        auto* lease = new AppleVideoFrameLease {};
+        lease->texture = (__bridge_retained void*)texture;
+        lease->plane_wrappers[0] = wrapper;
+        lease->recyclable_destination = recyclable_destination;
+        if (frame.pixel_buffer != nullptr) {
+            // The import can outlive the decoder slot the frame came from.
+            lease->pixel_buffer =
+                const_cast<void*>(CFRetain(reinterpret_cast<CVPixelBufferRef>(frame.pixel_buffer)));
+        }
+        return lease;
     }
 }
 
-void* CreateAppleVideoMetalTexture(const VideoTextureFrame& frame, std::string* error)
+void* AppleVideoFrameLeaseTexture(void* lease)
 {
-    return CreateAppleVideoMetalTextureForDevice(frame, nullptr, nullptr, error);
+    return lease != nullptr ? static_cast<AppleVideoFrameLease*>(lease)->texture : nullptr;
+}
+
+void* TakeAppleVideoFrameLeaseDestination(void* lease)
+{
+    if (lease == nullptr) return nullptr;
+    auto* owned = static_cast<AppleVideoFrameLease*>(lease);
+    if (!owned->recyclable_destination) return nullptr;
+    // Ownership of the retain moves to the caller; the lease must not release
+    // the same texture again.
+    void* destination = owned->texture;
+    owned->texture = nullptr;
+    owned->recyclable_destination = false;
+    return destination;
+}
+
+void ReleaseAppleVideoFrameLease(void* lease)
+{
+    if (lease == nullptr) return;
+
+    @autoreleasepool {
+        auto* owned = static_cast<AppleVideoFrameLease*>(lease);
+        for (auto& wrapper : owned->plane_wrappers) {
+            if (wrapper != nullptr) {
+                CFRelease(wrapper);
+                wrapper = nullptr;
+            }
+        }
+        if (owned->texture != nullptr) {
+            (void)CFBridgingRelease(owned->texture);
+            owned->texture = nullptr;
+        }
+        if (owned->pixel_buffer != nullptr) {
+            CFRelease(reinterpret_cast<CVPixelBufferRef>(owned->pixel_buffer));
+            owned->pixel_buffer = nullptr;
+        }
+        delete owned;
+    }
 }
 
 void ReleaseAppleVideoMetalTexture(void* handle)

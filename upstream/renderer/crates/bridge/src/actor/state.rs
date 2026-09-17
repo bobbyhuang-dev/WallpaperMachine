@@ -2,7 +2,7 @@ pub mod drafts {
     pub use crate::state::drafts::*;
 }
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use drafts::WallpaperOptionsDraft;
 use wallpaper_core::project::{SceneDesc, WallpaperProjectType};
@@ -20,7 +20,14 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct BridgeActorState {
     pub playback_state: BridgePlaybackState,
+    /// Global presentation suspension: display sleep or session lock, where no
+    /// display can show a wallpaper pixel at all.
     pub presentation_suspended: bool,
+    /// Displays suspended on their own, by occlusion for example. Kept apart
+    /// from the global flag so one hidden screen cannot pause a visible one,
+    /// and from `playback_state` so resuming visibility never clears the user's
+    /// own pause.
+    pub suspended_displays: BTreeSet<u32>,
     pub selected_wallpaper_id: Option<String>,
     pub active_wallpaper_ids: Vec<String>,
     pub errors: Vec<String>,
@@ -47,6 +54,7 @@ impl Default for BridgeActorState {
         Self {
             playback_state: BridgePlaybackState::Playing,
             presentation_suspended: false,
+            suspended_displays: BTreeSet::new(),
             selected_wallpaper_id: None,
             active_wallpaper_ids: Vec::new(),
             errors: Vec::new(),

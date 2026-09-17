@@ -1261,6 +1261,21 @@ void TextureCache::SetVideoPlaybackPaused(bool paused) { m_video_playback_state.
 
 void TextureCache::SetVideoPlaybackRate(float rate) { m_video_playback_state.rate = rate; }
 
+double TextureCache::ShortestVideoFramePeriod() const {
+    double shortest = 0.0;
+    for (const auto& [key, video_tex] : m_video_tex_map) {
+        if (video_tex == nullptr || video_tex->source == nullptr) continue;
+        const double period = video_tex->source->frameDurationSeconds();
+        if (! (period > 0.0)) {
+            // A source that cannot report its rate makes the whole answer
+            // unknown: pacing on the others could skip its changes.
+            return 0.0;
+        }
+        if (shortest == 0.0 || period < shortest) shortest = period;
+    }
+    return shortest;
+}
+
 VideoTextureSubmissionStats TextureCache::VideoSubmissionStats() const {
     auto stats                    = m_video_submission_stats;
     stats.import_submission_slots = m_video_import_slots.size();
@@ -1489,9 +1504,13 @@ bool TextureCache::UpdateVideoFrame(std::string_view                 key,
             &video::ReleaseAppleVideoMetalTexture);
         auto candidate = std::make_shared<ImportedVideoFrame>();
         if (converted) ++m_video_submission_stats.conversion_calls;
-        void* metal_texture = video::CreateAppleVideoMetalTextureForDevice(
+        // The lease keeps the Core Video wrapper and pixel buffer alive for as
+        // long as this imported frame can be sampled; the texture below is
+        // borrowed from it.
+        void* lease = video::CreateAppleVideoFrameLease(
             frame, metal_device, destination.get(), error);
-        if (metal_texture == nullptr) return false;
+        if (lease == nullptr) return false;
+        void* metal_texture = video::AppleVideoFrameLeaseTexture(lease);
         const bool reused = destination != nullptr;
         destination.reset();
         if (converted) {
@@ -1500,9 +1519,15 @@ bool TextureCache::UpdateVideoFrame(std::string_view                 key,
         }
         const std::weak_ptr<video::AppleVideoMetalTexturePool> pool =
             converted ? m_video_destination_pool : nullptr;
-        candidate->metal_texture = std::shared_ptr<void>(metal_texture, [pool](void* handle) {
-            if (auto owner = pool.lock()) owner->Recycle(handle);
-            else video::ReleaseAppleVideoMetalTexture(handle);
+        candidate->frame_lease = std::shared_ptr<void>(lease, [pool](void* handle) {
+            // Give a poolable conversion destination back before the lease
+            // releases everything else it owns, each exactly once.
+            if (auto owner = pool.lock()) {
+                if (void* recyclable = video::TakeAppleVideoFrameLeaseDestination(handle)) {
+                    owner->Recycle(recyclable);
+                }
+            }
+            video::ReleaseAppleVideoFrameLease(handle);
         });
         TextureKey sampler_key {
             .width = static_cast<i32>(frame.width),

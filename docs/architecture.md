@@ -81,7 +81,7 @@ Services are grouped by domain under `App/Services/`.
 | Domain | Types | Responsibility |
 |---|---|---|
 | `Appearance/` | `AppTheme` (`AppThemePreferences`, `AppThemeStore`) | Mode/accent/tone preferences shared by AppKit and the page |
-| `Desktop/` | `DesktopSpaceWallpaperAPI`, `DesktopWallpaperLedger`, `DesktopWallpaperSync`, `WallpaperPresentationPolicy` | Per-Space desktop picture control, original-wallpaper journal, still-poster sync, renderer suspension |
+| `Desktop/` | `DesktopSpaceWallpaperAPI`, `DesktopWallpaperLedger`, `DesktopWallpaperSync`, `WallpaperPresentationPolicy` | Per-Space desktop picture control, original-wallpaper journal, still-poster sync, per-display renderer suspension |
 | `GitHub/` | `GitHubReleaseClient`, `AppUpdateModels`, `AppUpdateStore`, `AppUpdateInstaller` | GitHub Releases update check, download, in-place install |
 | `Library/` | `ClientPaths`, `WallpaperImportService`, `WallpaperDeletionService` | App-support layout, non-destructive import, guarded deletion |
 | `LockScreen/` | `LockScreenWallpaperSelection`, `LockScreenWallpaperService` | System lock-screen selection overrides and configuration publishing |
@@ -117,8 +117,15 @@ Swift keeps the *system* wallpaper consistent with that window:
   (`DesktopPosterEncoder`) under `<support>/DesktopPosters`, so the static system wallpaper
   matches the animated one; it suspends itself while the native lock-screen provider owns the
   desktop.
-- `WallpaperPresentationPolicy` suspends the renderer when no wallpaper pixel can reach a
-  display (occlusion, display sleep, session lock) without altering the user's play/pause choice.
+- `WallpaperPresentationPolicy` suspends presentation when no wallpaper pixel can reach a
+  display, without altering the user's play/pause choice. Display sleep and session lock are
+  global conditions and use `setPresentationSuspended`; occlusion is per display and uses
+  `setDisplayPresentationSuspended`, so one covered screen stops only its own decoding,
+  simulation and rendering and a visible screen never resumes a covered one. The bridge keeps
+  `suspended_displays` beside the global flag, resolves each scene's and web descriptor's paused
+  state from its own display, and re-applies the still-hidden displays after a global resume.
+  System audio capture follows visible consumers — a presenting scene with audio response
+  enabled — rather than the global pause flag.
 
 ### Renderer bridge (generated uniffi)
 
@@ -179,8 +186,12 @@ process; the app cannot call into it directly.
 | `WallpaperSettingsProvider.swift` | Encodes the private wallpaper settings view-model payload |
 | `WallpaperExtensionBridge.h` | Objective-C bridging header declaring the private `CAContext`, `NSXPCConnection.auditToken` and the XPC protocol; also includes `SceneWallpaperBindings.h` |
 
-The process boundary is a file boundary. `Shared/LockScreenConfiguration.swift` compiles into
-both targets and defines the only contract: the app writes a complete immutable
+The process boundary is a file boundary. `Shared/` compiles into both targets and holds the
+contracts they must agree on: `RuntimeCounters` (time-limited, per-surface runtime counters for
+power work, off by default — see [testing/power-benchmark.md](testing/power-benchmark.md)),
+`WallpaperPresentationAuthority` (which surface roles may keep presenting, and why not, so a
+preview or lock-screen instance cannot render for nobody), and
+`LockScreenConfiguration`, which defines the published contract: the app writes a complete immutable
 `LockScreenConfiguration` (version, revision, `[LockScreenScene]` with paths relative to the
 extension's Documents directory) into the extension container, then posts
 `LockScreenConfiguration.changedNotification`; the extension reloads and writes

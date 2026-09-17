@@ -21,6 +21,7 @@
 #include "Interface/IShaderValueUpdater.h"
 #include "Platform/Apple/FfmpegVideoInterop.hpp"
 #include "Shader/RustShaderBridge.hpp"
+#include "Video/VideoColorConversion.hpp"
 #include "Vulkan/Device.hpp"
 #include <vulkan/vulkan_metal.h>
 #include "Vulkan/Util.hpp"
@@ -269,6 +270,8 @@ public:
     double durationSeconds() const override { return 1000.0; }
     double playbackSeconds() const override { return frame.pts_seconds; }
     uint64_t loopCount() const override { return 0; }
+    double frameDurationSeconds() const override { return frame_duration_seconds; }
+    double frame_duration_seconds = 1.0 / 60.0;
 };
 
 struct TestUpdater final : IShaderValueUpdater {
@@ -457,13 +460,13 @@ protected:
     }
     Bytes Reference(const SyntheticVideo& source, bool rgba = true) {
         std::string error;
-        void* retained = video::CreateAppleVideoMetalTextureForDevice(source.frame, nullptr, nullptr, &error);
-        Require(retained != nullptr, error);
-        id<MTLTexture> texture = (__bridge id<MTLTexture>)retained;
+        void* lease = video::CreateAppleVideoFrameLease(source.frame, nullptr, nullptr, &error);
+        Require(lease != nullptr, error);
+        id<MTLTexture> texture = (__bridge id<MTLTexture>)video::AppleVideoFrameLeaseTexture(lease);
         Bytes bytes(source.frame.width * source.frame.height * 4);
         [texture getBytes:bytes.data() bytesPerRow:source.frame.width * 4
                  fromRegion:MTLRegionMake2D(0, 0, source.frame.width, source.frame.height) mipmapLevel:0];
-        video::ReleaseAppleVideoMetalTexture(retained);
+        video::ReleaseAppleVideoFrameLease(lease);
         if (rgba) for (size_t i = 0; i < bytes.size(); i += 4) std::swap(bytes[i], bytes[i + 2]);
         return bytes;
     }
@@ -813,6 +816,57 @@ TEST_F(PlaybackGPU, SteadyGenerationsReuseRetiredDestinations) {
                 EXPECT_LE(TextureCacheVideoInteropTestAccess::CachedImports(device.tex_cache(), key), 4u);
                 EXPECT_LE(stats.pool_cached_texture_count, 4u);
                 EXPECT_LE(stats.pool_cached_bytes, 64u * 1024u * 1024u);
+            }
+        }
+    }
+}
+
+TEST_F(PlaybackGPU, MetalConversionMatchesTheCpuColorReference) {
+    // The other video tests compare the GPU result against an import of the
+    // same frame, which cannot catch a wrong range or matrix. This one compares
+    // the Metal kernel against the shared CPU conversion for known code values,
+    // so the two paths have to agree about studio swing and colorimetry.
+    const std::array<std::pair<CFStringRef, video::YuvMatrix>, 3> matrices {{
+        { kCVImageBufferYCbCrMatrix_ITU_R_601_4, video::YuvMatrix::Bt601 },
+        { kCVImageBufferYCbCrMatrix_ITU_R_709_2, video::YuvMatrix::Bt709 },
+        { kCVImageBufferYCbCrMatrix_ITU_R_2020,
+          video::YuvMatrix::Bt2020NonConstantLuminance },
+    }};
+    const std::array<std::array<uint8_t, 3>, 6> samples {{
+        { 126, 128, 160 },  // the plan's worked example: chroma off the midpoint
+        { 180, 128, 128 },  // neutral, isolates luma range handling
+        {  51, 109, 212 },  // 75% red bar
+        { 145, 147,  44 },  // 75% cyan bar
+        {  16, 128, 128 },  // studio black
+        { 235, 128, 128 },  // studio white
+    }};
+    for (OSType format : { kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                           kCVPixelFormatType_420YpCbCr8BiPlanarFullRange }) {
+        const video::YuvRange range = format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+            ? video::YuvRange::Full
+            : video::YuvRange::Limited;
+        for (const auto& [attachment, matrix] : matrices) {
+            auto source = std::make_shared<SyntheticVideo>();
+            source->Resize(32, 32, format);
+            const auto params = video::MakeYuvColorParams(
+                { .matrix = matrix, .range = range, .bit_depth = 8 });
+            for (const auto& sample : samples) {
+                source->Set(++serial, sample[0], sample[1], sample[2], attachment);
+                const Bytes converted = Reference(*source, /*rgba=*/false);
+                ASSERT_GE(converted.size(), 4u);
+                const video::Rgb8 expected =
+                    video::ConvertYuvCodeToRgb8(params, sample[0], sample[1], sample[2]);
+                SCOPED_TRACE(testing::Message()
+                             << "range=" << video::YuvRangeName(range)
+                             << " matrix=" << video::YuvMatrixName(matrix)
+                             << " Y=" << int(sample[0]) << " Cb=" << int(sample[1])
+                             << " Cr=" << int(sample[2]));
+                // Two code values of slack for half-precision output and
+                // rounding; a wrong range or matrix is off by far more.
+                EXPECT_NEAR(int(converted[2]), int(expected.red), 2);
+                EXPECT_NEAR(int(converted[1]), int(expected.green), 2);
+                EXPECT_NEAR(int(converted[0]), int(expected.blue), 2);
+                EXPECT_EQ(int(converted[3]), 255);
             }
         }
     }

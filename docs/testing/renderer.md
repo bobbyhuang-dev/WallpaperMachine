@@ -445,6 +445,49 @@ do not measure QuickJS `malloc`, worker-thread allocations or whole-process
 memory. Pixel equality and Vulkan command traces are not synchronization-layer
 validation, desktop equivalence, GPU residency or power measurements.
 
+### Video decode state machine and colour range
+
+`video_decode_pump_test` pins the libavcodec send/receive contract, and includes
+reproductions of the order this project used before: feeding input before
+draining output loses a packet the decoder rejected with `EAGAIN`, and seeking at
+end of input instead of draining loses the reordered tail of every loop. A
+change that reintroduces either order fails those two cases. The same file
+covers cancellation during a drain, a bounded no-progress budget, and releasing
+a held packet exactly once on seek, stop or failure.
+
+`video_color_conversion_test` pins known pixels for BT.601/709/2020 in both
+ranges, studio black and white with clamping, 75% colour bars round-tripped from
+their RGB primaries, matrix separation, resolution-based inference for
+unspecified metadata, and bit-depth scaling. Limited-range chroma has its own
+224 code-value excursion; reading it as `sample - 0.5` desaturates every
+studio-swing frame, and that specific regression has a case of its own.
+`PlaybackGPU.MetalConversionMatchesTheCpuColorReference` compares the Metal
+`nv12_to_bgra` kernel against the same CPU reference, so the two paths cannot
+drift apart.
+
+Video frame imports are owned by a lease that retains the Core Video texture
+wrapper and the pixel buffer for as long as the frame can be sampled, not just
+the vended `MTLTexture`. `playback_gpu_test` exercises pool reuse, generation
+dedup, cache eviction and recording-discard recovery against it.
+
+### Frame pacing follows the content, bounded on both sides
+
+`timer_tests` pins the frame clock's content-rate pacing. A pushed
+`FrameDemand.content_period` may only lengthen the tick interval: the configured
+FPS stays the ceiling, so a 60 fps video cannot make a 30 fps wallpaper render at
+60, and an unknown, zero, negative or absurdly long period cannot stall a
+scene — one hour is clamped to the five-second gap the frame clock still treats
+as continuous playback. Dropping the demand restores the fixed cadence rather
+than inheriting the previous scene's, and pacing never changes how many draws may
+be in flight.
+
+Only the engine's own plain-video scene reports a period, and only because
+`CreateVideoProjectScene` builds it with a single video texture, a copy shader, a
+no-op shader value updater and no script, particle, audio or pointer input.
+Authored scenes report nothing. A change that lets any other scene answer needs a
+positive account of every dynamic render-graph input first; guessing freezes a
+live wallpaper.
+
 ### Shader pipeline
 
 The shader repair handles undersized cross-stage varying declarations,
@@ -486,8 +529,13 @@ Built into the renderer check build directory under `artifacts/renderer/bin/`:
 `script_runtime_compat_test`, `text_object_runtime_test`,
 `render_target_lifetime_test`, `shader_cache_metadata_test`, `audio_tests`,
 `mouse_input_test`, `particle_mouse_controlpoint_test`, `timer_tests`,
-`playback_gpu_test`, plus the `offscreen_scene_probe`,
-`scene_reload_cycle_probe` and `wpdump` diagnostics.
+`playback_gpu_test`, `video_decode_pump_test`, `video_color_conversion_test`,
+plus the `offscreen_scene_probe`, `scene_reload_cycle_probe` and `wpdump`
+diagnostics. `scripts/check_renderer.py` builds and runs
+`render_target_lifetime_test`, `text_object_runtime_test`,
+`shader_cache_metadata_test`, `video_decode_pump_test`,
+`video_color_conversion_test`, `timer_tests` and `playback_gpu_test`; a non-zero
+exit from any of them fails the check.
 
 Useful filters:
 

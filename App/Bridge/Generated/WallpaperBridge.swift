@@ -733,6 +733,19 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func setDisplayMode(displayId: String, mode: BridgeDisplayMode) async throws  -> BridgeDisplayMutationBundle
     
     /**
+     * Suspends or resumes rendering for one display without touching the
+     * others or the user-visible playback state. Used for conditions that are
+     * specific to a screen, such as a window fully covering that wallpaper:
+     * one display being hidden must not stop a display that is still visible.
+     *
+     * # Errors
+     *
+     * Returns an error when the display id is not a known display, or the
+     * engine fails to apply the pause.
+     */
+    func setDisplayPresentationSuspended(displayId: String, suspended: Bool) async throws 
+    
+    /**
      * # Errors
      *
      * Returns an error when filter state cannot be persisted.
@@ -1522,6 +1535,34 @@ open func setDisplayMode(displayId: String, mode: BridgeDisplayMode)async throws
             completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
             freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeBridgeDisplayMutationBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Suspends or resumes rendering for one display without touching the
+     * others or the user-visible playback state. Used for conditions that are
+     * specific to a screen, such as a window fully covering that wallpaper:
+     * one display being hidden must not stop a display that is still visible.
+     *
+     * # Errors
+     *
+     * Returns an error when the display id is not a known display, or the
+     * engine fails to apply the pause.
+     */
+open func setDisplayPresentationSuspended(displayId: String, suspended: Bool)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_display_presentation_suspended(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(displayId),FfiConverterBool.lower(suspended)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_void,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_void,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_void,
+            liftFunc: { $0 },
             errorHandler: FfiConverterTypeBridgeError.lift
         )
 }
@@ -5221,6 +5262,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_display_mode() != 57230) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_display_presentation_suspended() != 39147) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_filter() != 4762) {

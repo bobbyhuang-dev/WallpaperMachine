@@ -13,7 +13,9 @@ for them.
   same inspector. Apply pushes the committed values into the running page.
 - Play/Pause, the presentation policy (occluded desktop, display sleep, session
   lock), display assignment, mirroring, and Space posters apply to web wallpapers
-  the same way they apply to renderer wallpapers.
+  the same way they apply to renderer wallpapers. Occlusion is per display: a
+  window covering the wallpaper on one screen suspends that page and leaves the
+  page on another screen running.
 - The Workshop badge reads *Web · built-in web view*; the inspector notes that
   mouse input reaches the page while audio response and keyboard input do not.
 - Mouse input reaches the page: hover, clicks, drags, right clicks and scrolling
@@ -54,7 +56,25 @@ unrestricted (macOS ATS applies, so plain `http://` requests fail).
   `webWallpapers()` on every snapshot and diffs it against one
   `WebWallpaperWindow` (`MWEWebWallpaperDesktopWindow`, desktop level, all Spaces,
   mouse-transparent) per display. `WebWallpaperPage` owns the `WKWebView`, the
-  host script, property/pause delivery and one-shot content-process recovery.
+  host script, property/pause delivery, host-side suspension and
+  content-process recovery.
+- Suspension does not rely on the page cooperating. `setPaused` is an optional
+  listener callback, so a page can ignore it; alongside it the host suspends all
+  media playback (suspend and unsuspend, so media the user had paused is not
+  started by a resume) and removes the web view from the window tree, which is
+  the documented condition for `WKPreferences.inactiveSchedulingPolicy`
+  (`.suspend`). A snapshot taken before detaching stays on screen as a
+  placeholder inside the window's container view, so the Space poster sync keeps
+  identifying the surface by the same content layer, and a suspended page
+  receives no pointer events. The document is never reloaded to suspend it, so
+  its JavaScript state survives. How much WebKit then throttles the page is its
+  own decision and has not been measured here.
+- A content process that keeps terminating is restarted on a windowed budget
+  with exponential backoff rather than forever; the budget returns only after a
+  document has run without interruption for the stable-run threshold.
+- Committed host state (properties, fps, pause) is replayed in full on every new
+  document, so a reload after a crash restores the page even though nothing in
+  the descriptor changed.
 - Mouse input (`WebWallpaperMouseForwarder`): the windows stay mouse-transparent
   and nothing is consumed, so no Accessibility or Input Monitoring grant is
   needed. A global `NSEvent` monitor observes desktop pointer events;

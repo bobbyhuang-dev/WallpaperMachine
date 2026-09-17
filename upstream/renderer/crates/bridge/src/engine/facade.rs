@@ -29,7 +29,13 @@ pub trait EngineFacade: Send + Sync + 'static {
     fn refresh_displays(&self) -> EngineFuture<()>;
     fn display_snapshot(&self) -> Vec<DisplaySnapshotEntry>;
     fn close_all_scenes(&self) -> EngineFuture<()>;
+    /// Pauses or resumes every open scene. Global conditions only: the user's
+    /// Play/Pause choice, power policy, display sleep and session lock.
     fn set_all_paused(&self, paused: bool) -> EngineFuture<()>;
+    /// Pauses or resumes the scene on one display. One display being hidden
+    /// must not stop a visible one, so occlusion is applied here rather than
+    /// through `set_all_paused`.
+    fn set_display_paused(&self, display_id: u32, paused: bool) -> EngineFuture<()>;
     fn set_audio_volume(&self, handle: SceneHandle, volume: AudioVolume) -> EngineFuture<()>;
     fn set_audio_muted(&self, handle: SceneHandle, muted: bool) -> EngineFuture<()>;
     fn set_audio_response_enabled(&self, handle: SceneHandle, enabled: bool) -> EngineFuture<()>;
@@ -164,6 +170,24 @@ impl EngineFacade for RealEngineFacade {
     fn set_all_paused(&self, paused: bool) -> EngineFuture<()> {
         let engine = self.engine.clone();
         async move { engine.set_all_paused(paused).await }.boxed()
+    }
+
+    fn set_display_paused(&self, display_id: u32, paused: bool) -> EngineFuture<()> {
+        let engine = self.engine.clone();
+        async move {
+            let Some(handle) = engine
+                .display_snapshot()
+                .iter()
+                .find(|entry| entry.desc.display_id == display_id)
+                .and_then(|entry| entry.handle)
+            else {
+                // A display with no open scene has nothing to pause; the state
+                // is carried by the descriptor the next reconcile builds.
+                return Ok(());
+            };
+            engine.set_paused(handle, paused).await
+        }
+        .boxed()
     }
 
     fn set_audio_volume(&self, handle: SceneHandle, volume: AudioVolume) -> EngineFuture<()> {
@@ -440,6 +464,8 @@ pub struct FakeEngineFacade {
     refresh_failure: Arc<ArcSwap<Option<String>>>,
     paused_calls: Arc<ArcSwap<Vec<bool>>>,
     pause_failure: Arc<ArcSwap<Option<String>>>,
+    display_paused_calls: Arc<ArcSwap<Vec<(u32, bool)>>>,
+    display_pause_failure: Arc<ArcSwap<Option<String>>>,
     suspend_failure: Arc<ArcSwap<Option<String>>>,
     disable_capture_failure: Arc<ArcSwap<Option<String>>>,
     close_failure: Arc<ArcSwap<Option<String>>>,
@@ -580,6 +606,11 @@ impl FakeEngineFacade {
     }
 
     #[must_use]
+    pub fn display_paused_calls(&self) -> Vec<(u32, bool)> {
+        load_log(&self.display_paused_calls)
+    }
+
+    #[must_use]
     pub fn audio_volume_calls(&self) -> Vec<(SceneHandle, f32)> {
         load_log(&self.audio_volume_calls)
     }
@@ -635,6 +666,11 @@ impl FakeEngineFacade {
     pub fn fail_next_pause(&self) {
         self.pause_failure
             .store(Arc::new(Some("pause failed".into())));
+    }
+
+    pub fn fail_next_display_pause(&self) {
+        self.display_pause_failure
+            .store(Arc::new(Some("display pause failed".into())));
     }
 
     pub fn fail_next_suspend(&self) {
@@ -871,6 +907,27 @@ impl EngineFacade for FakeEngineFacade {
                 let mut scenes = scenes.as_ref().clone();
                 for scene in &mut scenes {
                     scene.paused = paused;
+                }
+                scenes
+            });
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn set_display_paused(&self, display_id: u32, paused: bool) -> EngineFuture<()> {
+        let fake = self.clone();
+        async move {
+            push_log(&fake.display_paused_calls, (display_id, paused));
+            if let Some(message) = fake.display_pause_failure.swap(Arc::new(None)).as_ref() {
+                return Err(EngineError::Platform(message.clone()));
+            }
+            fake.rendered_scenes.rcu(|scenes| {
+                let mut scenes = scenes.as_ref().clone();
+                for scene in &mut scenes {
+                    if scene.display.display_id == display_id {
+                        scene.paused = paused;
+                    }
                 }
                 scenes
             });

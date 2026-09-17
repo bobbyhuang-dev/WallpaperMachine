@@ -30,11 +30,13 @@ App/                               MacWallpaperEngine application target sources
   Views/ControlPanel/              SwiftUI container, WKWebView host, snapshot builder, action handlers
   Resources/                       Info.plist, string catalogs, Assets.xcassets; app resources only
 Extension/                         MacWallpaperExtension sources, Info.plist, entitlements, bridging header
-Shared/                            LockScreenConfiguration.swift only; compiled into both targets
+Shared/                            contracts compiled into both targets: LockScreenConfiguration,
+                                   RuntimeCounters, WallpaperPresentationAuthority
 WebUI/                             HTML/CSS/JS control panel; bundled verbatim as the app resource folder WebUI
 Resources/StarterWallpaper/        bundled sample wallpaper (Aurora.mp4, preview.jpg, project.json)
-Tests/Unit/<Domain>/               MacWallpaperEngineTests, grouped Appearance, Desktop, GitHub, Library,
-                                   LockScreen, Panel, Steam, WebWallpaper, Workshop; hosted in the app binary
+Tests/Unit/<Domain>/               MacWallpaperEngineTests, grouped Appearance, Desktop, Diagnostics, GitHub,
+                                   Library, LockScreen, Panel, Steam, WebWallpaper, Workshop; hosted in the
+                                   app binary
 Tests/UI/                          MacWallpaperEngineUITests; desktop-driving XCUITest suite
 docs/                              all project documentation; see docs/README.md for the index
 scripts/                           developer command line; Python only

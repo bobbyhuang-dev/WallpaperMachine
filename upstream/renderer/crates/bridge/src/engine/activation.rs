@@ -1,7 +1,10 @@
 //! Translate bridge state into the `SceneDesc` list consumed by engine
 //! reconciliation, plus the web-wallpaper descriptors the host renders itself.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 use wallpaper_core::{
     DisplayDesc, DisplaySelector, DisplaySnapshotEntry, EngineError, WallpaperAssignment,
@@ -21,7 +24,12 @@ pub struct ActivationInputs<'a> {
     pub app_config: &'a AppConfig,
     pub wallpapers: &'a BTreeMap<String, WallpaperConfig>,
     pub displays: &'a [DisplaySnapshotEntry],
+    /// Conditions that apply to every display: the user's Play/Pause choice,
+    /// power policy, display sleep and session lock.
     pub paused: bool,
+    /// Displays whose own presentation is suspended, by occlusion for example.
+    /// Hiding one screen must not pause the wallpaper on another.
+    pub suspended_displays: &'a BTreeSet<u32>,
     pub paths: &'a BridgePaths,
     pub force_shader_refresh: bool,
     /// Parsed manifests keyed by wallpaper id. Web projects are routed to
@@ -60,6 +68,12 @@ struct MirrorSlot {
 }
 
 impl ActivationInputs<'_> {
+    /// Effective paused state for one display: a global reason, or that display
+    /// being suspended on its own.
+    fn display_paused(&self, display_id: u32) -> bool {
+        self.paused || self.suspended_displays.contains(&display_id)
+    }
+
     /// Engine-rendered scenes for every enabled, resolved display. Web
     /// wallpapers are excluded; see [`Self::build_web`].
     ///
@@ -106,6 +120,9 @@ impl ActivationInputs<'_> {
             })?;
             let mut scene = source_scene;
             scene.display = mirror.display;
+            // A mirror presents on its own display, so it takes that display's
+            // suspension rather than the source display's.
+            scene.paused = self.display_paused(scene.display.display_id);
             scene.scaling_mode = mirror.settings.parse_scaling_mode();
             scene.scaling_factor = mirror.settings.scaling_factor;
             scene.fps = scene
@@ -153,6 +170,7 @@ impl ActivationInputs<'_> {
                 })
                 .map(|property| (property.id.clone(), property.effective_value(&overrides)))
                 .collect();
+            let paused = self.display_paused(slot.display.display_id);
             let render = RenderOverrideResolver {
                 wallpaper: slot.wallpaper,
                 monitor: slot.monitor,
@@ -170,7 +188,7 @@ impl ActivationInputs<'_> {
                 project_dir: self.paths.steam_workshop_root().join(slot.wallpaper_id),
                 entry_file,
                 fps,
-                paused: self.paused,
+                paused,
                 audio_response_enabled: slot.wallpaper.audio.response_enabled,
                 properties,
             });
@@ -197,9 +215,11 @@ impl ActivationInputs<'_> {
                 .target_fps
                 .max(1)
                 .min(mirror.display.refresh_rate_hz.max(1));
+            let paused = self.display_paused(mirror.display.display_id);
             web.push(WebWallpaperDesc {
                 display: mirror.display,
                 fps,
+                paused,
                 ..source
             });
         }
@@ -316,13 +336,14 @@ impl ActivationInputs<'_> {
         wallpaper: &WallpaperConfig,
         monitor: &MonitorCfg,
     ) -> Result<SceneDesc, BridgeError> {
+        let display_paused = self.display_paused(display.display_id);
         SceneDescBuilder::build_from_wallpaper_config(SceneBuildContext {
             display,
             workshop_id: wallpaper_id,
             wallpaper,
             monitor,
             displays: self.displays,
-            paused: self.paused,
+            paused: display_paused,
             paths: self.paths,
             force_shader_refresh: self.force_shader_refresh,
         })

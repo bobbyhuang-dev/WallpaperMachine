@@ -344,6 +344,94 @@ current `pageSize` and a `reachable` count for the Steam cap note.
   SUCCEEDED; the delivered app carries the new WebUI and store.
 - Not verified: the live window's look while resizing (no desktop run
   requested).
+## 2026-09-17 — Phase A and most of phase B of the power improvement plan
+
+Implemented M00 (minimal counters plus a configuration manifest), V01 (FFmpeg
+receive-first decode state machine with EOF drain, cancellation and a
+no-progress budget), V02 (`AppleVideoFrameLease` owning the Core Video texture
+wrapper and pixel buffer), V03 (shared limited-range colour parameters for the
+CPU path and the Metal kernel), W01 (canonical web entry identity,
+committed-state replay per document generation, windowed crash budget with
+backoff), P01 (per-display presentation suspension in the Swift policy, the
+bridge and the web host) and W02 (media suspension, removal from the window
+tree, placeholder and pointer gating). A01 is limited to the visible-consumer
+gate for system audio capture; its real-time callback is unchanged. Details and
+per-task evidence:
+[../mac-wallpaper-engine-implementation-progress.md](../mac-wallpaper-engine-implementation-progress.md).
+
+- `python3 scripts/test.py`: Python suite, XcodeGen and native unit tests passed
+  (310 tests, 0 failures; 267 before this work). New suites:
+  `RuntimeCountersTests` (8), `WebWallpaperRecoveryTests` (11),
+  `WebWallpaperSuspensionTests` (4),
+  `WallpaperPresentationAuthorityTests` (11), and a rewritten
+  `WallpaperPresentationPolicyTests` (17, migrated from the single global
+  visibility closure to per-display surfaces). That run builds the embedded
+  extension, so the two files moved or added under `Shared/`
+  (`RuntimeCounters.swift`, `WallpaperPresentationAuthority.swift`) are also
+  confirmed to compile under `APPLICATION_EXTENSION_API_ONLY`.
+- `python3 scripts/check_renderer.py`: exit 0. Ten generated cases with
+  `pixels_equal=true` and no diagnostics, `scene_reload_cycle_probe` exit 0, and
+  all seven test binaries exit 0, now including the new `video_decode_pump_test`
+  (13 cases), `video_color_conversion_test` (9 cases), and `playback_gpu_test`
+  (32 cases) and `timer_tests` (11 cases, 5 of them new), both added to the
+  gate.
+- `cargo test --release --workspace` in `upstream/renderer`: passed, 233
+  `wallpaper-bridge` cases including the new `display_presentation` module, and
+  every other crate green. The shell had `CARGO_TARGET_DIR` pointed at a sandbox
+  cache, which silently left the committed static library and the generated
+  bindings stale; every renderer build and test here ran with it unset.
+- `python3 scripts/build.py --renderer-only`: passed; `App/Bridge/Generated`
+  regenerated with `setDisplayPresentationSuspended`.
+- Tests found four real defects in this round's own work, all fixed: the
+  per-display delivery queue did not drain after a successful transition, a
+  decision that changed while in flight was dropped, an absolute web entry path
+  resolved inside the project instead of being rejected, and a timer-based
+  restart-budget reset could be collapsed by a page that crashed immediately
+  after each load.
+
+Not verified, and not claimed:
+
+- **No power was measured.** No `powermetrics`, Instruments or external meter
+  run; `scripts/power_benchmark.py` records configuration only and writes every
+  condition as `measured: false`. No saving percentage or watt figure exists for
+  any task in this round.
+- No desktop run: no window occlusion, Spaces, lock/unlock, display sleep,
+  hot-plug or wallpaper change was exercised. `scripts/test.py --ui` was not
+  run.
+- Nothing visual was compared. The colour fix is verified against an
+  independently derived reference and against the CPU path from the Metal
+  kernel, not against a displayed wallpaper.
+- Whether a web page's own timers, workers, WebGL and media stop while suspended
+  is unverified: a detached web view stops answering script evaluation, and a
+  windowless test container cannot reproduce WebKit's in-window condition.
+- Whether the renderer's submission and present counts actually stop for a
+  hidden surface is unverified; the per-display work is asserted on the decision
+  and the rebuilt descriptor, not on renderer-side counters.
+- The local wallpaper corpus was not exercised (skip, not a pass), no synthetic
+  B-frame clip was decoded end to end, and no Metal API-validation or
+  leak-instrumented run was made.
+- E01 is implemented as one shared presentation-eligibility rule set compiled
+  into both targets (a preview was previously never suspended once it had
+  produced its readiness frame), but no lock, unlock, display-sleep or
+  preview-close transition was exercised against the real extension and no
+  joint per-process submission count was captured. The two processes agree by
+  construction rather than by exchanging authorization, which is weaker than
+  the plan's design.
+- P02's first version is implemented as content-rate pacing: the frame clock
+  takes a pushed `FrameDemand` that can only lengthen the tick interval, and the
+  engine's own plain-video scene reports the video's shortest plausible frame
+  period. Previously a 30 fps video on a 60 fps target rendered twice per decoded
+  frame. **That the number of renders per decoded frame actually drops is
+  unverified**: the interval arithmetic and its bounds are tested, but the
+  end-to-end effect needs a desktop run reading the video submission counters,
+  compared at equal presented frame rate and identical pixels. Static-scene
+  classification was deliberately not attempted — a wrong verdict freezes a live
+  wallpaper — so every authored scene keeps the fixed cadence. Two findings that
+  shaped this are in the progress document: pausing already stops the frame
+  timer, and the tick rate was the user/display ceiling rather than the content
+  rate.
+- GPU test binaries fail with `VK_ERROR_INCOMPATIBLE_DRIVER` inside the command
+  sandbox and were run outside it; they create only private GPU images.
 
 ## 2026-09-17 — Filter sidebar arrow rail and draggable inspector edge
 

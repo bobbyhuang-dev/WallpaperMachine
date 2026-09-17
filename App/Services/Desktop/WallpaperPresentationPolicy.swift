@@ -1,8 +1,20 @@
 import AppKit
 
-/// Suspends the desktop renderer while no wallpaper pixel can reach a display.
-/// Suspension never changes the user's Play/Pause choice: the bridge composes
-/// this signal with the playback state and restores playback when it clears.
+/// Visibility of the wallpaper surface on one display.
+struct WallpaperSurfaceVisibility: Equatable, Sendable {
+    let displayID: UInt32
+    let isVisible: Bool
+}
+
+/// Suspends wallpaper presentation per display while no pixel from that display
+/// can reach the user, and globally only for conditions that really do cover
+/// every screen. Suspension never changes the user's Play/Pause choice: the
+/// bridge composes this signal with the playback state and restores playback
+/// when it clears.
+///
+/// The split matters for power: a window covering the wallpaper on one display
+/// must stop that display's decoding and rendering, and must not stop a display
+/// the user is still looking at.
 @MainActor
 final class WallpaperPresentationPolicy {
     typealias ApplyCompletion = @MainActor (Result<Void, Error>) -> Void
@@ -10,17 +22,28 @@ final class WallpaperPresentationPolicy {
     private let workspaceCenter: NotificationCenter
     private let lockCenter: NotificationCenter
     private let windowCenter: NotificationCenter
-    private let isDesktopVisible: @MainActor () -> Bool
+    private let surfaces: @MainActor () -> [WallpaperSurfaceVisibility]
     private let isSessionLocked: @MainActor () -> Bool
     private let occlusionSettleDelay: Duration
-    private let apply: @MainActor (Bool, @escaping ApplyCompletion) -> Void
+    private let counters: RuntimeCounters
+    private let applyGlobal: @MainActor (Bool, @escaping ApplyCompletion) -> Void
+    private let applyDisplay: @MainActor (UInt32, Bool, @escaping ApplyCompletion) -> Void
 
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var displaysAsleep = false
     private var settle: Task<Void, Never>?
-    private var appliedSuspension: Bool? = false
+    private var appliedGlobal: Bool? = false
+    /// Acknowledged state per display. A display with no entry has never been
+    /// told anything, so it is presenting.
+    private var appliedDisplays: [UInt32: Bool] = [:]
+    /// Displays whose decision still has to reach the renderer, including one
+    /// whose delivery failed; a later evaluation retries it.
+    private var pendingDisplays: Set<UInt32> = []
     private var deliveryInFlight = false
+    /// Conditions under which no display at all can present.
     private(set) var isSuspended = false
+    /// Displays suspended on their own, by occlusion.
+    private(set) var suspendedDisplayIDs: Set<UInt32> = []
 
     /// Closures are optional so their `@MainActor` defaults are built inside
     /// this (already `@MainActor`) initializer rather than in a default-argument
@@ -29,18 +52,22 @@ final class WallpaperPresentationPolicy {
         workspaceCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
         lockCenter: NotificationCenter = DistributedNotificationCenter.default(),
         windowCenter: NotificationCenter = .default,
-        isDesktopVisible: (@MainActor () -> Bool)? = nil,
+        surfaces: (@MainActor () -> [WallpaperSurfaceVisibility])? = nil,
         isSessionLocked: (@MainActor () -> Bool)? = nil,
         occlusionSettleDelay: Duration = .seconds(1),
-        apply: @escaping @MainActor (Bool, @escaping ApplyCompletion) -> Void
+        counters: RuntimeCounters? = nil,
+        applyGlobal: @escaping @MainActor (Bool, @escaping ApplyCompletion) -> Void,
+        applyDisplay: @escaping @MainActor (UInt32, Bool, @escaping ApplyCompletion) -> Void
     ) {
         self.workspaceCenter = workspaceCenter
         self.lockCenter = lockCenter
         self.windowCenter = windowCenter
-        self.isDesktopVisible = isDesktopVisible ?? { Self.desktopIsVisible() }
+        self.surfaces = surfaces ?? { Self.systemSurfaces() }
         self.isSessionLocked = isSessionLocked ?? { Self.sessionIsLocked() }
         self.occlusionSettleDelay = occlusionSettleDelay
-        self.apply = apply
+        self.counters = counters ?? .shared
+        self.applyGlobal = applyGlobal
+        self.applyDisplay = applyDisplay
     }
 
     func start() {
@@ -81,7 +108,12 @@ final class WallpaperPresentationPolicy {
         settle = nil
         for (center, token) in observers { center.removeObserver(token) }
         observers.removeAll()
-        commit(false)
+        displaysAsleep = false
+        // Teardown must never leave a surface suspended.
+        pendingDisplays.formUnion(suspendedDisplayIDs)
+        suspendedDisplayIDs.removeAll()
+        isSuspended = false
+        deliverPending()
     }
 
     /// Both window kinds host wallpaper pixels: the renderer's Metal window and
@@ -94,10 +126,22 @@ final class WallpaperPresentationPolicy {
         return NSApp.windows.filter { window in types.contains { window.isKind(of: $0) } }
     }
 
-    static func desktopIsVisible() -> Bool {
-        let windows = wallpaperWindows()
-        // No wallpaper window means nothing to suspend.
-        return windows.isEmpty || windows.contains { $0.occlusionState.contains(.visible) }
+    /// Wallpaper visibility grouped by display. A display counts as visible
+    /// when any of its wallpaper windows is visible, so a second window that
+    /// AppKit reports as occluded cannot hide a live one.
+    static func systemSurfaces() -> [WallpaperSurfaceVisibility] {
+        var visibility: [UInt32: Bool] = [:]
+        for window in wallpaperWindows() {
+            guard let screen = window.screen,
+                  let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            else { continue }
+            let displayID = number.uint32Value
+            let visible = window.occlusionState.contains(.visible)
+            visibility[displayID] = (visibility[displayID] ?? false) || visible
+        }
+        return visibility
+            .map { WallpaperSurfaceVisibility(displayID: $0.key, isVisible: $0.value) }
+            .sorted { $0.displayID < $1.displayID }
     }
 
     static func sessionIsLocked() -> Bool {
@@ -105,55 +149,125 @@ final class WallpaperPresentationPolicy {
             ?? false
     }
 
-    /// Retry unacknowledged delivery even when desktop visibility is unchanged.
+    /// Retry unacknowledged delivery even when visibility is unchanged.
     func evaluate() {
         let blocking = displaysAsleep || isSessionLocked()
-        let hidden = !isDesktopVisible()
-        let target = blocking || hidden
+        let current = surfaces()
+        let hidden = Set(current.filter { !$0.isVisible }.map(\.displayID))
+        let known = Set(current.map(\.displayID))
         settle?.cancel()
         settle = nil
-        guard target != isSuspended else {
-            deliverPending()
+
+        // Surfaces that no longer exist carry no state; a stale entry would keep
+        // resending a decision for a display that is gone.
+        appliedDisplays = appliedDisplays.filter { known.contains($0.key) }
+        pendingDisplays.formIntersection(known)
+        suspendedDisplayIDs.formIntersection(known)
+
+        if blocking != isSuspended {
+            commitGlobal(blocking)
             return
         }
         // Resume instantly; delay only occlusion-driven suspension so a Space
         // switch or a Mission Control pass does not freeze a visible wallpaper.
-        guard target, !blocking, occlusionSettleDelay > .zero else {
-            commit(target)
+        let revealed = suspendedDisplayIDs.subtracting(hidden)
+        let newlyHidden = hidden.subtracting(suspendedDisplayIDs)
+        if !revealed.isEmpty {
+            suspendedDisplayIDs.subtract(revealed)
+            pendingDisplays.formUnion(revealed)
+            AppLog.info("presentation resumed for displays \(revealed.sorted())")
+            deliverPending()
+            if newlyHidden.isEmpty { return }
+        }
+        guard !newlyHidden.isEmpty else {
+            deliverPending()
+            return
+        }
+        guard occlusionSettleDelay > .zero else {
+            commitHidden(newlyHidden)
             return
         }
         settle = Task { [weak self] in
             guard let self else { return }
             do { try await Task.sleep(for: self.occlusionSettleDelay) } catch { return }
-            guard !Task.isCancelled, !self.isDesktopVisible() else { return }
-            self.commit(true)
+            guard !Task.isCancelled else { return }
+            let stillHidden = Set(self.surfaces().filter { !$0.isVisible }.map(\.displayID))
+            self.commitHidden(newlyHidden.intersection(stillHidden))
         }
     }
 
-    private func commit(_ suspended: Bool) {
+    private func commitGlobal(_ suspended: Bool) {
         if suspended != isSuspended {
             isSuspended = suspended
-            AppLog.info("presentation policy \(suspended ? "suspended" : "resumed")")
+            AppLog.info("presentation \(suspended ? "suspended" : "resumed")")
         }
         deliverPending()
     }
 
-    private func deliverPending() {
-        guard !deliveryInFlight, appliedSuspension != isSuspended else { return }
-        let suspended = isSuspended
-        deliveryInFlight = true
-        apply(suspended) { [self] result in
-            deliveryInFlight = false
-            if case .success = result {
-                appliedSuspension = suspended
-            } else {
-                // A failed bridge transaction may have rolled rendering back.
-                // Keep it pending until a later evaluation retries delivery.
-                appliedSuspension = nil
-            }
-            // Serialize transitions so a late acknowledgement cannot overwrite
-            // a newer visibility decision. Do not spin on a failed same-state call.
-            if isSuspended != suspended { deliverPending() }
+    private func commitHidden(_ hidden: Set<UInt32>) {
+        guard !hidden.isEmpty else {
+            deliverPending()
+            return
         }
+        suspendedDisplayIDs.formUnion(hidden)
+        pendingDisplays.formUnion(hidden)
+        AppLog.info("presentation suspended for displays \(hidden.sorted())")
+        deliverPending()
+    }
+
+    private func deliverPending() {
+        guard !deliveryInFlight else { return }
+        // The global condition is the coarser one, so it goes first.
+        if appliedGlobal != isSuspended {
+            let suspended = isSuspended
+            deliveryInFlight = true
+            applyGlobal(suspended) { [self] result in
+                deliveryInFlight = false
+                guard case .success = result else {
+                    // A failed bridge transaction may have rolled rendering
+                    // back. Keep it pending for a later evaluation, and stop
+                    // here: retrying now would spin on a rejecting renderer.
+                    appliedGlobal = nil
+                    return
+                }
+                appliedGlobal = suspended
+                record(suspended, for: RuntimeSurfaceKey(kind: .desktopScene, displayID: 0))
+                // Deliveries are serialized, so the rest of the queue — and any
+                // decision that changed while this one was in flight — follows
+                // the acknowledgement.
+                deliverPending()
+            }
+            return
+        }
+        for displayID in pendingDisplays.sorted() {
+            let target = suspendedDisplayIDs.contains(displayID)
+            guard appliedDisplays[displayID] != target else {
+                pendingDisplays.remove(displayID)
+                continue
+            }
+            deliveryInFlight = true
+            applyDisplay(displayID, target) { [self] result in
+                deliveryInFlight = false
+                guard case .success = result else {
+                    // Leave it pending. Retrying here would spin on a renderer
+                    // that keeps rejecting the transition.
+                    appliedDisplays[displayID] = nil
+                    return
+                }
+                appliedDisplays[displayID] = target
+                record(target, for: RuntimeSurfaceKey(kind: .desktopScene, displayID: displayID))
+                // The decision may have changed while this one was in flight,
+                // in which case the display stays pending and is sent again.
+                if appliedDisplays[displayID] == suspendedDisplayIDs.contains(displayID) {
+                    pendingDisplays.remove(displayID)
+                }
+                deliverPending()
+            }
+            return
+        }
+    }
+
+    private func record(_ suspended: Bool, for surface: RuntimeSurfaceKey) {
+        counters.record(suspended ? .presentationSuspended : .presentationResumed, for: surface)
     }
 }

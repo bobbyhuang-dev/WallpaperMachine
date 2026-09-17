@@ -46,6 +46,10 @@ public:
     [[nodiscard]] virtual double durationSeconds() const = 0;
     [[nodiscard]] virtual double playbackSeconds() const = 0;
     [[nodiscard]] virtual uint64_t loopCount() const = 0;
+    /// Seconds between this source's own frames, or 0 when it cannot say. The
+    /// frame clock uses it to stop rendering more often than the content
+    /// changes; an unknown period keeps the fixed cadence.
+    [[nodiscard]] virtual double frameDurationSeconds() const = 0;
 };
 
 std::shared_ptr<VideoTextureSource> CreateVideoTextureSource(const Image& image,

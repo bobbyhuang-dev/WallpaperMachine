@@ -120,6 +120,10 @@ public:
     void          SetVideoPlaybackPaused(bool paused);
     void          SetVideoPlaybackRate(float rate);
     [[nodiscard]] VideoTextureSubmissionStats VideoSubmissionStats() const;
+    /// Shortest frame period among the live video sources, in seconds, or 0
+    /// when none of them can report one. The shortest is the safe answer: it
+    /// is the rate at which something can still change.
+    [[nodiscard]] double ShortestVideoFramePeriod() const;
     void                                      ResetVideoSubmissionStats();
     double                           GetVideoDuration(std::string_view key) const;
     bool UpdateVideoFrame(std::string_view key, const video::VideoPlaybackState& playback_state,
@@ -180,7 +184,10 @@ private:
     const Device&                m_device;
     Map<std::string, ImageSlots> m_tex_map;
     struct ImportedVideoFrame {
-        std::shared_ptr<void> metal_texture;
+        /// Owns the imported frame: the Core Video texture wrapper, the pixel
+        /// buffer and the Metal texture retire together when the last holder of
+        /// this lease drops it.
+        std::shared_ptr<void> frame_lease;
         ExImageParameters     image;
         uint64_t              generation { 0 };
         uint64_t              last_used { 0 };

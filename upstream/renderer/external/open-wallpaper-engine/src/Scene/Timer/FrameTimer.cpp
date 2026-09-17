@@ -1,6 +1,7 @@
 #include "FrameTimer.hpp"
 #include "Utils//Logging.h"
 
+#include <algorithm>
 #include <numeric>
 
 using namespace wallpaper;
@@ -18,8 +19,9 @@ FrameTimer::FrameTimer(std::function<void()> cb)
           // Fixed-rate clock. The callback only posts CMD_DRAW to the render
           // looper, so the tick period must be the ideal frame time; halving it
           // when a frame runs long makes a slow scene render flat out instead of
-          // degrading to its achievable rate.
-          m_timer.SetInterval(m_ideatime.load());
+          // degrading to its achievable rate. Content that can prove it changes
+          // less often than that lengthens the period, never shortens it.
+          m_timer.SetInterval(ResolveInterval());
 
           // At most one DRAW may be in flight. A slow frame drops ticks rather
           // than queueing work the display will never show.
@@ -65,7 +67,30 @@ void FrameTimer::SetRequiredFps(u16 value) {
     m_req_fps  = value > 0 ? value : DEFAULT_REQUIRED_FPS;
     m_ideatime = microseconds(1'000'000 / m_req_fps.load());
     // An FPS change must not discard an in-flight draw or its elapsed time.
-    m_timer.SetInterval(m_ideatime.load());
+    m_timer.SetInterval(ResolveInterval());
+}
+
+void FrameTimer::SetFrameDemand(FrameDemand demand) {
+    const auto period = demand.content_period > microseconds::zero() ? demand.content_period
+                                                                     : microseconds::zero();
+    if (m_content_period.exchange(period) == period) return;
+    m_timer.SetInterval(ResolveInterval());
+}
+
+std::chrono::microseconds FrameTimer::TickInterval() const { return m_tick_interval.load(); }
+
+std::chrono::microseconds FrameTimer::ResolveInterval() {
+    const auto ideal  = m_ideatime.load();
+    const auto period = m_content_period.load();
+    auto       interval = ideal;
+    if (period > ideal) {
+        // Bounded on both sides: never faster than the ceiling the user and the
+        // display set, and never slower than the longest gap the frame clock
+        // treats as continuous playback, so a bad period cannot stall the scene.
+        interval = std::min(period, duration_cast<microseconds>(MAX_FRAME_DURATION));
+    }
+    m_tick_interval.store(interval);
+    return interval;
 }
 
 void FrameTimer::AddFrametime(micros t) {
@@ -111,7 +136,7 @@ void FrameTimer::Run() {
     if (! Running()) {
         ResetFrameTiming();
         m_frame_busy_count.store(0);
-        m_timer.SetInterval(m_ideatime.load());
+        m_timer.SetInterval(ResolveInterval());
     }
     m_timer.Start();
 }

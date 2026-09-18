@@ -11,6 +11,26 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-18 — Release 0.4.0 published
+
+The Workshop/control-panel work logged below (concurrent downloads, tile
+download rings, grid-sized Discover pages) was committed as
+`feat(workshop): concurrent downloads, tile download rings and grid-sized
+Discover pages` with a `release: minor` line and pushed to `main`.
+
+- `python3 scripts/test.py` on the committed tree: Python suites and XcodeGen
+  passed; native suite executed 277 tests with 0 failures.
+- Version workflow: bumped `0.3.2` -> `0.4.0` (build 15), committed
+  `chore: bump version to 0.4.0`, pushed `v0.4.0`; the called Build job
+  succeeded and GitHub Release `v0.4.0` carries
+  `MacWallpaperEngine-0.4.0-arm64.zip` as its only asset.
+- Local checkout was re-cloned from `origin/main` at the bump commit after an
+  uninstaller (Pearcleaner) moved the working copy and its `build/` output to
+  the Trash; `python3 scripts/build.py --configuration Release` on the fresh
+  clone: BUILD SUCCEEDED, bundle reports `0.4.0`.
+- Not run: the manual smoke pass against the packaged build
+  ([manual-smoke.md](manual-smoke.md)); no desktop run was requested.
+
 ## 2026-09-18 — Batch with a saved sign-in starts together; SteamCMD sessions log their progress
 
 A live run of the concurrent queue on a real account (Release build from the

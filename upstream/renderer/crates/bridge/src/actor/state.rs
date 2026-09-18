@@ -13,6 +13,7 @@ use crate::{
         BridgeWallpaperKind,
     },
     config::{AppConfig, SerializedSelector, WallpaperConfig},
+    engine::NativeVideoRejections,
     project::ProjectModel,
 };
 
@@ -31,11 +32,16 @@ pub struct BridgeActorState {
     /// Whether a diagnostic session asked the renderer to count its work. Off
     /// by default; nothing counts and nothing is reported until it is on.
     pub renderer_counters_enabled: bool,
-    /// Wallpapers the native video player refused, with the host's reason. A
-    /// refusal holds for the session so a wallpaper cannot oscillate between
-    /// the two backends, and the scene engine — which supports everything —
-    /// takes it back.
-    pub native_video_rejected: BTreeMap<String, String>,
+    /// Refusals the native video player recorded, per wallpaper id and then
+    /// per admission key — one key per display slot, so two displays showing
+    /// the same clip at different target rates are refused independently and
+    /// neither refusal erases the other. A refusal excludes only the
+    /// configuration it describes: raise the target frame rate, restore an
+    /// unsupported setting or replace the media file and that slot is offered
+    /// natively again. Within one configuration it holds for the session, so a
+    /// wallpaper cannot oscillate between the two backends, and the scene
+    /// engine — which supports everything — takes it back.
+    pub native_video_rejected: NativeVideoRejections,
     pub selected_wallpaper_id: Option<String>,
     pub active_wallpaper_ids: Vec<String>,
     pub errors: Vec<String>,

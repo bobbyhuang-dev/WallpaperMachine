@@ -21,6 +21,8 @@ final class RuntimeDiagnosticsReportTests: XCTestCase {
         renderSubmissions: UInt64 = 0,
         decodeOutputs: UInt64 = 0,
         framesSkipped: UInt64 = 0,
+        conversionLiveBytes: UInt64 = 0,
+        conversionPeakLiveBytes: UInt64 = 0,
         sourceInstance: String = "instance:1",
         sourceCount: UInt64 = 1
     ) -> BridgeRendererSurfaceCounters {
@@ -53,7 +55,9 @@ final class RuntimeDiagnosticsReportTests: XCTestCase {
             videoFramesSkipped: framesSkipped,
             videoSelectedGeneration: 0,
             videoConversions: 0,
-            videoImports: 0)
+            videoImports: 0,
+            videoConversionLiveBytes: conversionLiveBytes,
+            videoConversionPeakLiveBytes: conversionPeakLiveBytes)
     }
 
     private func report(
@@ -99,6 +103,39 @@ final class RuntimeDiagnosticsReportTests: XCTestCase {
         let sourceRows = lines.filter { $0.hasPrefix("source=instance:4 ") }
         XCTAssertEqual(sourceRows.count, 2)
         XCTAssertTrue(sourceRows.allSatisfy { $0.contains("decode_outputs=600") })
+    }
+
+    func testConversionMemoryIsReportedPerSurfaceWithItsPeakKeptSeparate() {
+        // A surface that has released its imported frames reads near zero
+        // right now and still cost 324 MiB while they were live. Reporting
+        // only the current value would make that surface look free, which is
+        // exactly the reading the old cached-bytes-only figure gave.
+        let lines = RuntimeDiagnosticsSession.rendererLines(
+            report([
+                surface(
+                    displayID: "7", generation: 1, source: "/library/clip/project.json",
+                    paused: false, conversionLiveBytes: 84_934_656,
+                    conversionPeakLiveBytes: 339_738_624, sourceInstance: "instance:4"),
+                surface(
+                    displayID: "9", generation: 1, source: "/library/still/project.json",
+                    paused: false, sourceInstance: "instance:5"),
+            ]))
+
+        let converting = lines.first { $0.hasPrefix("surface=scene/7") }
+        XCTAssertNotNil(converting)
+        XCTAssertTrue(converting?.contains("conversion_live_bytes=84934656") == true)
+        XCTAssertTrue(
+            converting?.contains("conversion_peak_live_bytes=339738624") == true,
+            "the peak is what a ceiling is judged against and must not be collapsed into the "
+                + "current value")
+
+        // A surface whose texture cache converts nothing reports zero, and
+        // zero is a measurement here rather than an absence: the row is the
+        // converting surface's own, never the decoder's or another surface's.
+        let direct = lines.first { $0.hasPrefix("surface=scene/9") }
+        XCTAssertNotNil(direct)
+        XCTAssertTrue(direct?.contains("conversion_live_bytes=0") == true)
+        XCTAssertTrue(direct?.contains("conversion_peak_live_bytes=0") == true)
     }
 
     func testOneDecoderConsumedTwiceIsTotalledOnce() {

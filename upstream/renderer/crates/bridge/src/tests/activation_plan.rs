@@ -9,7 +9,7 @@ use crate::{
         AppConfig, MonitorCfg, MonitorRender, MonitorSettingsCfg, SerializedSelector,
         WallpaperConfig,
     },
-    engine::ActivationInputs,
+    engine::{ActivationInputs, NativeVideoRejection},
     paths::BridgePaths,
 };
 
@@ -360,4 +360,120 @@ fn display_snapshot(display_id: u32) -> DisplaySnapshotEntry {
         window_active: true,
         assignment: None,
     }
+}
+
+/// The routing rules themselves, with no actor and no host query in the way.
+///
+/// Every reconcile runs through `build()`/`build_native_video()`, including the
+/// ones the bridge spawns for unrelated reasons, so a recorded refusal has to
+/// be re-evaluated here rather than only in the bookkeeping that runs when the
+/// host asks what to play. Otherwise a wallpaper whose configuration changed
+/// would be rendered by both backends until the host happened to ask again.
+#[test]
+fn a_rejection_recorded_for_another_admission_key_does_not_route_a_video_to_the_engine() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = BridgePaths::for_home(temp.path().to_path_buf());
+    let project_dir = paths.steam_workshop_root().join("500");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(project_dir.join("clip.mp4"), b"clip bytes").unwrap();
+
+    let mut config = AppConfig::default();
+    config.monitors.push(MonitorCfg {
+        selector: SerializedSelector::Primary,
+        enabled: true,
+        mode: "independent".to_string(),
+        wallpaper: Some("500".to_string()),
+        mirror_target: None,
+    });
+    let mut wallpapers = BTreeMap::new();
+    wallpapers.insert("500".to_string(), WallpaperConfig::new_for("500", "video"));
+    let mut project_models = BTreeMap::new();
+    project_models.insert(
+        "500".to_string(),
+        crate::project::ProjectModel::parse(
+            "500",
+            r#"{"type":"video","title":"Clip","file":"clip.mp4","description":""}"#,
+        )
+        .unwrap(),
+    );
+    let displays = vec![display_snapshot(1)];
+    let suspended = BTreeSet::new();
+
+    fn plan<'a>(
+        app_config: &'a AppConfig,
+        wallpapers: &'a BTreeMap<String, WallpaperConfig>,
+        displays: &'a [DisplaySnapshotEntry],
+        suspended_displays: &'a BTreeSet<u32>,
+        paths: &'a BridgePaths,
+        project_models: &'a BTreeMap<String, crate::project::ProjectModel>,
+        native_video_rejected: &'a crate::engine::NativeVideoRejections,
+    ) -> ActivationInputs<'a> {
+        ActivationInputs {
+            app_config,
+            wallpapers,
+            displays,
+            suspended_displays,
+            paused: false,
+            paths,
+            force_shader_refresh: false,
+            project_models,
+            native_video_enabled: true,
+            native_video_rejected,
+        }
+    }
+    macro_rules! inputs {
+        ($rejected:expr) => {
+            plan(
+                &config,
+                &wallpapers,
+                &displays,
+                &suspended,
+                &paths,
+                &project_models,
+                $rejected,
+            )
+        };
+    }
+
+    let empty = BTreeMap::new();
+    let live_key = inputs!(&empty).build_native_video().unwrap()[0].admission_key;
+
+    let matching: crate::engine::NativeVideoRejections = [(
+        "500".to_string(),
+        [(
+            live_key,
+            NativeVideoRejection {
+                reason: "unsupported".to_string(),
+            },
+        )]
+        .into(),
+    )]
+    .into();
+    assert!(inputs!(&matching).build_native_video().unwrap().is_empty());
+    assert_eq!(
+        inputs!(&matching).build().unwrap().len(),
+        1,
+        "a refusal that describes the live configuration puts the wallpaper on the engine"
+    );
+
+    let stale: crate::engine::NativeVideoRejections = [(
+        "500".to_string(),
+        [(
+            live_key ^ 1,
+            NativeVideoRejection {
+                reason: "unsupported".to_string(),
+            },
+        )]
+        .into(),
+    )]
+    .into();
+    assert_eq!(
+        inputs!(&stale).build_native_video().unwrap().len(),
+        1,
+        "a refusal for a configuration that no longer exists must not exclude this one"
+    );
+    assert!(
+        inputs!(&stale).build().unwrap().is_empty(),
+        "and the engine must not also be handed a scene for it"
+    );
 }

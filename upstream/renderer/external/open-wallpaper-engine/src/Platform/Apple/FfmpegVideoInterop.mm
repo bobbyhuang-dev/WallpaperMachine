@@ -777,6 +777,7 @@ struct AppleVideoMetalTexturePool::Impl {
     /// exhausted budget is visible in the log without printing per frame.
     uint32_t               reported_refusals { 0 };
     VideoConversionSlotKey reported_partial_shape {};
+    VideoConversionSlotKey reported_over_ceiling_shape {};
 
     explicit Impl(void* handle) : device((__bridge id<MTLDevice>)handle) {
         reclaimed.reserve(VideoConversionBudget::kCoexistingSlots);
@@ -816,16 +817,140 @@ struct AppleVideoMetalTexturePool::Impl {
                      VideoConversionBudget::RequiredBytesForAllSlots(bytes)),
                  static_cast<unsigned long long>(budget.ceiling_bytes()));
     }
+
+    /// The budget's view of a reservation the header keeps opaque. Both
+    /// directions are plain field copies: a reservation owns nothing, so there
+    /// is no ownership to get wrong here.
+    [[nodiscard]] static VideoConversionReservation ToBudget(
+        const AppleVideoConversionReservation& reservation) noexcept {
+        // Field order follows VideoConversionReservation's declaration order,
+        // which designated initializers require.
+        return {
+            .granted = reservation.granted,
+            .over_ceiling = reservation.over_ceiling,
+            .estimated_bytes = reservation.estimated_bytes,
+            .refusal = static_cast<VideoConversionRefusal>(reservation.refusal),
+            .first_unsatisfiable_report = reservation.first_unsatisfiable_report,
+            .in_flight_cap_breached = reservation.in_flight_cap_breached,
+            .first_in_flight_cap_report = reservation.first_in_flight_cap_report,
+        };
+    }
+
+    /// More destinations in flight than the structural expectation accounts
+    /// for. Reported, never refused: refusing here would withhold the import
+    /// whose delivery is what makes a consumer release the destination the
+    /// next request needs, so the texture would stop advancing permanently.
+    /// Once per episode — the budget decides when a new one starts.
+    void reportInFlightCapBreach(const VideoConversionSlotKey& key, uint32_t cap) noexcept {
+        LOG_INFO("video conversion destinations in flight for %ux%u exceed the expected %u "
+                 "(%llu on loan); still granting, because refusing would stop the destinations "
+                 "coming back at all",
+                 key.width,
+                 key.height,
+                 cap,
+                 static_cast<unsigned long long>(budget.loan_count()));
+    }
+
+    /// A destination was allocated the ceiling had no room for. The frame is
+    /// worth more than the ceiling, so this is reported rather than refused.
+    void reportOverCeiling(const VideoConversionSlotKey& key, uint64_t estimated_bytes) noexcept {
+        if (reported_over_ceiling_shape == key) return;
+        reported_over_ceiling_shape = key;
+        LOG_INFO("video conversion destination granted above the ceiling for %ux%u: %llu more "
+                 "bytes on top of %llu live, ceiling is %llu",
+                 key.width,
+                 key.height,
+                 static_cast<unsigned long long>(estimated_bytes),
+                 static_cast<unsigned long long>(
+                     budget.total_live_conversion_allocation_bytes()),
+                 static_cast<unsigned long long>(budget.ceiling_bytes()));
+    }
 };
 
 AppleVideoMetalTexturePool::AppleVideoMetalTexturePool(void* metal_device)
-    : m_impl(std::make_unique<Impl>(metal_device)) {}
+    : m_impl(std::make_unique<Impl>(metal_device))
+{
+    // Several renderer instances in one process each hold a ceiling of their
+    // own; the domain is what makes the sum of them visible to each. It never
+    // reaches into another budget: a budget only ever evicts its own cache.
+    m_impl->budget.AttachDomain(&SharedVideoConversionMemoryDomain());
+}
 
-AppleVideoMetalTexturePool::~AppleVideoMetalTexturePool() { Clear(); }
+AppleVideoMetalTexturePool::~AppleVideoMetalTexturePool()
+{
+    Clear();
+    SharedVideoConversionMemoryDomain().Forget(&m_impl->budget);
+}
 
 void* AppleVideoMetalTexturePool::Take(uint32_t width, uint32_t height)
 {
     return m_impl->budget.Take(Impl::KeyFor(width, height));
+}
+
+void AppleVideoMetalTexturePool::SetInFlightSlotExpectation(std::uint32_t slots) noexcept
+{
+    // The cache computed this: it is the only object that can see how many
+    // video textures it hosts and how many consumers each of them has. The
+    // budget floors the value at its single-video-texture default, so a pool
+    // that is never told behaves exactly as it did before this existed and
+    // publishing can only ever raise the expectation.
+    m_impl->budget.SetInFlightSlotCap(slots);
+}
+
+AppleVideoConversionReservation AppleVideoMetalTexturePool::ReserveFresh(uint32_t width,
+                                                                        uint32_t height)
+{
+    const VideoConversionSlotKey key = Impl::KeyFor(width, height);
+    // The estimate is the nominal cost, which is all anyone can know before
+    // the texture exists. CommitFresh replaces it with what Metal allocated.
+    const VideoConversionReservation reservation = m_impl->budget.ReserveAllocation(
+        key, NominalConversionDestinationBytes(width, height), m_impl->reclaimed);
+    m_impl->releaseReclaimed();
+    if (reservation.over_ceiling) m_impl->reportOverCeiling(key, reservation.estimated_bytes);
+    if (reservation.first_in_flight_cap_report) {
+        m_impl->reportInFlightCapBreach(key, m_impl->budget.in_flight_slot_cap());
+    }
+    return {
+        .granted = reservation.granted,
+        .over_ceiling = reservation.over_ceiling,
+        .estimated_bytes = reservation.estimated_bytes,
+        .refusal = static_cast<uint32_t>(reservation.refusal),
+        .first_unsatisfiable_report = reservation.first_unsatisfiable_report,
+        .in_flight_cap_breached = reservation.in_flight_cap_breached,
+        .first_in_flight_cap_report = reservation.first_in_flight_cap_report,
+    };
+}
+
+void AppleVideoMetalTexturePool::CommitFresh(const AppleVideoConversionReservation& reservation,
+                                             void* destination) noexcept
+{
+    if (destination == nullptr) {
+        // The allocation the reservation was for never happened.
+        m_impl->budget.CancelReservation(Impl::ToBudget(reservation));
+        return;
+    }
+    id<MTLTexture> texture = (__bridge id<MTLTexture>)destination;
+    const VideoConversionSlot slot {
+        .key = { static_cast<uint32_t>(texture.width),
+                 static_cast<uint32_t>(texture.height),
+                 static_cast<uint32_t>(texture.pixelFormat) },
+        // Metal's own figure. A width * height * 4 product is not this number.
+        .bytes = texture.allocatedSize,
+        .resource = destination,
+    };
+    m_impl->budget.CommitAllocation(Impl::ToBudget(reservation), slot);
+    m_impl->reportPartialHosting(slot.key, slot.bytes);
+}
+
+void AppleVideoMetalTexturePool::CancelFresh(
+    const AppleVideoConversionReservation& reservation) noexcept
+{
+    m_impl->budget.CancelReservation(Impl::ToBudget(reservation));
+}
+
+void AppleVideoMetalTexturePool::MarkGpuPending(void* destination) noexcept
+{
+    m_impl->budget.MarkAwaitingGpu(destination);
 }
 
 void AppleVideoMetalTexturePool::EndLoan(void* retained_destination) noexcept
@@ -898,14 +1023,22 @@ AppleVideoConversionPoolStats AppleVideoMetalTexturePool::Stats() const noexcept
 {
     const auto& budget = m_impl->budget;
     return {
-        .cached_texture_count = budget.pooled_count(),
-        .cached_bytes = budget.pooled_bytes(),
-        .peak_cached_bytes = budget.peak_pooled_bytes(),
+        .cached_texture_count = budget.available_cached_count(),
+        .cached_bytes = budget.available_cached_bytes(),
+        .peak_cached_bytes = budget.peak_available_cached_bytes(),
+        .checked_out_bytes = budget.checked_out_bytes(),
+        .awaiting_gpu_bytes = budget.awaiting_gpu_completion_bytes(),
+        .live_bytes = budget.total_live_conversion_allocation_bytes(),
+        .peak_live_bytes = budget.peak_live_conversion_allocation_bytes(),
+        .reserved_estimate_bytes = budget.reserved_estimate_bytes(),
+        .over_ceiling_grants = budget.over_ceiling_grants(),
+        .live_slot_count = budget.live_slot_count(),
         .hits = budget.hits(),
         .misses = budget.misses(),
         .recycles = m_impl->recycles,
         .evictions = budget.evictions(),
         .refusals = budget.refusals(),
+        .in_flight_cap_breaches = budget.in_flight_cap_breaches(),
     };
 }
 
@@ -1047,7 +1180,8 @@ void* CreateAppleVideoFrameLease(const VideoTextureFrame& frame,
                                  void* metal_device,
                                  void* reusable_destination,
                                  std::string* error,
-                                 bool* destination_allocation_failed)
+                                 bool* destination_allocation_failed,
+                                 void** created_destination)
 {
     if (!frame.valid()) {
         return SetError(error, "video frame metadata is incomplete"), nullptr;
@@ -1128,6 +1262,13 @@ void* CreateAppleVideoFrameLease(const VideoTextureFrame& frame,
         lease->texture = (__bridge_retained void*)texture;
         lease->plane_wrappers[0] = wrapper;
         lease->recyclable_destination = recyclable_destination;
+        if (created_destination != nullptr && recyclable_destination &&
+            reusable_destination == nullptr) {
+            // The same handle Recycle will later be given, so the budget's
+            // ledger keys on one identity from allocation to release. Borrowed:
+            // the retain above stays with the lease.
+            *created_destination = lease->texture;
+        }
         if (frame.pixel_buffer != nullptr) {
             // The import can outlive the decoder slot the frame came from.
             lease->pixel_buffer =

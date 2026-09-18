@@ -701,14 +701,18 @@ public protocol WallpaperBridgeProtocol : AnyObject {
      * Hands a wallpaper back to the scene engine because the native player
      * cannot honour it — an unsupported target frame rate, for example.
      *
-     * The refusal holds for the rest of the session, so a wallpaper cannot
-     * oscillate between the two backends.
+     * `admission_key` is the key of the descriptor the host judged. The
+     * refusal is recorded against that key and holds for the rest of the
+     * session, so a wallpaper cannot oscillate between the two backends; it
+     * stops applying as soon as the configuration it describes changes. A key
+     * that already does not match the live configuration is a refusal that
+     * lost a race with the user and is dropped.
      *
      * # Errors
      *
      * Returns an error when the scene list cannot be rebuilt.
      */
-    func rejectNativeVideo(wallpaperId: String, reason: String) async throws 
+    func rejectNativeVideo(wallpaperId: String, admissionKey: UInt64, reason: String) async throws 
     
     /**
      * Reads renderer work counters for every open scene.
@@ -1497,20 +1501,24 @@ open func refreshLibrary()async throws  -> BridgeSnapshotBundle {
      * Hands a wallpaper back to the scene engine because the native player
      * cannot honour it — an unsupported target frame rate, for example.
      *
-     * The refusal holds for the rest of the session, so a wallpaper cannot
-     * oscillate between the two backends.
+     * `admission_key` is the key of the descriptor the host judged. The
+     * refusal is recorded against that key and holds for the rest of the
+     * session, so a wallpaper cannot oscillate between the two backends; it
+     * stops applying as soon as the configuration it describes changes. A key
+     * that already does not match the live configuration is a refusal that
+     * lost a race with the user and is dropped.
      *
      * # Errors
      *
      * Returns an error when the scene list cannot be rebuilt.
      */
-open func rejectNativeVideo(wallpaperId: String, reason: String)async throws  {
+open func rejectNativeVideo(wallpaperId: String, admissionKey: UInt64, reason: String)async throws  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_wallpaper_bridge_fn_method_wallpaperbridge_reject_native_video(
                     self.uniffiClonePointer(),
-                    FfiConverterString.lower(wallpaperId),FfiConverterString.lower(reason)
+                    FfiConverterString.lower(wallpaperId),FfiConverterUInt64.lower(admissionKey),FfiConverterString.lower(reason)
                 )
             },
             pollFunc: ffi_wallpaper_bridge_rust_future_poll_void,
@@ -3327,10 +3335,12 @@ public func FfiConverterTypeBridgeMonitorInformationSnapshot_lower(_ value: Brid
  * A plain local video routed to the native platform player instead of the
  * scene engine.
  *
- * Only the declared subset appears here. `fps` is the user's target rate and
- * is a requirement, not a hint: the host must refuse the wallpaper rather than
- * play it at a different rate, and a refusal sends it back to the scene
- * engine, which supports everything.
+ * Only the declared subset appears here. `fps` is this display's own target
+ * rate and is a requirement, not a hint. Admission, however, is judged against
+ * `admission_fps`, which is the strictest target across the mirror group this
+ * display belongs to: the host must refuse the wallpaper rather than play any
+ * member at a rate its own target does not allow, and a refusal sends the
+ * whole group back to the scene engine, which supports everything.
  */
 public struct BridgeNativeVideoWallpaper {
     public var displayId: UInt32
@@ -3342,9 +3352,30 @@ public struct BridgeNativeVideoWallpaper {
      */
     public var mediaPath: String
     /**
-     * The user's target frame rate for this display.
+     * This display's own target frame rate: what the player runs at here.
      */
     public var fps: UInt32
+    /**
+     * The target rate the accept-or-refuse decision must be judged against:
+     * the strictest `fps` across this display's mirror group, equal to `fps`
+     * when the display mirrors nothing and is mirrored by nothing.
+     *
+     * A mirror is only ever given a scene by copying its source's, so it
+     * cannot fall back to the scene engine on its own; the group is admitted
+     * or refused as a unit and is only safe at its strictest member's rate.
+     * Probing `fps` on a mirror would accept a verdict taken for a faster
+     * source and play this display above its own target without ever asking.
+     */
+    public var admissionFps: UInt32
+    /**
+     * Identifies the exact configuration this descriptor was produced from:
+     * the media file, its length and modification time, and `admission_fps`.
+     * Identical for every member of a mirror group. The host must pass it back
+     * to `reject_native_video` when it refuses, so that a refusal arriving
+     * after the user changed something is discarded instead of killing a
+     * configuration the host never judged.
+     */
+    public var admissionKey: UInt64
     /**
      * Presentation suspension or the user's own pause, already combined for
      * this display by the activation rules.
@@ -3363,8 +3394,27 @@ public struct BridgeNativeVideoWallpaper {
          * project directory.
          */mediaPath: String, 
         /**
-         * The user's target frame rate for this display.
+         * This display's own target frame rate: what the player runs at here.
          */fps: UInt32, 
+        /**
+         * The target rate the accept-or-refuse decision must be judged against:
+         * the strictest `fps` across this display's mirror group, equal to `fps`
+         * when the display mirrors nothing and is mirrored by nothing.
+         *
+         * A mirror is only ever given a scene by copying its source's, so it
+         * cannot fall back to the scene engine on its own; the group is admitted
+         * or refused as a unit and is only safe at its strictest member's rate.
+         * Probing `fps` on a mirror would accept a verdict taken for a faster
+         * source and play this display above its own target without ever asking.
+         */admissionFps: UInt32, 
+        /**
+         * Identifies the exact configuration this descriptor was produced from:
+         * the media file, its length and modification time, and `admission_fps`.
+         * Identical for every member of a mirror group. The host must pass it back
+         * to `reject_native_video` when it refuses, so that a refusal arriving
+         * after the user changed something is discarded instead of killing a
+         * configuration the host never judged.
+         */admissionKey: UInt64, 
         /**
          * Presentation suspension or the user's own pause, already combined for
          * this display by the activation rules.
@@ -3374,6 +3424,8 @@ public struct BridgeNativeVideoWallpaper {
         self.title = title
         self.mediaPath = mediaPath
         self.fps = fps
+        self.admissionFps = admissionFps
+        self.admissionKey = admissionKey
         self.paused = paused
         self.volume = volume
         self.muted = muted
@@ -3401,6 +3453,12 @@ extension BridgeNativeVideoWallpaper: Equatable, Hashable {
         if lhs.fps != rhs.fps {
             return false
         }
+        if lhs.admissionFps != rhs.admissionFps {
+            return false
+        }
+        if lhs.admissionKey != rhs.admissionKey {
+            return false
+        }
         if lhs.paused != rhs.paused {
             return false
         }
@@ -3425,6 +3483,8 @@ extension BridgeNativeVideoWallpaper: Equatable, Hashable {
         hasher.combine(title)
         hasher.combine(mediaPath)
         hasher.combine(fps)
+        hasher.combine(admissionFps)
+        hasher.combine(admissionKey)
         hasher.combine(paused)
         hasher.combine(volume)
         hasher.combine(muted)
@@ -3446,6 +3506,8 @@ public struct FfiConverterTypeBridgeNativeVideoWallpaper: FfiConverterRustBuffer
                 title: FfiConverterString.read(from: &buf), 
                 mediaPath: FfiConverterString.read(from: &buf), 
                 fps: FfiConverterUInt32.read(from: &buf), 
+                admissionFps: FfiConverterUInt32.read(from: &buf), 
+                admissionKey: FfiConverterUInt64.read(from: &buf), 
                 paused: FfiConverterBool.read(from: &buf), 
                 volume: FfiConverterFloat.read(from: &buf), 
                 muted: FfiConverterBool.read(from: &buf), 
@@ -3460,6 +3522,8 @@ public struct FfiConverterTypeBridgeNativeVideoWallpaper: FfiConverterRustBuffer
         FfiConverterString.write(value.title, into: &buf)
         FfiConverterString.write(value.mediaPath, into: &buf)
         FfiConverterUInt32.write(value.fps, into: &buf)
+        FfiConverterUInt32.write(value.admissionFps, into: &buf)
+        FfiConverterUInt64.write(value.admissionKey, into: &buf)
         FfiConverterBool.write(value.paused, into: &buf)
         FfiConverterFloat.write(value.volume, into: &buf)
         FfiConverterBool.write(value.muted, into: &buf)
@@ -3821,6 +3885,16 @@ public struct BridgeRendererSurfaceCounters {
     public var videoSelectedGeneration: UInt64
     public var videoConversions: UInt64
     public var videoImports: UInt64
+    /**
+     * Bytes of converted video destination textures this surface's texture
+     * cache is keeping alive, and the most it ever kept alive. Gauges, not
+     * running totals, and an allocation ledger over those destination
+     * textures alone: decode pixel buffers, Core Video plane wrappers, the
+     * Vulkan images aliasing them and the swapchain are all outside it, so
+     * neither figure is a residency or process-footprint measurement.
+     */
+    public var videoConversionLiveBytes: UInt64
+    public var videoConversionPeakLiveBytes: UInt64
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -3857,7 +3931,15 @@ public struct BridgeRendererSurfaceCounters {
         /**
          * Decoded frames superseded before they were ever displayed. A rising
          * count is how a demand-driven clock is falsified.
-         */videoFramesSkipped: UInt64, videoSelectedGeneration: UInt64, videoConversions: UInt64, videoImports: UInt64) {
+         */videoFramesSkipped: UInt64, videoSelectedGeneration: UInt64, videoConversions: UInt64, videoImports: UInt64, 
+        /**
+         * Bytes of converted video destination textures this surface's texture
+         * cache is keeping alive, and the most it ever kept alive. Gauges, not
+         * running totals, and an allocation ledger over those destination
+         * textures alone: decode pixel buffers, Core Video plane wrappers, the
+         * Vulkan images aliasing them and the swapchain are all outside it, so
+         * neither figure is a residency or process-footprint measurement.
+         */videoConversionLiveBytes: UInt64, videoConversionPeakLiveBytes: UInt64) {
         self.displayId = displayId
         self.surfaceId = surfaceId
         self.generation = generation
@@ -3887,6 +3969,8 @@ public struct BridgeRendererSurfaceCounters {
         self.videoSelectedGeneration = videoSelectedGeneration
         self.videoConversions = videoConversions
         self.videoImports = videoImports
+        self.videoConversionLiveBytes = videoConversionLiveBytes
+        self.videoConversionPeakLiveBytes = videoConversionPeakLiveBytes
     }
 }
 
@@ -3981,6 +4065,12 @@ extension BridgeRendererSurfaceCounters: Equatable, Hashable {
         if lhs.videoImports != rhs.videoImports {
             return false
         }
+        if lhs.videoConversionLiveBytes != rhs.videoConversionLiveBytes {
+            return false
+        }
+        if lhs.videoConversionPeakLiveBytes != rhs.videoConversionPeakLiveBytes {
+            return false
+        }
         return true
     }
 
@@ -4014,6 +4104,8 @@ extension BridgeRendererSurfaceCounters: Equatable, Hashable {
         hasher.combine(videoSelectedGeneration)
         hasher.combine(videoConversions)
         hasher.combine(videoImports)
+        hasher.combine(videoConversionLiveBytes)
+        hasher.combine(videoConversionPeakLiveBytes)
     }
 }
 
@@ -4053,7 +4145,9 @@ public struct FfiConverterTypeBridgeRendererSurfaceCounters: FfiConverterRustBuf
                 videoFramesSkipped: FfiConverterUInt64.read(from: &buf), 
                 videoSelectedGeneration: FfiConverterUInt64.read(from: &buf), 
                 videoConversions: FfiConverterUInt64.read(from: &buf), 
-                videoImports: FfiConverterUInt64.read(from: &buf)
+                videoImports: FfiConverterUInt64.read(from: &buf), 
+                videoConversionLiveBytes: FfiConverterUInt64.read(from: &buf), 
+                videoConversionPeakLiveBytes: FfiConverterUInt64.read(from: &buf)
         )
     }
 
@@ -4087,6 +4181,8 @@ public struct FfiConverterTypeBridgeRendererSurfaceCounters: FfiConverterRustBuf
         FfiConverterUInt64.write(value.videoSelectedGeneration, into: &buf)
         FfiConverterUInt64.write(value.videoConversions, into: &buf)
         FfiConverterUInt64.write(value.videoImports, into: &buf)
+        FfiConverterUInt64.write(value.videoConversionLiveBytes, into: &buf)
+        FfiConverterUInt64.write(value.videoConversionPeakLiveBytes, into: &buf)
     }
 }
 
@@ -6155,7 +6251,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_refresh_library() != 64122) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_reject_native_video() != 62924) {
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_reject_native_video() != 52338) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_renderer_counters() != 60387) {

@@ -1130,8 +1130,12 @@ impl WallpaperBridge {
     /// Hands a wallpaper back to the scene engine because the native player
     /// cannot honour it — an unsupported target frame rate, for example.
     ///
-    /// The refusal holds for the rest of the session, so a wallpaper cannot
-    /// oscillate between the two backends.
+    /// `admission_key` is the key of the descriptor the host judged. The
+    /// refusal is recorded against that key and holds for the rest of the
+    /// session, so a wallpaper cannot oscillate between the two backends; it
+    /// stops applying as soon as the configuration it describes changes. A key
+    /// that already does not match the live configuration is a refusal that
+    /// lost a race with the user and is dropped.
     ///
     /// # Errors
     ///
@@ -1139,11 +1143,13 @@ impl WallpaperBridge {
     pub async fn reject_native_video(
         &self,
         wallpaper_id: String,
+        admission_key: u64,
         reason: String,
     ) -> Result<(), BridgeError> {
         self.actor
             .ask(RejectNativeVideo {
                 wallpaper_id,
+                admission_key,
                 reason,
             })
             .await

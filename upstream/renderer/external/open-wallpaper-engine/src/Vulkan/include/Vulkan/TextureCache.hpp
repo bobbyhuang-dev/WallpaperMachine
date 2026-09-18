@@ -49,16 +49,57 @@ struct VideoTextureSubmissionStats {
     std::uint64_t conversion_calls { 0 };
     std::uint64_t converted_destinations_created { 0 };
     std::uint64_t converted_destinations_reused { 0 };
+    /// Imports that asked the pool to book a conversion destination and were
+    /// not given one. Each is a frame this cache did not import and, above
+    /// all, did not allocate for: the previously imported frame stayed on
+    /// screen instead.
+    ///
+    /// `ReserveFresh` has no refusal path today — the in-flight slot cap is
+    /// reported, never enforced, because refusing withholds the import whose
+    /// delivery is what makes a consumer release the destination the next
+    /// request needs — so this stays zero in practice. It is the guard's
+    /// counter: anything other than zero means a reservation came back
+    /// unbooked and the import correctly declined to allocate behind it.
+    std::uint64_t conversion_reservations_refused { 0 };
+    /// Destinations idle in the reuse pool. The Available state alone: a
+    /// destination an import is using is deliberately not counted here.
     std::uint64_t pool_cached_texture_count { 0 };
     std::uint64_t pool_cached_bytes { 0 };
     /// Largest the pooled set has been since this pool was created, which is
     /// what a reuse ceiling has to be judged against.
     std::uint64_t pool_peak_cached_bytes { 0 };
+    /// Handed to an import that has not yet reported the GPU may use it.
+    std::uint64_t pool_checked_out_bytes { 0 };
+    /// Referenced by a live imported frame.
+    std::uint64_t pool_awaiting_gpu_bytes { 0 };
+    /// Every conversion destination the pool is keeping alive: cached plus
+    /// checked out plus awaiting GPU. This is an allocation ledger over those
+    /// `MTLTexture`s and nothing else — decode pixel buffers, Core Video plane
+    /// wrappers, Vulkan images and the swapchain are all outside it.
+    std::uint64_t pool_live_bytes { 0 };
+    std::uint64_t pool_peak_live_bytes { 0 };
+    /// Granted reservations that are not allocations yet: an intent, so it is
+    /// not part of `pool_live_bytes`.
+    std::uint64_t pool_reserved_estimate_bytes { 0 };
+    /// Reservations granted although the ceiling had no room, because refusing
+    /// a destination the conversion needs would drop the frame.
+    std::uint64_t pool_over_ceiling_grants { 0 };
+    std::uint64_t pool_live_slot_count { 0 };
     std::uint64_t pool_hits { 0 };
     std::uint64_t pool_misses { 0 };
     std::uint64_t pool_recycles { 0 };
     std::uint64_t pool_evictions { 0 };
+    /// Destinations the pool declined to take back into its cache. Admission
+    /// only: a reservation is never refused for capacity.
     std::uint64_t pool_refusals { 0 };
+    /// Reservations granted while more destinations were already in flight
+    /// than the structural expectation accounts for — pending import
+    /// submissions, plus each live video texture's imported-frame cap, plus
+    /// the destination every consumer holding an `ImageSlotsRef` retains.
+    /// Reported rather than refused, so this is the figure that says a scene
+    /// is holding more frames than the caps predict, without that ever
+    /// stopping playback.
+    std::uint64_t pool_in_flight_cap_breaches { 0 };
 };
 
 struct VideoImportSubmissionPlan {
@@ -221,6 +262,27 @@ private:
         /// delta rather than the running total of every source.
         uint64_t                                         reported_decode_outputs { 0 };
         uint64_t                                         reported_seeks { 0 };
+        /// Consumers of this video texture, observed rather than assumed.
+        ///
+        /// Every consumer calls `UpdateVideoFrame` for its own slot once per
+        /// recording cycle, so counting those calls between
+        /// `BeginVideoFrameRecording` and the next one counts the consumers
+        /// that asked. It matters because each consumer retains one imported
+        /// frame in its own `ImageSlotsRef` — one per slot, never a list —
+        /// and those retentions are the term the per-video-texture caps do
+        /// not cover.
+        ///
+        /// `consumers_in_cycle` is the tally for `consumer_cycle_serial`;
+        /// `observed_consumers` is the high-water mark across closed cycles.
+        /// It is a high-water mark and not the latest tally because a hidden
+        /// consumer stops calling in while still holding the frame it last
+        /// received: the cycle it goes quiet in must not drop it from the
+        /// figure. The published value is the larger of the two, so a
+        /// consumer set still growing inside the current cycle is covered
+        /// immediately rather than a cycle late.
+        uint64_t                                         consumer_cycle_serial { 0 };
+        uint32_t                                         consumers_in_cycle { 0 };
+        uint32_t                                         observed_consumers { 0 };
     };
     static constexpr std::size_t kMaxImportedVideoFramesPerVideoTex { 4 };
     static constexpr std::size_t kMaxPendingVideoImportSubmissions { 2 };
@@ -229,6 +291,16 @@ private:
     std::shared_ptr<ImportedVideoFrame> FindImportedVideoFrame(
         VideoTex& video_tex, const video::VideoTextureFrame& frame, void* surface_identity) const;
     bool                EnsureVideoFrameCacheRoom(VideoTex& video_tex, std::string* error);
+    /// Destinations this cache can legitimately hold in flight right now:
+    /// `kMaxPendingVideoImportSubmissions` plus, for every live video texture,
+    /// `kMaxImportedVideoFramesPerVideoTex` plus that texture's observed
+    /// consumer count. Published to the conversion pool so a breach of it
+    /// means a genuine leak rather than an ordinary busy scene.
+    std::uint32_t       videoInFlightSlotExpectation() const;
+    /// Counts this call as one consumer of `video_tex` for the current
+    /// recording cycle. Only tallies during a recording, because outside one
+    /// there is no cycle to attribute a consumer to.
+    void                observeVideoConsumer(VideoTex& video_tex);
     /// Publishes how many decoder instances this cache consumes and, when
     /// there is exactly one, its identity, so source work can be attributed
     /// to a running decoder rather than to a file path.
@@ -239,6 +311,11 @@ private:
     RendererCounters*                           m_counters { nullptr };
     VideoTextureSubmissionStats                 m_video_submission_stats {};
     std::shared_ptr<video::AppleVideoMetalTexturePool> m_video_destination_pool;
+    /// Latched on the first reservation the budget declined to book and
+    /// cleared by the next grant, so such an episode is logged once instead of
+    /// once per frame at the display's rate. Distinct from the in-flight slot
+    /// cap, which is reported by the pool and never declines anything.
+    bool m_video_reservation_refusal_reported { false };
     VideoFrameState m_video_frame_state { VideoFrameState::Idle };
     uint64_t m_video_recording_serial { 0 };
     std::vector<std::shared_ptr<const void>> m_video_frame_pins;

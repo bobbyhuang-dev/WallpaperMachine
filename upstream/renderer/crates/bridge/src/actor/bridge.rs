@@ -55,7 +55,7 @@ use crate::{
     },
     config::{AppConfig, ConfigStore, SerializedSelector, WallpaperConfig},
     display::{DisplaySelectorExt, DisplaySnapshotExt},
-    engine::{ActivationInputs, EngineFacade},
+    engine::{ActivationInputs, EngineFacade, NativeVideoRejection, NativeVideoRejections},
     library::scan,
     login::LaunchAtLoginController,
     paths::BridgePaths,
@@ -702,6 +702,56 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         }
     }
 
+    /// Every admission key the live configuration currently produces, per
+    /// wallpaper id. Recorded refusals are ignored, so a repeat refusal for a
+    /// configuration that is already excluded still reads as current.
+    fn native_video_admission_keys(&self) -> BTreeMap<String, BTreeSet<u64>> {
+        let displays = self.engine.display_snapshot();
+        self.activation_inputs(&displays, self.playback_paused())
+            .native_video_admission_keys()
+    }
+
+    /// Drops refusals whose configuration is gone, reporting whether any went.
+    ///
+    /// [`ActivationInputs`] already ignores a record whose key matches no live
+    /// slot, so dropping it does not by itself change routing; what the return
+    /// value buys is knowing that routing just changed, because a slot that
+    /// was excluded is offered natively again and the scene engine has to let
+    /// go of it. Without this the map would also keep dead records for the
+    /// rest of the session.
+    ///
+    /// A wallpaper's records are checked against *all* of its live keys, one
+    /// per display slot: the same clip on two displays at different target
+    /// rates has two keys, and a record matching either of them is alive.
+    /// A wallpaper with no live key at all — unassigned, or with missing media
+    /// — is left alone, because nothing has been shown to have changed.
+    fn prune_stale_native_video_rejections(&mut self) -> bool {
+        if self.state.native_video_rejected.is_empty() {
+            return false;
+        }
+        let live_keys = self.native_video_admission_keys();
+        let mut pruned = false;
+        self.state.native_video_rejected.retain(|wallpaper_id, by_key| {
+            let Some(live) = live_keys.get(wallpaper_id) else {
+                return true;
+            };
+            by_key.retain(|admission_key, record| {
+                if live.contains(admission_key) {
+                    return true;
+                }
+                pruned = true;
+                log::info!(
+                    "native video wallpaper {wallpaper_id} refusal for admission key \
+                     {admission_key} no longer applies and is dropped (was: {})",
+                    record.reason
+                );
+                false
+            });
+            !by_key.is_empty()
+        });
+        pruned
+    }
+
     /// Committed web wallpapers for connected displays, rendered by the host.
     /// Committed plain-video wallpapers routed to the native player.
     ///
@@ -733,6 +783,8 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                     title,
                     media_path,
                     fps: desc.fps,
+                    admission_fps: desc.admission_fps,
+                    admission_key: desc.admission_key,
                     paused: desc.paused,
                     volume: desc.volume,
                     muted: desc.muted,
@@ -1408,7 +1460,7 @@ async fn reconcile_with<E: EngineFacade>(
     suspended_displays: BTreeSet<u32>,
     paths: BridgePaths,
     force_shader_refresh: bool,
-    native_video_rejected: BTreeMap<String, String>,
+    native_video_rejected: NativeVideoRejections,
 ) -> Result<Vec<SceneDesc>, BridgeError> {
     let displays = engine.display_snapshot();
     let scenes = ActivationInputs {
@@ -2477,6 +2529,16 @@ impl<E: EngineFacade + Clone> Message<GetNativeVideoWallpapers> for BridgeActor<
         _msg: GetNativeVideoWallpapers,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        // This is where the host asks what to play, so it is where a refusal
+        // that has outlived its configuration expires. The wallpaper goes back
+        // to the native player, so the scene engine has to let go of it in the
+        // same step or both would render it.
+        if self.prune_stale_native_video_rejections() {
+            let app_config = self.state.app_config.clone();
+            let wallpaper_configs = self.state.wallpaper_configs.clone();
+            let scenes = self.reconcile_engine(app_config, wallpaper_configs).await?;
+            self.state.set_active_ids_from_scenes(&scenes);
+        }
         self.native_video_wallpapers()
     }
 }
@@ -2489,19 +2551,45 @@ impl<E: EngineFacade + Clone> Message<RejectNativeVideo> for BridgeActor<E> {
         msg: RejectNativeVideo,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        // Recorded once and never retried, so a wallpaper the player cannot
-        // honour cannot bounce between the two backends.
+        let live_keys = self.native_video_admission_keys();
+        let current = live_keys.get(&msg.wallpaper_id);
+        if !current.is_some_and(|keys| keys.contains(&msg.admission_key)) {
+            // The host judged a configuration that no longer exists: the user
+            // changed the target rate, an option or the media file while the
+            // refusal was in flight. Recording it would kill a configuration
+            // nothing has actually refused.
+            log::info!(
+                "native video wallpaper {} refused for admission key {} that is no longer \
+                 current ({}); the configuration changed while the refusal was in flight, so \
+                 the refusal is dropped",
+                msg.wallpaper_id,
+                msg.admission_key,
+                msg.reason
+            );
+            return Ok(());
+        }
+        // Recorded once per admission key and never retried, so a wallpaper the
+        // player cannot honour cannot bounce between the two backends. Keyed by
+        // admission key rather than by wallpaper id: another display's refusal
+        // of the same clip is a different decision and must not be overwritten.
+        let record = NativeVideoRejection {
+            reason: msg.reason.clone(),
+        };
         if self
             .state
             .native_video_rejected
-            .insert(msg.wallpaper_id.clone(), msg.reason.clone())
+            .entry(msg.wallpaper_id.clone())
+            .or_default()
+            .insert(msg.admission_key, record)
             .is_some()
         {
             return Ok(());
         }
         log::info!(
-            "native video wallpaper {} refused: {}; falling back to the scene engine",
+            "native video wallpaper {} refused for admission key {}: {}; falling back to the \
+             scene engine",
             msg.wallpaper_id,
+            msg.admission_key,
             msg.reason
         );
         // The scene engine has to take it back now, or the display shows
@@ -2605,6 +2693,8 @@ fn renderer_surface_row(counters: &RendererSurfaceCounters) -> BridgeRendererSur
         video_selected_generation: counters.value(K::VideoSelectedGeneration),
         video_conversions: counters.value(K::VideoConversions),
         video_imports: counters.value(K::VideoImports),
+        video_conversion_live_bytes: counters.value(K::VideoConversionLiveBytes),
+        video_conversion_peak_live_bytes: counters.value(K::VideoConversionPeakLiveBytes),
     }
 }
 

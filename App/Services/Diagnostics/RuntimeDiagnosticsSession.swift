@@ -107,7 +107,16 @@ final class RuntimeDiagnosticsSession {
                     + "frames_skipped=\(surface.videoFramesSkipped) "
                     + "selected_generation=\(surface.videoSelectedGeneration) "
                     + "conversions=\(surface.videoConversions) "
-                    + "imports=\(surface.videoImports)")
+                    + "imports=\(surface.videoImports) "
+                    // Allocation ledger over this surface's video conversion
+                    // destination textures, now and at its highest. Decode
+                    // pixel buffers, Vulkan images and the swapchain are not
+                    // in it, so neither figure is a residency or footprint
+                    // claim; the peak is what a ceiling has to be judged
+                    // against, because the current value alone hides the
+                    // destinations that were in flight a moment ago.
+                    + "conversion_live_bytes=\(surface.videoConversionLiveBytes) "
+                    + "conversion_peak_live_bytes=\(surface.videoConversionPeakLiveBytes)")
             // Work the decoder instance performs, which one hidden consumer
             // does not necessarily stop.
             lines.append(

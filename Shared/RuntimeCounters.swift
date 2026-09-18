@@ -60,6 +60,11 @@ enum RuntimeCounter: String, CaseIterable, Sendable {
     /// The native backend refused a wallpaper and handed it to the scene
     /// engine.
     case nativeVideoRefused
+    /// A poster request could not be answered from the item that is playing
+    /// and fell back to a one-shot image generator, which is a second decode.
+    /// Counted so a fallback that became the normal path is visible instead
+    /// of being inferred from CPU use.
+    case nativeVideoPosterFallback
 }
 
 /// Time-limited, aggregated runtime counters. Off by default: recording happens

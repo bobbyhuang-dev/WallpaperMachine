@@ -42,6 +42,14 @@ pub enum RendererCounterKind {
     VideoSelectedGeneration,
     VideoConversions,
     VideoImports,
+    /// Bytes of converted video destination textures one surface's texture
+    /// cache is keeping alive, and the most it ever kept alive. Gauges, not
+    /// running totals. The ledger covers those destination textures alone:
+    /// decode pixel buffers, Core Video plane wrappers, the Vulkan images
+    /// aliasing them and the swapchain are outside it, so this is an
+    /// allocation figure and never a residency or footprint measurement.
+    VideoConversionLiveBytes,
+    VideoConversionPeakLiveBytes,
     // Source work, shareable between consumers.
     VideoSourceCount,
     VideoSourceInstance,
@@ -78,6 +86,12 @@ impl RendererCounterKind {
             }
             Self::VideoConversions => sys::owe_renderer_counter_OWE_RC_VIDEO_CONVERSIONS,
             Self::VideoImports => sys::owe_renderer_counter_OWE_RC_VIDEO_IMPORTS,
+            Self::VideoConversionLiveBytes => {
+                sys::owe_renderer_counter_OWE_RC_VIDEO_CONVERSION_LIVE_BYTES
+            }
+            Self::VideoConversionPeakLiveBytes => {
+                sys::owe_renderer_counter_OWE_RC_VIDEO_CONVERSION_PEAK_LIVE_BYTES
+            }
         };
         raw as usize
     }

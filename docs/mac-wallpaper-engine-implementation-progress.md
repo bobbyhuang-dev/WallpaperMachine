@@ -5,15 +5,18 @@ Implementation record for the work packages in
 Task IDs are the plan's own. The plan itself is not rewritten; corrections to it
 are recorded here.
 
-Three rounds are recorded here, newest first after the shared preamble. Round 1
+Four rounds are recorded here, newest first after the shared preamble. Round 1
 covered phase A (M00, V01, V02, W01, V03) and phase B (P01, W02, P02 first
 version, A01 consumer gating, E01). Round 2 closed out M00's unbuilt half —
 renderer-side counters on the production paths — re-examined P02's correctness
 argument, and recorded phase C admission per task. Round 3 is the first phase C
 batch: P02's remaining scheduling guarantee, counter attribution, R02, I01 and
-an opt-in V04. R01, D01, R03, the full Metal backend, static-scene
-classification and V05 are deliberately not in it. Phases D/E remain out of
-scope.
+an opt-in V04. Round 4 adds no task. It audits what round 3 claimed: R02's
+memory accounting against the resources it says it covers, and V04's admission,
+rejection and player paths against real media. R01, D01, R03, R04, the full
+Metal backend, static-scene classification and V05 are deliberately not in it,
+P02 stays off by default, and I01's implementation is untouched — only its
+evidence wording is corrected. Phases D/E remain out of scope.
 
 ## Evidence vocabulary
 
@@ -76,6 +79,753 @@ recorded as blocked rather than failed:
 
 **No power number, watt figure or saving percentage is reported anywhere in this
 document.** Counters and unit tests bound what is claimed.
+
+## Round 4 — the six questions this round was set, answered
+
+**0. Was this round's own work correct?** No — not on the first pass, and the
+list matters more than the headline. Fifteen further defects were found in it by
+review and measurement after it was first reported done, including one that
+reopened the accounting hole the round existed to close, two that could leave a
+display showing nothing at all, one that could orphan a window on the user's
+desktop, and one attempted fix that deadlocked the renderer on real hardware.
+All fifteen are fixed and pinned; they are enumerated
+below rather than folded silently into the sections above.
+
+**1. What does the 81 MiB peak cover, and is the budget's accounting correct?**
+It covered the idle reuse cache and nothing else — one 6144x3456 BGRA8 slot.
+Destinations on loan and destinations the import had just allocated were both
+invisible, so the figure was low by a factor of four and the ceiling could not
+constrain the live set even in principle. It is now a three-state,
+mutually-exclusive ledger; the same workload's live peak is 339,738,624 B. See
+*R02: what the 81 MiB peak actually covered*.
+
+**2. Which real media is accepted or refused, and on what basis?** Whole-number
+24/25/30/60 and NTSC 24000/1001, 30000/1001, 60000/1001 are accepted at or
+above their own rate; anything whose *fastest declared interval* exceeds the
+target is refused, including 60 at 59 and 29.97 at 29, which round 3's
+one-frame slack admitted. Interlaced and unbounded-rate tracks are refused
+rather than guessed at. The basis is `minFrameDuration` compared as a rational
+plus `nominalFrameRate` with representation-error slack only, whichever is
+higher. Read-back values per fixture are tabulated.
+
+**3. Is a rejection re-evaluated once its cause changes?** Yes. Refusals are
+keyed on an admission key over media path, file length, mtime and target fps,
+and retained per `(wallpaper id, admission key)` so one display's refusal cannot
+erase another's. Raising the target, restoring a supported setting, or replacing
+the file re-offers the wallpaper; a refusal carrying a stale key is dropped
+rather than recorded. A *running* player is re-admitted too, not just a pending
+offer. Fifteen bridge cases and five host cases cover it.
+
+**4. Which real player and poster paths are verified?** Load, readiness,
+playback-time advance, two loop boundaries, poster from the playing item after
+those boundaries with zero generator fallbacks, concurrent-request coalescing,
+paused poster without resuming, stale-request suppression, and balanced
+create/release counters — all through the production `NativeVideoPlayer`
+against real files, in the opt-in media suite. Playback *failure* after a
+successful admission now hands the wallpaper to the scene engine instead of
+leaving a black display, checked in the host suite separately from metadata
+refusals.
+
+**5. Build and test results.** Renderer gate exit 0, `playback_gpu_test` 36/36
+on real Metal, `video_conversion_budget_test` 23/23, cargo workspace green with
+257 bridge cases, media suite 7/7, Release app and extension built. The app
+suite is 362 tests with **one pre-existing failure** in the control panel's
+web-layout test, which this round did not touch and does not claim to fix.
+
+**6. What still needs an authorized desktop session?** Everything about actual
+presentation: first frame on a screen, loop and pause behaviour as seen, poster
+on the desktop, single- and dual-display visibility, the refusal handing back
+to the scene engine without oscillation, and only then a paired power
+measurement. The minimum ordered checklist is at the end of this round's
+sections.
+
+## Round 4 — status by task ID
+
+| ID | implementation | automated verification | runtime verification | visual | power |
+|---|---|---|---|---|---|
+| R02 live ledger + domain | done | `video_conversion_budget_test` (37), `playback_gpu_test` (39, real Metal) | — | synthetic GPU pixel comparison only | — |
+| R02 counters and diagnostics | done | `RuntimeDiagnosticsReportTests` (8) | — | — | — |
+| V04 frame-rate admission | done, off by default | `NativeVideoAdmissionTests` (15, real media) | — | — | — |
+| V04 rejection re-evaluation | done, off by default | `native_video_routing` (15, bridge) | — | — | — |
+| V04 host routing, re-admission and poster staleness | done, off by default | `NativeVideoWallpaperHostTests` (25) | — | — | — |
+| V04 real player and poster | done, off by default | `NativeVideoPlayerMediaTests` (9, opt-in, real decode) | — | — | — |
+| I01 | unchanged | — | — | — | — |
+
+"runtime verification" is empty on every row and that is the honest state: no
+wallpaper has been displayed by this backend on a real desktop, in this round
+or any previous one. The media tests decode real files and read real pixels,
+which is more than round 3 had, but an `AVPlayerLayer` that never joins a
+window's layer tree presents nothing to a screen.
+
+## Round 4 — commands actually run
+
+| Command | Result |
+|---|---|
+| `python3 scripts/test.py` | 377 tests, **1 failed** — `ControlPanelLayoutTests/testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes`. See below. |
+| `python3 scripts/check_renderer.py` | Pass, exit 0; 10 cases `pixels_equal=true`, 0 diagnostics, reload cycles 0 |
+| `cargo test --release --workspace` | Pass; 969 cases total, `wallpaper-bridge` 264 including `native_video_routing` (19) |
+| `playback_gpu_test` | Pass, 39/39 on a real Apple M3 Max — Metal NV12 conversion, readback and 6144x3456 imports all executed |
+| `video_conversion_budget_test` | Pass, 37/37 (CPU only) |
+| `MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1 … NativeVideoPlayerMediaTests` | Pass, 7/7 with real decode |
+| `python3 scripts/build.py --renderer-only` | Pass; bindings carry `admissionKey`, the new `rejectNativeVideo` signature and `videoConversionLiveBytes` / `videoConversionPeakLiveBytes` |
+| `python3 scripts/build.py --configuration Release` | **BUILD SUCCEEDED**; app and embedded `MacWallpaperExtension.appex` |
+
+**The one failure is outside this round.**
+`testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes` fails
+deterministically, in isolation as well as in the suite, asserting that a full
+Discover page does not scroll (`overflow: 52` px at `tile: 166`, 5 columns, 4
+rows, in a 960x640 web view). It is a `WKWebView` layout arithmetic check over
+`WebUI/`. Nothing this round touched can reach it: no file under `WebUI/`,
+`App/Views/ControlPanel/` or `Tests/Unit/Panel/` was modified, and the FFI
+change adds a field to a native-video record the panel never reads. Round 3
+recorded this suite green at 325 tests, so it regressed between then and now
+for a reason outside this tree — most plausibly the WebKit in the current
+toolchain. It is reported rather than worked around, and it is **not** claimed
+as fixed or as passing.
+
+### Round 4 build identity
+
+Round 4 started from `c0461f7d88450a26aae51321c6512b94b6f672a6` on `main` with
+a genuinely clean tree: `git status --porcelain --untracked-files=all` was
+empty, so round 3's reported results correspond exactly to that commit. Nothing
+was reset, stashed, reverted, committed or pushed, and no history was rewritten.
+
+The tree now carries 32 modified paths and 5 untracked ones. The untracked
+files are source, not scratch, and belong to this round's record:
+`App/Services/NativeVideo/NativeVideoAdmission.swift`,
+`App/Services/NativeVideo/NativeVideoPlayer.swift`,
+`Tests/Unit/NativeVideo/NativeVideoAdmissionTests.swift`,
+`Tests/Unit/NativeVideo/NativeVideoPlayerMediaTests.swift` and
+`Tests/Unit/NativeVideo/SyntheticVideoFixture.swift`. A `git diff` alone would
+not describe what was built.
+
+---
+
+## Round 4 — R02: what the 81 MiB peak actually covered
+
+Round 3 reported "peak resident pool bytes 84,934,656" for a 6144x3456 clip
+over 17 imports. Both halves of that phrase were wrong.
+
+**It was a cache statistic, not a memory figure.** `peak_pooled_bytes` was the
+high-water mark of the *idle* reuse pool: exactly one 6144x3456 BGRA8
+destination (6144 x 3456 x 4 = 84,934,656, and `MTLTexture.allocatedSize`
+matches the nominal product for this shape). Three things were invisible to it:
+
+- **A destination on loan left the books entirely.** `Take` subtracted the
+  slot's bytes from the pooled total and pushed a bare `void*` onto a loan
+  vector with no byte accounting at all.
+- **A freshly allocated destination never reached the books.** The import
+  allocated it inside `CreateAppleVideoFrameLease`, and the budget first heard
+  about it when the frame that owned it died and offered it back. Between
+  allocation and first recycle the process held 81 MiB per frame that nothing
+  counted.
+- **Admission was tested against cached bytes only**, so the ceiling could not
+  constrain the live set even in principle.
+
+**It was also not residency.** `resident` is now banned from this code. These
+are allocation ledgers: the budget cannot observe paging, purgeable state or
+compression. Decode `CVPixelBuffer`s and their `IOSurface`s, Core Video plane
+wrappers, Vulkan images, the swapchain, staging buffers and render targets are
+all outside the ledger, and the headers say so. A total here is a lower bound
+on what video playback costs, never the whole cost.
+
+### The ledger now
+
+One destination is in exactly one of three states and its measured bytes are
+counted in exactly one place:
+
+| State | Accessor | Meaning |
+|---|---|---|
+| Available | `available_cached_bytes()` | idle in the reuse pool |
+| CheckedOut | `checked_out_bytes()` | handed to an import that has not yet reported GPU reference |
+| AwaitingGpu | `awaiting_gpu_completion_bytes()` | referenced by a live imported frame |
+
+`total_live_conversion_allocation_bytes()` is the sum of exactly those three,
+`peak_live_conversion_allocation_bytes()` its running maximum, and
+`reserved_estimate_bytes()` is a deliberately separate fourth quantity —
+granted-but-unmade allocations, which are intents, not allocations, and are not
+part of the live total. They still count against the ceiling, because an intent
+the caller is about to act on is about to become real.
+
+`CreateAppleVideoFrameLease` now reports the destination it allocated through a
+borrowed out-parameter, so the ledger keys on one identity from allocation to
+release. That is the hole that made the old number low by a factor of four.
+
+### The same workload, measured again
+
+| Figure | Round 3 | Round 4 |
+|---|---|---|
+| peak cached (Available only) | 84,934,656 | 84,934,656 |
+| peak live (all three states) | not measured | **339,738,624** |
+| destinations created | 4 | 4 |
+| destinations reused | 13 | 13 |
+
+Reuse is unchanged, and that is the point: the allocation behaviour round 3
+reported was already correct, and what was wrong was the figure used to
+describe the memory it cost. (An earlier draft of this table showed
+"17 created / 0 reused" as the round 3 baseline. That was a misattribution on
+my part: 17 allocations with zero reuses was a *regression introduced and then
+fixed inside this round*, described below — never round 3's behaviour. Round 3
+measured 4 created and 13 reused over 17 imports, and so does round 4.)
+
+339,738,624 is four 84,934,656-byte destinations alive at once: three held by
+the imported frames `TextureCache` retains and one checked out to the import in
+progress. The per-generation trace, emitted by `playback_gpu_test` as a
+`RecordProperty` and read back from its XML:
+
+```
+gen=1  allocate  live=169869312  cached=0  in_flight=2  peak_live=169869312
+gen=2  allocate  live=254803968  cached=0  in_flight=3  peak_live=254803968
+gen=3  allocate  live=339738624  cached=0  in_flight=4  peak_live=339738624
+gen=4..16 reuse  live=339738624  cached=0  in_flight=4  peak_live=339738624
+                                           peak_cached=84934656
+```
+
+Four allocations, thirteen reuses, zero refusals. `created` is a cumulative
+total and is not a concurrent count; `in_flight` is the concurrent figure, and
+the two are reported separately precisely because round 3 read one as the other.
+`cached` reads 0 at the end of each update because the same update took the
+cached slot straight back out; `peak_cached` is that one idle slot in the
+window between `Recycle` and `Take`.
+
+### What the ceiling governs, and what may exceed it
+
+The per-pool ceiling is 256 MiB and it governs *live* allocation, enforced by
+evicting cached destinations. It cannot refuse a destination the renderer needs
+for correctness: the frame is already decoded, and refusing would drop it. So
+`ReserveAllocation` evicts this budget's cache and then grants regardless,
+setting `over_ceiling` and counting `over_ceiling_grants()`.
+
+**The overshoot is stated and reported, not enforced, and that is a measured
+conclusion rather than a preference.** The destinations legitimately in flight
+at once are `kMaxPendingVideoImportSubmissions` (2, per cache), plus
+`kMaxImportedVideoFramesPerVideoTex` (4) for each live video texture, plus the
+one destination each consumer retains while it is still displaying its last
+import. `in_flight_slot_cap()` carries that expectation and
+`in_flight_cap_breaches()` counts every reservation granted past it, with one
+log line per episode. Nothing refuses.
+
+Two earlier drafts of this document claimed otherwise, and both were wrong.
+The first called the overshoot "bounded by `kCoexistingSlots` slots" when
+nothing capped it at all. The second made it a real refusal — and that is when
+the interesting part happened. Driven through the production path on a real
+M3 Max (seven `CustomShaderPass`es over one `VideoTex`, each going through
+`TextureCache::UpdateVideoFrame` and `PinVideoFrame`), a refusing cap
+**deadlocked**: refusals per generation went 1, 8, 14, 19, 23 while `created`
+froze at 6, `reused` stayed at 0, and the video texture stuck on generation 5
+for the rest of the run.
+
+The mechanism is structural, not a bad constant. What holds the extra
+destination is `CustomShaderPass::desc().vk_textures[i]` — the `ImageSlotsRef`
+that `UpdateVideoFrame` itself handed the consumer. A consumer releases its
+previous destination by re-binding, and it re-binds by receiving the very
+import a refusal withholds. So refusing is *what stops* the destinations coming
+back. No finite denying cap degrades gracefully here; it converts a memory
+ceiling into a permanent stall, which is exactly the failure mode the plan
+forbids. Picking a larger number would only have made it rarer.
+
+`InFlightCapReached` was therefore removed from `VideoConversionRefusal`
+entirely rather than kept as a value that never gates, and
+`KeepsGrantingWhenTheConsumerReleasesOnlyOnTheNextImport` pins the recovered
+behaviour over 40 generations.
+
+339,738,624 therefore exceeds the 268,435,456-byte ceiling, legitimately and
+visibly: `HostsAllSlots` is false for this shape (six slots would need
+509,607,936) and the grant is counted rather than hidden.
+
+**A separate regression, found and fixed earlier in the same area.** The first
+version of `LiveAllocationAtCeiling` refused *admission* whenever live + slot
+exceeded the ceiling. Measured on real hardware, that destroyed reuse for
+exactly the clips R02 exists for: 17 allocations, 0 reuses, 13 refusals,
+`peak_cached` 0 — an 81 MiB `MTLTexture` allocated and freed every frame. And
+it saved nothing: `peak_live` was 339,738,624 with or without the refusal,
+because `Admit` re-admits bytes that are *already live*. The rule now tests the
+refusal before the eviction loop and gates it on the cache already holding a
+slot the incoming key could reuse, so an empty cache always admits and the
+refusal stays reachable only for speculative caching beyond live demand. The
+GPU test that caught it was not re-pinned.
+
+### Per-pool versus per-process
+
+One budget belongs to one pool, one pool to one `TextureCache`, one
+`TextureCache` to one renderer instance. `VideoConversionMemoryDomain` is the
+process-wide total those per-pool ceilings add up into: 512 MiB by default, a
+mutex-protected table each budget publishes its live and cached bytes to, and a
+budget's effective ceiling is `min(own ceiling, domain.headroom_for(this))`.
+
+It is deliberately cooperative, not authoritative. A budget only ever evicts
+*its own* cache — the domain never reaches into another budget, because those
+budgets run on other renderer threads — so shedding takes effect at the other
+pool's next conversion. That latency is documented in the header rather than
+denied.
+
+**Nothing coordinates across processes.** The lock-screen extension runs its own
+renderer in its own address space with its own domain. There is no system-wide
+GPU memory ceiling here and none is claimed.
+
+---
+
+## Round 4 — V04 rejection: a refusal now expires with the thing it described
+
+Round 3 keyed refusals on the wallpaper id alone and kept them for the session,
+clearing them only when the backend was toggled. Four consequences, all real:
+a 60 fps clip refused at target 30 stayed refused after the user raised the
+target to 60; restoring an unsupported setting never re-evaluated; replacing the
+media file at the same path never re-evaluated; and a late asynchronous refusal
+from a previous configuration could mark the current one dead. The last is a
+correctness bug, not a missed optimisation.
+
+`BridgeNativeVideoWallpaper` now carries an `admission_key: u64` — FNV-1a over
+the resolved media path, the file's length, its modification time and the
+display's effective target fps. FNV-1a rather than `DefaultHasher` because the
+key crosses the FFI boundary to the host and back, and `DefaultHasher`'s output
+is explicitly not stable across Rust releases. Length and mtime stand in for
+contents; hashing the media would read hundreds of megabytes per activation.
+The cost is stated rather than hidden: two clips of equal length written to the
+same path inside one timestamp tick are indistinguishable, which loses a
+re-evaluation and never shows a wrong frame.
+
+`reject_native_video` takes the key the host decided against. A refusal whose
+key does not match the wallpaper's current key is stale and is dropped with a
+log line instead of recorded, and `native_video_media()` ignores and prunes a
+record whose key no longer matches. A repeat refusal with a *matching* key
+still triggers no second reconcile, which is round 3's guarantee and is kept.
+
+The key is computed per display slot, so one wallpaper on two displays at
+different target rates has two keys and a refusal on one display does not drag
+the other off the native player. A mirror deliberately keeps its source's key:
+`build()` gives a mirror a scene only by copying its source's, so a mirror
+cannot fall back on its own, and admitting or refusing it together with its
+source is what stops the mirror display going black.
+
+Twelve `native_video_routing` cases cover it, including
+`a_refusal_at_one_target_rate_does_not_survive_a_new_target_rate`,
+`a_refusal_stops_applying_when_the_setting_it_describes_is_restored`,
+`replacing_the_media_file_at_the_same_path_re_offers_the_wallpaper`,
+`a_refusal_carrying_a_stale_admission_key_is_dropped` and
+`exactly_one_backend_renders_a_wallpaper_across_a_refusal`.
+
+**Host side.** The host's own `refused` set is keyed on the same `UInt64`, so
+it cannot disagree with the bridge, and the decision is cached per key in a
+16-entry table so a reconcile storm is not a file read per pass.
+`testTheRefusalTravelsWithTheKeyItWasDecidedAgainst` pins that the key is
+reported with the refusal, and
+`testChangingTheTargetRateIsEvaluatedAgainRatherThanStayingRefused` pins that a
+new configuration does not inherit the old verdict.
+
+## Round 4 — fifteen defects found in round 4's own work, after it was first called done
+
+Everything above was written, tested and reported green. A second review pass
+over the same code found five more faults in it. They are recorded here rather
+than quietly folded into the sections above, because the pattern matters: each
+one is a case where the *new* rule was correct in the situation it was written
+for and wrong one step outside it, and every one of them was reachable by
+reading the code rather than by running it.
+
+**1. The domain could hand the same bytes to two pools.** `PublishToDomain`
+published `total_live_conversion_allocation_bytes()`, which deliberately
+excludes reservations, and `headroom_for` summed only `live`. So a reservation
+counted against its own budget's ceiling but was invisible to the process-wide
+one — asymmetric for no reason. Worse, `ReserveAllocation` took the domain lock
+twice, once to read headroom and once to publish, so two pools could read the
+same headroom and both reserve it. Fixed: reservations are published, other
+budgets' `live + reserved` is what headroom subtracts, and the fit test and the
+record now happen inside one locked `AcquireHeadroom` call. `headroom_for`
+stayed a `const` query that counts nothing; shed requests are counted on the
+mutating call where the decision is actually taken.
+
+**2. The overage was counted, not bounded — and then the bound turned out to
+be unenforceable.** This went through three states, and only the third is
+right. It was counted but uncapped; then I made `InFlightCapReached` a real
+refusal; then measurement showed a refusing cap **deadlocks** the production
+path, and it was removed. The full argument and the numbers are under *What the
+ceiling governs*. Two smaller errors along the way: my first spec capped on
+`live_slot_count()`, which includes cached slots and so would refuse the very
+reservation a full reuse pool exists to serve, and the cap was sized per pool
+from a constant that is per video texture. Both were caught before landing.
+
+**3. An average could admit a clip on its own.** The new rule required a
+bound, but `presentationRateBound` fell back to `nominalFrameRate` when
+`minFrameDuration` was unusable. A track reporting a 24 fps average with an
+invalid minimum was therefore *accepted* at a target of 30 — and a 24 fps
+average is equally consistent with a clip that sits at 12 and bursts to 60.
+That is round 3's fault reached through a different field. An upper bound now
+requires a usable `minFrameDuration`; the average can only ever make the
+verdict stricter, never admit. Falsified: against the previous rule,
+`testAPositiveNominalRateAloneNeverAdmitsAClip` fails with
+`(rate: 24.0, source: "nominalFrameRate")`.
+
+**4. A running player outlived the decision that admitted it.**
+`apply` replaced a surface only when the wallpaper *id* changed, so lowering
+the target rate under a running clip, or replacing the media at the same path,
+left the player running and merely pushed the new descriptor at it. A 60 fps
+clip carried on playing at 60 under a 30 fps target — precisely what admission
+exists to prevent, arrived at by never re-running admission. A surface is now
+bound to the admission key it was accepted under, and a changed key tears it
+down and goes through admission from the start. Falsified: reverting the
+condition fails seven assertions across two tests.
+
+**5. Playback failure had no hand-off at all.** Admission reads metadata;
+nothing observed whether the asset actually *played*. `AVPlayerItem.status`
+becoming `.failed` was not watched, and `NativeVideoSurface` had no failure
+channel, so an asset that probed cleanly and then failed to decode stayed
+native-selected with the scene engine excluded: a black display for as long as
+it was assigned. The player now observes both the item's and the looper's
+status, reports once, and the host stops the surface and hands the wallpaper
+back through the same path a metadata refusal uses — with the surface
+generation checked, so a late failure cannot condemn its successor.
+`playbackFailed` is a distinct, settled refusal from `preparationFailed`.
+
+**6. One refusal could erase another display's.** The bridge stored one
+rejection per wallpaper id, but a wallpaper has one admission key *per display
+slot*. The same clip refused on two displays at different target rates meant
+the second refusal overwrote the first; the first display's record then looked
+stale, was pruned, and the clip was offered natively again to a host that had
+already refused that exact key. That display ended up with neither backend.
+Rejections are now retained per `(wallpaper id, admission key)` and pruned
+against all of a wallpaper's live keys. Three multi-display cases cover it, and
+restoring the single-record store fails two of them.
+
+**7. The cap was never enforced on the production path, and made things worse.**
+Once `InFlightCapReached` existed, `TextureCache` never read
+`ReserveFresh(...).granted`: it allocated anyway, and `CommitFresh` then
+early-returned on the denied reservation, leaving the new texture **uncounted**.
+The enforcement added at the end of the round had reopened the exact accounting
+hole the round existed to close. `TextureCache` now reads `granted`, allocates
+nothing on a denial, counts `conversion_reservations_refused`, and fails that
+frame's import. The denial path itself is now unreachable for capacity, but the
+guard stays for memory pressure and unsatisfiable sizes, where failing the
+import genuinely is recoverable.
+
+**8. A failure on one display was discarded because another display opened.**
+`handlePreparationFailure` compared the reported generation against the
+host-wide `surfaceGeneration`, which moves whenever *any* display opens a
+surface. Open display 7, then display 9, and display 7's real playback failure
+compared unequal and was dropped as stale — leaving it native-selected with the
+scene engine excluded, showing black. Staleness is now surface identity, which
+is what the poster path already used.
+
+**9. The failure observer watched an item that never plays.** It observed the
+`AVPlayerLooper`'s *template* item, which the SDK states is not used for
+playback — the looper enqueues copies. It also subscribed to looper status with
+`.new` only, after construction, and the host installed its callback *after*
+`load`. So a synchronous failure could be raised with nobody listening and
+dropped. The observation now follows `player.currentItem` across loop
+boundaries, takes `.initial`, and a failure raised before a callback exists is
+held and delivered on install. Honest scope note: of these, only the buffered
+delivery is proven load-bearing by a test — removing it fails
+`testAFailureRaisedBeforeTheCallbackIsInstalledIsStillDelivered`. Removing the
+`currentItem` observation does **not** fail the real truncated-asset test,
+because the looper's status reports that particular fault; it is retained as
+defence for a mid-playback item failure that no test here produces, and is not
+claimed as verified.
+
+**10. Two refusal caches with different lifetimes left a display blank.** The
+host kept its own permanent `refused` set of admission keys. The bridge prunes a
+rejection whose key no longer matches a live display slot, so going 30 → 60 → 30
+brings key 30 back as a legitimate fresh offer — which the host silently
+skipped, while the bridge had already excluded the scene engine for that
+display. Neither backend, nothing on screen. Toggling the backend off reproduced
+it too, since that clears only the bridge's map. The bridge is now the sole
+authority: the host keeps only an in-flight guard against reporting the same
+refusal twice concurrently, and answers every offer it is given. Two existing
+host tests asserted "handed back exactly once" across repeated offers; that was
+pinning the defect, so they were rewritten rather than worked around —
+loop-freedom is the bridge's guarantee and is tested there.
+
+**11. A denied reservation still allocated, and the denial was never read.**
+`TextureCache` ignored `ReserveFresh(...).granted`, allocated anyway, and
+`CommitFresh` then early-returned on the denied reservation — leaving the new
+texture uncounted. The enforcement added at the end of the round had reopened
+the exact hole the round existed to close. `TextureCache` now reads `granted`,
+allocates nothing on a denial, counts `conversion_reservations_refused`, and
+fails that frame's import so the previous frame stays on screen.
+
+**12. Known-unsatisfiable allocations were retried every frame.**
+`ReportAllocationFailure` recorded the failing size but only `Admit` consulted
+it, so after a real Metal allocation failure the next import attempted the same
+allocation again, failed again, and logged again, per frame — the repeatedly
+failing allocation the plan forbids. `ReserveAllocation` now denies at or above
+a recorded failing size with `AllocationUnsatisfiable`, counted separately from
+every capacity number, with `Reset` as the stated recovery. Denying here is safe
+for the reason capacity denial is not: an allocation already known to fail was
+never going to produce a destination, so it cannot withhold a release a later
+request depends on.
+
+**13. A buffered failure could orphan a desktop window.** Fixing defect 9 by
+holding a pre-install failure created a new fault: installing the callback
+delivers it *synchronously*, so the hand-off closed the surface in the middle of
+`open` — and `open` then carried on to `update` and `present`, ordering a
+stopped, unregistered window onto the desktop that nothing owned and nothing
+could close. `open` now re-checks that the surface is still registered after
+installing the callback. Falsified: removing that check leaves the host suite
+unable to complete.
+
+**14. Mirrors bypassed the frame-rate rule entirely.** A mirror got its own
+`fps` but inherited the source's `admission_key`, and the host caches verdicts
+by key — so a 60 fps clip accepted for a source display at target 60 handed that
+cached acceptance to a mirror at target 30, which never evaluated 30 at all. The
+one path that skipped admission completely. A mirror group is now judged against
+its strictest member: `admission_fps` is the group minimum, every member shares
+one key, and a refusal sends the group back together — which is the only
+coherent outcome, since `build()` gives a mirror a scene only by copying its
+source's.
+
+**15. The "no video track" case was never exercised against real media.** It
+asserted a hand-built probe with `hasVideoTrack: false`. It now writes a real
+LPCM audio-only movie and probes it; AVFoundation returns an empty video track
+list and the refusal reads `no video track`. Writing an audio track is file I/O
+— no device is opened and nothing is played.
+
+Apart from the admission key and `admission_fps` the FFI surface is unchanged.
+Three existing tests were rewritten because they pinned defects 10 and 15; two
+others were briefly trimmed to fit the refusing cap and then reverted to
+byte-identical when the cap was removed.
+
+---
+
+## Round 4 — V04 admission: the frame-rate rule was wrong in both directions
+
+Round 3 refused a wallpaper when `Float(targetFps) + 1.0 < nominalFrameRate`.
+Three separate faults, all source-confirmed in the round 3 tree.
+
+**The one-frame slack admitted genuinely over-limit content.** It was written
+to stop 29.97 being refused against a target of 30. It was never needed for
+that — 29.97 is already below 30, and a rational comparison has no
+representation error to absorb — and it silently admitted every clip within one
+frame above the target. A 60 fps clip at a target of 59 evaluated
+`59 + 1 < 60` → false → accepted, which is exactly the silent rate change the
+target is there to prevent. `testARateLessThanOneFrameAboveTheTargetIsStillRefused`
+drives both that case and 29.97 against 29 through real files and fails against
+the old rule.
+
+**`nominalFrameRate` was treated as a ceiling.** It is an average over the
+track, and for interlaced content it is the field rate. A clip whose average is
+30 but whose shortest declared frame is 1/60 s can present 60 frames in a
+second. The rule now reads `AVAssetTrack.minFrameDuration` as well, compares it
+to the target as the rational it is — `CMTimeCompare(minFrameDuration,
+CMTime(value: 1, timescale: targetFps))`, no tolerance — and takes the *larger*
+of the two implied rates as the bound. `testAnAverageRateBelowTheTargetDoesNotExcuseAFasterInterval`
+pins it.
+
+**Unusable metadata became a huge frame rate.** `minFrameDuration` comes back
+invalid, indefinite or zero for tracks AVFoundation cannot summarise, and each
+of those divides through into nonsense. `NativeVideoAdmission.isUsable` rejects
+all of them, and a track where neither field is usable is refused as
+`frameRateNotDeterminable` rather than admitted on a guess. Interlaced tracks
+(`kCMFormatDescriptionExtension_FieldCount > 1`) are refused for the same
+reason: this backend cannot tell which rate the display path will choose, and
+the scene engine paces its own frames.
+
+The float comparison keeps one tolerance, and only one:
+`floatRepresentationSlack = 1e-4`, relative, for `nominalFrameRate` being a
+`Float`. That is four parts in ten thousand against a smallest meaningful
+difference of one part in a thousand (30 vs 29.97). It absorbs representation
+error and nothing else.
+
+**Settled and unsettled failures are now different things.** Round 3 folded a
+thrown metadata load into `notPlayable`, which recorded a permanent refusal. An
+I/O error, a file still being written or a contended decoder says nothing about
+the content. `NativeVideoRefusal.preparationFailed` is unsettled: the host
+retries it up to `admissionAttemptLimit` (3) times, 150 ms apart, and only then
+hands the wallpaper over. Without the split one blip demotes a wallpaper for the
+session; without the bound a file that never loads leaves the display blank for
+as long as it is offered. Both halves are pinned —
+`testATransientMetadataFailureIsRetriedRatherThanDemotingTheWallpaper` and
+`testAPersistentMetadataFailureStopsRetryingAndHandsOffOnce`.
+
+**Probing does not repeat.** `reconcile` runs on display changes, wallpaper
+changes and suspension changes. The host caches the decision per admission key
+in a 16-entry table, so a reconcile storm is not a file read per pass, and the
+probe itself is `AVURLAsset`'s asynchronous property loading — never a
+synchronous read on the main thread, and never a walk of the file.
+
+### What real media actually returned
+
+`Tests/Unit/NativeVideo/SyntheticVideoFixture.swift` writes the clips with
+`AVAssetWriter`; `NativeVideoAdmissionTests` reads them back through
+`NativeVideoAdmission.probe` and logs the API's own answer next to the verdict.
+The rate a fixture was *asked* for is never asserted as a result — only what
+`nominalFrameRate` and `minFrameDuration` report about the finished file.
+
+| Fixture written | `nominalFrameRate` read back | `minFrameDuration` read back | Target | Verdict |
+|---|---|---|---|---|
+| 24/1 | 24.0 | 1/24 | 24, 54 | accepted |
+| 25/1 | 25.0 | 1/25 | 25, 55 | accepted |
+| 30/1 | 30.0 | 1/30 | 30, 60 | accepted |
+| 60/1 | 60.0 | 1/60 | 60, 90 | accepted |
+| 60/1 | 60.0 | 1/60 | 30 | refused, bound 60 from `minFrameDuration` |
+| 60/1 | 60.0 | 1/60 | **59** | refused — the case the old one-frame slack admitted |
+| 24000/1001 | 23.976025 | 1001/24000 | 24 | accepted, no tolerance needed |
+| 30000/1001 | 29.97003 | 1001/30000 | 30 | accepted, no tolerance needed |
+| 60000/1001 | 59.94006 | 1001/60000 | 60 | accepted, no tolerance needed |
+| 30000/1001 | 29.97003 | 1001/30000 | **29** | refused — over by less than one frame |
+| VFR, 15 fps with a 60 fps burst | 24.0 | 15/900 (= 60 fps) | 30 | refused on the fastest interval, not the average |
+| corrupt file | — | — | 60 | refused, `notPlayable` ("asset reports itself unplayable") |
+| absent file | — | — | 60 | refused, `preparationFailed`, no crash |
+| interlaced, fieldCount 2 | 29.97 | 1001/30000 | 60 | refused, `frameRateNotDeterminable` |
+| nominal 0 + invalid `minFrameDuration` | 0 | invalid | 60 | refused, `frameRateNotDeterminable` |
+| any | 30.0 | 1/30 | **0** | refused, never divided through |
+
+Two things in that table are worth reading carefully, because both are cases
+where the generator's intent and the file's contents diverged.
+
+**The NTSC fixtures nearly were not NTSC.** The first run came back 24.0 / 30.0
+/ 60.0 with `minFrameDuration` 25/600, 20/600 and 10/600: `AVAssetWriter` had
+re-timed the track to its own 600 timescale, in which 1001/24000 s per frame
+cannot be represented. The test caught it because it asserts the *read-back*
+rate, not the requested one — an assertion on the requested rate would have
+passed while testing nothing. The fixture now pins
+`AVAssetWriterInput.mediaTimeScale`, and the rationals above are what the files
+actually contain.
+
+**The VFR clip's average is not what it was asked for either** — 24.0 rather
+than 15 — but its shortest frame is 15/900 s, exactly 60 fps, and that is what
+the refusal cites. That is the rule working: the average was misleading and the
+fastest interval was not.
+
+The last four rows are built as `NativeVideoTrackProbe` values rather than
+files. The encoder available here does not produce interlaced or metadata-less
+tracks, and claiming a file had produced them would be a fabricated result.
+They exercise the same `decide` function the real files go through.
+
+The fixtures are generated with the hardware encoder explicitly disabled
+(`kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: false`).
+They run in the routine gate, which is not a device test; eight 64x36 frames
+cost nothing in software, and the gate stays off the media engine.
+
+---
+
+## Round 4 — V04 poster: it was a second decoder, and it did not follow the loop
+
+source-confirmed in round 3: `posterImage()` built an `AVAssetImageGenerator`
+from `player.currentItem?.asset` on every request. The comment above it said
+"the existing player is asked for it; a second player would mean decoding the
+same clip twice" — and an image generator is exactly a second decode. There was
+also no bound on concurrent requests: five requests built five generators.
+
+What it does now:
+
+- Reads from an `AVPlayerItemVideoOutput` attached to the item that is
+  **playing**, re-resolved on every polling step. `AVPlayerLooper` replaces
+  `currentItem` at each loop boundary, so an output attached once would stop
+  producing after the first wrap. `testAPosterIsProducedFromTheItemPlayingAfterTwoLoops`
+  waits for two observed wraps before asking.
+- Detaches the output when the request ends, always. A permanently attached
+  output is a continuous readback of every frame for a picture nobody asked
+  for; `posterOutputIsAttachedForTest` is asserted false after every request.
+- Coalesces concurrent requests into one `Task`, so overlapping callers share
+  one read and get the identical `CGImage`.
+- Falls back to a one-shot `AVAssetImageGenerator` only after a bounded wait
+  (12 × 25 ms), and counts it as `nativeVideoPosterFallback`. A fallback that
+  became the normal path is then a visible number rather than an inference.
+  Nothing is retained between requests, so a failure leaves no converter and no
+  second decoder behind.
+- Never resumes playback. A paused player answers from the last frame it
+  produced; `testAPausedPlayerAnswersAPosterWithoutResuming` asserts the rate is
+  still zero afterwards.
+- A stopped surface answers `nil`, its in-flight request is cancelled, and the
+  host checks the surface is still the one bound to that display before
+  publishing. `testAPosterFromAReplacedSurfaceIsNotPublished` replaces the
+  wallpaper mid-request and asserts nothing is delivered.
+
+**Readiness evidence stays separated.** `AVPlayerLayer.isReadyForDisplay` means
+the layer has a frame it could show. The media tests record asset loaded, item
+`readyToPlay`, playback time advanced, pixel obtained and layer ready as five
+distinct observations, and on-screen presentation as `unavailable` — this
+backend has no presentation-feedback source and none is invented.
+
+### What the real player run actually established
+
+`NativeVideoPlayerMediaTests`, 9/9, with `MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1`.
+These drive the production `NativeVideoPlayer` — real `AVQueuePlayer`,
+`AVPlayerLooper`, `AVPlayerLayer`, `AVPlayerItemVideoOutput` — against
+generated silent clips, so they decode on this machine's media hardware. That
+is why they are opt-in and why `scripts/test.py` forwards the variable as
+`TEST_RUNNER_…`: `xcodebuild` does not hand its own environment to the hosted
+test process, so without that the suite silently skips.
+
+| Observation | Result |
+|---|---|
+| asset loaded | yes |
+| item reached `readyToPlay` | yes |
+| playback time advanced | yes |
+| loop boundaries crossed | 2 observed wraps, 3 queued items, queue never ran dry |
+| pixel obtained after 2 loops | yes, 64x36, `nativeVideoPosterFallback` = 0 |
+| video output left attached afterwards | no |
+| concurrent requests | 3 requests, one shared `CGImage` |
+| paused poster | frame returned, `player.rate` still 0 |
+| release | `nativeVideoItemCreated` == `nativeVideoItemReleased`, stopped surface answers `nil` |
+| layer `isReadyForDisplay` | true |
+| **on screen** | **unavailable** — no presentation feedback exists for this backend |
+
+`fallbacks = 0` is the load-bearing number: the poster came from the playing
+item across two loop boundaries, not from the image generator. The generator
+path exists and is counted, but it was not the path taken.
+
+---
+
+## Round 4 — I01: what last round's memory numbers actually were
+
+No I01 code changed this round. Round 3's two figures were reported side by
+side as if they were the same kind of evidence. They are not.
+
+| Figure | What produced it |
+|---|---|
+| 4,079,616 B growth for a 67,244,350 B clip | A real measurement on the real production path, but a **single sample from one round 3 run**. `VideoSourceInput.LargeLocalFileIsNeverResident` reads `task_vm_info.phys_footprint` before and after `CreateVideoProjectImage` → `CreateVideoTextureSource` → `prime`. The test asserts only `growth < 16 MiB`; the exact byte figure is printed on failure, so a green run does not re-emit it and this round did not re-derive it. |
+| 134,316,128 B for a 64 MiB file | **Provenance unverified.** No test in the tree measures the old path's footprint, and nothing records which program produced this number or which metric it used. It is exactly 2 × 67,158,064, which is consistent with an arithmetic doubling of the media size — but consistency is not proof, and a throwaway control program that no longer exists would fit equally well. It is not usable as a comparator until its origin and metric are re-established. |
+
+The metric in row 1 is `phys_footprint`: the delta in the process's physical
+footprint across scene load, sampled twice. It is not peak RSS, not a
+high-water mark over the interval, and not a count of allocated bytes — a peak
+between the two samples would not appear in it. The in-package payload path
+that row 2 models still exists in the tree for media inside a `.pkg`, and it is
+unmeasured.
+
+So the durable, reproducible claim is the test's own bound: opening a plain
+local video of 64 MiB grows this process's physical footprint by under 16 MB,
+and no copy of the media is written to the temp directory.
+`check_renderer.py` re-confirmed that bound this round (`video_source_input_test`
+11/11). The "twice the media size" comparison is withdrawn as a claim: it may
+well be true, but nothing in the tree establishes it, and a number whose origin
+and metric are both unknown is not evidence for a before/after improvement.
+
+---
+
+## Round 4 — the desktop session that is still required
+
+Not executed. No desktop control, screen capture, wallpaper change, app
+install, lock/unlock, audio capture or elevated sampling was performed or
+authorized this round, and `python3 scripts/test.py --ui` was not run. This is
+the minimum list that a single authorized session would have to cover, in
+order, for V04 to have runtime and visual evidence at all:
+
+1. Launch `build/Build/Products/Release/MacWallpaperEngine.app` with
+   `MAC_WALLPAPER_ENGINE_DIAGNOSTICS=120` and an isolated
+   `MAC_WALLPAPER_ENGINE_HOME`.
+2. Turn the native video backend on and assign one plain local video whose
+   frame rate is at or below the display's target, so admission accepts it.
+3. Observe, on one visible display: first frame appears; playback loops at
+   least twice without a visible seam; user pause stops it and resume restarts
+   it; a poster request produces the current frame rather than a black
+   rectangle.
+4. Hide and reveal that display (occlusion), then repeat with two displays, and
+   confirm the hidden one stops while the visible one keeps playing.
+5. Assign a clip the rule refuses — 60 fps under a 30 fps target — and confirm
+   the scene engine takes it, the wallpaper still renders, and nothing
+   oscillates between the two backends.
+6. Only then, the paired power measurement from
+   [testing/power-benchmark.md](testing/power-benchmark.md): same clip, same
+   output geometry, same *measured* presented frame rate, legacy and native in
+   two separate runs.
+
+Two rules for step 6. Do not run both builds at once to compare them — two
+wallpaper renderers on one machine measure each other. Do not change content
+pacing, output resolution or quality tier in the same comparison; if the two
+paths do not present at the same measured rate, there is no equal-quality
+saving to report and none may be quoted.
+
+---
 
 ## Round 3 — status by task ID
 

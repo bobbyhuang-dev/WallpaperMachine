@@ -11,6 +11,96 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-18 — Round 4: R02 memory accounting audit and V04 real-media hardening
+
+Audit round on top of `c0461f7` (clean tree at start). No new plan task. R02's
+conversion-memory ledger was rebuilt so one destination is billed in exactly
+one mutually exclusive state, V04's frame-rate admission was rewritten on real
+AVFoundation metadata and exercised against generated media, and V04's poster
+path stopped being a second decoder. P02 stays opt-in and the native video
+backend stays off by default. I01 code is untouched; only its evidence wording
+in the progress doc was corrected.
+
+- `python3 scripts/test.py`: Python suites and XcodeGen passed; native suite
+  **377 tests, 1 failed**. The failure is
+  `ControlPanelLayoutTests/testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes`
+  (a full Discover page scrolls by 52 px at tile 166 / 5 columns / 4 rows in a
+  960x640 web view). It reproduces deterministically in isolation and is
+  **unrelated to this round**: no file under `WebUI/`, `App/Views/ControlPanel/`
+  or `Tests/Unit/Panel/` was modified. Not fixed, not worked around, not
+  claimed as passing.
+- `python3 scripts/check_renderer.py`: exit 0. `playback_gpu_test` 39,
+  `video_conversion_budget_test` 37, `video_frame_pacing_test` 21,
+  `timer_tests` 20, `video_decode_pump_test` 13, `video_source_input_test` 11,
+  `video_color_conversion_test` 9, `render_target_lifetime_test` 4,
+  `shader_cache_metadata_test` 1, `text_object_runtime_test` 60. The ten
+  generated GPU cases ran with `pixels_equal=true` and 0 diagnostics; reload
+  cycles 0. Vulkan/Metal were available on this machine (Apple M3 Max), so the
+  6144x3456 conversion cases executed for real.
+- `cargo test --release --workspace` (from `upstream/renderer`, with
+  `scripts/build.py`'s environment and `CARGO_TARGET_DIR` unset): pass,
+  including `wallpaper-bridge` **264** with `native_video_routing` at 19.
+- `MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1` `NativeVideoPlayerMediaTests`: **9/9**
+  with real decode — 2 observed loop wraps, poster obtained from the playing
+  item after both wraps with 0 image-generator fallbacks, concurrent requests
+  coalesced, paused poster returned without resuming, item create/release
+  counters balanced. `scripts/test.py` now forwards this variable as
+  `TEST_RUNNER_…` because `xcodebuild` does not pass its environment to the
+  hosted test process; without that the suite silently skipped.
+- `python3 scripts/build.py --renderer-only`: pass; regenerated bindings carry
+  `admissionKey`, the three-argument `rejectNativeVideo`, and
+  `videoConversionLiveBytes` / `videoConversionPeakLiveBytes`.
+- `python3 scripts/build.py --configuration Release`: **BUILD SUCCEEDED**, app
+  and embedded `MacWallpaperExtension.appex`.
+
+A second review pass over this round's own work found fifteen further defects in it
+and they were fixed before yielding: the conversion domain could hand the same
+bytes to two pools (reservations were published to it but never subtracted from
+other budgets' headroom, and the fit test was not atomic with the record); the
+overage was counted but not bounded; the admission rule could still admit on a
+nominal *average* alone when `minFrameDuration` was unusable; a running player
+outlived the decision that admitted it, so lowering the target rate under a
+60 fps clip left it playing at 60; playback failure after a successful
+admission had no hand-off, leaving a black display with the scene engine
+excluded; and the bridge stored one rejection per wallpaper id, so the same clip
+refused on two displays left one of them with no backend at all; the in-flight
+cap was never read on the production path, so a denial allocated an uncounted
+texture; a playback failure on one display was discarded as stale as soon as a
+second display opened; the failure observer watched the looper's template item,
+which is never played; and the host's own permanent refusal set disagreed with
+the bridge's, so a key refused, superseded and offered again was silently
+skipped while the scene engine was already excluded. Each is pinned by a test
+that was falsified against the pre-fix code.
+
+Five more followed in the same pass: a denied reservation still allocated and
+was never read, so the denial left an uncounted texture; a known-unsatisfiable
+allocation was retried every frame; the buffered-failure fix could order a
+stopped, unregistered window onto the desktop; mirrors inherited their source's
+admission key and so never evaluated their own target rate; and the "no video
+track" case was only ever asserted against a hand-built probe, not real media.
+
+One attempted fix had to be withdrawn on evidence. Making the in-flight cap a
+real refusal **deadlocked** the production path on the real GPU: refusals per
+generation 1, 8, 14, 19, 23 with `created` frozen and `reused` at 0, because a
+refused import leaves the consumer holding the `ImageSlotsRef` whose release the
+import would have caused. The cap is now stated and reported, never enforced;
+`InFlightCapReached` was removed from the refusal enum, and the two tests
+briefly trimmed to fit the cap were reverted to byte-identical.
+
+Headline correction: round 3's "peak resident pool bytes 84,934,656" was the
+idle-cache high-water mark, not memory held. The same 6144x3456 workload now
+reports `peak_live_bytes` **339,738,624** — four destinations alive at once —
+with `peak_cached_bytes` still 84,934,656 and correctly labelled as the
+Available state alone. A first version of the new ceiling refusal was measured
+destroying reuse entirely (17 allocations / 0 reuses / 13 refusals) while
+saving no memory at all, and was corrected before landing rather than pinned.
+
+**Not run, and still required:** any desktop session. No wallpaper has been
+displayed by the native backend, no screenshot or capture was taken, no
+wallpaper or appearance setting was changed, `--ui` was not run, and no power
+measurement exists. The minimum authorized-session checklist is in
+[../mac-wallpaper-engine-implementation-progress.md](../mac-wallpaper-engine-implementation-progress.md).
+
 ## 2026-09-18 — Trimmed vendored upstream tree
 
 Removed files under `upstream/renderer` that no build path, script or doc

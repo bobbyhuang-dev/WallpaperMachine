@@ -7,6 +7,7 @@ the Swift test bundle. Result bundles land in `artifacts/tests/` and are disposa
 """
 import argparse
 from datetime import datetime
+import os
 import subprocess
 import sys
 
@@ -40,7 +41,16 @@ def main():
         "-only-testing:" + target,
         "-maximum-test-execution-time-allowance", "90", "-test-timeouts-enabled", "YES", "test",
     ]
-    completed = subprocess.run(command, cwd=ROOT)
+    env = dict(os.environ)
+    # xcodebuild does not hand its own environment to the hosted test process.
+    # `TEST_RUNNER_`-prefixed variables are forwarded with the prefix stripped,
+    # which is what makes the documented opt-in
+    # `MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1 python3 scripts/test.py` reach the
+    # tests that gate themselves on it.
+    for name in ("MAC_WALLPAPER_ENGINE_MEDIA_TESTS",):
+        if name in env:
+            env["TEST_RUNNER_" + name] = env[name]
+    completed = subprocess.run(command, cwd=ROOT, env=env)
     if (result / "Info.plist").exists():
         subprocess.run(["xcrun", "xcresulttool", "get", "test-results", "summary", "--path", str(result)], cwd=ROOT)
     print(f"{MARK.step} Test evidence: {result}")

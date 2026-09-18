@@ -3,7 +3,9 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
+    fs,
+    path::{Path, PathBuf},
+    time::UNIX_EPOCH,
 };
 
 use wallpaper_core::{
@@ -39,10 +41,40 @@ pub struct ActivationInputs<'a> {
     /// Whether plain local video wallpapers may be routed to the native
     /// player. Off by default; see [`ActivationInputs::build_native_video`].
     pub native_video_enabled: bool,
-    /// Wallpapers the native player refused, with the reason recorded by the
-    /// host. A refusal is permanent for the session, so a wallpaper cannot
-    /// oscillate between the two backends.
-    pub native_video_rejected: &'a BTreeMap<String, String>,
+    /// Refusals the native player recorded, per wallpaper and then per
+    /// admission key. See [`NativeVideoRejections`].
+    pub native_video_rejected: &'a NativeVideoRejections,
+}
+
+/// Refusals recorded per wallpaper id, then per admission key.
+///
+/// A wallpaper has one admission key *per display slot*, so the same clip on
+/// two displays at different target rates is two independent decisions. One
+/// record per wallpaper id cannot hold both: the second display's refusal
+/// overwrote the first's, the first display's live key then no longer matched
+/// the stored one so the record looked stale and was pruned, and the wallpaper
+/// was offered natively again to a host that had already refused that exact
+/// key. The host opened nothing and [`ActivationInputs::build`] had already
+/// excluded the display as natively routed, so that display was left with no
+/// backend at all. A refusal may only ever suppress the key it was decided
+/// against.
+pub type NativeVideoRejections = BTreeMap<String, BTreeMap<u64, NativeVideoRejection>>;
+
+/// A refusal the host recorded for one native-video configuration.
+///
+/// Scoped by [`NativeVideoWallpaperDesc::admission_key`] rather than by
+/// wallpaper id alone. A refusal is a statement about the configuration the
+/// host evaluated — "60 fps clip, target 30" — not about the wallpaper
+/// forever: raising the target rate, restoring an unsupported setting or
+/// replacing the media file produces a different key, and that slot is offered
+/// to the native backend again. Within one configuration the refusal still
+/// holds for the rest of the session, so the two backends cannot hand a
+/// wallpaper back and forth.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeVideoRejection {
+    /// The host's own wording. Logged when the refusal is recorded and again
+    /// when it expires, never parsed.
+    pub reason: String,
 }
 
 /// A plain local video assigned to one display, played by the host process
@@ -56,9 +88,28 @@ pub struct NativeVideoWallpaperDesc {
     pub display: DisplayDesc,
     pub wallpaper_id: String,
     pub media_path: PathBuf,
-    /// The user's target frame rate for this display. The host must refuse the
-    /// wallpaper rather than silently play at a different rate.
+    /// This display's own target frame rate. What the player runs at here.
     pub fps: u32,
+    /// The target frame rate the host's accept-or-refuse answer must be judged
+    /// against: the strictest [`Self::fps`] across this display's mirror group,
+    /// which is this display's own when it mirrors and is mirrored by nothing.
+    ///
+    /// A mirror cannot fall back on its own — [`ActivationInputs::build`] only
+    /// ever gives a mirror a scene by copying its source's — so the group is
+    /// admitted or refused as a unit, and a unit is only safe at the rate its
+    /// strictest member demands. Judging a 60 fps source and then handing that
+    /// verdict to a 30 fps mirror would play the mirror at 60 under a 30 fps
+    /// target: the silent rate change admission exists to prevent, arriving
+    /// through the one path that never asked.
+    pub admission_fps: u32,
+    /// Identifies the exact inputs the host's admission decision rests on,
+    /// [`Self::admission_fps`] among them. Identical for every member of a
+    /// mirror group, so one verdict covers the group and a refusal recorded
+    /// against it suppresses the group rather than one display. The host must
+    /// echo it back when it refuses, so a refusal that arrives after the
+    /// configuration changed can be discarded instead of killing a
+    /// configuration it never judged. See [`native_video_admission_key`].
+    pub admission_key: u64,
     pub paused: bool,
     pub volume: f32,
     pub muted: bool,
@@ -95,6 +146,66 @@ struct MirrorSlot {
     settings: MonitorSettingsCfg,
 }
 
+/// One mirror group's native-video candidacy: the media file the host would
+/// open, the strictest target rate the group must be judged at, and the key
+/// that identifies exactly that judgement.
+struct NativeVideoAdmission {
+    media_path: PathBuf,
+    admission_fps: u32,
+    admission_key: u64,
+}
+
+/// Offset basis and prime of the 64-bit FNV-1a hash.
+const FNV1A_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV1A_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// Identifies one native-video admission decision: the media the host would
+/// open, the bytes behind that path, and the frame rate it has to hit. Those
+/// are exactly the inputs the host's accept-or-refuse answer depends on.
+///
+/// `admission_fps` is the mirror group's strictest target, never one display's
+/// own. Every member of a group therefore gets the same key, which is what
+/// makes one host verdict cover the group instead of a verdict taken for the
+/// source silently standing in for a slower mirror that was never evaluated.
+///
+/// FNV-1a is written out here rather than reached for through [`std::hash`]:
+/// `DefaultHasher`'s output is explicitly not guaranteed stable across Rust
+/// releases. The key never outlives the session, so an unstable hash would not
+/// corrupt persisted state, but a value that silently changes under a
+/// toolchain upgrade is not something a reader can reason about, and this key
+/// crosses the FFI boundary to the host and back. FNV-1a is a few lines, needs
+/// no dependency, and yields the same key for the same inputs on every build.
+///
+/// Length and modification time stand in for the file's contents: hashing the
+/// media itself would read hundreds of megabytes on every activation. Two
+/// different clips written to the same path with the same length inside one
+/// filesystem timestamp tick are indistinguishable here, and that is the
+/// accepted cost — it is a re-evaluation that does not happen, never a wrong
+/// frame on screen.
+fn native_video_admission_key(
+    media_path: &Path,
+    metadata: &fs::Metadata,
+    admission_fps: u32,
+) -> u64 {
+    let modified_nanos = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |since_epoch| since_epoch.as_nanos());
+    let mut hash = fnv1a(FNV1A_OFFSET_BASIS, media_path.as_os_str().as_encoded_bytes());
+    hash = fnv1a(hash, &metadata.len().to_le_bytes());
+    hash = fnv1a(hash, &modified_nanos.to_le_bytes());
+    fnv1a(hash, &admission_fps.to_le_bytes())
+}
+
+fn fnv1a(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV1A_PRIME);
+    }
+    hash
+}
+
 impl ActivationInputs<'_> {
     /// Effective paused state for one display: a global reason, or that display
     /// being suspended on its own.
@@ -111,12 +222,18 @@ impl ActivationInputs<'_> {
     /// into a scene.
     pub fn build(&self) -> Result<Vec<SceneDesc>, BridgeError> {
         let (direct, mirrors) = self.slots();
+        let group_targets = Self::mirror_group_targets(&mirrors);
         let mut scenes = Vec::new();
         for slot in direct {
             // A wallpaper routed to a host-rendered backend must not also get a
             // scene: two renderers for one display would decode and present the
             // same content twice.
-            if self.is_web(slot.wallpaper_id) || self.is_native_video(slot.wallpaper_id) {
+            let admission_fps = self.slot_admission_fps(&slot, &group_targets);
+            if self.is_web(slot.wallpaper_id)
+                || self
+                    .native_video_admission(&slot, admission_fps)
+                    .is_some()
+            {
                 continue;
             }
             scenes.push(self.scene_for_monitor(
@@ -262,20 +379,44 @@ impl ActivationInputs<'_> {
         self.web_model(wallpaper_id).is_some()
     }
 
-    /// Whether this wallpaper is routed to the native player right now.
+    /// Whether this slot is routed to the native player right now.
     ///
     /// Requires the opt-in, a Video project, a resolvable media file, and no
-    /// recorded refusal. Any of those failing leaves it on the scene engine,
-    /// which is the backend that supports everything.
-    fn is_native_video(&self, wallpaper_id: &str) -> bool {
-        self.native_video_media(wallpaper_id).is_some()
+    /// refusal recorded against this slot's *current* admission key. Any of
+    /// those failing leaves it on the scene engine, which is the backend that
+    /// supports everything.
+    ///
+    /// `admission_fps` is the mirror group's strictest target, from
+    /// [`Self::slot_admission_fps`]. Two independent displays showing the same
+    /// wallpaper at different targets have different keys and are looked up
+    /// separately, so a refusal on one neither drags the other off the native
+    /// player nor erases it; a mirror group shares one key and moves together,
+    /// because a mirror has no scene of its own to fall back to.
+    fn native_video_admission(
+        &self,
+        slot: &DirectSlot<'_>,
+        admission_fps: u32,
+    ) -> Option<NativeVideoAdmission> {
+        let candidate = self.native_video_candidate(slot.wallpaper_id, admission_fps)?;
+        // Only a refusal recorded against this slot's own live key applies. Any
+        // other record describes a configuration that is not this one.
+        self.native_video_rejected
+            .get(slot.wallpaper_id)
+            .is_none_or(|by_key| !by_key.contains_key(&candidate.admission_key))
+            .then_some(candidate)
     }
 
-    fn native_video_media(&self, wallpaper_id: &str) -> Option<PathBuf> {
+    /// The candidate ignoring any recorded refusal.
+    ///
+    /// Refusals are matched by key, so the key of a refused configuration has
+    /// to stay computable while that refusal is in force — otherwise a repeat
+    /// refusal would look stale and a settled fallback would start flapping.
+    fn native_video_candidate(
+        &self,
+        wallpaper_id: &str,
+        admission_fps: u32,
+    ) -> Option<NativeVideoAdmission> {
         if !self.native_video_enabled {
-            return None;
-        }
-        if self.native_video_rejected.contains_key(wallpaper_id) {
             return None;
         }
         let model = self.project_models.get(wallpaper_id)?;
@@ -286,14 +427,112 @@ impl ActivationInputs<'_> {
         if file.is_empty() {
             return None;
         }
-        let media = self
+        let media_path = self
             .paths
             .steam_workshop_root()
             .join(wallpaper_id)
             .join(file);
         // The player opens a path, so a project whose media is missing has to
         // stay on the engine rather than produce a window that can never play.
-        media.is_file().then_some(media)
+        let metadata = fs::metadata(&media_path).ok()?;
+        if !metadata.is_file() {
+            return None;
+        }
+        Some(NativeVideoAdmission {
+            admission_key: native_video_admission_key(&media_path, &metadata, admission_fps),
+            media_path,
+            admission_fps,
+        })
+    }
+
+    /// Every admission key the live configuration currently produces, per
+    /// wallpaper id, ignoring recorded refusals.
+    ///
+    /// The caller uses this to separate a refusal that describes the live
+    /// configuration from one that arrived after the user changed it, and to
+    /// drop records whose configuration is gone.
+    pub fn native_video_admission_keys(&self) -> BTreeMap<String, BTreeSet<u64>> {
+        let (direct, mirrors) = self.slots();
+        let group_targets = Self::mirror_group_targets(&mirrors);
+        let mut keys: BTreeMap<String, BTreeSet<u64>> = BTreeMap::new();
+        for slot in direct {
+            let admission_fps = self.slot_admission_fps(&slot, &group_targets);
+            let Some(candidate) = self.native_video_candidate(slot.wallpaper_id, admission_fps)
+            else {
+                continue;
+            };
+            keys.entry(slot.wallpaper_id.to_string())
+                .or_default()
+                .insert(candidate.admission_key);
+        }
+        keys
+    }
+
+    /// This slot's effective target frame rate: the user's requested rate for
+    /// the monitor, never above what the display can actually present.
+    fn slot_fps(&self, slot: &DirectSlot<'_>) -> u32 {
+        RenderOverrideResolver {
+            wallpaper: slot.wallpaper,
+            monitor: slot.monitor,
+            display: &slot.display,
+            displays: self.displays,
+        }
+        .resolve()
+        .map_or(60, |render| render.fps)
+        .max(1)
+        .min(slot.display.refresh_rate_hz.max(1))
+    }
+
+    /// One mirror display's effective target frame rate.
+    fn mirror_fps(mirror: &MirrorSlot) -> u32 {
+        mirror
+            .settings
+            .target_fps
+            .max(1)
+            .min(mirror.display.refresh_rate_hz.max(1))
+    }
+
+    /// The strictest mirror target per source display id.
+    ///
+    /// Mirrors are deduplicated by physical display exactly as the build loops
+    /// deduplicate them, so the rate a group is judged at is the rate a group
+    /// member will actually run at.
+    fn mirror_group_targets(mirrors: &[MirrorSlot]) -> BTreeMap<u32, u32> {
+        let mut strictest: BTreeMap<u32, u32> = BTreeMap::new();
+        let mut counted: Vec<DisplayDesc> = Vec::new();
+        for mirror in mirrors {
+            if counted
+                .iter()
+                .any(|used| used.same_physical_display(&mirror.display))
+            {
+                continue;
+            }
+            counted.push(mirror.display.clone());
+            let fps = Self::mirror_fps(mirror);
+            strictest
+                .entry(mirror.source_display_id)
+                .and_modify(|current| *current = (*current).min(fps))
+                .or_insert(fps);
+        }
+        strictest
+    }
+
+    /// The target frame rate this slot's admission must be judged against: the
+    /// strictest across the mirror group it heads, or its own when it heads
+    /// none.
+    ///
+    /// A group is admitted or refused as a unit because a mirror has no scene
+    /// of its own to fall back to, and a unit is only safe at the rate its
+    /// strictest member demands.
+    fn slot_admission_fps(
+        &self,
+        slot: &DirectSlot<'_>,
+        group_targets: &BTreeMap<u32, u32>,
+    ) -> u32 {
+        let own = self.slot_fps(slot);
+        group_targets
+            .get(&slot.display.display_id)
+            .map_or(own, |mirrored| own.min(*mirrored))
     }
 
     /// Plain local videos for every enabled, resolved display, including
@@ -305,9 +544,11 @@ impl ActivationInputs<'_> {
     /// range.
     pub fn build_native_video(&self) -> Result<Vec<NativeVideoWallpaperDesc>, BridgeError> {
         let (direct, mirrors) = self.slots();
+        let group_targets = Self::mirror_group_targets(&mirrors);
         let mut videos = Vec::new();
         for slot in direct {
-            let Some(media_path) = self.native_video_media(slot.wallpaper_id) else {
+            let admission_fps = self.slot_admission_fps(&slot, &group_targets);
+            let Some(admission) = self.native_video_admission(&slot, admission_fps) else {
                 continue;
             };
             let render = RenderOverrideResolver {
@@ -317,14 +558,14 @@ impl ActivationInputs<'_> {
                 displays: self.displays,
             }
             .resolve();
-            let fps = render
-                .map_or(60, |render| render.fps)
-                .max(1)
-                .min(slot.display.refresh_rate_hz.max(1));
             videos.push(NativeVideoWallpaperDesc {
                 wallpaper_id: slot.wallpaper_id.to_string(),
-                media_path,
-                fps,
+                media_path: admission.media_path,
+                // This display's own rate, which may be looser than the rate the
+                // group was judged at.
+                fps: self.slot_fps(&slot),
+                admission_fps: admission.admission_fps,
+                admission_key: admission.admission_key,
                 paused: self.display_paused(slot.display.display_id),
                 volume: slot.wallpaper.audio.volume,
                 muted: slot.wallpaper.audio.muted,
@@ -352,11 +593,16 @@ impl ActivationInputs<'_> {
                 continue;
             };
             mirrored.push(mirror.display.clone());
-            let fps = mirror
-                .settings
-                .target_fps
-                .max(1)
-                .min(mirror.display.refresh_rate_hz.max(1));
+            let fps = Self::mirror_fps(&mirror);
+            // A mirror takes the source's `admission_fps` and `admission_key`
+            // through `..source`, and that is correct rather than convenient:
+            // the source was judged at the group minimum, which already
+            // accounts for this mirror's own target. [`Self::build`] gives a
+            // mirror a scene only by copying the source display's scene, so a
+            // mirror cannot fall back to the engine on its own; sharing one key
+            // is what makes a refusal move the whole group and keeps this
+            // display from going dark. Its own `fps` still reports the rate it
+            // runs at here.
             videos.push(NativeVideoWallpaperDesc {
                 fps,
                 paused: self.display_paused(mirror.display.display_id),

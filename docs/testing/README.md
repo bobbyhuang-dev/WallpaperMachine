@@ -57,6 +57,7 @@ scheme excludes UI tests.
 | Python script tests | `scripts/tests/` | `python3 scripts/test.py` (runs first, before Xcode) |
 | Swift unit/integration | `Tests/Unit/<Domain>/` | `python3 scripts/test.py` (`MacWallpaperEngineTests`) |
 | XCUITest (desktop) | `Tests/UI/` | `python3 scripts/test.py --ui` — opt-in only |
+| Media/device integration | `Tests/Unit/NativeVideo/` | `MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1 python3 scripts/test.py` — opt-in only |
 | Rust crates | `upstream/renderer/crates/` | `cargo test --release -p wallpaper-core --lib`, `cargo test --release -p wallpaper-bridge --lib`, `cargo test -p shader --test pipeline -- --nocapture` |
 | C++ renderer tests | `upstream/renderer/external/open-wallpaper-engine` | `python3 scripts/check_renderer.py` builds and runs them; see [renderer.md](renderer.md) |
 | Headless GPU probes | same CMake tree | explicitly invoked executables (`offscreen_scene_probe`, `scene_reload_cycle_probe`, `playback_gpu_test`, `wpdump`); see [renderer.md](renderer.md) |
@@ -67,8 +68,16 @@ Cargo and CMake commands need the Homebrew environment that `scripts/build.py`
 assembles; run the Rust commands from `upstream/renderer`. Build prerequisites
 are in [../build.md](../build.md).
 
-`Tests/Unit/` is grouped by domain: Appearance, Desktop, GitHub, Library,
-LockScreen, Panel, Steam, Workshop.
+`Tests/Unit/` is grouped by domain: Appearance, Desktop, Diagnostics, GitHub,
+Library, LockScreen, NativeVideo, Panel, Steam, WebWallpaper, Workshop.
+
+`NativeVideoPlayerMediaTests` is the one opt-in layer inside `Tests/Unit/`. It
+drives the real `AVQueuePlayer`, `AVPlayerLooper`, `AVPlayerLayer` and video
+output against generated silent clips, which means real video decoding on this
+machine's media hardware, so it skips itself unless
+`MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1` is set. It still opens no window, changes
+no wallpaper and configures no audio session; it is not a desktop test and is
+not a substitute for one.
 
 ## Evidence
 

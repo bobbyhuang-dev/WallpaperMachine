@@ -340,6 +340,14 @@ pub struct BridgeRendererSurfaceCounters {
     pub video_selected_generation: u64,
     pub video_conversions: u64,
     pub video_imports: u64,
+    /// Bytes of converted video destination textures this surface's texture
+    /// cache is keeping alive, and the most it ever kept alive. Gauges, not
+    /// running totals, and an allocation ledger over those destination
+    /// textures alone: decode pixel buffers, Core Video plane wrappers, the
+    /// Vulkan images aliasing them and the swapchain are all outside it, so
+    /// neither figure is a residency or process-footprint measurement.
+    pub video_conversion_live_bytes: u64,
+    pub video_conversion_peak_live_bytes: u64,
 }
 
 /// One pull of the renderer counters, plus the process-wide values that belong
@@ -364,10 +372,12 @@ pub struct BridgeRendererCountersReport {
 /// A plain local video routed to the native platform player instead of the
 /// scene engine.
 ///
-/// Only the declared subset appears here. `fps` is the user's target rate and
-/// is a requirement, not a hint: the host must refuse the wallpaper rather than
-/// play it at a different rate, and a refusal sends it back to the scene
-/// engine, which supports everything.
+/// Only the declared subset appears here. `fps` is this display's own target
+/// rate and is a requirement, not a hint. Admission, however, is judged against
+/// `admission_fps`, which is the strictest target across the mirror group this
+/// display belongs to: the host must refuse the wallpaper rather than play any
+/// member at a rate its own target does not allow, and a refusal sends the
+/// whole group back to the scene engine, which supports everything.
 #[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct BridgeNativeVideoWallpaper {
     pub display_id: u32,
@@ -376,8 +386,25 @@ pub struct BridgeNativeVideoWallpaper {
     /// Absolute path to the media file, already containment-checked against the
     /// project directory.
     pub media_path: String,
-    /// The user's target frame rate for this display.
+    /// This display's own target frame rate: what the player runs at here.
     pub fps: u32,
+    /// The target rate the accept-or-refuse decision must be judged against:
+    /// the strictest `fps` across this display's mirror group, equal to `fps`
+    /// when the display mirrors nothing and is mirrored by nothing.
+    ///
+    /// A mirror is only ever given a scene by copying its source's, so it
+    /// cannot fall back to the scene engine on its own; the group is admitted
+    /// or refused as a unit and is only safe at its strictest member's rate.
+    /// Probing `fps` on a mirror would accept a verdict taken for a faster
+    /// source and play this display above its own target without ever asking.
+    pub admission_fps: u32,
+    /// Identifies the exact configuration this descriptor was produced from:
+    /// the media file, its length and modification time, and `admission_fps`.
+    /// Identical for every member of a mirror group. The host must pass it back
+    /// to `reject_native_video` when it refuses, so that a refusal arriving
+    /// after the user changed something is discarded instead of killing a
+    /// configuration the host never judged.
+    pub admission_key: u64,
     /// Presentation suspension or the user's own pause, already combined for
     /// this display by the activation rules.
     pub paused: bool,

@@ -1303,11 +1303,19 @@ VideoTextureSubmissionStats TextureCache::VideoSubmissionStats() const {
         stats.pool_cached_texture_count = pool.cached_texture_count;
         stats.pool_cached_bytes = pool.cached_bytes;
         stats.pool_peak_cached_bytes = pool.peak_cached_bytes;
+        stats.pool_checked_out_bytes = pool.checked_out_bytes;
+        stats.pool_awaiting_gpu_bytes = pool.awaiting_gpu_bytes;
+        stats.pool_live_bytes = pool.live_bytes;
+        stats.pool_peak_live_bytes = pool.peak_live_bytes;
+        stats.pool_reserved_estimate_bytes = pool.reserved_estimate_bytes;
+        stats.pool_over_ceiling_grants = pool.over_ceiling_grants;
+        stats.pool_live_slot_count = pool.live_slot_count;
         stats.pool_hits = pool.hits;
         stats.pool_misses = pool.misses;
         stats.pool_recycles = pool.recycles;
         stats.pool_evictions = pool.evictions;
         stats.pool_refusals = pool.refusals;
+        stats.pool_in_flight_cap_breaches = pool.in_flight_cap_breaches;
     }
     return stats;
 }
@@ -1364,6 +1372,55 @@ bool TextureCache::EnsureVideoFrameCacheRoom(VideoTex& video_tex, std::string*) 
         video_tex.imported_frames.erase(victim);
     }
     return true;
+}
+
+void TextureCache::observeVideoConsumer(VideoTex& video_tex) {
+    // Only a recording cycle delimits a consumer set. Outside one there is
+    // nothing to attribute a call to, so the last observed figure stands.
+    if (m_video_frame_state != VideoFrameState::Recording) return;
+    if (video_tex.consumer_cycle_serial != m_video_recording_serial) {
+        // A cycle closed. Fold its tally into a high-water mark rather than
+        // replacing it, because the count that matters is how many consumers
+        // are HOLDING a destination, not how many asked this cycle. A hidden
+        // layer does not call in at all and still retains the frame it last
+        // received, so the cycle in which it went quiet would otherwise drop
+        // it from the figure — which is exactly the consumer the expectation
+        // needs to cover. Over-counting a consumer that has left for good only
+        // loosens a reporting threshold; under-counting one that is merely
+        // quiet reports every ordinary scene as a leak.
+        video_tex.observed_consumers =
+            std::max(video_tex.observed_consumers, video_tex.consumers_in_cycle);
+        video_tex.consumer_cycle_serial = m_video_recording_serial;
+        video_tex.consumers_in_cycle = 0;
+    }
+    if (video_tex.consumers_in_cycle != std::numeric_limits<uint32_t>::max()) {
+        ++video_tex.consumers_in_cycle;
+    }
+}
+
+std::uint32_t TextureCache::videoInFlightSlotExpectation() const {
+    // Every consumer of a video texture retains one imported frame in its own
+    // ImageSlotsRef — one per slot, never a list — so the destinations this
+    // cache can legitimately hold in flight are its unretired import
+    // submissions plus, per video texture, its imported-frame cap and its
+    // consumers. Anything beyond this is a destination that stopped being
+    // returned, which is what the pool's breach counter is for.
+    std::uint64_t slots = kMaxPendingVideoImportSubmissions;
+    for (const auto& [key, video_tex] : m_video_tex_map) {
+        if (video_tex == nullptr) continue;
+        // The larger of the closed cycle and the one in progress, so a
+        // consumer set that is still filling is covered in the cycle it grows
+        // in rather than a cycle later.
+        const std::uint64_t consumers =
+            std::max(video_tex->observed_consumers, video_tex->consumers_in_cycle);
+        slots += kMaxImportedVideoFramesPerVideoTex + consumers;
+    }
+    // A cache with no video texture registered yet still imports its first
+    // frame, so never publish less than one video texture's worth.
+    const std::uint64_t floor = kMaxPendingVideoImportSubmissions +
+                                kMaxImportedVideoFramesPerVideoTex;
+    return static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(std::max(slots, floor), std::numeric_limits<std::uint32_t>::max()));
 }
 
 bool TextureCache::BeginVideoFrameRecording(std::string* error) {
@@ -1487,6 +1544,12 @@ bool TextureCache::UpdateVideoFrame(std::string_view                 key,
         return SetError(error, std::string("video texture source missing: ") + std::string(key));
     }
 
+    // One call per consumer per recording cycle, so this is where the consumer
+    // set is observed. It happens before any early return below: a consumer
+    // that asked for a frame retains whatever it already holds whether or not
+    // this update succeeds, so it counts either way.
+    observeVideoConsumer(video_tex);
+
     const video::VideoPlaybackState effective_state =
         ResolveEffectiveVideoPlaybackState(m_video_playback_state, playback_state);
 
@@ -1554,24 +1617,81 @@ bool TextureCache::UpdateVideoFrame(std::string_view                 key,
             m_video_destination_pool = std::make_shared<video::AppleVideoMetalTexturePool>(metal_device);
         }
         auto candidate = std::make_shared<ImportedVideoFrame>();
-        if (converted) ++m_video_submission_stats.conversion_calls;
         if (converted && m_video_destination_pool) {
+            // The in-flight slot expectation is a per-pool quantity built
+            // from per-video-texture terms and from consumer retention, and
+            // only this object can see either. It has to say so before it
+            // asks, or an ordinary second wallpaper — or an ordinary scene
+            // with several layers on one video — is reported as breaching a
+            // threshold that never accounted for it.
+            static_assert(video::kImportedVideoFramesPerSource ==
+                              kMaxImportedVideoFramesPerVideoTex,
+                          "FfmpegVideoInterop mirrors TextureCache's per-video-texture imported "
+                          "frame cap; the two must stay equal");
+            static_assert(video::kPendingVideoImportSubmissions ==
+                              kMaxPendingVideoImportSubmissions,
+                          "FfmpegVideoInterop mirrors TextureCache's pending import submission "
+                          "cap; the two must stay equal");
+            m_video_destination_pool->SetInFlightSlotExpectation(videoInFlightSlotExpectation());
             // A shape nothing requests any more is not worth its bytes. The
             // decoded frame's size is the only size that matters here; the
             // surface this ends up on never enters the key.
             m_video_destination_pool->RetainOnly(frame.width, frame.height);
         }
-        // Nothing may fail between borrowing a destination and handing it to
-        // the import: an abandoned loan is a leaked slot.
+        // Nothing may fail between borrowing or reserving a destination and
+        // handing it to the import without unwinding the ledger: an abandoned
+        // loan is a leaked slot, and an abandoned reservation is bytes the
+        // budget believes are about to exist and never will.
         void* borrowed = converted && m_video_destination_pool
             ? m_video_destination_pool->Take(frame.width, frame.height)
             : nullptr;
+        // No reuse available: the import is about to allocate, so say so
+        // before it does rather than discovering the bytes on the way back.
+        video::AppleVideoConversionReservation reservation {};
+        if (converted && m_video_destination_pool && borrowed == nullptr) {
+            reservation = m_video_destination_pool->ReserveFresh(frame.width, frame.height);
+            if (! reservation.granted) {
+                // The budget did not book this allocation, so there is no
+                // allocation to make. Allocating anyway would hand back a
+                // texture the ledger never learns about, which is exactly the
+                // uncounted memory the reservation exists to prevent; this
+                // frame's import fails instead and the previously imported
+                // frame stays on screen.
+                //
+                // `ReserveFresh` has no refusal path — the in-flight slot
+                // count is reported, never enforced, because withholding the
+                // import is what stops destinations coming back at all — so
+                // reaching here means a condition that genuinely cannot
+                // allocate. Nothing was borrowed, nothing allocated, and an
+                // unbooked reservation holds no estimate, so there is nothing
+                // to unwind: `candidate` owns no lease and simply dies here.
+                ++m_video_submission_stats.conversion_reservations_refused;
+                if (! m_video_reservation_refusal_reported) {
+                    m_video_reservation_refusal_reported = true;
+                    LOG_INFO("video conversion destination not booked for \"%s\" (%ux%u); "
+                             "importing this frame would allocate one nothing could account "
+                             "for, so the previous frame stays on screen",
+                             std::string(key).c_str(),
+                             frame.width,
+                             frame.height);
+                }
+                return SetError(error,
+                                std::string("video conversion destination was not booked: ") +
+                                    std::string(key));
+            }
+            m_video_reservation_refusal_reported = false;
+        }
+        // A conversion this cache is actually going to perform. Counted after
+        // the reservation, because a frame that never got a destination
+        // converts nothing.
+        if (converted) ++m_video_submission_stats.conversion_calls;
         // The lease keeps the Core Video wrapper and pixel buffer alive for as
         // long as this imported frame can be sampled; the texture below is
         // borrowed from it.
-        bool destination_allocation_failed = false;
+        bool  destination_allocation_failed = false;
+        void* created = nullptr;
         void* lease = video::CreateAppleVideoFrameLease(
-            frame, metal_device, borrowed, error, &destination_allocation_failed);
+            frame, metal_device, borrowed, error, &destination_allocation_failed, &created);
         if (borrowed != nullptr) {
             if (lease != nullptr) {
                 // The lease took an independent retain. The loan stays open
@@ -1582,10 +1702,18 @@ bool TextureCache::UpdateVideoFrame(std::string_view                 key,
             }
         }
         if (lease == nullptr) {
-            if (destination_allocation_failed && m_video_destination_pool) {
-                m_video_destination_pool->ReportAllocationFailure(frame.width, frame.height);
+            if (m_video_destination_pool) {
+                m_video_destination_pool->CancelFresh(reservation);
+                if (destination_allocation_failed) {
+                    m_video_destination_pool->ReportAllocationFailure(frame.width, frame.height);
+                }
             }
             return false;
+        }
+        if (m_video_destination_pool) {
+            // Measured cost in, estimate out. A commit with no destination is
+            // the cancel: the conversion reused something after all.
+            m_video_destination_pool->CommitFresh(reservation, created);
         }
         void* metal_texture = video::AppleVideoFrameLeaseTexture(lease);
         if (converted) {
@@ -1604,6 +1732,13 @@ bool TextureCache::UpdateVideoFrame(std::string_view                 key,
             }
             video::ReleaseAppleVideoFrameLease(handle);
         });
+        // The lease exists and its deleter will recycle the destination, so
+        // from here on the destination is one a live imported frame owns. Every
+        // remaining failure in this block drops `candidate`, which runs that
+        // deleter and takes the bytes off the live books.
+        if (m_video_destination_pool) {
+            m_video_destination_pool->MarkGpuPending(borrowed != nullptr ? borrowed : created);
+        }
         TextureKey sampler_key {
             .width = static_cast<i32>(frame.width),
             .height = static_cast<i32>(frame.height),
@@ -1659,6 +1794,16 @@ bool TextureCache::UpdateVideoFrame(std::string_view                 key,
         // "did GPU-side video work stop" without a second call.
         m_counters->Set(OWE_RC_VIDEO_CONVERSIONS, m_video_submission_stats.conversion_calls);
         m_counters->Set(OWE_RC_VIDEO_IMPORTS, m_video_submission_stats.new_imports);
+        // Gauges, not totals: what the conversion destinations cost right now
+        // and the most they have ever cost. Read off the pool on the import
+        // path that just changed them, so no sampler and no thread exist for
+        // this. Zero when this cache converts nothing, and not read at all
+        // when nobody is counting.
+        if (m_video_destination_pool && RendererCounters::Enabled()) {
+            const auto pool = m_video_destination_pool->Stats();
+            m_counters->Set(OWE_RC_VIDEO_CONVERSION_LIVE_BYTES, pool.live_bytes);
+            m_counters->Set(OWE_RC_VIDEO_CONVERSION_PEAK_LIVE_BYTES, pool.peak_live_bytes);
+        }
     }
 
     return true;

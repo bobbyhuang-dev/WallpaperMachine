@@ -842,6 +842,18 @@ TEST_F(PlaybackGPU, WarmLargeVideoStopsReallocatingItsConversionDestination) {
     uint64_t created = 0;
     uint64_t reused = 0;
     std::array<uint8_t, 3> last {};
+    // Per-generation trace of the ledger, so the allocate/reuse/return/destroy
+    // sequence that produces the reported peak can be read instead of
+    // guessed. `created` and `reused` below are cumulative totals; the
+    // concurrent figure is `in_flight`, which is the destinations neither idle
+    // in the pool nor yet given back.
+    std::string  trace;
+    uint64_t     previous_created = 0;
+    uint64_t     previous_reused = 0;
+    uint64_t     previous_recycles = 0;
+    uint64_t     previous_refusals = 0;
+    uint64_t     previous_evictions = 0;
+    uint64_t     peak_in_flight = 0;
     for (uint64_t i = 1; i <= 16; ++i) {
         last = { static_cast<uint8_t>(30 + (i * 19) % 180),
                  static_cast<uint8_t>(70 + (i * 13) % 110),
@@ -849,6 +861,37 @@ TEST_F(PlaybackGPU, WarmLargeVideoStopsReallocatingItsConversionDestination) {
         source->Set(i, last[0], last[1], last[2]);
         ASSERT_TRUE(Update(key, ref, i / 60.0)) << "generation " << i;
         const auto stats = device.tex_cache().VideoSubmissionStats();
+        // Cached bytes are the idle subset of the live bytes, never more.
+        EXPECT_GE(stats.pool_live_bytes, stats.pool_cached_bytes) << "generation " << i;
+        EXPECT_EQ(stats.pool_live_bytes,
+                  stats.pool_cached_bytes + stats.pool_checked_out_bytes +
+                      stats.pool_awaiting_gpu_bytes)
+            << "generation " << i;
+        const uint64_t in_flight = stats.pool_live_slot_count - stats.pool_cached_texture_count;
+        peak_in_flight = std::max(peak_in_flight, in_flight);
+        // Every live destination in this case has the one shape, so the live
+        // total divided by the live count is that shape's measured cost.
+        const uint64_t slot_bytes =
+            stats.pool_live_slot_count == 0 ? 0 : stats.pool_live_bytes / stats.pool_live_slot_count;
+        trace += "generation=" + std::to_string(i) + " action=" +
+            (stats.converted_destinations_created > previous_created
+                 ? "allocate"
+                 : (stats.converted_destinations_reused > previous_reused ? "reuse" : "cache-hit")) +
+            " slot_bytes=" + std::to_string(slot_bytes) + " live_bytes=" +
+            std::to_string(stats.pool_live_bytes) + " cached_bytes=" +
+            std::to_string(stats.pool_cached_bytes) + " in_flight=" + std::to_string(in_flight) +
+            " returned=" + std::to_string(stats.pool_recycles - previous_recycles) +
+            // A destination the pool refused is released outside the ledger,
+            // which is a destroy as surely as an eviction is.
+            " refused=" + std::to_string(stats.pool_refusals - previous_refusals) +
+            " destroyed=" + std::to_string(stats.pool_evictions - previous_evictions) +
+            " peak_live_bytes=" + std::to_string(stats.pool_peak_live_bytes) +
+            " peak_cached_bytes=" + std::to_string(stats.pool_peak_cached_bytes) + "\n";
+        previous_created = stats.converted_destinations_created;
+        previous_reused = stats.converted_destinations_reused;
+        previous_recycles = stats.pool_recycles;
+        previous_refusals = stats.pool_refusals;
+        previous_evictions = stats.pool_evictions;
         if (i == kWarm) {
             created = stats.converted_destinations_created;
             reused = stats.converted_destinations_reused;
@@ -859,6 +902,7 @@ TEST_F(PlaybackGPU, WarmLargeVideoStopsReallocatingItsConversionDestination) {
                 << "generation " << i;
         }
     }
+    RecordProperty("conversion_ledger_trace", trace);
     const auto stats = device.tex_cache().VideoSubmissionStats();
     EXPECT_GT(stats.converted_destinations_reused, 0u);
     EXPECT_EQ(stats.pool_refusals, 0u);
@@ -866,6 +910,15 @@ TEST_F(PlaybackGPU, WarmLargeVideoStopsReallocatingItsConversionDestination) {
     EXPECT_LE(stats.pool_peak_cached_bytes, video::VideoConversionBudget::kDefaultCeilingBytes);
     // The pool really did hold a destination the retired ceiling refused.
     EXPECT_GT(stats.pool_peak_cached_bytes, 64u * 1024u * 1024u);
+    // The cached figure alone was never the cost of this workload. More than
+    // one destination was in flight at once, and each of those is the same
+    // size as the single cached one the old figure reported.
+    EXPECT_GT(peak_in_flight, 1u);
+    EXPECT_GT(stats.pool_peak_live_bytes, stats.pool_peak_cached_bytes);
+    EXPECT_GE(stats.pool_peak_live_bytes, peak_in_flight * 64u * 1024u * 1024u);
+    // Reservations are intents; none may be left outstanding once every
+    // import this loop started has finished.
+    EXPECT_EQ(stats.pool_reserved_estimate_bytes, 0u);
 
     // A destination that came back from the pool still has to carry the frame
     // the conversion wrote into it. Sampling one corner is enough: a stale or
@@ -895,6 +948,10 @@ TEST_F(PlaybackGPU, RetainedFramesKeepTheirConversionDestinationsOutOfThePool) {
     auto ref = Register(key, source);
     std::vector<ImageSlotsRef> held { ref };
     std::vector<Bytes>         expected { Reference(*source, false) };
+    // Seven destinations in flight at once, none of them returned. This is
+    // above the in-flight slot cap on purpose: the cap is a reported
+    // structural expectation, never a refusal, so every one of these imports
+    // has to succeed.
     for (uint64_t i = 1; i <= 6; ++i) {
         source->Set(i, static_cast<uint8_t>(40 + i * 25), static_cast<uint8_t>(90 + i * 9),
                     static_cast<uint8_t>(190 - i * 21));
@@ -927,6 +984,426 @@ TEST_F(PlaybackGPU, RetainedFramesKeepTheirConversionDestinationsOutOfThePool) {
     EXPECT_GT(device.tex_cache().VideoSubmissionStats().converted_destinations_reused,
               before.converted_destinations_reused);
     EXPECT_EQ(Read(ref.getActive()), Reference(*source, false));
+}
+
+TEST_F(PlaybackGPU, FreshConversionDestinationIsCountedBeforeItIsEverRecycled) {
+    // The accounting hole this closes. A destination the import allocated for
+    // itself used to reach the budget only when the frame that owned it died
+    // and offered it back; until then the process held 81 MiB per frame that
+    // nothing was counting, and the reported figure was the idle pool alone.
+    auto source = std::make_shared<SyntheticVideo>();
+    source->Resize(6144, 3456);
+    const std::string key = "fresh";
+    auto ref = Register(key, source);
+    source->Set(1, 120, 100, 140);
+    ASSERT_TRUE(Update(key, ref));
+
+    const auto stats = device.tex_cache().VideoSubmissionStats();
+    ASSERT_GT(stats.converted_destinations_created, 0u);
+    ASSERT_EQ(stats.converted_destinations_reused, 0u);
+    // Nothing has come back yet, so the reuse pool is still empty...
+    EXPECT_EQ(stats.pool_recycles, 0u);
+    EXPECT_EQ(stats.pool_cached_texture_count, 0u);
+    EXPECT_EQ(stats.pool_cached_bytes, 0u);
+    EXPECT_EQ(stats.pool_peak_cached_bytes, 0u);
+    // ...and every destination is nevertheless on the books, held by the live
+    // imported frames that reference them.
+    EXPECT_EQ(stats.pool_checked_out_bytes, 0u);
+    EXPECT_EQ(stats.pool_live_bytes, stats.pool_awaiting_gpu_bytes);
+    EXPECT_EQ(stats.pool_live_slot_count, stats.converted_destinations_created);
+    EXPECT_GE(stats.pool_live_bytes,
+              stats.converted_destinations_created * 6144ull * 3456ull * 4ull);
+    EXPECT_EQ(stats.pool_peak_live_bytes, stats.pool_live_bytes);
+    // An estimate is released the moment the allocation it stood for exists.
+    EXPECT_EQ(stats.pool_reserved_estimate_bytes, 0u);
+}
+
+TEST_F(PlaybackGPU, TwoVideoTexturesShareOnePoolWithinTheirCombinedSlotExpectation) {
+    // One texture cache owns one conversion pool, so the in-flight slot
+    // expectation is a per-pool quantity — but the count it is built from,
+    // `kMaxImportedVideoFramesPerVideoTex`, is per video texture. Sizing the
+    // pool's threshold with the per-video-texture figure makes every second
+    // wallpaper look like a breach the moment both are busy: a permanent false
+    // report of a condition that is supposed to mean a scene is holding more
+    // frames than the caps predict. Two ordinary wallpapers are not that.
+    //
+    // Both sources are the same shape here, so a single reuse pool can serve
+    // both and the sizing is the only thing under test.
+    auto first = std::make_shared<SyntheticVideo>();
+    auto second = std::make_shared<SyntheticVideo>();
+    auto first_ref = Register("pair-first", first);
+    auto second_ref = Register("pair-second", second);
+
+    // Long enough for both sources to fill their imported-frame sets and start
+    // recycling; the steady-state assertions only look past it.
+    constexpr uint64_t kWarm = 12;
+    uint64_t first_reuses = 0, first_creates = 0;
+    uint64_t second_reuses = 0, second_creates = 0;
+    uint64_t peak_in_flight = 0;
+    auto previous = device.tex_cache().VideoSubmissionStats();
+    for (uint64_t i = 1; i <= 24; ++i) {
+        first->Set(i, static_cast<uint8_t>(30 + (i * 19) % 180),
+                   static_cast<uint8_t>(70 + (i * 13) % 110),
+                   static_cast<uint8_t>(60 + (i * 7) % 130));
+        ASSERT_TRUE(Update("pair-first", first_ref, i / 60.0)) << "first source, generation " << i;
+        auto now = device.tex_cache().VideoSubmissionStats();
+        if (i > kWarm) {
+            first_reuses += now.converted_destinations_reused - previous.converted_destinations_reused;
+            first_creates += now.converted_destinations_created - previous.converted_destinations_created;
+        }
+        previous = now;
+
+        // Deliberately different code values, so a destination handed to both
+        // sources at once would show up as the wrong picture below.
+        second->Set(i, static_cast<uint8_t>(200 - (i * 17) % 150),
+                    static_cast<uint8_t>(140 - (i * 11) % 90),
+                    static_cast<uint8_t>(180 - (i * 23) % 120));
+        ASSERT_TRUE(Update("pair-second", second_ref, i / 60.0))
+            << "second source, generation " << i;
+        now = device.tex_cache().VideoSubmissionStats();
+        if (i > kWarm) {
+            second_reuses += now.converted_destinations_reused - previous.converted_destinations_reused;
+            second_creates += now.converted_destinations_created - previous.converted_destinations_created;
+        }
+        previous = now;
+
+        // Neither source may be turned away, and neither may be reported as
+        // holding more than the pool's threshold accounts for: two ordinary
+        // wallpapers are exactly what that threshold is supposed to admit.
+        EXPECT_EQ(now.conversion_reservations_refused, 0u) << "generation " << i;
+        EXPECT_EQ(now.pool_refusals, 0u) << "generation " << i;
+        EXPECT_EQ(now.pool_in_flight_cap_breaches, 0u) << "generation " << i;
+        peak_in_flight = std::max(peak_in_flight,
+                                  now.pool_live_slot_count - now.pool_cached_texture_count);
+
+        EXPECT_EQ(Read(first_ref.getActive()), Reference(*first, false))
+            << "first source, generation " << i;
+        EXPECT_EQ(Read(second_ref.getActive()), Reference(*second, false))
+            << "second source, generation " << i;
+    }
+
+    // Both wallpapers reuse, and neither is still allocating once warm. A
+    // threshold sized for one video texture would not change this — nothing
+    // refuses any more — but the breach assertion above would fire every
+    // generation, which is the regression this case pins.
+    EXPECT_GT(first_reuses, 0u);
+    EXPECT_GT(second_reuses, 0u);
+    EXPECT_EQ(first_creates, 0u) << "a warm pool must stop allocating for the first source";
+    EXPECT_EQ(second_creates, 0u) << "a warm pool must stop allocating for the second source";
+
+    // The case really did exceed what one video texture alone may hold, which
+    // is the only reason the sizing matters here.
+    EXPECT_GT(peak_in_flight, video::VideoConversionBudget::kCoexistingSlots)
+        << "two busy sources must exceed a single source's in-flight allowance, "
+           "or this test is not covering the sizing at all";
+    const auto stats = device.tex_cache().VideoSubmissionStats();
+    EXPECT_EQ(stats.pool_in_flight_cap_breaches, 0u);
+    EXPECT_EQ(stats.pool_reserved_estimate_bytes, 0u);
+    EXPECT_EQ(stats.pool_live_bytes, stats.pool_cached_bytes + stats.pool_checked_out_bytes +
+                                         stats.pool_awaiting_gpu_bytes);
+}
+
+TEST_F(PlaybackGPU, InFlightSlotCapIsReportedAndNeverRefusesAnImport) {
+    // The in-flight slot cap is a structural expectation this pool reports,
+    // never a gate. Refusing a conversion destination cannot be recovered from
+    // on the real path: the destination that would satisfy the next request is
+    // released by a consumer re-binding, and a consumer re-binds by receiving
+    // the very import a refusal would withhold. Refusal removes the only way
+    // back, so past the cap the import must still go through, the breach must
+    // be reported, and every destination must stay accounted for.
+    auto source = std::make_shared<SyntheticVideo>();
+    const std::string key = "past-cap";
+    auto ref = Register(key, source);
+    std::vector<ImageSlotsRef> held { ref };
+    std::vector<Bytes>         expected { Reference(*source, false) };
+
+    // Well past `kMaxPendingVideoImportSubmissions +
+    // kMaxImportedVideoFramesPerVideoTex`, holding every frame so nothing is
+    // ever returned. This is the shape a denying cap would have stalled on.
+    constexpr uint64_t kCap = uint64_t(video::kPendingVideoImportSubmissions +
+                                       video::kImportedVideoFramesPerSource);
+    for (uint64_t i = 1; i <= kCap + 6; ++i) {
+        source->Set(i, static_cast<uint8_t>(40 + i * 15), static_cast<uint8_t>(90 + i * 9),
+                    static_cast<uint8_t>(200 - i * 13));
+        const auto before = device.tex_cache().VideoSubmissionStats();
+        ASSERT_TRUE(Update(key, ref, i / 60.0))
+            << "the in-flight cap must never refuse an import, generation " << i;
+        held.push_back(ref);
+        expected.push_back(Reference(*source, false));
+
+        const auto after = device.tex_cache().VideoSubmissionStats();
+        EXPECT_EQ(after.conversion_reservations_refused, 0u) << "generation " << i;
+        // Every destination that exists is on the books. Nothing has come back,
+        // so nothing was reused and nothing cached: the ledger's live count has
+        // to be exactly what this cache allocated, which is what an allocation
+        // slipping past an unread reservation would break.
+        EXPECT_EQ(after.converted_destinations_reused, 0u) << "generation " << i;
+        EXPECT_EQ(after.pool_cached_texture_count, 0u) << "generation " << i;
+        EXPECT_EQ(after.pool_live_slot_count, after.converted_destinations_created)
+            << "generation " << i;
+        EXPECT_EQ(after.pool_live_slot_count, before.pool_live_slot_count + 1)
+            << "generation " << i;
+        EXPECT_EQ(after.pool_live_bytes, after.pool_awaiting_gpu_bytes) << "generation " << i;
+        EXPECT_EQ(after.pool_checked_out_bytes, 0u) << "generation " << i;
+        EXPECT_EQ(after.pool_reserved_estimate_bytes, 0u) << "generation " << i;
+        // Granting past the cap is not the same as not noticing. Every
+        // reservation made while the count was already at the cap is counted.
+        EXPECT_EQ(after.pool_in_flight_cap_breaches,
+                  before.pool_live_slot_count >= kCap ? before.pool_in_flight_cap_breaches + 1
+                                                      : before.pool_in_flight_cap_breaches)
+            << "generation " << i;
+    }
+
+    const auto past = device.tex_cache().VideoSubmissionStats();
+    // The case really did run past the cap, or it is not covering this rule.
+    EXPECT_GT(past.pool_live_slot_count, kCap);
+    EXPECT_GT(past.pool_in_flight_cap_breaches, 0u);
+    // A breach is not a refusal, and must not be counted as one.
+    EXPECT_EQ(past.pool_refusals, 0u);
+    // Every retained frame still carries its own picture: running past the cap
+    // must not quietly hand one destination to two live frames.
+    for (size_t i = 0; i < held.size(); ++i) {
+        EXPECT_EQ(Read(held[i].getActive()), expected[i]) << "retained frame " << i;
+    }
+
+    // And once a consumer does let go, reuse resumes out of the pool rather
+    // than by allocating afresh.
+    held.clear();
+    const auto released = device.tex_cache().VideoSubmissionStats();
+    ASSERT_GT(released.pool_cached_texture_count, 0u);
+    source->Set(kCap + 7, 200, 90, 60);
+    ASSERT_TRUE(Update(key, ref));
+    const auto recovered = device.tex_cache().VideoSubmissionStats();
+    EXPECT_GT(recovered.converted_destinations_reused, past.converted_destinations_reused);
+    EXPECT_EQ(recovered.converted_destinations_created, past.converted_destinations_created);
+    EXPECT_EQ(recovered.conversion_reservations_refused, 0u);
+    EXPECT_EQ(recovered.pool_reserved_estimate_bytes, 0u);
+    EXPECT_EQ(Read(ref.getActive()), Reference(*source, false));
+}
+
+TEST_F(PlaybackGPU, HiddenConsumersKeepImportingAndTheOverageStopsGrowing) {
+    // The shape that decided this design, driven entirely through the real pass
+    // path: several consumers of one video texture where some stop re-binding
+    // and keep the generation they last saw in their own `desc().vk_textures`.
+    // Those retained references are handed out by `UpdateVideoFrame` itself, so
+    // they are the import path's own retention, and they push the in-flight
+    // count past what one video texture's caps account for.
+    //
+    // Under a cap that refused, this froze. The refused update left every
+    // consumer holding its old reference, so no destination was ever returned,
+    // so every later reservation was refused too: measured refusals of
+    // 1, 8, 14, 19, 23 over five generations with allocations frozen and reuse
+    // stuck at zero, the texture never leaving one generation again. Playback
+    // has to keep moving instead.
+    auto source = std::make_shared<SyntheticVideo>();
+    const std::string key = "hidden";
+    auto ref = Register(key, source);
+    std::array<CustomShaderPass*, 7> passes;
+    auto shader = Compile(true, false);
+    for (auto& p : passes) p = &Pass(true, false, {}, false, VK_SAMPLE_COUNT_1_BIT, shader);
+    for (auto* pass : passes) {
+        pass->desc().textures[0] = key;
+        pass->desc().video_textures[0] = true;
+    }
+
+    // Every consumer updating at one scene time shares a single import, which
+    // is what an ordinary frame does and what has to stay cheap.
+    Begin();
+    for (auto* pass : passes) ASSERT_TRUE(pass->updateFrame(device, rr));
+    Upload();
+    for (auto* pass : passes) Execute(*pass);
+    const auto shared = device.tex_cache().VideoSubmissionStats();
+    EXPECT_EQ(shared.converted_destinations_created, 1u)
+        << "consumers at one scene time must share one imported frame";
+    EXPECT_GE(shared.cache_hits, passes.size() - 1);
+    Submit();
+
+    // Now let only a rotating subset re-bind, so the rest retain older
+    // generations across frames.
+    //
+    // This is also where the overage's upper bound is pinned. It is enforced
+    // by construction rather than by a counter: a consumer holds exactly one
+    // reference per video-texture slot — `vk_textures[i]` is one assignment,
+    // not a list — so the live set cannot exceed the cache's own retention
+    // plus one destination per consumer slot, and neither term grows with
+    // time. The observable consequence, asserted below, is that allocation
+    // stops outright while reuse keeps going.
+    constexpr uint64_t kSettle = 20;
+    constexpr uint64_t kGenerations = 60;
+    uint64_t peak_in_flight = 0;
+    uint64_t last_generation = 0;
+    VideoTextureSubmissionStats settled {};
+    for (uint64_t g = 1; g <= kGenerations; ++g) {
+        source->Set(g, static_cast<uint8_t>(30 + g * 17), static_cast<uint8_t>(80 + g * 9),
+                    static_cast<uint8_t>(170 - g * 11));
+        Begin();
+        for (size_t i = g % passes.size(); i < passes.size(); ++i) {
+            ASSERT_TRUE(passes[i]->updateFrame(device, rr))
+                << "generation " << g << " pass " << i;
+        }
+        Upload();
+        for (auto* pass : passes) Execute(*pass);
+        const auto stats = device.tex_cache().VideoSubmissionStats();
+        peak_in_flight = std::max<uint64_t>(
+            peak_in_flight, stats.pool_live_slot_count - stats.pool_cached_texture_count);
+        // Not one refusal, and the ledger stays self-consistent throughout.
+        EXPECT_EQ(stats.conversion_reservations_refused, 0u) << "generation " << g;
+        EXPECT_EQ(stats.pool_live_bytes, stats.pool_cached_bytes + stats.pool_checked_out_bytes +
+                                             stats.pool_awaiting_gpu_bytes)
+            << "generation " << g;
+        EXPECT_EQ(stats.pool_reserved_estimate_bytes, 0u) << "generation " << g;
+        if (g == kSettle) settled = stats;
+        if (g > kSettle) {
+            // The bound, as an observable: past the settling point this
+            // workload allocates nothing further and the live set does not
+            // grow, however long it runs. A genuinely unbounded overage would
+            // show up right here as either figure creeping up.
+            EXPECT_EQ(stats.converted_destinations_created,
+                      settled.converted_destinations_created)
+                << "conversion destinations kept being allocated at generation " << g;
+            EXPECT_EQ(stats.pool_live_slot_count, settled.pool_live_slot_count)
+                << "the live destination set kept growing at generation " << g;
+            // ...while playback keeps advancing out of the pool.
+            EXPECT_GT(stats.converted_destinations_reused, settled.converted_destinations_reused)
+                << "generation " << g;
+            // And the threshold now covers this shape, so nothing is reported
+            // at all: a breach means a destination that stopped being
+            // returned, not an ordinary scene with several layers on one
+            // video. That is the only thing worth a log line.
+            EXPECT_EQ(stats.pool_in_flight_cap_breaches, 0u)
+                << "an ordinary retained-consumer scene must not be reported as a breach, "
+                   "generation " << g;
+        }
+        Submit();
+        last_generation = g;
+    }
+
+    const auto stats = device.tex_cache().VideoSubmissionStats();
+    // The case exceeded what one video texture's own caps account for, which is
+    // the only reason it is interesting.
+    EXPECT_GT(peak_in_flight, uint64_t(video::kPendingVideoImportSubmissions +
+                                       video::kImportedVideoFramesPerSource))
+        << "the retained-consumer shape did not exceed the cap, so this proves nothing";
+    // Nothing here is a leak, so nothing here is reported. A breach now means
+    // a destination that stopped being returned, which is the only thing worth
+    // a log line; an ordinary scene with several layers on one video is not
+    // that, and used to be reported as if it were.
+    EXPECT_EQ(stats.pool_in_flight_cap_breaches, 0u);
+    // The overage is bounded, and this is the number: the live set never grew
+    // past the cache's own retention plus one destination per consumer slot.
+    EXPECT_LE(stats.pool_live_slot_count,
+              uint64_t(video::kPendingVideoImportSubmissions +
+                       video::kImportedVideoFramesPerSource) + passes.size());
+    // Playback did not freeze: destinations came back and were reused, rather
+    // than the texture being stuck on whatever generation filled the cap.
+    EXPECT_GT(stats.converted_destinations_reused, 0u)
+        << "a stalled video texture never reuses, because nothing is ever returned";
+    EXPECT_GT(stats.pool_recycles, 0u);
+
+    // And the surface really is showing the newest frame, not a frozen one.
+    ASSERT_TRUE(Update(key, ref, last_generation / 60.0));
+    EXPECT_EQ(Read(ref.getActive()), Reference(*source, false));
+}
+
+TEST_F(PlaybackGPU, ClearedCacheAndDestroyedPoolLeaveNoConversionBytesBehind) {
+    auto&          domain = video::SharedVideoConversionMemoryDomain();
+    const uint64_t domain_live_before = domain.live_bytes();
+    const size_t   domain_budgets_before = domain.budget_count();
+
+    auto cache = std::make_unique<TextureCache>(device);
+    auto source = std::make_shared<SyntheticVideo>();
+    source->Resize(1920, 1080);
+    const std::string key = "drained";
+    auto              ref = Register(key, source, cache.get());
+    for (uint64_t i = 1; i <= 5; ++i) {
+        source->Set(i, uint8_t(40 + i * 21), uint8_t(90 + i * 11), uint8_t(180 - i * 17));
+        std::string error;
+        ASSERT_TRUE(cache->UpdateVideoFrame(
+            key, video::VideoPlaybackState { .scene_elapsed_seconds = i / 60.0 }, &ref, &error))
+            << error;
+    }
+    const auto busy = cache->VideoSubmissionStats();
+    EXPECT_GT(busy.pool_live_bytes, 0u);
+    // A pool that has opted into the domain is one the domain can see.
+    EXPECT_EQ(domain.budget_count(), domain_budgets_before + 1);
+    EXPECT_GE(domain.live_bytes(), domain_live_before + busy.pool_live_bytes);
+
+    ref = {};
+    ASSERT_TRUE(cache->WaitForPendingUploads());
+    // Clear drops the pool, which drains what it cached and takes itself out
+    // of the domain. The destinations its live imports still held go with
+    // their frames, so the domain has to come back to exactly where it was.
+    ASSERT_TRUE(cache->Clear());
+    const auto cleared = cache->VideoSubmissionStats();
+    EXPECT_EQ(cleared.pool_cached_texture_count, 0u);
+    EXPECT_EQ(cleared.pool_cached_bytes, 0u);
+    EXPECT_EQ(cleared.pool_peak_cached_bytes, 0u);
+    EXPECT_EQ(cleared.pool_checked_out_bytes, 0u);
+    EXPECT_EQ(cleared.pool_awaiting_gpu_bytes, 0u);
+    EXPECT_EQ(cleared.pool_live_bytes, 0u);
+    EXPECT_EQ(cleared.pool_peak_live_bytes, 0u);
+    EXPECT_EQ(cleared.pool_reserved_estimate_bytes, 0u);
+    EXPECT_EQ(cleared.pool_live_slot_count, 0u);
+    EXPECT_EQ(domain.budget_count(), domain_budgets_before);
+    EXPECT_EQ(domain.live_bytes(), domain_live_before);
+
+    cache.reset();
+    EXPECT_EQ(domain.budget_count(), domain_budgets_before);
+    EXPECT_EQ(domain.live_bytes(), domain_live_before);
+
+    // A pool driven by hand, so the three states and the drain are observed on
+    // a live object rather than on one the cache has already thrown away.
+    id<MTLDevice> metal = MTLCreateSystemDefaultDevice();
+    ASSERT_NE(metal, nil);
+    {
+        video::AppleVideoMetalTexturePool pool((__bridge void*)metal);
+        source->Set(6, 60, 150, 110);
+        const auto reservation = pool.ReserveFresh(source->frame.width, source->frame.height);
+        EXPECT_TRUE(reservation.granted);
+        EXPECT_GT(pool.Stats().reserved_estimate_bytes, 0u);
+        EXPECT_EQ(pool.Stats().live_bytes, 0u) << "an intent is not an allocation";
+
+        std::string error;
+        void*       created = nullptr;
+        void*       lease = video::CreateAppleVideoFrameLease(
+            source->frame, (__bridge void*)metal, nullptr, &error, nullptr, &created);
+        ASSERT_NE(lease, nullptr) << error;
+        ASSERT_NE(created, nullptr);
+        pool.CommitFresh(reservation, created);
+        const auto committed = pool.Stats();
+        EXPECT_EQ(committed.reserved_estimate_bytes, 0u);
+        EXPECT_EQ(committed.checked_out_bytes, committed.live_bytes);
+        EXPECT_GT(committed.live_bytes, 0u);
+        EXPECT_EQ(committed.cached_bytes, 0u);
+
+        pool.MarkGpuPending(created);
+        const auto pending = pool.Stats();
+        EXPECT_EQ(pending.checked_out_bytes, 0u);
+        EXPECT_EQ(pending.awaiting_gpu_bytes, committed.live_bytes);
+        EXPECT_EQ(pending.live_bytes, committed.live_bytes);
+
+        void* recyclable = video::TakeAppleVideoFrameLeaseDestination(lease);
+        ASSERT_EQ(recyclable, created);
+        pool.Recycle(recyclable);
+        video::ReleaseAppleVideoFrameLease(lease);
+        const auto returned = pool.Stats();
+        EXPECT_EQ(returned.awaiting_gpu_bytes, 0u);
+        EXPECT_EQ(returned.cached_bytes, committed.live_bytes);
+        EXPECT_EQ(returned.live_bytes, committed.live_bytes);
+
+        pool.Clear();
+        const auto drained = pool.Stats();
+        EXPECT_EQ(drained.cached_bytes, 0u);
+        EXPECT_EQ(drained.cached_texture_count, 0u);
+        EXPECT_EQ(drained.checked_out_bytes, 0u);
+        EXPECT_EQ(drained.awaiting_gpu_bytes, 0u);
+        EXPECT_EQ(drained.live_bytes, 0u);
+        EXPECT_EQ(drained.reserved_estimate_bytes, 0u);
+        EXPECT_EQ(drained.live_slot_count, 0u);
+    }
+    // The destroyed pool took itself out of the shared domain.
+    EXPECT_EQ(domain.budget_count(), domain_budgets_before);
+    EXPECT_EQ(domain.live_bytes(), domain_live_before);
 }
 
 TEST_F(PlaybackGPU, MetalConversionMatchesTheCpuColorReference) {
@@ -1079,7 +1556,7 @@ TEST_F(PlaybackGPU, ResizeAndDirectBgraKeepSeparateLifetimes) {
     EXPECT_LE(stats.pool_cached_texture_count, video::VideoConversionBudget::kCoexistingSlots);
     EXPECT_LE(stats.pool_cached_bytes, video::VideoConversionBudget::kDefaultCeilingBytes);
     // Resolution churn must not leave the pool holding shapes nothing asks
-    // for: only the size the last import requested may still be resident.
+    // for: only the size the last import requested may still be cached.
     EXPECT_LE(stats.pool_cached_bytes, 32u * 32u * 4u * video::VideoConversionBudget::kCoexistingSlots);
     id<MTLDevice> metal = MTLCreateSystemDefaultDevice(); ASSERT_NE(metal, nil);
     video::AppleVideoMetalTexturePool pool((__bridge void*)metal);

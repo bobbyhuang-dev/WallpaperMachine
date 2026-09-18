@@ -78,6 +78,20 @@ typedef enum owe_renderer_counter {
      */
     OWE_RC_VIDEO_CONVERSIONS,
     OWE_RC_VIDEO_IMPORTS,
+    /*
+     * Bytes of video conversion destinations that texture cache is keeping
+     * alive right now, and the most it has ever kept alive. Stored, not
+     * accumulated: these are gauges.
+     *
+     * The ledger covers the converted BGRA8 destination textures alone —
+     * cached for reuse, checked out to an import, or referenced by a live
+     * imported frame. Decode pixel buffers, Core Video plane wrappers, the
+     * Vulkan images that alias these textures and the swapchain are all
+     * outside it. It is an allocation total, not a residency measurement, and
+     * not a process footprint.
+     */
+    OWE_RC_VIDEO_CONVERSION_LIVE_BYTES,
+    OWE_RC_VIDEO_CONVERSION_PEAK_LIVE_BYTES,
 
     /* --- source work, shareable between consumers --- */
     /*

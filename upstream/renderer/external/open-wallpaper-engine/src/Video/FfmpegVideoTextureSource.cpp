@@ -2,6 +2,7 @@
 
 #include "Image.hpp"
 #include "Video/VideoDecodePump.hpp"
+#include "Video/VideoFramePacing.hpp"
 #include "Video/VideoMetadata.hpp"
 #include "Platform/Apple/FfmpegVideoInterop.hpp"
 #include "Utils/Logging.h"
@@ -35,6 +36,8 @@ extern "C" {
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <unistd.h>
 
 namespace wallpaper::video
 {
@@ -74,6 +77,25 @@ double CircularDistance(double left, double right, double duration_seconds)
     return std::min(direct, duration_seconds - direct);
 }
 
+std::filesystem::path VideoCacheDirectory(std::string* error)
+{
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "wallpaper-engine-video";
+    std::error_code       ec;
+    std::filesystem::create_directories(temp_dir, ec);
+    if (ec) {
+        SetError(error, "failed to create temporary video cache directory");
+        return {};
+    }
+    return temp_dir;
+}
+
+/// Extracts an inline video payload into the shared cache so FFmpeg can open
+/// it by path.
+///
+/// The bytes are staged under a name unique to this attempt and only then
+/// renamed onto the content-addressed name, so a concurrent opener either sees
+/// nothing or sees the finished file - never a half-written one. Losing the
+/// rename race is success: the winner's file holds the same bytes.
 std::filesystem::path WriteVideoPayloadToTemp(std::string_view debug_label,
                                               const std::vector<char>& payload,
                                               std::string* error)
@@ -83,23 +105,24 @@ std::filesystem::path WriteVideoPayloadToTemp(std::string_view debug_label,
         return {};
     }
 
-    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "wallpaper-engine-video";
-    std::error_code       ec;
-    std::filesystem::create_directories(temp_dir, ec);
-    if (ec) {
-        SetError(error, "failed to create temporary video cache directory");
-        return {};
-    }
+    const std::filesystem::path temp_dir = VideoCacheDirectory(error);
+    if (temp_dir.empty()) return {};
 
-    const std::filesystem::path media_path =
-        temp_dir / (utils::genSha1(std::span(payload.data(), payload.size())) + ".mp4");
+    std::error_code ec;
+    const std::string digest = utils::genSha1(std::span(payload.data(), payload.size()));
+    const std::filesystem::path media_path = temp_dir / (digest + ".mp4");
+    const auto payload_size = static_cast<uintmax_t>(payload.size());
     if (std::filesystem::exists(media_path, ec) &&
         !ec &&
-        std::filesystem::file_size(media_path, ec) == static_cast<uintmax_t>(payload.size())) {
+        std::filesystem::file_size(media_path, ec) == payload_size) {
         return media_path;
     }
 
-    std::ofstream output(media_path, std::ios::binary | std::ios::trunc);
+    static std::atomic<uint64_t> staging_serial { 0 };
+    const std::filesystem::path staging_path =
+        temp_dir / (digest + "." + std::to_string(static_cast<long long>(getpid())) + "." +
+                    std::to_string(staging_serial.fetch_add(1, std::memory_order_relaxed)) + ".part");
+    std::ofstream output(staging_path, std::ios::binary | std::ios::trunc);
     if (!output.good()) {
         SetError(error, "failed to open temporary video cache file");
         return {};
@@ -107,7 +130,19 @@ std::filesystem::path WriteVideoPayloadToTemp(std::string_view debug_label,
 
     output.write(payload.data(), static_cast<std::streamsize>(payload.size()));
     output.close();
-    if (!output.good()) {
+    // The size on disk is the completion check: a short write is discarded
+    // instead of reaching the published name.
+    if (!output.good() || std::filesystem::file_size(staging_path, ec) != payload_size || ec) {
+        std::filesystem::remove(staging_path, ec);
+        SetError(error, "failed to write temporary video cache file");
+        return {};
+    }
+
+    std::filesystem::rename(staging_path, media_path, ec);
+    if (ec) {
+        std::error_code remove_ec;
+        std::filesystem::remove(staging_path, remove_ec);
+        if (std::filesystem::file_size(media_path, ec) == payload_size && !ec) return media_path;
         SetError(error, "failed to write temporary video cache file");
         return {};
     }
@@ -116,6 +151,15 @@ std::filesystem::path WriteVideoPayloadToTemp(std::string_view debug_label,
              std::string(debug_label).c_str(),
              media_path.string().c_str());
     return media_path;
+}
+
+/// Identity of a running decoder instance. Monotonic and never reused, so a
+/// report can de-duplicate one source's work across several consumers without
+/// ever merging two decoders that happen to read the same file.
+uint64_t NextVideoSourceInstanceId()
+{
+    static std::atomic<uint64_t> next { 1 };
+    return next.fetch_add(1, std::memory_order_relaxed);
 }
 
 double ProbeDurationSeconds(AVFormatContext* format_context, AVStream* stream)
@@ -132,25 +176,20 @@ double ProbeDurationSeconds(AVFormatContext* format_context, AVStream* stream)
     return 0.0;
 }
 
-/// Shortest period between frames this stream can plausibly produce.
+/// Shortest period the container's declared rates imply.
 ///
-/// Pacing has to use the shortest, not the average: a variable-frame-rate clip
-/// whose average period is longer than its tightest gap would lose the frames
-/// inside that gap. `r_frame_rate` is libavformat's upper bound on the frame
-/// rate, so the smaller of the two periods is the safe one — it can only make
-/// the clock render more often than needed, never less.
+/// `avg_frame_rate` is an average and `r_frame_rate` is libavformat's estimate,
+/// so neither proves how far apart two particular frames are. This value is
+/// only ever combined with observed presentation timestamps, never trusted on
+/// its own to decide that a frame can be skipped.
 double ProbeShortestFrameDurationSeconds(AVStream* stream)
 {
     if (stream == nullptr) return 0.0;
-    double shortest = 0.0;
-    for (const AVRational rate : { stream->avg_frame_rate, stream->r_frame_rate }) {
-        if (rate.num <= 0 || rate.den <= 0) continue;
-        const double fps = av_q2d(rate);
-        if (!std::isfinite(fps) || !(fps > 0.0)) continue;
-        const double period = 1.0 / fps;
-        if (shortest == 0.0 || period < shortest) shortest = period;
-    }
-    return shortest;
+    const std::array<video::FrameRateRatio, 2> rates {
+        video::FrameRateRatio { stream->avg_frame_rate.num, stream->avg_frame_rate.den },
+        video::FrameRateRatio { stream->r_frame_rate.num, stream->r_frame_rate.den },
+    };
+    return video::ShortestMetadataPeriodSeconds(rates.data(), rates.size());
 }
 
 double ProbeFrameDurationSeconds(AVStream* stream)
@@ -251,6 +290,12 @@ public:
     {
         if (!image.header.isVideo) {
             m_initial_error = "image is not marked as a video texture";
+            return;
+        }
+        if (!image.videoFilePath.empty()) {
+            // The media already is a file: the decoder opens it where it lies,
+            // so this source never holds the video's bytes at all.
+            m_media_path = image.videoFilePath;
             return;
         }
         if (image.slots.empty() || image.slots.front().mipmaps.empty()) {
@@ -442,8 +487,22 @@ public:
     [[nodiscard]] double frameDurationSeconds() const
     {
         std::lock_guard lock(m_mutex);
-        // Zero until the container has been probed, which reads as "unknown".
-        return m_primed ? m_pacing_frame_duration_seconds : 0.0;
+        // Zero until enough real presentation timestamps have been seen, which
+        // the frame clock reads as "unknown" and answers with the fixed
+        // cadence. Declared rates alone never unlock pacing.
+        return m_primed ? m_pacing.PeriodSeconds() : 0.0;
+    }
+
+    [[nodiscard]] VideoSourceStats sourceStats() const
+    {
+        std::lock_guard lock(m_mutex);
+        return VideoSourceStats {
+            .instance_id = m_instance_id,
+            .decoded_frames = m_decoded_frame_count,
+            .seek_requests = m_seek_request_count,
+            .observed_period_seconds = m_pacing.ObservedPeriodSeconds(),
+            .observed_samples = m_pacing.SampleCount(),
+        };
     }
 
 private:
@@ -552,10 +611,25 @@ private:
         return impl != nullptr && impl->m_cancel_requested.load(std::memory_order_relaxed) ? 1 : 0;
     }
 
-    bool openDecoder(std::string* error)
+    /// Makes the media openable by path.
+    ///
+    /// A file-backed source already has its path and keeps it. An inline
+    /// payload is extracted once and then released, so the decoder does not go
+    /// on holding a whole second copy of the video for the rest of playback.
+    bool resolveMediaPath(std::string* error)
     {
+        if (!m_media_path.empty()) return true;
+
         m_media_path = WriteVideoPayloadToTemp(m_debug_label, m_payload, error);
         if (m_media_path.empty()) return false;
+        m_payload.clear();
+        m_payload.shrink_to_fit();
+        return true;
+    }
+
+    bool openDecoder(std::string* error)
+    {
+        if (!resolveMediaPath(error)) return false;
 
         AVFormatContext* format_context = avformat_alloc_context();
         if (format_context == nullptr) {
@@ -665,7 +739,9 @@ private:
         m_frame = frame;
         m_duration_seconds = ProbeDurationSeconds(format_context, video_stream);
         m_frame_duration_seconds = ProbeFrameDurationSeconds(video_stream);
-        m_pacing_frame_duration_seconds = ProbeShortestFrameDurationSeconds(video_stream);
+        // The declared rates seed the estimator as an upper bound on the
+        // period; decoded timestamps are what actually unlock pacing.
+        m_pacing.Reset(ProbeShortestFrameDurationSeconds(video_stream));
         return true;
     }
 
@@ -756,6 +832,7 @@ private:
         m_requested_seek_absolute_seconds = std::max(0.0, absolute_seconds);
         m_seek_requested = true;
         ++m_seek_ticket;
+        ++m_seek_request_count;
         clearPendingFramesLocked();
     }
 
@@ -904,6 +981,11 @@ private:
         }
 
         frame_slot.frame.generation = m_next_generation++;
+        ++m_decoded_frame_count;
+        // Evidence for pacing comes from here, where a real decoded timestamp
+        // exists. Deltas across a loop seam or a seek describe the seam, not
+        // the content, so the run identity travels with the sample.
+        m_pacing.Observe(frame_slot.absolute_seconds, frame_slot.loop_index, seek_ticket);
         m_pending_frames.push_back(std::move(frame_slot));
         if (!m_display_frame_ready) {
             promoteNextFrameLocked();
@@ -980,9 +1062,15 @@ private:
     bool                             m_clock_initialized { false };
     double                           m_duration_seconds { 0.0 };
     double                           m_frame_duration_seconds { 1.0 / 60.0 };
-    /// Shortest plausible period, used only to pace the frame clock. Zero until
-    /// probed, which the clock reads as "unknown" and ignores.
-    double                           m_pacing_frame_duration_seconds { 0.0 };
+    /// Pacing evidence: declared rates as an upper bound on the period plus the
+    /// shortest gap actually decoded. Reports unknown until it has enough
+    /// samples, which keeps an unproven stream on the fixed cadence.
+    /// Process-unique, so two decoders opened from the same file are two
+    /// identities. Never derived from the path or from content.
+    const uint64_t                   m_instance_id { NextVideoSourceInstanceId() };
+    VideoFramePacingEstimator        m_pacing;
+    uint64_t                         m_decoded_frame_count { 0 };
+    uint64_t                         m_seek_request_count { 0 };
     uint64_t                         m_loop_count { 0 };
     uint64_t                         m_next_generation { 1 };
     std::deque<DecodedFrameSlot>     m_pending_frames;
@@ -1060,6 +1148,11 @@ double FfmpegVideoTextureSource::frameDurationSeconds() const
     return m_impl->frameDurationSeconds();
 }
 
+VideoSourceStats FfmpegVideoTextureSource::sourceStats() const
+{
+    return m_impl->sourceStats();
+}
+
 std::shared_ptr<VideoTextureSource> CreateVideoTextureSource(const Image& image,
                                                              std::string* error)
 {
@@ -1069,6 +1162,80 @@ std::shared_ptr<VideoTextureSource> CreateVideoTextureSource(const Image& image,
     }
 
     return std::make_shared<FfmpegVideoTextureSource>(image);
+}
+
+std::shared_ptr<Image> CreateVideoProjectImage(const std::filesystem::path& project_directory,
+                                               std::string_view             file_name,
+                                               std::string*                 error)
+{
+    if (file_name.empty()) {
+        SetError(error, "video project file entry must not be empty");
+        return nullptr;
+    }
+
+    std::filesystem::path media_path(file_name);
+    if (media_path.is_relative()) media_path = project_directory / media_path;
+
+    // Both sides are canonicalised before they are compared, so a symlink is
+    // followed first and a link that leaves the project is rejected rather
+    // than read.
+    std::error_code ec;
+    const std::filesystem::path resolved_media = std::filesystem::canonical(media_path, ec);
+    if (ec) {
+        SetError(error,
+                 std::string("failed to open video project media file: ") + media_path.string());
+        return nullptr;
+    }
+    const std::filesystem::path resolved_project = std::filesystem::canonical(project_directory, ec);
+    if (ec) {
+        SetError(error,
+                 std::string("failed to open video project media file: ") + media_path.string());
+        return nullptr;
+    }
+
+    const std::filesystem::path relative = resolved_media.lexically_relative(resolved_project);
+    if (relative.empty() || relative.begin()->native() == "..") {
+        SetError(error,
+                 std::string("video project media file escapes the project directory: ") +
+                     resolved_media.string());
+        return nullptr;
+    }
+
+    if (!std::filesystem::is_regular_file(resolved_media, ec) || ec) {
+        SetError(error,
+                 std::string("failed to open video project media file: ") + media_path.string());
+        return nullptr;
+    }
+    if (std::filesystem::file_size(resolved_media, ec) == 0 || ec) {
+        SetError(error,
+                 std::string("video project media file is empty: ") + media_path.string());
+        return nullptr;
+    }
+
+    uint32_t source_width  = 0;
+    uint32_t source_height = 0;
+    if (!ProbeVideoFileDimensions(resolved_media.string(), &source_width, &source_height, error)) {
+        return nullptr;
+    }
+
+    auto image = std::make_shared<Image>();
+    image->key = std::string(file_name);
+    // The wallpaper's own file is the decode input. Nothing reads it into this
+    // process and nothing writes a second copy of it, which is why the image
+    // carries no slots.
+    image->videoFilePath            = resolved_media.string();
+    image->header.isVideo           = true;
+    image->header.videoAudioEnabled = true;
+    image->header.count             = 1;
+    image->header.sample.wrapS      = TextureWrap::CLAMP_TO_EDGE;
+    image->header.sample.wrapT      = TextureWrap::CLAMP_TO_EDGE;
+    image->header.sample.minFilter  = TextureFilter::LINEAR;
+    image->header.sample.magFilter  = TextureFilter::LINEAR;
+    image->header.width             = static_cast<i32>(source_width);
+    image->header.height            = static_cast<i32>(source_height);
+    image->header.mapWidth          = static_cast<i32>(source_width);
+    image->header.mapHeight         = static_cast<i32>(source_height);
+    return image;
 }
 
 bool ProbeVideoFileDimensions(std::string_view media_path,

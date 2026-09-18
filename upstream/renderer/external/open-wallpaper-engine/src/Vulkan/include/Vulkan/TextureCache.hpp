@@ -1,10 +1,12 @@
 #pragma once
 
+#include "Video/VideoFramePacing.hpp"
 #include "Video/VideoTextureSource.hpp"
 #include "Parameters.hpp"
 #include "Type.hpp"
 #include "Core/NoCopyMove.hpp"
 #include "Core/MapSet.hpp"
+#include "Core/RendererCounters.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -49,6 +51,14 @@ struct VideoTextureSubmissionStats {
     std::uint64_t converted_destinations_reused { 0 };
     std::uint64_t pool_cached_texture_count { 0 };
     std::uint64_t pool_cached_bytes { 0 };
+    /// Largest the pooled set has been since this pool was created, which is
+    /// what a reuse ceiling has to be judged against.
+    std::uint64_t pool_peak_cached_bytes { 0 };
+    std::uint64_t pool_hits { 0 };
+    std::uint64_t pool_misses { 0 };
+    std::uint64_t pool_recycles { 0 };
+    std::uint64_t pool_evictions { 0 };
+    std::uint64_t pool_refusals { 0 };
 };
 
 struct VideoImportSubmissionPlan {
@@ -124,6 +134,9 @@ public:
     /// when none of them can report one. The shortest is the safe answer: it
     /// is the rate at which something can still change.
     [[nodiscard]] double ShortestVideoFramePeriod() const;
+    /// Counters owned by the scene, shared with the frame clock and the
+    /// renderer. Sources created after this call receive it too.
+    void                                      SetCounters(RendererCounters* counters);
     void                                      ResetVideoSubmissionStats();
     double                           GetVideoDuration(std::string_view key) const;
     bool UpdateVideoFrame(std::string_view key, const video::VideoPlaybackState& playback_state,
@@ -201,6 +214,13 @@ private:
         ImportedVideoFrame*                              current_frame { nullptr };
         std::vector<std::shared_ptr<ImportedVideoFrame>> imported_frames;
         uint64_t                                         frame_use_serial { 0 };
+        /// Turns the displayed generation sequence into selected / reused /
+        /// skipped, which is how a pacing change is falsified.
+        video::VideoFrameSelectionTracker                selection;
+        /// Decoder totals already reported, so the counters accumulate the
+        /// delta rather than the running total of every source.
+        uint64_t                                         reported_decode_outputs { 0 };
+        uint64_t                                         reported_seeks { 0 };
     };
     static constexpr std::size_t kMaxImportedVideoFramesPerVideoTex { 4 };
     static constexpr std::size_t kMaxPendingVideoImportSubmissions { 2 };
@@ -209,8 +229,14 @@ private:
     std::shared_ptr<ImportedVideoFrame> FindImportedVideoFrame(
         VideoTex& video_tex, const video::VideoTextureFrame& frame, void* surface_identity) const;
     bool                EnsureVideoFrameCacheRoom(VideoTex& video_tex, std::string* error);
+    /// Publishes how many decoder instances this cache consumes and, when
+    /// there is exactly one, its identity, so source work can be attributed
+    /// to a running decoder rather than to a file path.
+    void                publishVideoSourceIdentity();
     Map<std::string, std::unique_ptr<VideoTex>> m_video_tex_map;
     video::VideoPlaybackState                   m_video_playback_state {};
+    /// Null outside a scene, e.g. in tests and standalone tools.
+    RendererCounters*                           m_counters { nullptr };
     VideoTextureSubmissionStats                 m_video_submission_stats {};
     std::shared_ptr<video::AppleVideoMetalTexturePool> m_video_destination_pool;
     VideoFrameState m_video_frame_state { VideoFrameState::Idle };

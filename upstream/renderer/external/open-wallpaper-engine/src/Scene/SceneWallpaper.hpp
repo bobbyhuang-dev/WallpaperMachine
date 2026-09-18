@@ -106,6 +106,12 @@ public:
     // export failed). The caller MUST close() the returned fd.
     int takeLastFrameSyncFd();
 
+    /// Copies the renderer work counters for this surface. Returns how many
+    /// values were written, which is never more than `len`. Safe to call from
+    /// any thread: every counter is an independent atomic, so the result is a
+    /// set of live readings rather than one consistent instant.
+    std::size_t counters(uint64_t* out, std::size_t len) const;
+
 private:
     bool m_inited { false };
 

@@ -11,6 +11,12 @@ using namespace std::chrono;
 namespace
 {
 constexpr auto MAX_FRAME_DURATION = seconds(5);
+/// Multiple of the tick interval that still counts as ordinary scheduling
+/// jitter. A content-paced clock ticks at its own interval by design, so the
+/// suspension threshold has to be expressed relative to that interval; three
+/// intervals leaves room for a late wakeup without letting a genuine process
+/// suspension feed hours into scene simulation.
+constexpr i32  SUSPENSION_INTERVAL_SLACK { 3 };
 constexpr u16  DEFAULT_REQUIRED_FPS { 30 };
 }
 
@@ -23,11 +29,17 @@ FrameTimer::FrameTimer(std::function<void()> cb)
           // less often than that lengthens the period, never shortens it.
           m_timer.SetInterval(ResolveInterval());
 
+          auto* counters = m_counters.load(std::memory_order_relaxed);
+          if (counters != nullptr) counters->Add(OWE_RC_TIMER_WAKEUPS);
+
           // At most one DRAW may be in flight. A slow frame drops ticks rather
           // than queueing work the display will never show.
           if (m_callback && m_frame_busy_count.load() < 1) {
               m_frame_busy_count++;
+              if (counters != nullptr) counters->Add(OWE_RC_DRAW_REQUESTS);
               m_callback();
+          } else if (counters != nullptr) {
+              counters->Add(OWE_RC_DRAW_TICKS_SUPPRESSED);
           }
       }) {
     SetRequiredFps(DEFAULT_REQUIRED_FPS);
@@ -79,6 +91,16 @@ void FrameTimer::SetFrameDemand(FrameDemand demand) {
 
 std::chrono::microseconds FrameTimer::TickInterval() const { return m_tick_interval.load(); }
 
+void FrameTimer::SetCounters(RendererCounters* counters) {
+    m_counters.store(counters, std::memory_order_relaxed);
+}
+
+std::chrono::microseconds FrameTimer::SuspensionThreshold() const {
+    const auto floor    = duration_cast<microseconds>(MAX_FRAME_DURATION);
+    const auto relative = m_tick_interval.load() * SUSPENSION_INTERVAL_SLACK;
+    return std::max(floor, relative);
+}
+
 std::chrono::microseconds FrameTimer::ResolveInterval() {
     const auto ideal  = m_ideatime.load();
     const auto period = m_content_period.load();
@@ -90,6 +112,11 @@ std::chrono::microseconds FrameTimer::ResolveInterval() {
         interval = std::min(period, duration_cast<microseconds>(MAX_FRAME_DURATION));
     }
     m_tick_interval.store(interval);
+    auto* counters = m_counters.load(std::memory_order_relaxed);
+    if (counters != nullptr) {
+        counters->Set(OWE_RC_TICK_INTERVAL_MICROS, static_cast<u64>(interval.count()));
+        counters->Set(OWE_RC_CONTENT_PERIOD_MICROS, static_cast<u64>(period.count()));
+    }
     return interval;
 }
 
@@ -103,10 +130,13 @@ void FrameTimer::AddFrametime(micros t) {
 void FrameTimer::FrameBegin() { FrameBegin(steady_clock::now()); }
 void FrameTimer::FrameBegin(steady_clock::time_point now) {
     const auto elapsed = duration_cast<microseconds>(now - m_clock);
-    // The first frame after Run has no active predecessor. Treat very long
-    // gaps as suspension too, rather than feeding hours into scene simulation.
+    // The first frame after Run has no active predecessor. A gap far longer
+    // than the interval this clock is pacing at is the process having been
+    // suspended, not the content waiting, and must not feed hours into scene
+    // simulation. The threshold follows the interval precisely so that a scene
+    // paced to its content is not mistaken for a resume on every frame.
     const bool reset = m_reset_frame_clock.exchange(false);
-    m_elapsed_frametime.store(reset || elapsed > MAX_FRAME_DURATION
+    m_elapsed_frametime.store(reset || elapsed > SuspensionThreshold()
                                  ? m_ideatime.load()
                                  : elapsed);
     m_clock = now;

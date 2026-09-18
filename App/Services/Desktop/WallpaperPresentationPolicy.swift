@@ -116,9 +116,15 @@ final class WallpaperPresentationPolicy {
         deliverPending()
     }
 
-    /// Both window kinds host wallpaper pixels: the renderer's Metal window and
-    /// the app's web wallpaper window.
-    static let wallpaperWindowClassNames = ["MWEWallpaperDesktopWindow", "MWEWebWallpaperDesktopWindow"]
+    /// Every window kind that hosts wallpaper pixels: the renderer's Metal
+    /// window, the web wallpaper window, and the native video window. A backend
+    /// missing from this list is invisible to occlusion tracking, so its
+    /// display would never be suspended or resumed.
+    static let wallpaperWindowClassNames = [
+        "MWEWallpaperDesktopWindow",
+        "MWEWebWallpaperDesktopWindow",
+        "MWENativeVideoDesktopWindow",
+    ]
 
     static func wallpaperWindows() -> [NSWindow] {
         let types = wallpaperWindowClassNames.compactMap(NSClassFromString)

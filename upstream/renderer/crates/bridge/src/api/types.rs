@@ -283,3 +283,106 @@ pub struct BridgeDisplayMutationBundle {
     pub monitor_information: BridgeMonitorInformationSnapshot,
     pub settings: BridgeSettingsSnapshot,
 }
+
+/// Renderer work counters for one wallpaper surface.
+///
+/// The fields are split on purpose. `timer_wakeups` through `simulation_ticks`
+/// are work this surface alone performs and must stop when nobody can see it.
+/// The `video_*` fields describe the decoded source, which may legitimately keep
+/// running while one of its consumers is hidden as long as another consumer
+/// still presents it.
+///
+/// Counting is off by default. With it off every value is zero, which means
+/// "not recorded", never "no work".
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct BridgeRendererSurfaceCounters {
+    pub display_id: String,
+    /// Renderer scene handle: the surface identity.
+    pub surface_id: String,
+    /// Renderer object identity. Two wallpapers that reused one display and one
+    /// handle have different generations and are never merged.
+    pub generation: u64,
+    /// Identity of the running decoder instance this surface consumes:
+    /// `instance:<n>`, or `unknown` when the surface consumes no decoder or
+    /// more than one. Two decoders opened from the same file have different
+    /// identities and must never be folded together; a roll-up de-duplicates
+    /// source work on this, never on the path.
+    pub source_id: String,
+    /// Scene source path. A human label for the row, not an identity.
+    pub source_path: String,
+    /// Live decoder instances this surface consumes.
+    pub source_count: u64,
+    pub backend: String,
+    /// Independent reasons, never collapsed into one flag.
+    pub effective_pause_reasons: Vec<String>,
+    pub paused: bool,
+    pub timer_wakeups: u64,
+    pub draw_requests: u64,
+    pub draw_ticks_suppressed: u64,
+    pub draws_executed: u64,
+    pub draws_dropped: u64,
+    pub render_submissions: u64,
+    pub render_failures: u64,
+    pub present_requests: u64,
+    /// The submitted frame's fence signalled. Not a display presentation.
+    pub gpu_completions: u64,
+    pub simulation_ticks: u64,
+    pub tick_interval_micros: u64,
+    /// 0 when the content cannot prove how often it changes.
+    pub content_period_micros: u64,
+    pub video_decode_outputs: u64,
+    pub video_seeks: u64,
+    pub video_frames_selected: u64,
+    pub video_frames_reused: u64,
+    /// Decoded frames superseded before they were ever displayed. A rising
+    /// count is how a demand-driven clock is falsified.
+    pub video_frames_skipped: u64,
+    pub video_selected_generation: u64,
+    pub video_conversions: u64,
+    pub video_imports: u64,
+}
+
+/// One pull of the renderer counters, plus the process-wide values that belong
+/// to no single surface.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct BridgeRendererCountersReport {
+    /// False means counting is off and every value is zero.
+    pub recording: bool,
+    pub surfaces: Vec<BridgeRendererSurfaceCounters>,
+    /// Spectrum generations the analysis worker produced, process-wide.
+    pub audio_analysis_deliveries: u64,
+    pub audio_accepted_frames: u64,
+    /// Scenes that both enable audio response and are not paused for their own
+    /// display. Zero means the capture tap has no consumer.
+    pub audio_active_consumers: u32,
+    /// Whether the platform can report which frames were actually displayed.
+    /// This backend cannot, so present requests are never reported as
+    /// presented frames.
+    pub presentation_feedback_available: bool,
+}
+
+/// A plain local video routed to the native platform player instead of the
+/// scene engine.
+///
+/// Only the declared subset appears here. `fps` is the user's target rate and
+/// is a requirement, not a hint: the host must refuse the wallpaper rather than
+/// play it at a different rate, and a refusal sends it back to the scene
+/// engine, which supports everything.
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
+pub struct BridgeNativeVideoWallpaper {
+    pub display_id: u32,
+    pub wallpaper_id: String,
+    pub title: String,
+    /// Absolute path to the media file, already containment-checked against the
+    /// project directory.
+    pub media_path: String,
+    /// The user's target frame rate for this display.
+    pub fps: u32,
+    /// Presentation suspension or the user's own pause, already combined for
+    /// this display by the activation rules.
+    pub paused: bool,
+    pub volume: f32,
+    pub muted: bool,
+    pub scaling_mode: BridgeScalingMode,
+    pub scaling_factor: f64,
+}

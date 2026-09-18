@@ -20,6 +20,7 @@ use wallpaper_core::{
     WallpaperEngine,
     media::audio::{AudioCaptureController, AudioVolume, PlatformAudioCaptureBackend},
     project::{ScalingMode, SceneDesc, SceneHandle, SceneResult},
+    render::RendererSurfaceCounters,
 };
 
 pub type EngineFuture<T> = BoxFuture<'static, Result<T, EngineError>>;
@@ -67,6 +68,17 @@ pub trait EngineFacade: Send + Sync + 'static {
     fn set_audio_capture_suspended(&self, suspended: bool) -> EngineFuture<()> {
         let _ = suspended;
         async move { Ok(()) }.boxed()
+    }
+    /// Turns renderer counting on or off for the whole process. Off by
+    /// default; enabling starts no thread, timer or output stream.
+    fn set_renderer_counters_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        let _ = enabled;
+        Ok(())
+    }
+    /// Reads per-surface renderer counters plus the process-wide counters that
+    /// belong to no single surface.
+    fn renderer_counters(&self) -> EngineFuture<(Vec<RendererSurfaceCounters>, Vec<u64>)> {
+        async move { Ok((Vec::new(), Vec::new())) }.boxed()
     }
 }
 
@@ -188,6 +200,15 @@ impl EngineFacade for RealEngineFacade {
             engine.set_paused(handle, paused).await
         }
         .boxed()
+    }
+
+    fn set_renderer_counters_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        self.engine.set_renderer_counters_enabled(enabled)
+    }
+
+    fn renderer_counters(&self) -> EngineFuture<(Vec<RendererSurfaceCounters>, Vec<u64>)> {
+        let engine = self.engine.clone();
+        async move { engine.renderer_counters().await }.boxed()
     }
 
     fn set_audio_volume(&self, handle: SceneHandle, volume: AudioVolume) -> EngineFuture<()> {
@@ -493,6 +514,11 @@ pub struct FakeEngineFacade {
     reconcile_block: Arc<SegQueue<ReconcileBlockGate>>,
     reconcile_done: Arc<SegQueue<Sender<()>>>,
     first_frame_callback: Arc<ArcSwap<Option<FirstFrameCallback>>>,
+    counters_enabled: Arc<ArcSwap<bool>>,
+    /// Values the fake renderer reports. The real increments live in the
+    /// renderer; this only lets a bridge test drive the reporting path.
+    surface_counters: Arc<ArcSwap<Vec<RendererSurfaceCounters>>>,
+    shared_counters: Arc<ArcSwap<Vec<u64>>>,
 }
 
 #[cfg(test)]
@@ -608,6 +634,20 @@ impl FakeEngineFacade {
     #[must_use]
     pub fn display_paused_calls(&self) -> Vec<(u32, bool)> {
         load_log(&self.display_paused_calls)
+    }
+
+    pub fn set_renderer_counters(
+        &self,
+        surfaces: Vec<RendererSurfaceCounters>,
+        shared: Vec<u64>,
+    ) {
+        self.surface_counters.store(Arc::new(surfaces));
+        self.shared_counters.store(Arc::new(shared));
+    }
+
+    #[must_use]
+    pub fn renderer_counters_enabled(&self) -> bool {
+        **self.counters_enabled.load()
     }
 
     #[must_use]
@@ -932,6 +972,22 @@ impl EngineFacade for FakeEngineFacade {
                 scenes
             });
             Ok(())
+        }
+        .boxed()
+    }
+
+    fn set_renderer_counters_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        self.counters_enabled.store(Arc::new(enabled));
+        Ok(())
+    }
+
+    fn renderer_counters(&self) -> EngineFuture<(Vec<RendererSurfaceCounters>, Vec<u64>)> {
+        let fake = self.clone();
+        async move {
+            Ok((
+                fake.surface_counters.load().as_ref().clone(),
+                fake.shared_counters.load().as_ref().clone(),
+            ))
         }
         .boxed()
     }

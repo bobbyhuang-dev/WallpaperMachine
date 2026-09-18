@@ -22,6 +22,7 @@
 #include "Platform/Apple/FfmpegVideoInterop.hpp"
 #include "Shader/RustShaderBridge.hpp"
 #include "Video/VideoColorConversion.hpp"
+#include "Video/VideoConversionBudget.hpp"
 #include "Vulkan/Device.hpp"
 #include <vulkan/vulkan_metal.h>
 #include "Vulkan/Util.hpp"
@@ -814,11 +815,118 @@ TEST_F(PlaybackGPU, SteadyGenerationsReuseRetiredDestinations) {
                     EXPECT_EQ(stats.converted_destinations_reused, reused + i - 12);
                 }
                 EXPECT_LE(TextureCacheVideoInteropTestAccess::CachedImports(device.tex_cache(), key), 4u);
-                EXPECT_LE(stats.pool_cached_texture_count, 4u);
-                EXPECT_LE(stats.pool_cached_bytes, 64u * 1024u * 1024u);
+                EXPECT_LE(stats.pool_cached_texture_count,
+                          video::VideoConversionBudget::kCoexistingSlots);
+                // The pool is bounded by VideoConversionBudget's ceiling, not
+                // by the retired flat 64 MiB one. That figure had to go
+                // because a single 6K or larger destination exceeds it, so a
+                // large wallpaper could never keep one and reallocated per
+                // frame; a 32x32 clip stays far below either number.
+                EXPECT_LE(stats.pool_cached_bytes,
+                          video::VideoConversionBudget::kDefaultCeilingBytes);
             }
         }
     }
+}
+
+TEST_F(PlaybackGPU, WarmLargeVideoStopsReallocatingItsConversionDestination) {
+    // A 6144x3456 BGRA8 conversion destination is about 81 MiB, over the
+    // retired flat 64 MiB pool ceiling. Under that ceiling every generation of
+    // a large wallpaper allocated a destination and destroyed it again, which
+    // is the churn this budget exists to remove.
+    auto source = std::make_shared<SyntheticVideo>();
+    source->Resize(6144, 3456);
+    const std::string key = "large";
+    auto ref = Register(key, source);
+    constexpr uint64_t kWarm = 8;
+    uint64_t created = 0;
+    uint64_t reused = 0;
+    std::array<uint8_t, 3> last {};
+    for (uint64_t i = 1; i <= 16; ++i) {
+        last = { static_cast<uint8_t>(30 + (i * 19) % 180),
+                 static_cast<uint8_t>(70 + (i * 13) % 110),
+                 static_cast<uint8_t>(60 + (i * 7) % 130) };
+        source->Set(i, last[0], last[1], last[2]);
+        ASSERT_TRUE(Update(key, ref, i / 60.0)) << "generation " << i;
+        const auto stats = device.tex_cache().VideoSubmissionStats();
+        if (i == kWarm) {
+            created = stats.converted_destinations_created;
+            reused = stats.converted_destinations_reused;
+        }
+        if (i > kWarm) {
+            EXPECT_EQ(stats.converted_destinations_created, created) << "generation " << i;
+            EXPECT_EQ(stats.converted_destinations_reused, reused + i - kWarm)
+                << "generation " << i;
+        }
+    }
+    const auto stats = device.tex_cache().VideoSubmissionStats();
+    EXPECT_GT(stats.converted_destinations_reused, 0u);
+    EXPECT_EQ(stats.pool_refusals, 0u);
+    EXPECT_LE(stats.pool_cached_texture_count, video::VideoConversionBudget::kCoexistingSlots);
+    EXPECT_LE(stats.pool_peak_cached_bytes, video::VideoConversionBudget::kDefaultCeilingBytes);
+    // The pool really did hold a destination the retired ceiling refused.
+    EXPECT_GT(stats.pool_peak_cached_bytes, 64u * 1024u * 1024u);
+
+    // A destination that came back from the pool still has to carry the frame
+    // the conversion wrote into it. Sampling one corner is enough: a stale or
+    // foreign texture would not hold this generation's colour at all.
+    Bytes corner;
+    std::string error;
+    ASSERT_TRUE(device.tex_cache().ReadbackImageSample(ref.getActive(), 0, 0, 2, 2, &corner, &error))
+        << error;
+    ASSERT_EQ(corner.size(), 16u);
+    const video::Rgb8 expected = video::ConvertYuvCodeToRgb8(
+        video::MakeYuvColorParams({ .matrix = video::YuvMatrix::Bt709,
+                                    .range = video::YuvRange::Full,
+                                    .bit_depth = 8 }),
+        last[0], last[1], last[2]);
+    for (size_t pixel = 0; pixel < 4; ++pixel) {
+        // Two code values of slack for half-precision output and rounding.
+        EXPECT_NEAR(int(corner[pixel * 4 + 2]), int(expected.red), 2) << "pixel " << pixel;
+        EXPECT_NEAR(int(corner[pixel * 4 + 1]), int(expected.green), 2) << "pixel " << pixel;
+        EXPECT_NEAR(int(corner[pixel * 4 + 0]), int(expected.blue), 2) << "pixel " << pixel;
+        EXPECT_EQ(int(corner[pixel * 4 + 3]), 255) << "pixel " << pixel;
+    }
+}
+
+TEST_F(PlaybackGPU, RetainedFramesKeepTheirConversionDestinationsOutOfThePool) {
+    auto source = std::make_shared<SyntheticVideo>();
+    const std::string key = "in-flight";
+    auto ref = Register(key, source);
+    std::vector<ImageSlotsRef> held { ref };
+    std::vector<Bytes>         expected { Reference(*source, false) };
+    for (uint64_t i = 1; i <= 6; ++i) {
+        source->Set(i, static_cast<uint8_t>(40 + i * 25), static_cast<uint8_t>(90 + i * 9),
+                    static_cast<uint8_t>(190 - i * 21));
+        ASSERT_TRUE(Update(key, ref, i / 60.0));
+        held.push_back(ref);
+        expected.push_back(Reference(*source, false));
+        // Every imported frame is still referenced, so no destination has
+        // reached the end of its use. Pooling one here would let the next
+        // conversion overwrite a texture a live consumer still samples.
+        const auto stats = device.tex_cache().VideoSubmissionStats();
+        EXPECT_EQ(stats.pool_cached_texture_count, 0u) << "generation " << i;
+        EXPECT_EQ(stats.pool_cached_bytes, 0u) << "generation " << i;
+        EXPECT_EQ(stats.converted_destinations_reused, 0u) << "generation " << i;
+    }
+    const auto before = device.tex_cache().VideoSubmissionStats();
+    EXPECT_GE(before.converted_destinations_created, held.size());
+    // Distinct pixels per retained frame: separate destinations, not one
+    // texture quietly handed round behind their backs.
+    for (size_t i = 0; i < held.size(); ++i) {
+        EXPECT_EQ(Read(held[i].getActive()), expected[i]) << "retained frame " << i;
+    }
+
+    held.clear();
+    ref = {};
+    const auto released = device.tex_cache().VideoSubmissionStats();
+    EXPECT_GT(released.pool_cached_texture_count, 0u);
+    EXPECT_GT(released.pool_cached_bytes, 0u);
+    source->Set(7, 200, 90, 60);
+    ASSERT_TRUE(Update(key, ref));
+    EXPECT_GT(device.tex_cache().VideoSubmissionStats().converted_destinations_reused,
+              before.converted_destinations_reused);
+    EXPECT_EQ(Read(ref.getActive()), Reference(*source, false));
 }
 
 TEST_F(PlaybackGPU, MetalConversionMatchesTheCpuColorReference) {
@@ -968,15 +1076,40 @@ TEST_F(PlaybackGPU, ResizeAndDirectBgraKeepSeparateLifetimes) {
     EXPECT_EQ(Read(pass.desc().vk_output), Reference(*source));
     Bind(pass, retained); Draw(pass); EXPECT_EQ(Read(pass.desc().vk_output), old);
     const auto stats = device.tex_cache().VideoSubmissionStats();
-    EXPECT_LE(stats.pool_cached_texture_count, 4u); EXPECT_LE(stats.pool_cached_bytes, 64u * 1024u * 1024u);
+    EXPECT_LE(stats.pool_cached_texture_count, video::VideoConversionBudget::kCoexistingSlots);
+    EXPECT_LE(stats.pool_cached_bytes, video::VideoConversionBudget::kDefaultCeilingBytes);
+    // Resolution churn must not leave the pool holding shapes nothing asks
+    // for: only the size the last import requested may still be resident.
+    EXPECT_LE(stats.pool_cached_bytes, 32u * 32u * 4u * video::VideoConversionBudget::kCoexistingSlots);
     id<MTLDevice> metal = MTLCreateSystemDefaultDevice(); ASSERT_NE(metal, nil);
     video::AppleVideoMetalTexturePool pool((__bridge void*)metal);
-    auto* descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:4096 height:4097 mipmapped:NO];
-    descriptor.storageMode = MTLStorageModeShared; descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-    id<MTLTexture> large = [metal newTextureWithDescriptor:descriptor]; ASSERT_NE(large, nil);
+    const auto destination = [&](uint32_t width, uint32_t height) {
+        auto* descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                              width:width height:height mipmapped:NO];
+        descriptor.storageMode = MTLStorageModeShared;
+        descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        id<MTLTexture> texture = [metal newTextureWithDescriptor:descriptor];
+        Require(texture != nil, "allocate conversion destination for pool test");
+        return texture;
+    };
+    // 4096x4097 is over the retired flat 64 MiB ceiling. Refusing it is what
+    // made a large wallpaper reallocate a destination every generation, so it
+    // now has to be pooled and lent back for its own shape only.
+    id<MTLTexture> large = destination(4096, 4097);
     ASSERT_GT(large.allocatedSize, 64u * 1024u * 1024u);
     pool.Recycle((__bridge_retained void*)large);
-    EXPECT_EQ(pool.CachedTextureCount(), 0u); EXPECT_EQ(pool.CachedBytes(), 0u);
+    EXPECT_EQ(pool.Stats().cached_texture_count, 1u);
+    EXPECT_EQ(pool.Stats().cached_bytes, large.allocatedSize);
+    EXPECT_EQ(pool.Take(4096, 4096), nullptr);
+    void* lent = pool.Take(4096, 4097);
+    EXPECT_EQ(lent, (__bridge void*)large);
+    EXPECT_EQ(pool.Stats().cached_texture_count, 0u);
+    pool.Recycle(lent);
+    EXPECT_EQ(pool.Stats().cached_texture_count, 1u);
+    pool.RetainOnly(1920, 1080);
+    EXPECT_EQ(pool.Stats().cached_texture_count, 0u);
+    EXPECT_EQ(pool.Stats().cached_bytes, 0u);
+    EXPECT_EQ(pool.Stats().peak_cached_bytes, large.allocatedSize);
 }
 
 TEST_F(PlaybackGPU, RecordingDiscardAndSubmissionRecoveryKeepOwners) {

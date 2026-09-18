@@ -165,6 +165,9 @@ struct VulkanRender::Impl {
 
     std::vector<VulkanPass*> m_passes;
     CustomPassExecutionScratch m_pass_scratch;
+    /// Owned by the scene that created this renderer; may be null in tests and
+    /// standalone tools. Only read on the render thread.
+    RendererCounters* m_counters { nullptr };
 };
 
 VulkanRender::VulkanRender(): pImpl(std::make_unique<Impl>()) {}
@@ -216,6 +219,12 @@ void VulkanRender::SetVideoPlaybackRate(float rate) {
 double VulkanRender::ShortestVideoFramePeriod() const {
     if (pImpl->m_device == nullptr) return 0.0;
     return pImpl->m_device->tex_cache().ShortestVideoFramePeriod();
+}
+void VulkanRender::SetCounters(RendererCounters* counters) {
+    pImpl->m_counters = counters;
+    if (pImpl->m_device != nullptr) {
+        pImpl->m_device->tex_cache().SetCounters(counters);
+    }
 }
 
 wallpaper::ExSwapchain* VulkanRender::exSwapchain() const { return pImpl->m_ex_swapchain.get(); };
@@ -320,6 +329,9 @@ bool VulkanRender::Impl::initPresentation(const RenderInitInfo& info) {
                 LOG_ERROR("init vulkan device failed");
                 return false;
             }
+            // The texture cache owns the video sources, so it needs the same
+            // counters the frame clock writes to.
+            m_device->tex_cache().SetCounters(m_counters);
         }
     } else {
         // Device already exists — just recreate the swapchain.
@@ -778,6 +790,7 @@ bool VulkanRender::Impl::drawFrameSwapchain() {
     const auto submit_result = m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame);
     if (submit_result != VK_SUCCESS) return failFrame(submit_result);
     m_draw_submitted = true;
+    if (m_counters != nullptr) m_counters->Add(OWE_RC_RENDER_SUBMISSIONS);
     m_device->tex_cache().MarkVideoFrameSubmitted();
     VkPresentInfoKHR present_info {
         .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -790,9 +803,14 @@ bool VulkanRender::Impl::drawFrameSwapchain() {
     };
     // Even an out-of-date surface must finish the submitted copy before its
     // temporary readback buffer is destroyed.
+    if (m_counters != nullptr) m_counters->Add(OWE_RC_PRESENT_REQUESTS);
     const auto present_result = m_device->present_queue().handle.Present(present_info);
     const auto wait_result = rr.fence_frame.Wait(vk_wait_time);
     if (wait_result != VK_SUCCESS) return failFrame(wait_result);
+    // Fence signalled: the GPU finished the frame. Whether the compositor ever
+    // put it on a display is not observable through this backend, so no counter
+    // claims it.
+    if (m_counters != nullptr) m_counters->Add(OWE_RC_GPU_COMPLETIONS);
     m_device->tex_cache().CompleteVideoFrame();
     m_dyn_buf->finishUpload(true);
     m_draw_submitted = false;
@@ -847,9 +865,13 @@ bool VulkanRender::Impl::drawFrameOffscreen() {
     const auto submit_result = m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame);
     if (submit_result != VK_SUCCESS) return failFrame(submit_result);
     m_draw_submitted = true;
+    if (m_counters != nullptr) m_counters->Add(OWE_RC_RENDER_SUBMISSIONS);
     m_device->tex_cache().MarkVideoFrameSubmitted();
     const auto wait_result = rr.fence_frame.Wait(vk_wait_time);
     if (wait_result != VK_SUCCESS) return failFrame(wait_result);
+    // Offscreen frames are handed to the host, never presented by this
+    // process, so there is no present request to count here.
+    if (m_counters != nullptr) m_counters->Add(OWE_RC_GPU_COMPLETIONS);
     m_device->tex_cache().CompleteVideoFrame();
     m_dyn_buf->finishUpload(true);
     m_draw_submitted = false;

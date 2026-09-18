@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Core/RendererCounters.hpp"
 #include "ThreadTimer.hpp"
 #include <deque>
 
@@ -48,6 +49,21 @@ public:
     /// Interval the next tick will use, for diagnostics and tests.
     [[nodiscard]] std::chrono::microseconds TickInterval() const;
 
+    /// Gap above which a frame boundary is read as the process having been
+    /// suspended rather than as the content simply not having changed yet.
+    ///
+    /// A fixed threshold silently collides with content pacing: a scene paced
+    /// at the clamp would have every ordinary tick misread as a resume, its
+    /// elapsed time replaced by one ideal frame, and its playback would fall
+    /// behind by the difference every frame. The threshold therefore scales
+    /// with the interval the clock is actually using, and never drops below the
+    /// fixed floor.
+    [[nodiscard]] std::chrono::microseconds SuspensionThreshold() const;
+
+    /// Counters are owned by the scene and outlive the timer. Install before
+    /// `Run`; the timer thread only reads the pointer.
+    void SetCounters(RendererCounters* counters);
+
     // only used with one render
     void FrameBegin();
     void FrameEnd();
@@ -62,6 +78,7 @@ private:
 
     std::function<void()>                 m_callback;
     std::deque<std::chrono::microseconds> m_frametime_queue;
+    std::atomic<RendererCounters*>        m_counters { nullptr };
 
     std::atomic<u16>                        m_req_fps;
     std::atomic<std::chrono::microseconds> m_frametime;

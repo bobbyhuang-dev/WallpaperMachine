@@ -1261,6 +1261,25 @@ void TextureCache::SetVideoPlaybackPaused(bool paused) { m_video_playback_state.
 
 void TextureCache::SetVideoPlaybackRate(float rate) { m_video_playback_state.rate = rate; }
 
+void TextureCache::SetCounters(RendererCounters* counters) { m_counters = counters; }
+
+void TextureCache::publishVideoSourceIdentity() {
+    if (m_counters == nullptr) return;
+    // A single decoder is identifiable, so its source work can be attributed
+    // and de-duplicated. Zero or several is not: reporting one of their ids
+    // would attribute the whole cache's decode work to one of them, so the
+    // identity reads as unknown instead.
+    uint64_t live_sources = 0;
+    uint64_t single_instance = 0;
+    for (const auto& [key, video_tex] : m_video_tex_map) {
+        if (video_tex == nullptr || video_tex->source == nullptr) continue;
+        ++live_sources;
+        single_instance = video_tex->source->sourceStats().instance_id;
+    }
+    m_counters->Set(OWE_RC_VIDEO_SOURCE_COUNT, live_sources);
+    m_counters->Set(OWE_RC_VIDEO_SOURCE_INSTANCE, live_sources == 1 ? single_instance : 0);
+}
+
 double TextureCache::ShortestVideoFramePeriod() const {
     double shortest = 0.0;
     for (const auto& [key, video_tex] : m_video_tex_map) {
@@ -1280,8 +1299,15 @@ VideoTextureSubmissionStats TextureCache::VideoSubmissionStats() const {
     auto stats                    = m_video_submission_stats;
     stats.import_submission_slots = m_video_import_slots.size();
     if (m_video_destination_pool) {
-        stats.pool_cached_texture_count = m_video_destination_pool->CachedTextureCount();
-        stats.pool_cached_bytes = m_video_destination_pool->CachedBytes();
+        const auto pool = m_video_destination_pool->Stats();
+        stats.pool_cached_texture_count = pool.cached_texture_count;
+        stats.pool_cached_bytes = pool.cached_bytes;
+        stats.pool_peak_cached_bytes = pool.peak_cached_bytes;
+        stats.pool_hits = pool.hits;
+        stats.pool_misses = pool.misses;
+        stats.pool_recycles = pool.recycles;
+        stats.pool_evictions = pool.evictions;
+        stats.pool_refusals = pool.refusals;
     }
     return stats;
 }
@@ -1477,6 +1503,35 @@ bool TextureCache::UpdateVideoFrame(std::string_view                 key,
                         std::string("video frame is not ready for texture: ") + std::string(key));
     }
 
+    if (m_counters != nullptr) {
+        // Source work: what the decoder instance produced, independently of
+        // whether this consumer used it. Reported with the instance's own
+        // identity so a roll-up can de-duplicate one decoder across consumers
+        // without ever merging two decoders that read the same file.
+        const auto stats = video_tex.source->sourceStats();
+        if (stats.decoded_frames > video_tex.reported_decode_outputs) {
+            m_counters->Add(OWE_RC_VIDEO_DECODE_OUTPUTS,
+                            stats.decoded_frames - video_tex.reported_decode_outputs);
+            video_tex.reported_decode_outputs = stats.decoded_frames;
+        }
+        if (stats.seek_requests > video_tex.reported_seeks) {
+            m_counters->Add(OWE_RC_VIDEO_SEEKS, stats.seek_requests - video_tex.reported_seeks);
+            video_tex.reported_seeks = stats.seek_requests;
+        }
+        publishVideoSourceIdentity();
+        // Consumer work: which of those frames this update actually put on
+        // screen, and how many it stepped over.
+        const auto selection = video_tex.selection.Observe(frame.generation);
+        if (selection.selected) {
+            m_counters->Add(OWE_RC_VIDEO_FRAMES_SELECTED);
+            m_counters->Set(OWE_RC_VIDEO_SELECTED_GENERATION, frame.generation);
+        }
+        if (selection.reused) m_counters->Add(OWE_RC_VIDEO_FRAMES_REUSED);
+        if (selection.skipped > 0) {
+            m_counters->Add(OWE_RC_VIDEO_FRAMES_SKIPPED, selection.skipped);
+        }
+    }
+
     void* surface_identity = frame.io_surface != nullptr ? frame.io_surface : frame.pixel_buffer;
     auto imported_frame = FindImportedVideoFrame(video_tex, frame, surface_identity);
     if (imported_frame) {
@@ -1498,23 +1553,43 @@ bool TextureCache::UpdateVideoFrame(std::string_view                 key,
         if (converted && !m_video_recycling_disabled && !m_video_destination_pool) {
             m_video_destination_pool = std::make_shared<video::AppleVideoMetalTexturePool>(metal_device);
         }
-        std::unique_ptr<void, decltype(&video::ReleaseAppleVideoMetalTexture)> destination(
-            converted && m_video_destination_pool
-                ? m_video_destination_pool->Take(frame.width, frame.height) : nullptr,
-            &video::ReleaseAppleVideoMetalTexture);
         auto candidate = std::make_shared<ImportedVideoFrame>();
         if (converted) ++m_video_submission_stats.conversion_calls;
+        if (converted && m_video_destination_pool) {
+            // A shape nothing requests any more is not worth its bytes. The
+            // decoded frame's size is the only size that matters here; the
+            // surface this ends up on never enters the key.
+            m_video_destination_pool->RetainOnly(frame.width, frame.height);
+        }
+        // Nothing may fail between borrowing a destination and handing it to
+        // the import: an abandoned loan is a leaked slot.
+        void* borrowed = converted && m_video_destination_pool
+            ? m_video_destination_pool->Take(frame.width, frame.height)
+            : nullptr;
         // The lease keeps the Core Video wrapper and pixel buffer alive for as
         // long as this imported frame can be sampled; the texture below is
         // borrowed from it.
+        bool destination_allocation_failed = false;
         void* lease = video::CreateAppleVideoFrameLease(
-            frame, metal_device, destination.get(), error);
-        if (lease == nullptr) return false;
+            frame, metal_device, borrowed, error, &destination_allocation_failed);
+        if (borrowed != nullptr) {
+            if (lease != nullptr) {
+                // The lease took an independent retain. The loan stays open
+                // until the lease deleter reports GPU completion.
+                video::ReleaseAppleVideoMetalTexture(borrowed);
+            } else {
+                m_video_destination_pool->EndLoan(borrowed);
+            }
+        }
+        if (lease == nullptr) {
+            if (destination_allocation_failed && m_video_destination_pool) {
+                m_video_destination_pool->ReportAllocationFailure(frame.width, frame.height);
+            }
+            return false;
+        }
         void* metal_texture = video::AppleVideoFrameLeaseTexture(lease);
-        const bool reused = destination != nullptr;
-        destination.reset();
         if (converted) {
-            if (reused) ++m_video_submission_stats.converted_destinations_reused;
+            if (borrowed != nullptr) ++m_video_submission_stats.converted_destinations_reused;
             else ++m_video_submission_stats.converted_destinations_created;
         }
         const std::weak_ptr<video::AppleVideoMetalTexturePool> pool =
@@ -1577,6 +1652,13 @@ bool TextureCache::UpdateVideoFrame(std::string_view                 key,
         result.slots = { ImageParameters(imported_frame->image) };
         result.video_frame_owner = std::move(imported_frame);
         *out = std::move(result);
+    }
+
+    if (m_counters != nullptr) {
+        // Already accumulated by this cache; mirrored so one snapshot answers
+        // "did GPU-side video work stop" without a second call.
+        m_counters->Set(OWE_RC_VIDEO_CONVERSIONS, m_video_submission_stats.conversion_calls);
+        m_counters->Set(OWE_RC_VIDEO_IMPORTS, m_video_submission_stats.new_imports);
     }
 
     return true;

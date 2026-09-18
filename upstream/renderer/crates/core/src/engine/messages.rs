@@ -80,6 +80,9 @@ pub struct SetAllPaused {
     pub paused: bool,
 }
 
+/// Reads renderer work counters from every open scene.
+pub struct RendererCounters;
+
 pub struct SetMousePosition {
     pub handle: SceneHandle,
     pub x: f64,

@@ -35,6 +35,29 @@ struct VideoPlaybackState {
     double scene_elapsed_seconds { 0.0 };
 };
 
+/// What a source has actually done, as running totals.
+///
+/// This is source work, not consumer work: it may legitimately keep rising
+/// while one consumer is hidden, provided another consumer still presents the
+/// frames. Keeping it apart from the per-surface counters is what makes that
+/// distinction readable instead of assumed.
+struct VideoSourceStats {
+    /// Process-unique identity of this decoder instance, assigned at
+    /// construction. Two sources opened from the same file are two decoders and
+    /// must never be folded into one: the identity is the running instance, not
+    /// the path or a content hash. Zero means the source cannot identify
+    /// itself, which reads as "not de-duplicable" rather than "shared".
+    std::uint64_t instance_id { 0 };
+    /// Frames the decoder produced and queued for display.
+    std::uint64_t decoded_frames { 0 };
+    /// Seeks and resyncs the decoder was asked to perform.
+    std::uint64_t seek_requests { 0 };
+    /// Shortest gap observed between decoded frames, or 0 when not yet proven.
+    double        observed_period_seconds { 0.0 };
+    /// How many usable gaps that observation is based on.
+    std::uint64_t observed_samples { 0 };
+};
+
 class VideoTextureSource {
 public:
     virtual ~VideoTextureSource() = default;
@@ -50,6 +73,10 @@ public:
     /// frame clock uses it to stop rendering more often than the content
     /// changes; an unknown period keeps the fixed cadence.
     [[nodiscard]] virtual double frameDurationSeconds() const = 0;
+    /// Running totals of the work this source has done. Sources that cannot
+    /// account for themselves report zeroes, which read as "not observable"
+    /// rather than "no work".
+    [[nodiscard]] virtual VideoSourceStats sourceStats() const { return {}; }
 };
 
 std::shared_ptr<VideoTextureSource> CreateVideoTextureSource(const Image& image,

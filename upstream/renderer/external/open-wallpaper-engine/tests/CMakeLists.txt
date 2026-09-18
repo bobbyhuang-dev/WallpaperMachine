@@ -353,6 +353,57 @@ gtest_discover_tests(
     DISCOVERY_TIMEOUT 60
 )
 
+# Frame pacing decides how often the clock has to wake for video content. The
+# arithmetic and its evidence rules are independent of FFmpeg and the GPU, so
+# the counter-examples run headless.
+add_executable(video_frame_pacing_test
+    video_frame_pacing_test.cpp
+    ${CMAKE_SOURCE_DIR}/src/Video/VideoFramePacing.cpp)
+target_link_libraries(video_frame_pacing_test PRIVATE GTest::gtest_main)
+target_include_directories(video_frame_pacing_test PRIVATE . ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(video_frame_pacing_test PRIVATE cxx_std_20)
+gtest_discover_tests(
+    video_frame_pacing_test
+    TEST_PREFIX video_frame_pacing_test.
+    PROPERTIES TIMEOUT 30
+    DISCOVERY_TIMEOUT 60
+)
+
+# Conversion-destination budgeting is slot arithmetic, admission and an
+# exhaustion policy over opaque handles, so its counter-examples need neither a
+# Metal device nor a decoder.
+add_executable(video_conversion_budget_test
+    video_conversion_budget_test.cpp
+    ${CMAKE_SOURCE_DIR}/src/Video/VideoConversionBudget.cpp)
+target_link_libraries(video_conversion_budget_test PRIVATE GTest::gtest_main)
+target_include_directories(video_conversion_budget_test PRIVATE . ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(video_conversion_budget_test PRIVATE cxx_std_20)
+gtest_discover_tests(
+    video_conversion_budget_test
+    TEST_PREFIX video_conversion_budget_test.
+    PROPERTIES TIMEOUT 30
+    DISCOVERY_TIMEOUT 60
+)
+
+# A pure-video wallpaper's media is decode input, not a payload. The test drives
+# the real construction path against media it encodes itself, so it links the
+# renderer and FFmpeg rather than standing in a fake source.
+pkg_check_modules(TEST_AVFORMAT REQUIRED IMPORTED_TARGET libavformat)
+pkg_check_modules(TEST_AVCODEC REQUIRED IMPORTED_TARGET libavcodec)
+pkg_check_modules(TEST_AVUTIL REQUIRED IMPORTED_TARGET libavutil)
+add_executable(video_source_input_test video_source_input_test.cpp)
+target_link_libraries(video_source_input_test PRIVATE ${PROJECT_NAME}
+    PkgConfig::TEST_AVFORMAT PkgConfig::TEST_AVCODEC PkgConfig::TEST_AVUTIL GTest::gtest_main)
+target_include_directories(video_source_input_test PRIVATE
+    . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/include)
+target_compile_features(video_source_input_test PRIVATE cxx_std_20)
+gtest_discover_tests(
+    video_source_input_test
+    TEST_PREFIX video_source_input_test.
+    PROPERTIES TIMEOUT 120
+    DISCOVERY_TIMEOUT 60
+)
+
 add_executable(timer_tests timer/frame_timer_test.cpp)
 target_link_libraries(timer_tests PRIVATE wpTimer GTest::gtest_main)
 target_include_directories(timer_tests PRIVATE . ${CMAKE_SOURCE_DIR}/src)

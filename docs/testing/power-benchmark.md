@@ -26,20 +26,84 @@ artifact.
 
 ## Runtime counters
 
-`App/Services/Diagnostics/RuntimeCounters.swift` holds the in-process counters.
-They are **off by default**: `record` does nothing outside a session opened with
-`startSession(duration:)`, and the session expires on its own so a forgotten
-switch cannot keep counting. Counts are per surface —
-`RuntimeSurfaceKey(kind:displayID:generation:)`, where the generation separates
-two surfaces that reused one display id across a hot-plug or wallpaper switch —
-and the surface table is bounded at `RuntimeCounters.maximumTrackedSurfaces`,
-reporting `droppedSurfaceEvents` rather than growing without limit.
-`aggregatedReport()` returns one line per surface and is never emitted per
-frame.
+Two counter surfaces answer two different questions, and a power claim needs
+both. A suspend decision recorded on one side proves nothing about the work on
+the other.
+
+`Shared/RuntimeCounters.swift` holds the in-process counters for what the
+application decided and what the web host did. They are **off by default**:
+`record` does nothing outside a session opened with `startSession(duration:)`,
+and the session expires on its own so a forgotten switch cannot keep counting.
+Counts are per surface — `RuntimeSurfaceKey(kind:displayID:generation:)`, where
+the generation separates two surfaces that reused one display id across a
+hot-plug or wallpaper switch — and the surface table is bounded at
+`RuntimeCounters.maximumTrackedSurfaces`, reporting `droppedSurfaceEvents`
+rather than growing without limit.
+
+The renderer counts its own work: the frame clock's wakeups and draw requests,
+draws executed and dropped, queue submissions, present requests, frame-fence
+completions, simulation ticks, the effective pause reasons as independent bits,
+and the decoder's outputs, seeks, selected/reused/skipped frames, conversions
+and imports. Those are also **off by default** — one relaxed atomic load gates
+each increment — and reading them is a pull: nothing is pushed to the UI, logged
+per frame or written to disk, and enabling starts no thread and no timer.
+
+The two groups inside a renderer row are deliberately separate.
+`timer_wakeups` through `simulation_ticks` are work a surface performs alone and
+must stop when nobody can see it. The `video_*` values describe the decoded
+source, which may legitimately keep running while one of its consumers is
+hidden, provided another consumer still presents it. Collapsing them would make
+a correctly suspended surface look busy.
+
+`RuntimeDiagnosticsSession` opens both halves for a bounded window and produces
+one aggregated report. The application starts one when
+`MAC_WALLPAPER_ENGINE_DIAGNOSTICS=<seconds>` is set in the environment; without
+that variable nothing is started, nothing counts and no timer exists.
 
 The counters exist to answer one question per condition: did the work for a
 surface nobody can see actually stop? A count that keeps rising for an occluded
 surface falsifies the change regardless of what a CPU graph shows.
+
+### What the platform cannot report
+
+`present_requests` counts requests to present. Whether the compositor ever put
+a frame on a display is a different measurement, and this backend — MoltenVK
+over a `CAMetalLayer` swapchain — has no presentation-feedback source for it.
+The report says `presented_frames=unavailable`; the request count is never
+relabelled as displayed frames, and no frame-rate claim may be derived from it.
+
+### A/B comparison entry points
+
+Two switches make a comparison measure one change in one binary rather than two
+builds. Both cover a strategy only: neither restores a resource-lifetime or
+decode-correctness defect.
+
+| Switch | Off (default) | On |
+|---|---|---|
+| `MAC_WALLPAPER_ENGINE_CONTENT_PACING=1` | Tick at the configured ceiling | Pace video to its observed content rate |
+| `experimental.native_video_backend` in the app config | Every wallpaper on the scene engine | Eligible plain local videos on the platform player |
+
+Demand-driven pacing is off by default because its remaining exposure cannot be
+bounded here: the content period only reaches the frame clock after a completed
+frame, so a rate that turns out tighter than the interval being waited out loses
+every frame produced during the remainder of it. The native video backend is off
+by default because it has never been visually verified and supports a declared
+subset only.
+
+A four-way attribution therefore needs: the baseline; baseline plus R02;
+baseline plus I01; and the native backend opted in. R02 and I01 are not switched
+— they are correctness and resource changes, so comparing them needs a separate
+build directory or worktree. Whichever way two versions are compared, they need
+isolated `MAC_WALLPAPER_ENGINE_HOME` directories and must be measured serially,
+never concurrently.
+
+### What the native backend cannot report
+
+Decode and present counts inside AVFoundation are not observable from outside
+the framework, so they are reported as unavailable rather than invented.
+`AVPlayerLooper` keeps more than one copy of its template item queued to make
+the loop seam gapless, so the queued-item count is reported as the system gives
+it and is never claimed to be one with no pre-buffering.
 
 ## Condition matrix
 

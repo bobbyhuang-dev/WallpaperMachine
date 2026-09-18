@@ -118,6 +118,37 @@ impl OweBackend {
             )
         })
     }
+
+    /// Turns renderer counting on or off for the whole process.
+    ///
+    /// Off is the default. Enabling adds one relaxed atomic increment to each
+    /// counted event; it starts no thread, no timer and no output stream, and
+    /// reading counters stays a pull.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if OWE rejects the call.
+    pub fn set_counters_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        call_status("owe_renderer_counters_set_enabled", || unsafe {
+            sys::owe_renderer_counters_set_enabled(enabled)
+        })
+    }
+
+    /// Copies process-wide renderer counters, in `owe_renderer_shared_counter`
+    /// order. These belong to no single surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if OWE rejects the call.
+    pub fn shared_counters(&self) -> Result<Vec<u64>, EngineError> {
+        let mut values = vec![0u64; sys::owe_renderer_shared_counter_OWE_RC_SHARED_COUNT as usize];
+        let mut written: usize = 0;
+        call_status("owe_renderer_shared_counters", || unsafe {
+            sys::owe_renderer_shared_counters(values.as_mut_ptr(), values.len(), &raw mut written)
+        })?;
+        values.truncate(written);
+        Ok(values)
+    }
 }
 
 /// Owned `wallpaper::SceneWallpaper` backend object.
@@ -405,6 +436,32 @@ impl OweScene {
         call_status("owe_scene_wallpaper_set_paused", || unsafe {
             sys::owe_scene_wallpaper_set_paused(raw.as_ptr(), paused)
         })
+    }
+
+    /// Copies this surface's renderer work counters, in `owe_renderer_counter`
+    /// order.
+    ///
+    /// Counting is process-wide and off by default; see
+    /// [`OweBackend::set_counters_enabled`]. With it off every value is zero,
+    /// which reads as "not recorded" rather than "no work".
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if the scene is closed or OWE rejects the call.
+    pub fn counters(&self) -> Result<Vec<u64>, EngineError> {
+        let raw = self.raw_ptr()?;
+        let mut values = vec![0u64; sys::owe_renderer_counter_OWE_RC_COUNT as usize];
+        let mut written: usize = 0;
+        call_status("owe_scene_wallpaper_counters", || unsafe {
+            sys::owe_scene_wallpaper_counters(
+                raw.as_ptr(),
+                values.as_mut_ptr(),
+                values.len(),
+                &raw mut written,
+            )
+        })?;
+        values.truncate(written);
+        Ok(values)
     }
 
     /// Registers a first-frame callback owned by this renderer scene.

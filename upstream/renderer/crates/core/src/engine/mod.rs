@@ -26,6 +26,7 @@ use crate::engine::state::StoredSceneRuntimeState;
 use crate::project::SceneDescSliceExt;
 use crate::{
     DisplayDesc, DisplayIdentity, EngineError,
+    render::RendererSurfaceCounters,
     display::{
         callback::{DisplayChangeRegistration, DisplayRefreshTarget},
         state::DisplayStateModel,
@@ -492,6 +493,33 @@ impl WallpaperEngine {
     /// the update.
     pub async fn set_all_paused(&self, paused: bool) -> Result<(), EngineError> {
         self.ask_actor(messages::SetAllPaused { paused }).await
+    }
+
+    /// Turns renderer counting on or off for the whole process.
+    ///
+    /// Off is the default: with it off no counted event performs any
+    /// bookkeeping. Enabling starts no thread, no timer and no output stream;
+    /// counters are only ever read by an explicit call.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the renderer rejects the call.
+    pub fn set_renderer_counters_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        self.backend.set_counters_enabled(enabled)
+    }
+
+    /// Reads renderer work counters for every open scene, plus the process-wide
+    /// counters that belong to no single surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if actor communication fails or the renderer rejects
+    /// the call.
+    pub async fn renderer_counters(
+        &self,
+    ) -> Result<(Vec<RendererSurfaceCounters>, Vec<u64>), EngineError> {
+        let surfaces = self.ask_actor(messages::RendererCounters).await?;
+        Ok((surfaces, self.backend.shared_counters()?))
     }
 
     /// Sends normalized mouse coordinates to one open scene.

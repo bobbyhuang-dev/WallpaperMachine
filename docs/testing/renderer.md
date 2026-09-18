@@ -488,6 +488,52 @@ Authored scenes report nothing. A change that lets any other scene answer needs 
 positive account of every dynamic render-graph input first; guessing freezes a
 live wallpaper.
 
+The period a source reports is evidence, not metadata. `avg_frame_rate` is an
+average and `r_frame_rate` is an estimate, so neither describes a particular gap
+in a variable-frame-rate clip. `video_frame_pacing_test` pins the rules that
+replaced the metadata-only version: declared rates are an upper bound on the
+period and never unlock pacing on their own; the shortest gap actually decoded
+does, after enough samples; the result is monotonically non-increasing, so a
+burst that appears once keeps the clock fast afterwards; deltas across a loop
+seam or a seek are discarded because they describe the seam; and repeated,
+rewound or non-finite timestamps are not counted as evidence at all, which
+leaves the fixed cadence in place rather than pacing on a guess. Rational rates
+keep their exact period (`24000/1001`, not `1/24`), and playback speed maps the
+content's own timeline onto the wall clock, so a 2x wallpaper needs twice the
+tick rate for the same clip.
+
+A frame clock paced to its content also has to be told apart from a suspended
+process. `timer_tests` covers the boundary: the suspension threshold scales with
+the interval the clock is actually using and never drops below the five-second
+floor, so an ordinary frame boundary at the pacing clamp reports its real
+elapsed time instead of one ideal frame, while an eight-hour gap is still
+treated as a resume. Before that change a scene paced at the clamp lost the
+difference on every frame and fell steadily behind.
+
+`MAC_WALLPAPER_ENGINE_DISABLE_CONTENT_PACING=1` switches pacing off in the same
+binary so a comparison measures one strategy rather than two builds. The default
+is the paced path; an unset or empty value never disables it.
+
+### Renderer work counters
+
+`OWE_RC_*` counters are incremented by the production paths that perform the
+work: the frame clock's tick, the draw handler, the Vulkan submit, the present
+request, the frame fence and the texture cache's video update. They are off by
+default and read by pulling `owe_scene_wallpaper_counters`; nothing is pushed or
+logged per frame. `timer_tests` asserts that a tick which found a draw still in
+flight is counted as a suppressed tick rather than a request, that nothing is
+counted while the switch is off, and — running the real thread timer against the
+real callback — that a content period genuinely lowers how many draws the
+scheduler posts. `video_frame_pacing_test` pins the generation accounting behind
+`video_frames_selected`, `video_frames_reused` and `video_frames_skipped`: a gap
+between two displayed generations is exactly the number of decoded frames that
+never reached the screen, which is how a pacing regression is falsified while
+the picture still moves.
+
+`present_requests` counts requests. This backend has no presentation-feedback
+source, so the frames a compositor actually displayed are reported as
+unavailable and never approximated by the request count.
+
 ### Shader pipeline
 
 The shader repair handles undersized cross-stage varying declarations,
@@ -530,12 +576,13 @@ Built into the renderer check build directory under `artifacts/renderer/bin/`:
 `render_target_lifetime_test`, `shader_cache_metadata_test`, `audio_tests`,
 `mouse_input_test`, `particle_mouse_controlpoint_test`, `timer_tests`,
 `playback_gpu_test`, `video_decode_pump_test`, `video_color_conversion_test`,
+`video_frame_pacing_test`,
 plus the `offscreen_scene_probe`, `scene_reload_cycle_probe` and `wpdump`
 diagnostics. `scripts/check_renderer.py` builds and runs
 `render_target_lifetime_test`, `text_object_runtime_test`,
 `shader_cache_metadata_test`, `video_decode_pump_test`,
-`video_color_conversion_test`, `timer_tests` and `playback_gpu_test`; a non-zero
-exit from any of them fails the check.
+`video_color_conversion_test`, `video_frame_pacing_test`, `timer_tests` and
+`playback_gpu_test`; a non-zero exit from any of them fails the check.
 
 Useful filters:
 

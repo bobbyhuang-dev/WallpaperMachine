@@ -10,6 +10,7 @@ use crate::{
     media::audio::AudioVolume,
     owe::backend::{OweBackend, OweScene, PointerInputCallback},
     project::{ScalingMode, SceneDesc, SceneHandle, SerdeValudeExt},
+    render::RendererSurfaceCounters,
     window::{MouseButtonEdges, NormalizedMousePosition},
 };
 
@@ -170,6 +171,10 @@ pub struct SceneRuntime {
     property_override_json: Option<String>,
     /// `AppKit` window that owns the `CAMetalLayer` passed to OWE.
     window: Option<WallpaperWindow>,
+    /// Increments every time the renderer object is rebuilt. The renderer's
+    /// counters live and die with that object, so two wallpapers that reused
+    /// one display and one handle must not have their counts merged.
+    generation: u64,
 }
 
 #[derive(Clone)]
@@ -283,10 +288,24 @@ impl SceneRuntime {
             audio_muted: state.audio_muted,
             property_override_json: state.property_override_json,
             window: Some(window),
+            generation: 1,
         };
         runtime.desc = stored_desc;
         runtime.apply_runtime_properties(&descriptor_state)?;
         Ok(runtime)
+    }
+
+    /// Renderer work counters for this surface, with the identity needed to
+    /// tell one surface's exclusive work from the source work it shares.
+    pub fn counters(&self) -> Result<RendererSurfaceCounters, EngineError> {
+        Ok(RendererSurfaceCounters {
+            display_id: self.desc.display.display_id,
+            handle: self.handle,
+            generation: self.generation,
+            source_path: self.desc.scene_path.clone(),
+            paused: self.paused,
+            values: self.renderer.counters()?,
+        })
     }
 
     pub fn set_scaling_mode(&mut self, mode: ScalingMode) -> Result<(), EngineError> {
@@ -418,6 +437,7 @@ impl SceneRuntime {
             return Err(error);
         }
         let mut old_renderer = std::mem::replace(&mut self.renderer, renderer);
+        self.generation = self.generation.saturating_add(1);
         let old_relay = std::mem::replace(&mut self.pointer_relay, pointer_relay);
         self.pointer_input = NativePointerInputState::new(self.pointer_relay.renderer_instance.clone());
         old_relay.stop();

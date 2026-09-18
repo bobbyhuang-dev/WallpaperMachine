@@ -1,5 +1,6 @@
 #include "Platform/Apple/FfmpegVideoInterop.hpp"
 #include "Video/VideoColorConversion.hpp"
+#include "Video/VideoConversionBudget.hpp"
 #include "Utils/Logging.h"
 
 #include <CoreVideo/CoreVideo.h>
@@ -13,6 +14,7 @@
 #include <mutex>
 #include <sstream>
 #include <unordered_map>
+#include <vector>
 
 extern "C" {
 #include <libavutil/frame.h>
@@ -581,6 +583,28 @@ id<MTLTexture> CreatePixelBufferBackedMetalTexture(id<MTLDevice> device,
     return texture;
 }
 
+/// Pixel format the NV12 conversion kernel writes. It is part of the reuse key
+/// because a destination is only interchangeable with one the importer
+/// reinterprets the same way.
+constexpr MTLPixelFormat kConversionDestinationPixelFormat = MTLPixelFormatBGRA8Unorm;
+
+/// Bytes a destination of this shape would cost. Only used to record a
+/// failure, where there is no texture left to ask for its allocated size.
+uint64_t NominalConversionDestinationBytes(uint32_t width, uint32_t height)
+{
+    return static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * 4u;
+}
+
+/// Whether committing `bytes` more would push this device past the working set
+/// size it recommends. This is the memory-pressure signal Metal answers
+/// synchronously, so reading it needs no notification source and no thread.
+bool DeviceIsUnderMemoryPressure(id<MTLDevice> device, uint64_t bytes)
+{
+    const uint64_t recommended = device.recommendedMaxWorkingSetSize;
+    if (recommended == 0) return false;
+    return static_cast<uint64_t>(device.currentAllocatedSize) + bytes > recommended;
+}
+
 bool CompatibleConvertedDestination(id<MTLTexture> texture, id<MTLDevice> device,
                                     uint32_t width, uint32_t height)
 {
@@ -588,7 +612,7 @@ bool CompatibleConvertedDestination(id<MTLTexture> texture, id<MTLDevice> device
     return texture != nil && texture.device == device &&
         texture.textureType == MTLTextureType2D &&
         texture.width == width && texture.height == height && texture.depth == 1 &&
-        texture.pixelFormat == MTLPixelFormatBGRA8Unorm &&
+        texture.pixelFormat == kConversionDestinationPixelFormat &&
         texture.storageMode == MTLStorageModeShared &&
         texture.mipmapLevelCount == 1 && texture.sampleCount == 1 && texture.arrayLength == 1 &&
         (texture.usage & required_usage) == required_usage;
@@ -600,6 +624,7 @@ id<MTLTexture> CreateConvertedMetalTexture(id<MTLDevice>    device,
                                            uint32_t         width,
                                            uint32_t         height,
                                            id<MTLTexture>   reusable_destination,
+                                           bool*            destination_allocation_failed,
                                            std::string*     error)
 {
     CVMetalTextureCacheRef texture_cache = GetTextureCacheForDevice(device, error);
@@ -653,7 +678,7 @@ id<MTLTexture> CreateConvertedMetalTexture(id<MTLDevice>    device,
     id<MTLTexture> texture = reusable_destination;
     if (texture == nil) {
         MTLTextureDescriptor* descriptor =
-            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:kConversionDestinationPixelFormat
                                                                width:width
                                                               height:height
                                                            mipmapped:NO];
@@ -661,6 +686,9 @@ id<MTLTexture> CreateConvertedMetalTexture(id<MTLDevice>    device,
         descriptor.storageMode = MTLStorageModeShared;
         descriptor.resourceOptions = MTLResourceStorageModeShared;
         texture = [device newTextureWithDescriptor:descriptor];
+        if (texture == nil && destination_allocation_failed != nullptr) {
+            *destination_allocation_failed = true;
+        }
     }
     if (texture == nil) {
         CFRelease(y_plane_ref);
@@ -740,24 +768,53 @@ struct AppleVideoFrameLease {
 };
 
 struct AppleVideoMetalTexturePool::Impl {
-    id<MTLDevice> device;
-    struct Entry {
-        void* texture { nullptr };
-        uint64_t bytes { 0 };
-    };
-    std::array<Entry, 4> entries {};
-    size_t count { 0 };
-    uint64_t bytes { 0 };
-    static constexpr uint64_t budget = 64u * 1024u * 1024u;
+    id<MTLDevice>          device;
+    VideoConversionBudget  budget {};
+    /// Resources the budget handed back; released outside its ledger.
+    std::vector<void*>     reclaimed;
+    uint64_t               recycles { 0 };
+    /// One line per refusal reason and per partially-hosted shape, so an
+    /// exhausted budget is visible in the log without printing per frame.
+    uint32_t               reported_refusals { 0 };
+    VideoConversionSlotKey reported_partial_shape {};
 
-    explicit Impl(void* handle) : device((__bridge id<MTLDevice>)handle) {}
+    explicit Impl(void* handle) : device((__bridge id<MTLDevice>)handle) {
+        reclaimed.reserve(VideoConversionBudget::kCoexistingSlots);
+    }
 
-    void* remove(size_t index) noexcept {
-        void* texture = entries[index].texture;
-        bytes -= entries[index].bytes;
-        for (size_t i = index + 1; i < count; ++i) entries[i - 1] = entries[i];
-        entries[--count] = {};
-        return texture;
+    [[nodiscard]] static VideoConversionSlotKey KeyFor(uint32_t width, uint32_t height) {
+        return { width, height, static_cast<uint32_t>(kConversionDestinationPixelFormat) };
+    }
+
+    void releaseReclaimed() noexcept {
+        for (void* resource : reclaimed) ReleaseAppleVideoMetalTexture(resource);
+        reclaimed.clear();
+    }
+
+    void reportRefusal(VideoConversionRefusal refusal) noexcept {
+        const uint32_t bit = 1u << static_cast<uint32_t>(refusal);
+        if ((reported_refusals & bit) != 0) return;
+        reported_refusals |= bit;
+        LOG_INFO("video conversion destination not pooled: %s (ceiling %llu bytes)",
+                 VideoConversionRefusalName(refusal),
+                 static_cast<unsigned long long>(budget.ceiling_bytes()));
+    }
+
+    /// Degradation this shape has to live with: the ceiling holds fewer than
+    /// the slots that can coexist, so some frames keep allocating.
+    void reportPartialHosting(const VideoConversionSlotKey& key, uint64_t bytes) noexcept {
+        if (budget.HostsAllSlots(bytes)) return;
+        if (reported_partial_shape == key) return;
+        reported_partial_shape = key;
+        LOG_INFO("video conversion reuse is partial for %ux%u: %llu slots of %llu bytes need "
+                 "%llu bytes, ceiling is %llu",
+                 key.width,
+                 key.height,
+                 static_cast<unsigned long long>(VideoConversionBudget::kCoexistingSlots),
+                 static_cast<unsigned long long>(bytes),
+                 static_cast<unsigned long long>(
+                     VideoConversionBudget::RequiredBytesForAllSlots(bytes)),
+                 static_cast<unsigned long long>(budget.ceiling_bytes()));
     }
 };
 
@@ -768,39 +825,89 @@ AppleVideoMetalTexturePool::~AppleVideoMetalTexturePool() { Clear(); }
 
 void* AppleVideoMetalTexturePool::Take(uint32_t width, uint32_t height)
 {
-    for (size_t i = 0; i < m_impl->count; ++i) {
-        id<MTLTexture> texture = (__bridge id<MTLTexture>)m_impl->entries[i].texture;
-        if (CompatibleConvertedDestination(texture, m_impl->device, width, height)) {
-            return m_impl->remove(i);
-        }
-    }
-    return nullptr;
+    return m_impl->budget.Take(Impl::KeyFor(width, height));
+}
+
+void AppleVideoMetalTexturePool::EndLoan(void* retained_destination) noexcept
+{
+    if (retained_destination == nullptr) return;
+    m_impl->budget.EndLoan(retained_destination);
+    ReleaseAppleVideoMetalTexture(retained_destination);
 }
 
 void AppleVideoMetalTexturePool::Recycle(void* retained_destination) noexcept
 {
     if (retained_destination == nullptr) return;
     id<MTLTexture> texture = (__bridge id<MTLTexture>)retained_destination;
-    const uint64_t bytes = texture.allocatedSize;
-    if (!CompatibleConvertedDestination(texture, m_impl->device, texture.width, texture.height) ||
-        bytes > Impl::budget) {
+    const uint32_t width = static_cast<uint32_t>(texture.width);
+    const uint32_t height = static_cast<uint32_t>(texture.height);
+    if (!CompatibleConvertedDestination(texture, m_impl->device, width, height)) {
+        // Not a texture this pool could ever lend out for a conversion.
+        m_impl->budget.EndLoan(retained_destination);
         ReleaseAppleVideoMetalTexture(retained_destination);
         return;
     }
-    while (m_impl->count == m_impl->entries.size() || m_impl->bytes > Impl::budget - bytes) {
-        ReleaseAppleVideoMetalTexture(m_impl->remove(0));
+
+    const VideoConversionSlot slot {
+        .key = { width, height, static_cast<uint32_t>(texture.pixelFormat) },
+        .bytes = texture.allocatedSize,
+        .resource = retained_destination,
+    };
+    // The caller reached this point only after the GPU finished with the
+    // destination, which is what ends the loan the lend opened.
+    m_impl->budget.ReportGpuComplete(retained_destination);
+    if (DeviceIsUnderMemoryPressure(m_impl->device, slot.bytes)) {
+        m_impl->budget.ReportMemoryPressure(m_impl->reclaimed);
+    } else {
+        m_impl->budget.ClearMemoryPressure();
     }
-    m_impl->entries[m_impl->count++] = { retained_destination, bytes };
-    m_impl->bytes += bytes;
+    m_impl->reportPartialHosting(slot.key, slot.bytes);
+
+    const auto admission = m_impl->budget.Admit(slot, m_impl->reclaimed);
+    m_impl->releaseReclaimed();
+    if (!admission.accepted) {
+        m_impl->reportRefusal(admission.refusal);
+        ReleaseAppleVideoMetalTexture(retained_destination);
+        return;
+    }
+    ++m_impl->recycles;
+}
+
+void AppleVideoMetalTexturePool::RetainOnly(uint32_t width, uint32_t height) noexcept
+{
+    m_impl->budget.DropOtherKeys(Impl::KeyFor(width, height), m_impl->reclaimed);
+    m_impl->releaseReclaimed();
+}
+
+void AppleVideoMetalTexturePool::ReportAllocationFailure(uint32_t width, uint32_t height) noexcept
+{
+    m_impl->budget.ReportAllocationFailure(NominalConversionDestinationBytes(width, height),
+                                           m_impl->reclaimed);
+    m_impl->releaseReclaimed();
 }
 
 void AppleVideoMetalTexturePool::Clear() noexcept
 {
-    while (m_impl->count != 0) ReleaseAppleVideoMetalTexture(m_impl->remove(0));
+    m_impl->budget.Drain(m_impl->reclaimed);
+    m_impl->releaseReclaimed();
+    // A new scene may well fit what this one could not.
+    m_impl->budget.Reset();
 }
 
-uint64_t AppleVideoMetalTexturePool::CachedTextureCount() const noexcept { return m_impl->count; }
-uint64_t AppleVideoMetalTexturePool::CachedBytes() const noexcept { return m_impl->bytes; }
+AppleVideoConversionPoolStats AppleVideoMetalTexturePool::Stats() const noexcept
+{
+    const auto& budget = m_impl->budget;
+    return {
+        .cached_texture_count = budget.pooled_count(),
+        .cached_bytes = budget.pooled_bytes(),
+        .peak_cached_bytes = budget.peak_pooled_bytes(),
+        .hits = budget.hits(),
+        .misses = budget.misses(),
+        .recycles = m_impl->recycles,
+        .evictions = budget.evictions(),
+        .refusals = budget.refusals(),
+    };
+}
 
 bool CreateVideoToolboxDeviceContext(AVBufferRef** hw_device_ctx, std::string* error)
 {
@@ -939,7 +1046,8 @@ std::string DescribeAppleVideoFrame(const VideoTextureFrame& frame)
 void* CreateAppleVideoFrameLease(const VideoTextureFrame& frame,
                                  void* metal_device,
                                  void* reusable_destination,
-                                 std::string* error)
+                                 std::string* error,
+                                 bool* destination_allocation_failed)
 {
     if (!frame.valid()) {
         return SetError(error, "video frame metadata is incomplete"), nullptr;
@@ -997,6 +1105,7 @@ void* CreateAppleVideoFrameLease(const VideoTextureFrame& frame,
                 frame.width,
                 frame.height,
                 destination,
+                destination_allocation_failed,
                 error);
             recyclable_destination = texture != nil;
         } else if (frame.io_surface != nullptr && frame.pixel_buffer == nullptr) {

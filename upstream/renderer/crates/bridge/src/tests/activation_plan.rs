@@ -52,6 +52,8 @@ fn activation_plan_marks_scenes_paused_when_global_playback_is_paused() {
         paths: &paths,
         force_shader_refresh: false,
         project_models: &BTreeMap::new(),
+        native_video_enabled: false,
+        native_video_rejected: &BTreeMap::new(),
     }
     .build()
     .unwrap();
@@ -106,6 +108,8 @@ fn activation_plan_gives_primary_wallpaper_to_current_primary_display() {
         paths: &paths,
         force_shader_refresh: false,
         project_models: &BTreeMap::new(),
+        native_video_enabled: false,
+        native_video_rejected: &BTreeMap::new(),
     }
     .build()
     .unwrap();
@@ -123,6 +127,8 @@ fn activation_plan_gives_primary_wallpaper_to_current_primary_display() {
         paths: &paths,
         force_shader_refresh: false,
         project_models: &BTreeMap::new(),
+        native_video_enabled: false,
+        native_video_rejected: &BTreeMap::new(),
     }
     .build()
     .unwrap();
@@ -164,6 +170,8 @@ fn activation_plan_uses_primary_render_override_for_identity_primary_monitor() {
         paths: &paths,
         force_shader_refresh: false,
         project_models: &BTreeMap::new(),
+        native_video_enabled: false,
+        native_video_rejected: &BTreeMap::new(),
     }
     .build()
     .unwrap();
@@ -209,6 +217,8 @@ fn activation_plan_uses_identity_render_override_for_primary_monitor() {
         paths: &paths,
         force_shader_refresh: false,
         project_models: &BTreeMap::new(),
+        native_video_enabled: false,
+        native_video_rejected: &BTreeMap::new(),
     }
     .build()
     .unwrap();
@@ -280,6 +290,8 @@ fn mirror_scene_follows_source_wallpaper_with_monitor_overrides() {
         paths: &paths,
         force_shader_refresh: false,
         project_models: &BTreeMap::new(),
+        native_video_enabled: false,
+        native_video_rejected: &BTreeMap::new(),
     }
     .build()
     .unwrap();

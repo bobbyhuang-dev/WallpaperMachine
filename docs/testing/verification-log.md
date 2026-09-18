@@ -11,6 +11,61 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-18 — Phase C first batch: P02 closeout, R02, I01 and an opt-in V04
+
+Third round, on the same uncommitted tree as round 2 (`6bfaa1d84` plus that
+round's 41 modified and 9 untracked files, verified rather than assumed).
+Nothing was reset, stashed or committed. Per-task evidence:
+[../mac-wallpaper-engine-implementation-progress.md](../mac-wallpaper-engine-implementation-progress.md).
+
+- `python3 scripts/test.py`: passed, 325 tests, 0 failures (314 before). New
+  suites: `NativeVideoWallpaperHostTests` (7) and four added
+  `RuntimeDiagnosticsReportTests` cases.
+- `python3 scripts/check_renderer.py`: exit 0. Ten generated cases with
+  `pixels_equal=true` and no diagnostics, and every test binary exit 0,
+  now including `video_conversion_budget_test` (11) and
+  `video_source_input_test` (11), both added to the gate. `timer_tests` is 20
+  cases and `playback_gpu_test` 34.
+- `cargo test --release --workspace`: passed, 251 `wallpaper-bridge` cases
+  including the new `native_video_routing` module (7).
+- `python3 scripts/build.py --renderer-only` and
+  `python3 scripts/build.py --configuration Release`: both passed; the Release
+  app and embedded extension contain the new window class and both switches.
+  Not installed, not launched, `/Applications` untouched.
+- P02's round 2 claim that a rate transition costs at most one frame was
+  **disproved on the production path**: `ThreadTimer::SetInterval` could not
+  shorten a wait already in progress, so a demand change waited out the whole
+  previous period. Two new timer cases fail against the old code and pass now.
+  Because the remaining exposure — the period only reaches the clock after a
+  completed frame — cannot be bounded without an event-driven clock, pacing was
+  made opt-in and the safe baseline is the default.
+- Counter attribution was corrected: conversions and imports are consumer work,
+  source work is keyed on a process-unique decoder instance rather than a file
+  path, and a roll-up totals one decoder once without ever folding two decoders
+  that read the same file.
+- R02 and I01 report measured, non-power numbers: a warm 6144x3456 clip settles
+  at 4 created and 13 reused conversion destinations with an 81 MiB resident
+  peak, where the old ceiling kept allocating; scene-load peak for a 67 MB
+  wallpaper drops from +134,316,128 to +4,079,616 bytes. Every R02 rule was
+  confirmed load-bearing by deleting it and watching the matching test fail.
+
+Environment faults worth recording, both self-inflicted: a scratch CMake
+directory configured without `scripts/build.py`'s environment linked the default
+Homebrew `ffmpeg` instead of the pinned `ffmpeg@8` and produced dangling
+dylibs that looked like a broken toolchain; and a stale cmake cache under
+`target/release/build/wallpaper-core/*/out` carrying `BUILD_TESTS=ON` broke
+`build.py --renderer-only` until that one directory was removed.
+
+Not run, and therefore skips rather than passes: the local wallpaper corpus,
+`python3 scripts/test.py --ui`, and every desktop, visual and power measurement.
+No watt figure or saving percentage is claimed. In particular the native video
+backend has never put a pixel on a screen: its refusal path is tested with an
+injected decision, so the real frame-rate probe has not run against a real
+asset, and it stays off by default. Its window and player have no automated
+coverage at all — an earlier version of the host tests did construct a real
+desktop window, which this project's rules do not allow from an automated run,
+so the host now takes an injected surface factory and the tests use a fake.
+
 ## 2026-09-18 — Release 0.4.0 published
 
 The Workshop/control-panel work logged below (concurrent downloads, tile
@@ -102,6 +157,55 @@ activity bar and the queue footer states the slot rule.
   the app's sessions signed in on one account, whether SteamCMD has written a
   reusable sign-in by the time it reports the login, and the activity bar with
   several real transfers. No desktop run was authorised.
+
+## 2026-09-17 — Renderer work counters and the P02 correctness re-examination
+
+Second round on top of `6bfaa1d840f2ca84feb7ff600e7b32e78a6e9610`, whose working
+tree was clean, so the 310-test result recorded below belongs to exactly that
+commit. Built the renderer half of M00 that round 1 left unbuilt, and re-checked
+P02's correctness argument. Per-task evidence, with implementation, automated,
+runtime, visual and power verification tracked separately:
+[../mac-wallpaper-engine-implementation-progress.md](../mac-wallpaper-engine-implementation-progress.md).
+
+- `python3 scripts/test.py`: passed, 314 tests, 0 failures (310 before this
+  round). New suite: `RuntimeDiagnosticsReportTests` (4). That run builds the
+  embedded extension, so `Shared/` still compiles under
+  `APPLICATION_EXTENSION_API_ONLY`.
+- `python3 scripts/check_renderer.py`: exit 0. Ten generated cases with
+  `pixels_equal=true` and no diagnostics, `scene_reload_cycle_probe` exit 0, and
+  every test binary exit 0, now including the new `video_frame_pacing_test`
+  (21 cases) and an expanded `timer_tests` (18 cases, 7 of them new).
+  `playback_gpu_test` (32 cases) ran green inside the gate this time.
+- `cargo test --release --workspace` in `upstream/renderer` with
+  `CARGO_TARGET_DIR` unset: passed, 241 `wallpaper-bridge` cases including the
+  new `renderer_counters` module (8), every other crate green.
+- `python3 scripts/build.py --renderer-only`: passed; `App/Bridge/Generated`
+  regenerated with `rendererCounters` and `setRendererCountersEnabled`.
+- `python3 scripts/build.py --configuration Release`: **BUILD SUCCEEDED**, app
+  and embedded extension, at
+  `build/Build/Products/Release/MacWallpaperEngine.app`. Not installed, not
+  launched, and `/Applications` was not touched.
+- Counter-example checked by running it, not by assertion: with
+  `FrameTimer::SuspensionThreshold` temporarily cut back to the old fixed 5 s
+  floor, `AContentWaitAtTheClampIsNotMistakenForASuspension` and
+  `TheSuspensionThresholdFollowsTheIntervalAndNeverDropsBelowTheFloor` fail;
+  with the real implementation restored all 18 timer cases pass. The temporary
+  edit was reverted before any suite above was run.
+- Three P02 concerns were checked. One is falsified: the shortest-period `min`
+  was already taken over periods, i.e. `1 / max(fps)`. Two were real and are
+  fixed: pacing trusted container metadata that cannot describe a particular
+  gap, and it ignored playback speed. A third defect was found while checking
+  them: the pacing clamp and the suspension cutoff were the same 5 s constant,
+  so a scene paced at the clamp had every frame boundary misread as a resume and
+  fell behind on every frame.
+
+Not run, and therefore skips rather than passes: the local wallpaper corpus,
+`python3 scripts/test.py --ui`, and every desktop, visual and power measurement.
+No watt figure, energy number or saving percentage is claimed. Whether a hidden
+surface's counters actually stop rising on a real desktop, whether a
+non-cooperating web page's timers really halt, and whether a paced video keeps
+its timeline at equal quality are all unverified and need an authorized desktop
+session.
 
 ## 2026-09-17 — Parallel Workshop downloads withdrawn; the queue is serial again
 
@@ -344,6 +448,7 @@ current `pageSize` and a `reachable` count for the Steam cap note.
   SUCCEEDED; the delivered app carries the new WebUI and store.
 - Not verified: the live window's look while resizing (no desktop run
   requested).
+
 ## 2026-09-17 — Phase A and most of phase B of the power improvement plan
 
 Implemented M00 (minimal counters plus a configuration manifest), V01 (FFmpeg

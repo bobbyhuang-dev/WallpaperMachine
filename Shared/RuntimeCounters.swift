@@ -7,6 +7,7 @@ struct RuntimeSurfaceKey: Hashable, Sendable {
     enum Kind: String, Sendable {
         case desktopScene
         case desktopWeb
+        case desktopNativeVideo
         case lockScreen
         case preview
     }
@@ -51,6 +52,14 @@ enum RuntimeCounter: String, CaseIterable, Sendable {
     /// A surface produced the one frame a readiness or snapshot request needs,
     /// which is deliberately not the same as being allowed to keep presenting.
     case readinessFrameRendered
+    /// A native player item was created for a surface, and released again.
+    /// Creation and release are counted separately so a leaked player is
+    /// visible as a difference rather than inferred.
+    case nativeVideoItemCreated
+    case nativeVideoItemReleased
+    /// The native backend refused a wallpaper and handed it to the scene
+    /// engine.
+    case nativeVideoRefused
 }
 
 /// Time-limited, aggregated runtime counters. Off by default: recording happens

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Core/RendererCounters.hpp"
 #include "RenderGraph/RenderGraph.hpp"
 #include "Presentation/WallpaperScaling.hpp"
 #include "SceneWallpaperSurface.hpp"
@@ -51,6 +52,10 @@ public:
     /// Shortest frame period among the live video sources, in seconds, or 0
     /// when any of them cannot report one. Read on the render thread only.
     [[nodiscard]] double ShortestVideoFramePeriod() const;
+
+    /// Counters owned by the scene. Installed once, before any frame; the
+    /// renderer and its texture cache only read the pointer.
+    void SetCounters(RendererCounters* counters);
 
     /// World rectangle the presented wallpaper covers, for mapping
     /// window-normalized cursor input onto scene coordinates. Invalid before

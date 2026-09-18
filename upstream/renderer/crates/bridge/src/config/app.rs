@@ -16,6 +16,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub ui: UiCfg,
     #[serde(default)]
+    pub experimental: ExperimentalCfg,
+    #[serde(default)]
     pub monitors: Vec<MonitorCfg>,
     #[serde(default)]
     pub monitor_settings: Vec<MonitorSettingsCfg>,
@@ -28,6 +30,7 @@ impl Default for AppConfig {
             general: GeneralCfg::default(),
             power: PowerCfg::default(),
             ui: UiCfg::default(),
+            experimental: ExperimentalCfg::default(),
             monitors: Vec::new(),
             monitor_settings: Vec::new(),
         }
@@ -37,6 +40,19 @@ impl Default for AppConfig {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GeneralCfg {
     pub last_selected_wallpaper: Option<String>,
+}
+
+/// Opt-in behaviour that is not ready to be a default.
+///
+/// Anything here is off unless the user turns it on, survives a restart, and is
+/// expected to be reported as experimental wherever it is surfaced.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExperimentalCfg {
+    /// Route plain local video wallpapers to the native AVFoundation player
+    /// instead of the scene engine. Off by default: it supports a declared
+    /// subset only, and anything outside that subset falls back.
+    #[serde(default)]
+    pub native_video_backend: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

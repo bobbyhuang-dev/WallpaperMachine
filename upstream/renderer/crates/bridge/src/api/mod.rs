@@ -12,8 +12,10 @@ pub use types::{
     BridgeAppSnapshot, BridgeComboOption, BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplayMutationBundle,
     BridgeDisplaySettingsRow, BridgeLibraryScanStatus, BridgeLibrarySnapshot,
     BridgeLockScreenScene, BridgeLogLevel, BridgeLogStatus, BridgeMonitorInfoRow,
+    BridgeNativeVideoWallpaper,
     BridgeMonitorInformationSnapshot, BridgePlaybackState, BridgePropertyDescriptor,
-    BridgePropertyKind, BridgePropertyValue, BridgeScalingMode, BridgeSettingsSnapshot,
+    BridgePropertyKind, BridgePropertyValue, BridgeRendererCountersReport,
+    BridgeRendererSurfaceCounters, BridgeScalingMode, BridgeSettingsSnapshot,
     BridgeSliderMetadata, BridgeSnapshotBundle, BridgeStorageStatus, BridgeWallpaperEntry,
     BridgeWallpaperKind, BridgeWallpaperMutationBundle, BridgeWallpaperOptionsSnapshot,
     BridgeWebWallpaper,
@@ -41,13 +43,15 @@ use crate::{
             EditProperty, EjectWallpaperFromDisplay, GetAllSnapshots, GetAppSnapshot,
             GetLibrarySnapshot, GetLockScreenScenes, GetMonitorInformationSnapshot,
             GetSettingsSnapshot, GetWallpaperOptionsSnapshot, GetWebWallpapers, InitialFrameReady,
-            PollMousePosition,
+            GetNativeVideoWallpapers, PollMousePosition, RejectNativeVideo, RendererCounters,
             RefreshDisplays, RefreshLibrary, RestorePropertyDefault, SelectWallpaper,
             SetAudioResponseEnabled, SetDisplayConfigEnabled, SetDisplayEnabled, SetDisplayMode,
             SetDisplayPresentationSuspended,
             SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMirrorMuted, SetMirrorScalingFactor,
             SetMirrorScalingMode, SetMirrorTarget, SetMirrorTargetFps, SetMirrorVolume, SetMuted,
-            SetPauseOnBatteryPower, SetPresentationSuspended, SetScalingFactor, SetScalingMode,
+            SetNativeVideoBackendEnabled, SetPauseOnBatteryPower, SetPresentationSuspended,
+            SetRendererCountersEnabled,
+            SetScalingFactor, SetScalingMode,
             SetTargetFps, SetVolume, Shutdown,
         },
         state::BridgeActorState,
@@ -432,6 +436,31 @@ impl EngineFacade for ArcEngineFacade {
         paused: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), wallpaper_core::EngineError>> + Send>> {
         self.0.set_display_paused(display_id, paused)
+    }
+
+    fn set_renderer_counters_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<(), wallpaper_core::EngineError> {
+        self.0.set_renderer_counters_enabled(enabled)
+    }
+
+    fn renderer_counters(
+        &self,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        (
+                            Vec<wallpaper_core::render::RendererSurfaceCounters>,
+                            Vec<u64>,
+                        ),
+                        wallpaper_core::EngineError,
+                    >,
+                > + Send,
+        >,
+    > {
+        self.0.renderer_counters()
     }
 
     fn set_audio_volume(
@@ -1038,6 +1067,84 @@ impl WallpaperBridge {
             .ask(SetDisplayPresentationSuspended {
                 display_id,
                 suspended,
+            })
+            .await
+    }
+
+    /// Turns renderer work counting on or off for the whole process.
+    ///
+    /// Off is the default. Enabling adds one relaxed atomic increment per
+    /// counted event; it starts no thread, no timer and no output stream, and
+    /// counters are only ever read by an explicit `renderer_counters` call.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the renderer rejects the call.
+    pub async fn set_renderer_counters_enabled(&self, enabled: bool) -> Result<(), BridgeError> {
+        self.actor.ask(SetRendererCountersEnabled { enabled }).await
+    }
+
+    /// Reads renderer work counters for every open scene.
+    ///
+    /// This is the evidence half of the per-surface suspension work: it answers
+    /// whether a hidden surface actually stopped submitting and presenting,
+    /// rather than whether a suspend decision was delivered to it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the renderer rejects the call.
+    pub async fn renderer_counters(&self) -> Result<BridgeRendererCountersReport, BridgeError> {
+        self.actor.ask(RendererCounters).await
+    }
+
+    /// Turns the experimental native video backend on or off.
+    ///
+    /// Off by default. While it is on, a plain local video whose project and
+    /// options fall inside the supported subset is played by the platform
+    /// player and is no longer given to the scene engine at all; everything
+    /// else, and anything the host refuses, stays on the scene engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the scene list cannot be rebuilt for the new
+    /// routing, in which case the previous backend keeps running.
+    pub async fn set_native_video_backend_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<BridgeSnapshotBundle, BridgeError> {
+        self.actor.ask(SetNativeVideoBackendEnabled { enabled }).await
+    }
+
+    /// Plain local videos the host should play natively. Empty while the
+    /// backend is off.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a media path cannot be represented.
+    pub async fn native_video_wallpapers(
+        &self,
+    ) -> Result<Vec<BridgeNativeVideoWallpaper>, BridgeError> {
+        self.actor.ask(GetNativeVideoWallpapers).await
+    }
+
+    /// Hands a wallpaper back to the scene engine because the native player
+    /// cannot honour it — an unsupported target frame rate, for example.
+    ///
+    /// The refusal holds for the rest of the session, so a wallpaper cannot
+    /// oscillate between the two backends.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the scene list cannot be rebuilt.
+    pub async fn reject_native_video(
+        &self,
+        wallpaper_id: String,
+        reason: String,
+    ) -> Result<(), BridgeError> {
+        self.actor
+            .ask(RejectNativeVideo {
+                wallpaper_id,
+                reason,
             })
             .await
     }

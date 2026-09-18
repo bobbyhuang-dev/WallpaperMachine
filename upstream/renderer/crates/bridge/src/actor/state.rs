@@ -28,6 +28,14 @@ pub struct BridgeActorState {
     /// and from `playback_state` so resuming visibility never clears the user's
     /// own pause.
     pub suspended_displays: BTreeSet<u32>,
+    /// Whether a diagnostic session asked the renderer to count its work. Off
+    /// by default; nothing counts and nothing is reported until it is on.
+    pub renderer_counters_enabled: bool,
+    /// Wallpapers the native video player refused, with the host's reason. A
+    /// refusal holds for the session so a wallpaper cannot oscillate between
+    /// the two backends, and the scene engine — which supports everything —
+    /// takes it back.
+    pub native_video_rejected: BTreeMap<String, String>,
     pub selected_wallpaper_id: Option<String>,
     pub active_wallpaper_ids: Vec<String>,
     pub errors: Vec<String>,
@@ -55,6 +63,8 @@ impl Default for BridgeActorState {
             playback_state: BridgePlaybackState::Playing,
             presentation_suspended: false,
             suspended_displays: BTreeSet::new(),
+            renderer_counters_enabled: false,
+            native_video_rejected: BTreeMap::new(),
             selected_wallpaper_id: None,
             active_wallpaper_ids: Vec::new(),
             errors: Vec::new(),

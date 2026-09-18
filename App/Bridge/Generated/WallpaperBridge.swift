@@ -645,6 +645,16 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func monitorInformationSnapshot() async throws  -> BridgeMonitorInformationSnapshot
     
     /**
+     * Plain local videos the host should play natively. Empty while the
+     * backend is off.
+     *
+     * # Errors
+     *
+     * Returns an error when a media path cannot be represented.
+     */
+    func nativeVideoWallpapers() async throws  -> [BridgeNativeVideoWallpaper]
+    
+    /**
      * # Errors
      *
      * Returns an error when pending options cannot be applied or persisted.
@@ -686,6 +696,32 @@ public protocol WallpaperBridgeProtocol : AnyObject {
      * Returns an error when the library cannot be scanned.
      */
     func refreshLibrary() async throws  -> BridgeSnapshotBundle
+    
+    /**
+     * Hands a wallpaper back to the scene engine because the native player
+     * cannot honour it — an unsupported target frame rate, for example.
+     *
+     * The refusal holds for the rest of the session, so a wallpaper cannot
+     * oscillate between the two backends.
+     *
+     * # Errors
+     *
+     * Returns an error when the scene list cannot be rebuilt.
+     */
+    func rejectNativeVideo(wallpaperId: String, reason: String) async throws 
+    
+    /**
+     * Reads renderer work counters for every open scene.
+     *
+     * This is the evidence half of the per-surface suspension work: it answers
+     * whether a hidden surface actually stopped submitting and presenting,
+     * rather than whether a suspend decision was delivered to it.
+     *
+     * # Errors
+     *
+     * Returns an error when the renderer rejects the call.
+     */
+    func rendererCounters() async throws  -> BridgeRendererCountersReport
     
     /**
      * # Errors
@@ -816,6 +852,21 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func setMuted(wallpaperId: String, muted: Bool) async throws  -> BridgeWallpaperMutationBundle
     
     /**
+     * Turns the experimental native video backend on or off.
+     *
+     * Off by default. While it is on, a plain local video whose project and
+     * options fall inside the supported subset is played by the platform
+     * player and is no longer given to the scene engine at all; everything
+     * else, and anything the host refuses, stays on the scene engine.
+     *
+     * # Errors
+     *
+     * Returns an error when the scene list cannot be rebuilt for the new
+     * routing, in which case the previous backend keeps running.
+     */
+    func setNativeVideoBackendEnabled(enabled: Bool) async throws  -> BridgeSnapshotBundle
+    
+    /**
      * # Errors
      *
      * Returns an error when the setting cannot be persisted or an immediate
@@ -835,6 +886,19 @@ public protocol WallpaperBridgeProtocol : AnyObject {
      * to apply the pause.
      */
     func setPresentationSuspended(suspended: Bool) async throws 
+    
+    /**
+     * Turns renderer work counting on or off for the whole process.
+     *
+     * Off is the default. Enabling adds one relaxed atomic increment per
+     * counted event; it starts no thread, no timer and no output stream, and
+     * counters are only ever read by an explicit `renderer_counters` call.
+     *
+     * # Errors
+     *
+     * Returns an error when the renderer rejects the call.
+     */
+    func setRendererCountersEnabled(enabled: Bool) async throws 
     
     /**
      * # Errors
@@ -1272,6 +1336,31 @@ open func monitorInformationSnapshot()async throws  -> BridgeMonitorInformationS
 }
     
     /**
+     * Plain local videos the host should play natively. Empty while the
+     * backend is off.
+     *
+     * # Errors
+     *
+     * Returns an error when a media path cannot be represented.
+     */
+open func nativeVideoWallpapers()async throws  -> [BridgeNativeVideoWallpaper] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_native_video_wallpapers(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeBridgeNativeVideoWallpaper.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
      * # Errors
      *
      * Returns an error when pending options cannot be applied or persisted.
@@ -1400,6 +1489,62 @@ open func refreshLibrary()async throws  -> BridgeSnapshotBundle {
             completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
             freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeBridgeSnapshotBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Hands a wallpaper back to the scene engine because the native player
+     * cannot honour it — an unsupported target frame rate, for example.
+     *
+     * The refusal holds for the rest of the session, so a wallpaper cannot
+     * oscillate between the two backends.
+     *
+     * # Errors
+     *
+     * Returns an error when the scene list cannot be rebuilt.
+     */
+open func rejectNativeVideo(wallpaperId: String, reason: String)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_reject_native_video(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(wallpaperId),FfiConverterString.lower(reason)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_void,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_void,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Reads renderer work counters for every open scene.
+     *
+     * This is the evidence half of the per-surface suspension work: it answers
+     * whether a hidden surface actually stopped submitting and presenting,
+     * rather than whether a suspend decision was delivered to it.
+     *
+     * # Errors
+     *
+     * Returns an error when the renderer rejects the call.
+     */
+open func rendererCounters()async throws  -> BridgeRendererCountersReport {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_renderer_counters(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBridgeRendererCountersReport.lift,
             errorHandler: FfiConverterTypeBridgeError.lift
         )
 }
@@ -1773,6 +1918,36 @@ open func setMuted(wallpaperId: String, muted: Bool)async throws  -> BridgeWallp
 }
     
     /**
+     * Turns the experimental native video backend on or off.
+     *
+     * Off by default. While it is on, a plain local video whose project and
+     * options fall inside the supported subset is played by the platform
+     * player and is no longer given to the scene engine at all; everything
+     * else, and anything the host refuses, stays on the scene engine.
+     *
+     * # Errors
+     *
+     * Returns an error when the scene list cannot be rebuilt for the new
+     * routing, in which case the previous backend keeps running.
+     */
+open func setNativeVideoBackendEnabled(enabled: Bool)async throws  -> BridgeSnapshotBundle {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_native_video_backend_enabled(
+                    self.uniffiClonePointer(),
+                    FfiConverterBool.lower(enabled)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBridgeSnapshotBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
      * # Errors
      *
      * Returns an error when the setting cannot be persisted or an immediate
@@ -1813,6 +1988,34 @@ open func setPresentationSuspended(suspended: Bool)async throws  {
                 uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_presentation_suspended(
                     self.uniffiClonePointer(),
                     FfiConverterBool.lower(suspended)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_void,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_void,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Turns renderer work counting on or off for the whole process.
+     *
+     * Off is the default. Enabling adds one relaxed atomic increment per
+     * counted event; it starts no thread, no timer and no output stream, and
+     * counters are only ever read by an explicit `renderer_counters` call.
+     *
+     * # Errors
+     *
+     * Returns an error when the renderer rejects the call.
+     */
+open func setRendererCountersEnabled(enabled: Bool)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_renderer_counters_enabled(
+                    self.uniffiClonePointer(),
+                    FfiConverterBool.lower(enabled)
                 )
             },
             pollFunc: ffi_wallpaper_bridge_rust_future_poll_void,
@@ -3120,6 +3323,167 @@ public func FfiConverterTypeBridgeMonitorInformationSnapshot_lower(_ value: Brid
 }
 
 
+/**
+ * A plain local video routed to the native platform player instead of the
+ * scene engine.
+ *
+ * Only the declared subset appears here. `fps` is the user's target rate and
+ * is a requirement, not a hint: the host must refuse the wallpaper rather than
+ * play it at a different rate, and a refusal sends it back to the scene
+ * engine, which supports everything.
+ */
+public struct BridgeNativeVideoWallpaper {
+    public var displayId: UInt32
+    public var wallpaperId: String
+    public var title: String
+    /**
+     * Absolute path to the media file, already containment-checked against the
+     * project directory.
+     */
+    public var mediaPath: String
+    /**
+     * The user's target frame rate for this display.
+     */
+    public var fps: UInt32
+    /**
+     * Presentation suspension or the user's own pause, already combined for
+     * this display by the activation rules.
+     */
+    public var paused: Bool
+    public var volume: Float
+    public var muted: Bool
+    public var scalingMode: BridgeScalingMode
+    public var scalingFactor: Double
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(displayId: UInt32, wallpaperId: String, title: String, 
+        /**
+         * Absolute path to the media file, already containment-checked against the
+         * project directory.
+         */mediaPath: String, 
+        /**
+         * The user's target frame rate for this display.
+         */fps: UInt32, 
+        /**
+         * Presentation suspension or the user's own pause, already combined for
+         * this display by the activation rules.
+         */paused: Bool, volume: Float, muted: Bool, scalingMode: BridgeScalingMode, scalingFactor: Double) {
+        self.displayId = displayId
+        self.wallpaperId = wallpaperId
+        self.title = title
+        self.mediaPath = mediaPath
+        self.fps = fps
+        self.paused = paused
+        self.volume = volume
+        self.muted = muted
+        self.scalingMode = scalingMode
+        self.scalingFactor = scalingFactor
+    }
+}
+
+
+
+extension BridgeNativeVideoWallpaper: Equatable, Hashable {
+    public static func ==(lhs: BridgeNativeVideoWallpaper, rhs: BridgeNativeVideoWallpaper) -> Bool {
+        if lhs.displayId != rhs.displayId {
+            return false
+        }
+        if lhs.wallpaperId != rhs.wallpaperId {
+            return false
+        }
+        if lhs.title != rhs.title {
+            return false
+        }
+        if lhs.mediaPath != rhs.mediaPath {
+            return false
+        }
+        if lhs.fps != rhs.fps {
+            return false
+        }
+        if lhs.paused != rhs.paused {
+            return false
+        }
+        if lhs.volume != rhs.volume {
+            return false
+        }
+        if lhs.muted != rhs.muted {
+            return false
+        }
+        if lhs.scalingMode != rhs.scalingMode {
+            return false
+        }
+        if lhs.scalingFactor != rhs.scalingFactor {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(displayId)
+        hasher.combine(wallpaperId)
+        hasher.combine(title)
+        hasher.combine(mediaPath)
+        hasher.combine(fps)
+        hasher.combine(paused)
+        hasher.combine(volume)
+        hasher.combine(muted)
+        hasher.combine(scalingMode)
+        hasher.combine(scalingFactor)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeNativeVideoWallpaper: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeNativeVideoWallpaper {
+        return
+            try BridgeNativeVideoWallpaper(
+                displayId: FfiConverterUInt32.read(from: &buf), 
+                wallpaperId: FfiConverterString.read(from: &buf), 
+                title: FfiConverterString.read(from: &buf), 
+                mediaPath: FfiConverterString.read(from: &buf), 
+                fps: FfiConverterUInt32.read(from: &buf), 
+                paused: FfiConverterBool.read(from: &buf), 
+                volume: FfiConverterFloat.read(from: &buf), 
+                muted: FfiConverterBool.read(from: &buf), 
+                scalingMode: FfiConverterTypeBridgeScalingMode.read(from: &buf), 
+                scalingFactor: FfiConverterDouble.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BridgeNativeVideoWallpaper, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.displayId, into: &buf)
+        FfiConverterString.write(value.wallpaperId, into: &buf)
+        FfiConverterString.write(value.title, into: &buf)
+        FfiConverterString.write(value.mediaPath, into: &buf)
+        FfiConverterUInt32.write(value.fps, into: &buf)
+        FfiConverterBool.write(value.paused, into: &buf)
+        FfiConverterFloat.write(value.volume, into: &buf)
+        FfiConverterBool.write(value.muted, into: &buf)
+        FfiConverterTypeBridgeScalingMode.write(value.scalingMode, into: &buf)
+        FfiConverterDouble.write(value.scalingFactor, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeNativeVideoWallpaper_lift(_ buf: RustBuffer) throws -> BridgeNativeVideoWallpaper {
+    return try FfiConverterTypeBridgeNativeVideoWallpaper.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeNativeVideoWallpaper_lower(_ value: BridgeNativeVideoWallpaper) -> RustBuffer {
+    return FfiConverterTypeBridgeNativeVideoWallpaper.lower(value)
+}
+
+
 public struct BridgePropertyDescriptor {
     public var id: String
     public var kind: BridgePropertyKind
@@ -3247,6 +3611,498 @@ public func FfiConverterTypeBridgePropertyDescriptor_lift(_ buf: RustBuffer) thr
 #endif
 public func FfiConverterTypeBridgePropertyDescriptor_lower(_ value: BridgePropertyDescriptor) -> RustBuffer {
     return FfiConverterTypeBridgePropertyDescriptor.lower(value)
+}
+
+
+/**
+ * One pull of the renderer counters, plus the process-wide values that belong
+ * to no single surface.
+ */
+public struct BridgeRendererCountersReport {
+    /**
+     * False means counting is off and every value is zero.
+     */
+    public var recording: Bool
+    public var surfaces: [BridgeRendererSurfaceCounters]
+    /**
+     * Spectrum generations the analysis worker produced, process-wide.
+     */
+    public var audioAnalysisDeliveries: UInt64
+    public var audioAcceptedFrames: UInt64
+    /**
+     * Scenes that both enable audio response and are not paused for their own
+     * display. Zero means the capture tap has no consumer.
+     */
+    public var audioActiveConsumers: UInt32
+    /**
+     * Whether the platform can report which frames were actually displayed.
+     * This backend cannot, so present requests are never reported as
+     * presented frames.
+     */
+    public var presentationFeedbackAvailable: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * False means counting is off and every value is zero.
+         */recording: Bool, surfaces: [BridgeRendererSurfaceCounters], 
+        /**
+         * Spectrum generations the analysis worker produced, process-wide.
+         */audioAnalysisDeliveries: UInt64, audioAcceptedFrames: UInt64, 
+        /**
+         * Scenes that both enable audio response and are not paused for their own
+         * display. Zero means the capture tap has no consumer.
+         */audioActiveConsumers: UInt32, 
+        /**
+         * Whether the platform can report which frames were actually displayed.
+         * This backend cannot, so present requests are never reported as
+         * presented frames.
+         */presentationFeedbackAvailable: Bool) {
+        self.recording = recording
+        self.surfaces = surfaces
+        self.audioAnalysisDeliveries = audioAnalysisDeliveries
+        self.audioAcceptedFrames = audioAcceptedFrames
+        self.audioActiveConsumers = audioActiveConsumers
+        self.presentationFeedbackAvailable = presentationFeedbackAvailable
+    }
+}
+
+
+
+extension BridgeRendererCountersReport: Equatable, Hashable {
+    public static func ==(lhs: BridgeRendererCountersReport, rhs: BridgeRendererCountersReport) -> Bool {
+        if lhs.recording != rhs.recording {
+            return false
+        }
+        if lhs.surfaces != rhs.surfaces {
+            return false
+        }
+        if lhs.audioAnalysisDeliveries != rhs.audioAnalysisDeliveries {
+            return false
+        }
+        if lhs.audioAcceptedFrames != rhs.audioAcceptedFrames {
+            return false
+        }
+        if lhs.audioActiveConsumers != rhs.audioActiveConsumers {
+            return false
+        }
+        if lhs.presentationFeedbackAvailable != rhs.presentationFeedbackAvailable {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(recording)
+        hasher.combine(surfaces)
+        hasher.combine(audioAnalysisDeliveries)
+        hasher.combine(audioAcceptedFrames)
+        hasher.combine(audioActiveConsumers)
+        hasher.combine(presentationFeedbackAvailable)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeRendererCountersReport: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeRendererCountersReport {
+        return
+            try BridgeRendererCountersReport(
+                recording: FfiConverterBool.read(from: &buf), 
+                surfaces: FfiConverterSequenceTypeBridgeRendererSurfaceCounters.read(from: &buf), 
+                audioAnalysisDeliveries: FfiConverterUInt64.read(from: &buf), 
+                audioAcceptedFrames: FfiConverterUInt64.read(from: &buf), 
+                audioActiveConsumers: FfiConverterUInt32.read(from: &buf), 
+                presentationFeedbackAvailable: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BridgeRendererCountersReport, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.recording, into: &buf)
+        FfiConverterSequenceTypeBridgeRendererSurfaceCounters.write(value.surfaces, into: &buf)
+        FfiConverterUInt64.write(value.audioAnalysisDeliveries, into: &buf)
+        FfiConverterUInt64.write(value.audioAcceptedFrames, into: &buf)
+        FfiConverterUInt32.write(value.audioActiveConsumers, into: &buf)
+        FfiConverterBool.write(value.presentationFeedbackAvailable, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeRendererCountersReport_lift(_ buf: RustBuffer) throws -> BridgeRendererCountersReport {
+    return try FfiConverterTypeBridgeRendererCountersReport.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeRendererCountersReport_lower(_ value: BridgeRendererCountersReport) -> RustBuffer {
+    return FfiConverterTypeBridgeRendererCountersReport.lower(value)
+}
+
+
+/**
+ * Renderer work counters for one wallpaper surface.
+ *
+ * The fields are split on purpose. `timer_wakeups` through `simulation_ticks`
+ * are work this surface alone performs and must stop when nobody can see it.
+ * The `video_*` fields describe the decoded source, which may legitimately keep
+ * running while one of its consumers is hidden as long as another consumer
+ * still presents it.
+ *
+ * Counting is off by default. With it off every value is zero, which means
+ * "not recorded", never "no work".
+ */
+public struct BridgeRendererSurfaceCounters {
+    public var displayId: String
+    /**
+     * Renderer scene handle: the surface identity.
+     */
+    public var surfaceId: String
+    /**
+     * Renderer object identity. Two wallpapers that reused one display and one
+     * handle have different generations and are never merged.
+     */
+    public var generation: UInt64
+    /**
+     * Identity of the running decoder instance this surface consumes:
+     * `instance:<n>`, or `unknown` when the surface consumes no decoder or
+     * more than one. Two decoders opened from the same file have different
+     * identities and must never be folded together; a roll-up de-duplicates
+     * source work on this, never on the path.
+     */
+    public var sourceId: String
+    /**
+     * Scene source path. A human label for the row, not an identity.
+     */
+    public var sourcePath: String
+    /**
+     * Live decoder instances this surface consumes.
+     */
+    public var sourceCount: UInt64
+    public var backend: String
+    /**
+     * Independent reasons, never collapsed into one flag.
+     */
+    public var effectivePauseReasons: [String]
+    public var paused: Bool
+    public var timerWakeups: UInt64
+    public var drawRequests: UInt64
+    public var drawTicksSuppressed: UInt64
+    public var drawsExecuted: UInt64
+    public var drawsDropped: UInt64
+    public var renderSubmissions: UInt64
+    public var renderFailures: UInt64
+    public var presentRequests: UInt64
+    /**
+     * The submitted frame's fence signalled. Not a display presentation.
+     */
+    public var gpuCompletions: UInt64
+    public var simulationTicks: UInt64
+    public var tickIntervalMicros: UInt64
+    /**
+     * 0 when the content cannot prove how often it changes.
+     */
+    public var contentPeriodMicros: UInt64
+    public var videoDecodeOutputs: UInt64
+    public var videoSeeks: UInt64
+    public var videoFramesSelected: UInt64
+    public var videoFramesReused: UInt64
+    /**
+     * Decoded frames superseded before they were ever displayed. A rising
+     * count is how a demand-driven clock is falsified.
+     */
+    public var videoFramesSkipped: UInt64
+    public var videoSelectedGeneration: UInt64
+    public var videoConversions: UInt64
+    public var videoImports: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(displayId: String, 
+        /**
+         * Renderer scene handle: the surface identity.
+         */surfaceId: String, 
+        /**
+         * Renderer object identity. Two wallpapers that reused one display and one
+         * handle have different generations and are never merged.
+         */generation: UInt64, 
+        /**
+         * Identity of the running decoder instance this surface consumes:
+         * `instance:<n>`, or `unknown` when the surface consumes no decoder or
+         * more than one. Two decoders opened from the same file have different
+         * identities and must never be folded together; a roll-up de-duplicates
+         * source work on this, never on the path.
+         */sourceId: String, 
+        /**
+         * Scene source path. A human label for the row, not an identity.
+         */sourcePath: String, 
+        /**
+         * Live decoder instances this surface consumes.
+         */sourceCount: UInt64, backend: String, 
+        /**
+         * Independent reasons, never collapsed into one flag.
+         */effectivePauseReasons: [String], paused: Bool, timerWakeups: UInt64, drawRequests: UInt64, drawTicksSuppressed: UInt64, drawsExecuted: UInt64, drawsDropped: UInt64, renderSubmissions: UInt64, renderFailures: UInt64, presentRequests: UInt64, 
+        /**
+         * The submitted frame's fence signalled. Not a display presentation.
+         */gpuCompletions: UInt64, simulationTicks: UInt64, tickIntervalMicros: UInt64, 
+        /**
+         * 0 when the content cannot prove how often it changes.
+         */contentPeriodMicros: UInt64, videoDecodeOutputs: UInt64, videoSeeks: UInt64, videoFramesSelected: UInt64, videoFramesReused: UInt64, 
+        /**
+         * Decoded frames superseded before they were ever displayed. A rising
+         * count is how a demand-driven clock is falsified.
+         */videoFramesSkipped: UInt64, videoSelectedGeneration: UInt64, videoConversions: UInt64, videoImports: UInt64) {
+        self.displayId = displayId
+        self.surfaceId = surfaceId
+        self.generation = generation
+        self.sourceId = sourceId
+        self.sourcePath = sourcePath
+        self.sourceCount = sourceCount
+        self.backend = backend
+        self.effectivePauseReasons = effectivePauseReasons
+        self.paused = paused
+        self.timerWakeups = timerWakeups
+        self.drawRequests = drawRequests
+        self.drawTicksSuppressed = drawTicksSuppressed
+        self.drawsExecuted = drawsExecuted
+        self.drawsDropped = drawsDropped
+        self.renderSubmissions = renderSubmissions
+        self.renderFailures = renderFailures
+        self.presentRequests = presentRequests
+        self.gpuCompletions = gpuCompletions
+        self.simulationTicks = simulationTicks
+        self.tickIntervalMicros = tickIntervalMicros
+        self.contentPeriodMicros = contentPeriodMicros
+        self.videoDecodeOutputs = videoDecodeOutputs
+        self.videoSeeks = videoSeeks
+        self.videoFramesSelected = videoFramesSelected
+        self.videoFramesReused = videoFramesReused
+        self.videoFramesSkipped = videoFramesSkipped
+        self.videoSelectedGeneration = videoSelectedGeneration
+        self.videoConversions = videoConversions
+        self.videoImports = videoImports
+    }
+}
+
+
+
+extension BridgeRendererSurfaceCounters: Equatable, Hashable {
+    public static func ==(lhs: BridgeRendererSurfaceCounters, rhs: BridgeRendererSurfaceCounters) -> Bool {
+        if lhs.displayId != rhs.displayId {
+            return false
+        }
+        if lhs.surfaceId != rhs.surfaceId {
+            return false
+        }
+        if lhs.generation != rhs.generation {
+            return false
+        }
+        if lhs.sourceId != rhs.sourceId {
+            return false
+        }
+        if lhs.sourcePath != rhs.sourcePath {
+            return false
+        }
+        if lhs.sourceCount != rhs.sourceCount {
+            return false
+        }
+        if lhs.backend != rhs.backend {
+            return false
+        }
+        if lhs.effectivePauseReasons != rhs.effectivePauseReasons {
+            return false
+        }
+        if lhs.paused != rhs.paused {
+            return false
+        }
+        if lhs.timerWakeups != rhs.timerWakeups {
+            return false
+        }
+        if lhs.drawRequests != rhs.drawRequests {
+            return false
+        }
+        if lhs.drawTicksSuppressed != rhs.drawTicksSuppressed {
+            return false
+        }
+        if lhs.drawsExecuted != rhs.drawsExecuted {
+            return false
+        }
+        if lhs.drawsDropped != rhs.drawsDropped {
+            return false
+        }
+        if lhs.renderSubmissions != rhs.renderSubmissions {
+            return false
+        }
+        if lhs.renderFailures != rhs.renderFailures {
+            return false
+        }
+        if lhs.presentRequests != rhs.presentRequests {
+            return false
+        }
+        if lhs.gpuCompletions != rhs.gpuCompletions {
+            return false
+        }
+        if lhs.simulationTicks != rhs.simulationTicks {
+            return false
+        }
+        if lhs.tickIntervalMicros != rhs.tickIntervalMicros {
+            return false
+        }
+        if lhs.contentPeriodMicros != rhs.contentPeriodMicros {
+            return false
+        }
+        if lhs.videoDecodeOutputs != rhs.videoDecodeOutputs {
+            return false
+        }
+        if lhs.videoSeeks != rhs.videoSeeks {
+            return false
+        }
+        if lhs.videoFramesSelected != rhs.videoFramesSelected {
+            return false
+        }
+        if lhs.videoFramesReused != rhs.videoFramesReused {
+            return false
+        }
+        if lhs.videoFramesSkipped != rhs.videoFramesSkipped {
+            return false
+        }
+        if lhs.videoSelectedGeneration != rhs.videoSelectedGeneration {
+            return false
+        }
+        if lhs.videoConversions != rhs.videoConversions {
+            return false
+        }
+        if lhs.videoImports != rhs.videoImports {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(displayId)
+        hasher.combine(surfaceId)
+        hasher.combine(generation)
+        hasher.combine(sourceId)
+        hasher.combine(sourcePath)
+        hasher.combine(sourceCount)
+        hasher.combine(backend)
+        hasher.combine(effectivePauseReasons)
+        hasher.combine(paused)
+        hasher.combine(timerWakeups)
+        hasher.combine(drawRequests)
+        hasher.combine(drawTicksSuppressed)
+        hasher.combine(drawsExecuted)
+        hasher.combine(drawsDropped)
+        hasher.combine(renderSubmissions)
+        hasher.combine(renderFailures)
+        hasher.combine(presentRequests)
+        hasher.combine(gpuCompletions)
+        hasher.combine(simulationTicks)
+        hasher.combine(tickIntervalMicros)
+        hasher.combine(contentPeriodMicros)
+        hasher.combine(videoDecodeOutputs)
+        hasher.combine(videoSeeks)
+        hasher.combine(videoFramesSelected)
+        hasher.combine(videoFramesReused)
+        hasher.combine(videoFramesSkipped)
+        hasher.combine(videoSelectedGeneration)
+        hasher.combine(videoConversions)
+        hasher.combine(videoImports)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeRendererSurfaceCounters: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeRendererSurfaceCounters {
+        return
+            try BridgeRendererSurfaceCounters(
+                displayId: FfiConverterString.read(from: &buf), 
+                surfaceId: FfiConverterString.read(from: &buf), 
+                generation: FfiConverterUInt64.read(from: &buf), 
+                sourceId: FfiConverterString.read(from: &buf), 
+                sourcePath: FfiConverterString.read(from: &buf), 
+                sourceCount: FfiConverterUInt64.read(from: &buf), 
+                backend: FfiConverterString.read(from: &buf), 
+                effectivePauseReasons: FfiConverterSequenceString.read(from: &buf), 
+                paused: FfiConverterBool.read(from: &buf), 
+                timerWakeups: FfiConverterUInt64.read(from: &buf), 
+                drawRequests: FfiConverterUInt64.read(from: &buf), 
+                drawTicksSuppressed: FfiConverterUInt64.read(from: &buf), 
+                drawsExecuted: FfiConverterUInt64.read(from: &buf), 
+                drawsDropped: FfiConverterUInt64.read(from: &buf), 
+                renderSubmissions: FfiConverterUInt64.read(from: &buf), 
+                renderFailures: FfiConverterUInt64.read(from: &buf), 
+                presentRequests: FfiConverterUInt64.read(from: &buf), 
+                gpuCompletions: FfiConverterUInt64.read(from: &buf), 
+                simulationTicks: FfiConverterUInt64.read(from: &buf), 
+                tickIntervalMicros: FfiConverterUInt64.read(from: &buf), 
+                contentPeriodMicros: FfiConverterUInt64.read(from: &buf), 
+                videoDecodeOutputs: FfiConverterUInt64.read(from: &buf), 
+                videoSeeks: FfiConverterUInt64.read(from: &buf), 
+                videoFramesSelected: FfiConverterUInt64.read(from: &buf), 
+                videoFramesReused: FfiConverterUInt64.read(from: &buf), 
+                videoFramesSkipped: FfiConverterUInt64.read(from: &buf), 
+                videoSelectedGeneration: FfiConverterUInt64.read(from: &buf), 
+                videoConversions: FfiConverterUInt64.read(from: &buf), 
+                videoImports: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BridgeRendererSurfaceCounters, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.displayId, into: &buf)
+        FfiConverterString.write(value.surfaceId, into: &buf)
+        FfiConverterUInt64.write(value.generation, into: &buf)
+        FfiConverterString.write(value.sourceId, into: &buf)
+        FfiConverterString.write(value.sourcePath, into: &buf)
+        FfiConverterUInt64.write(value.sourceCount, into: &buf)
+        FfiConverterString.write(value.backend, into: &buf)
+        FfiConverterSequenceString.write(value.effectivePauseReasons, into: &buf)
+        FfiConverterBool.write(value.paused, into: &buf)
+        FfiConverterUInt64.write(value.timerWakeups, into: &buf)
+        FfiConverterUInt64.write(value.drawRequests, into: &buf)
+        FfiConverterUInt64.write(value.drawTicksSuppressed, into: &buf)
+        FfiConverterUInt64.write(value.drawsExecuted, into: &buf)
+        FfiConverterUInt64.write(value.drawsDropped, into: &buf)
+        FfiConverterUInt64.write(value.renderSubmissions, into: &buf)
+        FfiConverterUInt64.write(value.renderFailures, into: &buf)
+        FfiConverterUInt64.write(value.presentRequests, into: &buf)
+        FfiConverterUInt64.write(value.gpuCompletions, into: &buf)
+        FfiConverterUInt64.write(value.simulationTicks, into: &buf)
+        FfiConverterUInt64.write(value.tickIntervalMicros, into: &buf)
+        FfiConverterUInt64.write(value.contentPeriodMicros, into: &buf)
+        FfiConverterUInt64.write(value.videoDecodeOutputs, into: &buf)
+        FfiConverterUInt64.write(value.videoSeeks, into: &buf)
+        FfiConverterUInt64.write(value.videoFramesSelected, into: &buf)
+        FfiConverterUInt64.write(value.videoFramesReused, into: &buf)
+        FfiConverterUInt64.write(value.videoFramesSkipped, into: &buf)
+        FfiConverterUInt64.write(value.videoSelectedGeneration, into: &buf)
+        FfiConverterUInt64.write(value.videoConversions, into: &buf)
+        FfiConverterUInt64.write(value.videoImports, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeRendererSurfaceCounters_lift(_ buf: RustBuffer) throws -> BridgeRendererSurfaceCounters {
+    return try FfiConverterTypeBridgeRendererSurfaceCounters.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeRendererSurfaceCounters_lower(_ value: BridgeRendererSurfaceCounters) -> RustBuffer {
+    return FfiConverterTypeBridgeRendererSurfaceCounters.lower(value)
 }
 
 
@@ -5050,6 +5906,31 @@ fileprivate struct FfiConverterSequenceTypeBridgeMonitorInfoRow: FfiConverterRus
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeBridgeNativeVideoWallpaper: FfiConverterRustBuffer {
+    typealias SwiftType = [BridgeNativeVideoWallpaper]
+
+    public static func write(_ value: [BridgeNativeVideoWallpaper], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBridgeNativeVideoWallpaper.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BridgeNativeVideoWallpaper] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BridgeNativeVideoWallpaper]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBridgeNativeVideoWallpaper.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeBridgePropertyDescriptor: FfiConverterRustBuffer {
     typealias SwiftType = [BridgePropertyDescriptor]
 
@@ -5067,6 +5948,31 @@ fileprivate struct FfiConverterSequenceTypeBridgePropertyDescriptor: FfiConverte
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeBridgePropertyDescriptor.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeBridgeRendererSurfaceCounters: FfiConverterRustBuffer {
+    typealias SwiftType = [BridgeRendererSurfaceCounters]
+
+    public static func write(_ value: [BridgeRendererSurfaceCounters], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBridgeRendererSurfaceCounters.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BridgeRendererSurfaceCounters] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BridgeRendererSurfaceCounters]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBridgeRendererSurfaceCounters.read(from: &buf))
         }
         return seq
     }
@@ -5228,6 +6134,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_monitor_information_snapshot() != 21360) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_native_video_wallpapers() != 32035) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_ok_wallpaper_options() != 57862) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -5244,6 +6153,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_refresh_library() != 64122) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_reject_native_video() != 62924) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_renderer_counters() != 60387) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_restore_property_default() != 28754) {
@@ -5294,10 +6209,16 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_muted() != 46581) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_native_video_backend_enabled() != 49880) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_pause_on_battery_power() != 21085) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_presentation_suspended() != 9550) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_renderer_counters_enabled() != 63277) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_scaling_mode() != 14052) {

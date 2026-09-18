@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var displayChangeObserver: NSObjectProtocol?
     private var desktopWallpaperSync: DesktopWallpaperSync?
     private var webWallpaperHost: WebWallpaperHost?
+    private var nativeVideoHost: NativeVideoWallpaperHost?
     private var presentationPolicy: WallpaperPresentationPolicy?
     private var store: BridgeStore?
     private var startupError: Error?
@@ -20,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var shutdownInProgress = false
     private var shutdownComplete = false
     private var themeSubscription: AnyCancellable?
+    private var diagnostics: RuntimeDiagnosticsSession?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hosted unit tests need the executable's types, not its desktop lifecycle.
@@ -90,11 +92,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 }
             }
             webHost.start()
+            // The experimental native video backend. The bridge returns nothing
+            // for it unless the user turned it on, so this host opens no window
+            // and starts no player by default.
+            let nativeVideo = NativeVideoWallpaperHost(bridge: store.bridge)
+            nativeVideoHost = nativeVideo
+            nativeVideo.onError = { [weak self] message in
+                self?.lastError = WallpaperActionError(message: message)
+                self?.rebuildMenu()
+            }
+            nativeVideo.onSurfacesChanged = { [weak self] in
+                guard let self, !self.shutdownInProgress else { return }
+                self.presentationPolicy?.evaluate()
+            }
+            nativeVideo.start()
             store.onSnapshotApplied = { [weak self, weak lockScreen] in
                 guard let self, !self.shutdownInProgress else { return }
                 // Web wallpapers live in host windows; open or close them before
                 // the poster sync and the presentation policy look at the desktop.
                 self.webWallpaperHost?.reconcile()
+                self.nativeVideoHost?.reconcile()
                 self.presentationPolicy?.evaluate()
                 if let lockScreen, lockScreen.isRequested, lockScreen.errorMessage == nil {
                     lockScreen.refresh()
@@ -114,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                         return
                     }
                     self.webWallpaperHost?.setPresentationSuspended(suspended)
+                    self.nativeVideoHost?.setPresentationSuspended(suspended)
                     Task {
                         do {
                             try await store.setPresentationSuspendedAsync(suspended)
@@ -131,6 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                         return
                     }
                     self.webWallpaperHost?.setPresentationSuspended(suspended, forDisplay: displayID)
+                    self.nativeVideoHost?.setPresentationSuspended(suspended, forDisplay: displayID)
                     Task {
                         do {
                             try await store.setDisplayPresentationSuspendedAsync(
@@ -157,8 +176,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         bootstrapStore()
         logStartup("bootstrap dispatched")
+        startDiagnosticsSessionIfRequested()
         DispatchQueue.main.async { [weak self] in
             self?.showControlPanel(selection: .wallpaper)
+        }
+    }
+
+    /// Opens a bounded diagnostic window when the environment explicitly asks
+    /// for one. Absent the variable nothing is started, nothing is counted and
+    /// no timer exists: the renderer's counters stay off and the in-process
+    /// counters stay outside a session.
+    ///
+    /// `MAC_WALLPAPER_ENGINE_DIAGNOSTICS` is a duration in seconds. One
+    /// aggregated report is written to the log when it elapses; nothing is
+    /// emitted per frame, and no screenshot, pixel readback or periodic disk
+    /// write is involved.
+    private func startDiagnosticsSessionIfRequested() {
+        guard let store,
+              let raw = ProcessInfo.processInfo.environment["MAC_WALLPAPER_ENGINE_DIAGNOSTICS"],
+              let seconds = Int(raw), seconds > 0
+        else { return }
+        let session = RuntimeDiagnosticsSession(store: store)
+        diagnostics = session
+        Task { [weak self] in
+            do {
+                try await session.start(duration: .seconds(seconds)) { lines in
+                    for line in lines { AppLog.info("diagnostics \(line)") }
+                    self?.diagnostics = nil
+                }
+                AppLog.info("diagnostics session open for \(seconds)s")
+            } catch {
+                AppLog.error("diagnostics session failed: \(error.localizedDescription)")
+                self?.diagnostics = nil
+            }
         }
     }
 
@@ -174,9 +224,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         presentationPolicy = nil
         desktopWallpaperSync?.stop()
         webWallpaperHost?.shutdown()
+        nativeVideoHost?.shutdown()
         if let displayChangeObserver {
             NotificationCenter.default.removeObserver(displayChangeObserver)
             self.displayChangeObserver = nil
+        }
+        if let diagnostics {
+            self.diagnostics = nil
+            Task { await diagnostics.stop() }
         }
     }
 

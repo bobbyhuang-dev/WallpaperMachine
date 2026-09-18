@@ -68,6 +68,11 @@ struct Image : NoCopy, NoMove {
     ImageHeader       header;
     std::vector<Slot> slots;
     std::string       key;
+    // Set when the video's bytes already are a file on disk: the decoder opens
+    // that file in place, so `slots` stays empty and nothing ever holds a
+    // second copy of the media. Empty means the payload travels inline in
+    // `slots` and has to be extracted before a decoder can open it.
+    std::string       videoFilePath;
 };
 
 } // namespace wallpaper

@@ -502,6 +502,17 @@ final class BridgeStore {
             displayId: String(displayID), suspended: suspended)
     }
 
+    /// Turns renderer work counting on or off. Off by default; the renderer
+    /// performs no bookkeeping until this is on, and nothing is pushed back —
+    /// counters are only ever read by `rendererCountersAsync`.
+    func setRendererCountersEnabledAsync(_ enabled: Bool) async throws {
+        try await bridge.setRendererCountersEnabled(enabled: enabled)
+    }
+
+    func rendererCountersAsync() async throws -> BridgeRendererCountersReport {
+        try await bridge.rendererCounters()
+    }
+
     func ejectWallpaperFromDisplayAsync(
         displayId: String,
         wallpaperId: String

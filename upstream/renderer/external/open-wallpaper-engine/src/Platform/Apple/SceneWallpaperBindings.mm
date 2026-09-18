@@ -1,6 +1,7 @@
 #include "Platform/Apple/SceneWallpaperBindings.h"
 
 #include "Audio/AudioResponseService.h"
+#include "Core/RendererCounters.hpp"
 #include "SceneWallpaper.hpp"
 #include "SceneWallpaperSurface.hpp"
 #include "Utils/Logging.h"
@@ -710,6 +711,55 @@ extern "C" int owe_audio_current_spectrum_128(
     if (out_generation != nullptr) {
         *out_generation = snapshot.generation;
     }
+    return 0;
+}
+
+extern "C" int owe_renderer_counters_set_enabled(bool enabled)
+{
+    clear_last_error();
+    wallpaper::RendererCounters::SetEnabled(enabled);
+    return 0;
+}
+
+extern "C" bool owe_renderer_counters_enabled(void)
+{
+    return wallpaper::RendererCounters::Enabled();
+}
+
+extern "C" int owe_scene_wallpaper_counters(
+    owe_scene_wallpaper* scene,
+    uint64_t* out_values,
+    uintptr_t out_len,
+    uintptr_t* out_written)
+{
+    clear_last_error();
+    if (!valid_scene(scene)) return finish_with_error("scene must not be null");
+    if (out_values == nullptr) return finish_with_error("out_values must not be null");
+
+    const std::size_t written = scene->scene.counters(out_values, static_cast<std::size_t>(out_len));
+    if (out_written != nullptr) *out_written = written;
+    return 0;
+}
+
+extern "C" int owe_renderer_shared_counters(
+    uint64_t* out_values,
+    uintptr_t out_len,
+    uintptr_t* out_written)
+{
+    clear_last_error();
+    if (out_values == nullptr) return finish_with_error("out_values must not be null");
+
+    // The audio analysis worker already accounts for itself; reading its
+    // snapshot avoids adding any bookkeeping to the real-time callback.
+    const auto        snapshot = wallpaper::audio::CurrentAudioSpectrumSnapshot();
+    const uint64_t    values[OWE_RC_SHARED_COUNT] = {
+        snapshot.generation,
+        snapshot.accepted_frame_count,
+    };
+    const std::size_t written =
+        std::min(static_cast<std::size_t>(out_len), static_cast<std::size_t>(OWE_RC_SHARED_COUNT));
+    for (std::size_t i = 0; i < written; ++i) out_values[i] = values[i];
+    if (out_written != nullptr) *out_written = written;
     return 0;
 }
 

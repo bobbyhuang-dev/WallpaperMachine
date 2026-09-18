@@ -9,7 +9,7 @@ use std::{
 use wallpaper_core::{
     DisplayDesc, DisplaySelector, DisplaySnapshotEntry, EngineError, WallpaperAssignment,
     media::audio::AudioVolume,
-    project::{SceneDesc, SceneDescBuilder, SceneTemplate, WallpaperProjectType},
+    project::{ScalingMode, SceneDesc, SceneDescBuilder, SceneTemplate, WallpaperProjectType},
 };
 
 use crate::{
@@ -36,6 +36,34 @@ pub struct ActivationInputs<'a> {
     /// [`ActivationInputs::build_web`] instead of the scene engine; ids
     /// without a model are treated as engine-rendered.
     pub project_models: &'a BTreeMap<String, ProjectModel>,
+    /// Whether plain local video wallpapers may be routed to the native
+    /// player. Off by default; see [`ActivationInputs::build_native_video`].
+    pub native_video_enabled: bool,
+    /// Wallpapers the native player refused, with the reason recorded by the
+    /// host. A refusal is permanent for the session, so a wallpaper cannot
+    /// oscillate between the two backends.
+    pub native_video_rejected: &'a BTreeMap<String, String>,
+}
+
+/// A plain local video assigned to one display, played by the host process
+/// with the platform video player instead of by the scene engine.
+///
+/// Only the declared subset reaches this: a project whose type is Video, with
+/// a resolvable local media file, and with no option this backend cannot
+/// honour. Everything else stays on the scene engine.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeVideoWallpaperDesc {
+    pub display: DisplayDesc,
+    pub wallpaper_id: String,
+    pub media_path: PathBuf,
+    /// The user's target frame rate for this display. The host must refuse the
+    /// wallpaper rather than silently play at a different rate.
+    pub fps: u32,
+    pub paused: bool,
+    pub volume: f32,
+    pub muted: bool,
+    pub scaling_mode: ScalingMode,
+    pub scaling_factor: f64,
 }
 
 /// A web wallpaper assigned to one display, rendered by the host process in a
@@ -85,7 +113,10 @@ impl ActivationInputs<'_> {
         let (direct, mirrors) = self.slots();
         let mut scenes = Vec::new();
         for slot in direct {
-            if self.is_web(slot.wallpaper_id) {
+            // A wallpaper routed to a host-rendered backend must not also get a
+            // scene: two renderers for one display would decode and present the
+            // same content twice.
+            if self.is_web(slot.wallpaper_id) || self.is_native_video(slot.wallpaper_id) {
                 continue;
             }
             scenes.push(self.scene_for_monitor(
@@ -229,6 +260,116 @@ impl ActivationInputs<'_> {
 
     fn is_web(&self, wallpaper_id: &str) -> bool {
         self.web_model(wallpaper_id).is_some()
+    }
+
+    /// Whether this wallpaper is routed to the native player right now.
+    ///
+    /// Requires the opt-in, a Video project, a resolvable media file, and no
+    /// recorded refusal. Any of those failing leaves it on the scene engine,
+    /// which is the backend that supports everything.
+    fn is_native_video(&self, wallpaper_id: &str) -> bool {
+        self.native_video_media(wallpaper_id).is_some()
+    }
+
+    fn native_video_media(&self, wallpaper_id: &str) -> Option<PathBuf> {
+        if !self.native_video_enabled {
+            return None;
+        }
+        if self.native_video_rejected.contains_key(wallpaper_id) {
+            return None;
+        }
+        let model = self.project_models.get(wallpaper_id)?;
+        if model.project_type != WallpaperProjectType::Video {
+            return None;
+        }
+        let file = model.entry_file.as_ref()?;
+        if file.is_empty() {
+            return None;
+        }
+        let media = self
+            .paths
+            .steam_workshop_root()
+            .join(wallpaper_id)
+            .join(file);
+        // The player opens a path, so a project whose media is missing has to
+        // stay on the engine rather than produce a window that can never play.
+        media.is_file().then_some(media)
+    }
+
+    /// Plain local videos for every enabled, resolved display, including
+    /// mirrors of a native-video source display.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a monitor's audio volume is outside the valid
+    /// range.
+    pub fn build_native_video(&self) -> Result<Vec<NativeVideoWallpaperDesc>, BridgeError> {
+        let (direct, mirrors) = self.slots();
+        let mut videos = Vec::new();
+        for slot in direct {
+            let Some(media_path) = self.native_video_media(slot.wallpaper_id) else {
+                continue;
+            };
+            let render = RenderOverrideResolver {
+                wallpaper: slot.wallpaper,
+                monitor: slot.monitor,
+                display: &slot.display,
+                displays: self.displays,
+            }
+            .resolve();
+            let fps = render
+                .map_or(60, |render| render.fps)
+                .max(1)
+                .min(slot.display.refresh_rate_hz.max(1));
+            videos.push(NativeVideoWallpaperDesc {
+                wallpaper_id: slot.wallpaper_id.to_string(),
+                media_path,
+                fps,
+                paused: self.display_paused(slot.display.display_id),
+                volume: slot.wallpaper.audio.volume,
+                muted: slot.wallpaper.audio.muted,
+                scaling_mode: render
+                    .map(crate::config::wallpaper::MonitorRender::parse_scaling_mode)
+                    .unwrap_or_default(),
+                scaling_factor: render.map_or(1.0, |render| render.scaling_factor),
+                display: slot.display,
+            });
+        }
+
+        let mut mirrored: Vec<DisplayDesc> = Vec::new();
+        for mirror in mirrors {
+            if mirrored
+                .iter()
+                .any(|used| used.same_physical_display(&mirror.display))
+            {
+                continue;
+            }
+            let Some(source) = videos
+                .iter()
+                .find(|desc| desc.display.display_id == mirror.source_display_id)
+                .cloned()
+            else {
+                continue;
+            };
+            mirrored.push(mirror.display.clone());
+            let fps = mirror
+                .settings
+                .target_fps
+                .max(1)
+                .min(mirror.display.refresh_rate_hz.max(1));
+            videos.push(NativeVideoWallpaperDesc {
+                fps,
+                paused: self.display_paused(mirror.display.display_id),
+                volume: mirror.settings.volume,
+                muted: mirror.settings.muted,
+                scaling_mode: mirror.settings.parse_scaling_mode(),
+                scaling_factor: mirror.settings.scaling_factor,
+                display: mirror.display,
+                ..source
+            });
+        }
+
+        Ok(videos)
     }
 
     fn web_model(&self, wallpaper_id: &str) -> Option<&ProjectModel> {

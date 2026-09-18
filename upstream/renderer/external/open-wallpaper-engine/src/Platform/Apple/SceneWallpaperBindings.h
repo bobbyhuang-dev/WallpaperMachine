@@ -3,6 +3,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "../../Core/RendererCounters.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -156,6 +158,25 @@ int owe_audio_submit_mono_frames(uint32_t sample_rate, uint32_t frame_count,
                                  const float* pcm_frames);
 int owe_audio_submit_frames(uint32_t sample_rate, uint32_t frame_count, const float* pcm_frames);
 int owe_audio_current_spectrum_128(float* out_bins, uintptr_t out_len, uint64_t* out_generation);
+
+/*
+ * Renderer work counters.
+ *
+ * Counting is off by default and costs one relaxed atomic load per counted
+ * event when enabled. Reading is pull-only: nothing is pushed, logged, or
+ * written to disk, and enabling does not start a thread or a timer.
+ *
+ * `owe_scene_wallpaper_counters` writes at most `out_len` values in
+ * `owe_renderer_counter` order and reports how many it wrote, so a caller
+ * built against a shorter list stays correct. Values are read individually,
+ * so a snapshot is a set of live readings rather than one instant.
+ */
+int owe_renderer_counters_set_enabled(bool enabled);
+bool owe_renderer_counters_enabled(void);
+int owe_scene_wallpaper_counters(owe_scene_wallpaper* scene, uint64_t* out_values,
+                                 uintptr_t out_len, uintptr_t* out_written);
+/* Process-wide counters, in `owe_renderer_shared_counter` order. */
+int owe_renderer_shared_counters(uint64_t* out_values, uintptr_t out_len, uintptr_t* out_written);
 
 /* Thread-local error text for the last non-zero-returning call on this thread. */
 const char* owe_last_error(void);

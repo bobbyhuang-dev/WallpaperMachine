@@ -26,7 +26,8 @@
 
 #include "Audio/SoundManager.h"
 #include "Audio/FfmpegSoundStream.hpp"
-#include "Video/VideoTextureSource.hpp"
+#include "Video/FfmpegVideoTextureSource.hpp"
+#include "Video/VideoFramePacing.hpp"
 
 #include "RenderGraph/RenderGraph.hpp"
 
@@ -41,6 +42,7 @@
 #include <atomic>
 #include <charconv>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -152,78 +154,6 @@ struct SystemMediaArtworkPayload {
     uint32_t             height { 0 };
     std::vector<uint8_t> rgba;
 };
-
-std::shared_ptr<wallpaper::Image> LoadVideoProjectImage(const std::filesystem::path& project_path,
-                                                        std::string_view             file_name,
-                                                        std::string*                 error) {
-    if (file_name.empty()) {
-        SetError(error, "video project file entry must not be empty");
-        return nullptr;
-    }
-
-    std::filesystem::path media_path(file_name);
-    if (media_path.is_relative()) {
-        media_path = project_path.parent_path() / media_path;
-    }
-
-    std::ifstream input(media_path, std::ios::binary | std::ios::ate);
-    if (! input.good()) {
-        SetError(error,
-                 std::string("failed to open video project media file: ") + media_path.string());
-        return nullptr;
-    }
-
-    const std::streamsize size = input.tellg();
-    if (size <= 0) {
-        SetError(error, std::string("video project media file is empty: ") + media_path.string());
-        return nullptr;
-    }
-
-    input.seekg(0, std::ios::beg);
-
-    auto image                      = std::make_shared<wallpaper::Image>();
-    image->key                      = std::string(file_name);
-    image->header.isVideo           = true;
-    image->header.videoAudioEnabled = true;
-    image->header.count             = 1;
-    image->header.sample.wrapS      = wallpaper::TextureWrap::CLAMP_TO_EDGE;
-    image->header.sample.wrapT      = wallpaper::TextureWrap::CLAMP_TO_EDGE;
-    image->header.sample.minFilter  = wallpaper::TextureFilter::LINEAR;
-    image->header.sample.magFilter  = wallpaper::TextureFilter::LINEAR;
-
-    uint32_t source_width  = 0;
-    uint32_t source_height = 0;
-    if (! wallpaper::video::ProbeVideoFileDimensions(
-            media_path.string(), &source_width, &source_height, error)) {
-        return nullptr;
-    }
-    image->header.width     = static_cast<i32>(source_width);
-    image->header.height    = static_cast<i32>(source_height);
-    image->header.mapWidth  = static_cast<i32>(source_width);
-    image->header.mapHeight = static_cast<i32>(source_height);
-
-    wallpaper::Image::Slot slot;
-    slot.width  = std::max<i32>(1, image->header.width);
-    slot.height = std::max<i32>(1, image->header.height);
-
-    wallpaper::ImageData mip;
-    mip.width  = slot.width;
-    mip.height = slot.height;
-    mip.size   = static_cast<isize>(size);
-    mip.data   = wallpaper::ImageDataPtr(new uint8_t[static_cast<size_t>(size)], [](uint8_t* data) {
-        delete[] data;
-    });
-
-    if (! input.read(reinterpret_cast<char*>(mip.data.get()), size)) {
-        SetError(error,
-                 std::string("failed to read video project media file: ") + media_path.string());
-        return nullptr;
-    }
-
-    slot.mipmaps.push_back(std::move(mip));
-    image->slots.push_back(std::move(slot));
-    return image;
-}
 
 bool BuildVideoCopyShader(wallpaper::fs::VFS& vfs, std::string_view scene_id,
                           std::shared_ptr<wallpaper::SceneShader>* shader, std::string* error) {
@@ -342,7 +272,8 @@ CreateVideoProjectScene(std::unique_ptr<wallpaper::fs::VFS> vfs,
         return nullptr;
     }
 
-    auto image = LoadVideoProjectImage(project_path, manifest.file, error);
+    auto image =
+        wallpaper::video::CreateVideoProjectImage(project_path.parent_path(), manifest.file, error);
     if (image == nullptr) return nullptr;
 
     std::string scene_id = manifest.workshop_id;
@@ -495,7 +426,13 @@ public:
     };
     MainHandler& main_handler;
     RenderHandler(MainHandler& m)
-        : main_handler(m), m_render(std::make_unique<vulkan::VulkanRender>()) {}
+        : main_handler(m), m_render(std::make_unique<vulkan::VulkanRender>()) {
+        // Installed before anything can tick: the frame clock and the renderer
+        // only ever read this pointer, and the counters outlive both.
+        frame_timer.SetCounters(&counters);
+        m_render->SetCounters(&counters);
+        publishPauseReasons();
+    }
     virtual ~RenderHandler() {
         frame_timer.Stop();
         m_render->destroy();
@@ -542,18 +479,48 @@ public:
     /// script, a particle system, audio or a feedback texture that this code
     /// does not enumerate.
     ///
+    /// **Opt-in, and the reason is a bound this function cannot remove.** The
+    /// period only reaches the frame clock from here, and this runs after a
+    /// completed frame. A source whose rate turns out to be tighter than the
+    /// interval currently being waited out therefore produces frames that are
+    /// superseded before the next frame boundary — up to
+    /// `interval / period - 1` of them. Removing that needs the source to wake
+    /// the clock itself, which is a different change. Until then the default is
+    /// the safe baseline: tick at the configured ceiling.
+    ///
     /// Runs on the render thread; the frame clock only reads the value it
     /// stores.
     void refreshFrameDemand() {
+        // Also the A/B entry point, so a comparison measures one scheduling
+        // strategy in one binary rather than two builds. Read once.
+        static const bool pacing_enabled = video::ContentPacingEnabledByEnvironment(
+            std::getenv("MAC_WALLPAPER_ENGINE_CONTENT_PACING"));
+
         FrameTimer::FrameDemand demand {};
-        if (m_scene != nullptr && m_scene->single_video_source && renderInited()) {
-            const double period_seconds = m_render->ShortestVideoFramePeriod();
+        if (pacing_enabled && m_scene != nullptr && m_scene->single_video_source &&
+            renderInited()) {
+            // The source reports a period on the media's own timeline. Playback
+            // speed maps it onto the wall clock, so a 2x wallpaper needs twice
+            // the tick rate for the same content.
+            const double period_seconds = video::ResolveContentPeriodSeconds(
+                m_render->ShortestVideoFramePeriod(), static_cast<double>(m_speed));
             if (period_seconds > 0.0) {
                 demand.content_period = std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::duration<double>(period_seconds));
             }
         }
         frame_timer.SetFrameDemand(demand);
+    }
+
+    /// Why this surface is not presenting, as independent bits. Recomputed on
+    /// every transition that can change one of them, so a stopped surface can
+    /// be told apart from a surface whose renderer was taken away.
+    void publishPauseReasons() {
+        uint64_t reasons = OWE_RC_PAUSE_NONE;
+        if (! frame_timer.Running()) reasons |= OWE_RC_PAUSE_CLOCK_STOPPED;
+        if (m_render_blocked || ! renderInited()) reasons |= OWE_RC_PAUSE_RENDER_BLOCKED;
+        if (m_scene == nullptr) reasons |= OWE_RC_PAUSE_NO_SCENE;
+        counters.Set(OWE_RC_PAUSE_REASONS, reasons);
     }
 
     struct MouseButtonSnapshot {
@@ -605,6 +572,7 @@ private:
     void suspendRendering() {
         m_render_blocked = true;
         frame_timer.Stop();
+        publishPauseReasons();
     }
 
     bool rebuildRenderGraph() {
@@ -663,10 +631,17 @@ private:
             else
                 frame_timer.Run();
             refreshFrameDemand();
+            publishPauseReasons();
         }
     }
     MHANDLER_CMD(DRAW) {
-        if (m_render_blocked) return;
+        if (m_render_blocked) {
+            // The tick that posted this draw still counted; the work it asked
+            // for did not happen, and that difference is the whole point.
+            counters.Add(OWE_RC_DRAWS_DROPPED);
+            return;
+        }
+        counters.Add(OWE_RC_DRAWS_EXECUTED);
         frame_timer.FrameBegin();
         if (m_rg) {
             const double frame_time = frame_timer.IdeaTime() * m_speed;
@@ -717,7 +692,9 @@ private:
             if (frame_ok) frame_ok = m_render->drawFrame(*m_scene);
             if (frame_ok) {
                 m_scene->PassFrameTime(frame_time);
+                counters.Add(OWE_RC_SIMULATION_TICKS);
             } else {
+                counters.Add(OWE_RC_RENDER_FAILURES);
                 suspendRendering();
             }
 
@@ -840,6 +817,9 @@ private:
     MHANDLER_CMD(SET_SPEED) {
         if (msg->findFloat("value", &m_speed) && renderInited()) {
             m_render->SetVideoPlaybackRate(m_speed);
+            // Speed maps the content's own timeline onto the wall clock, so the
+            // tick rate a video needs changes with it.
+            refreshFrameDemand();
         }
     }
     MHANDLER_CMD(INIT_VULKAN) {
@@ -858,6 +838,7 @@ private:
 
             // Initialization succeeded; dispatch scene loading.
             main_handler.sendCmdLoadScene();
+            publishPauseReasons();
         }
     }
     MHANDLER_CMD(BEGIN_SURFACE_RECONFIGURE) {
@@ -894,6 +875,8 @@ private:
                 m_render_blocked = false;
                 m_render->SetVideoPlaybackPaused(false);
                 frame_timer.Run();
+                refreshFrameDemand();
+                publishPauseReasons();
             }
             promise->set_value(ok);
         } catch (...) {
@@ -903,8 +886,13 @@ private:
     }
 
 public:
-    FrameTimer frame_timer;
-    FpsCounter fps_counter;
+    FrameTimer       frame_timer;
+    FpsCounter       fps_counter;
+    /// Written by the frame clock, the render thread and the decode thread;
+    /// read by whoever asks for a snapshot. The destructor stops the frame
+    /// clock and destroys the renderer before any member is destroyed, so no
+    /// writer outlives it.
+    RendererCounters counters;
 
 private:
     std::shared_ptr<Scene> m_scene { nullptr };
@@ -1107,6 +1095,13 @@ int SceneWallpaper::takeLastFrameSyncFd() {
 
 ExSwapchain* SceneWallpaper::exSwapchain() const {
     return m_main_handler->renderHandler()->exSwapchain();
+}
+
+std::size_t SceneWallpaper::counters(uint64_t* out, std::size_t len) const {
+    if (m_main_handler == nullptr) return 0;
+    const auto handler = m_main_handler->renderHandler();
+    if (handler == nullptr) return 0;
+    return handler->counters.Snapshot(out, len);
 }
 
 MHANDLER_CMD_IMPL(MainHandler, LOAD_SCENE) {

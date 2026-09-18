@@ -14,6 +14,9 @@ use wallpaper_core::{
     DisplayIdentity, DisplaySelector, DisplaySnapshotEntry, WallpaperAssignment,
     media::audio::AudioVolume,
     project::{ScalingMode, SceneDesc, SceneHandle, SerdeValudeExt},
+    render::{
+        RendererCounterKind, RendererSharedCounterKind, RendererSurfaceCounters, shared_value,
+    },
 };
 
 use crate::{
@@ -27,21 +30,26 @@ use crate::{
             GetWebWallpapers,
             InitialFrameReady, InjectDisplayForTest, InjectSceneProjectForTest,
             InjectSceneWallpaperConfigForTest, InjectWallpaperForTest, PollMousePosition,
-            ReconcileFailed, RefreshDisplays, RefreshLibrary, ReplaceLibraryForTest,
+            GetNativeVideoWallpapers, ReconcileFailed, RefreshDisplays, RefreshLibrary,
+            RejectNativeVideo, RendererCounters, SetNativeVideoBackendEnabled,
+            ReplaceLibraryForTest,
             ReplaceWallpaperConfigForTest, RestorePropertyDefault, SelectWallpaper,
             SetAudioResponseEnabled, SetDisplayConfigEnabled, SetDisplayEnabled, SetDisplayMode,
             SetDisplayPresentationSuspended,
             SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMirrorMuted, SetMirrorScalingFactor,
             SetMirrorScalingMode, SetMirrorTarget, SetMirrorTargetFps, SetMirrorVolume, SetMuted,
-            SetPauseOnBatteryPower, SetPowerSource, SetPresentationSuspended, SetScalingFactor,
-            SetScalingMode, SetTargetFps, SetVolume, Shutdown,
+            SetPauseOnBatteryPower, SetPowerSource, SetPresentationSuspended,
+            SetRendererCountersEnabled, SetScalingFactor, SetScalingMode, SetTargetFps, SetVolume,
+            Shutdown,
         },
         state::BridgeActorState,
     },
     api::{
         BridgeAppSnapshot, BridgeDisplayMode, BridgeDisplayMutationBundle,
         BridgeDisplaySettingsRow, BridgeError, BridgeLibraryScanStatus, BridgeLibrarySnapshot,
-        BridgeLockScreenScene, BridgePlaybackState, BridgePropertyValue, BridgeScalingMode,
+        BridgeLockScreenScene, BridgeNativeVideoWallpaper, BridgePlaybackState,
+        BridgePropertyValue,
+        BridgeRendererCountersReport, BridgeRendererSurfaceCounters, BridgeScalingMode,
         BridgeSnapshotBundle, BridgeWallpaperEntry, BridgeWallpaperKind,
         BridgeWallpaperMutationBundle, BridgeWebWallpaper, MousePollingControl,
     },
@@ -689,10 +697,52 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             paths: &self.paths,
             force_shader_refresh: false,
             project_models: &self.state.project_models,
+            native_video_enabled: self.state.app_config.experimental.native_video_backend,
+            native_video_rejected: &self.state.native_video_rejected,
         }
     }
 
     /// Committed web wallpapers for connected displays, rendered by the host.
+    /// Committed plain-video wallpapers routed to the native player.
+    ///
+    /// Empty whenever the backend is off, so the host creates nothing and the
+    /// scene engine keeps every wallpaper.
+    fn native_video_wallpapers(&self) -> Result<Vec<BridgeNativeVideoWallpaper>, BridgeError> {
+        let displays = self.engine.display_snapshot();
+        self.activation_inputs(&displays, self.playback_paused())
+            .build_native_video()?
+            .into_iter()
+            .map(|desc| {
+                let title = self
+                    .state
+                    .library
+                    .iter()
+                    .find(|entry| entry.id == desc.wallpaper_id)
+                    .map(|entry| entry.title.clone())
+                    .unwrap_or_default();
+                let media_path = desc
+                    .media_path
+                    .into_os_string()
+                    .into_string()
+                    .map_err(|_| {
+                        BridgeError::invalid_input("video wallpaper path is not UTF-8")
+                    })?;
+                Ok(BridgeNativeVideoWallpaper {
+                    display_id: desc.display.display_id,
+                    wallpaper_id: desc.wallpaper_id,
+                    title,
+                    media_path,
+                    fps: desc.fps,
+                    paused: desc.paused,
+                    volume: desc.volume,
+                    muted: desc.muted,
+                    scaling_mode: BridgeScalingMode::from(desc.scaling_mode),
+                    scaling_factor: desc.scaling_factor,
+                })
+            })
+            .collect()
+    }
+
     fn web_wallpapers(&self) -> Result<Vec<BridgeWebWallpaper>, BridgeError> {
         let displays = self.engine.display_snapshot();
         self.activation_inputs(&displays, self.playback_paused())
@@ -876,6 +926,26 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             .any(|scene| scene.audio_response_enabled && !scene.paused)
     }
 
+    /// Scenes that both enable audio response and are not paused for their own
+    /// display. This is the same rule the capture tap follows, reported as a
+    /// number so a diagnostic session can see why the tap is open or closed.
+    fn audio_consumer_count(&self) -> u32 {
+        let displays = self.engine.display_snapshot();
+        let Ok(scenes) = self
+            .activation_inputs(&displays, self.playback_paused())
+            .build()
+        else {
+            return 0;
+        };
+        u32::try_from(
+            scenes
+                .iter()
+                .filter(|scene| scene.audio_response_enabled && !scene.paused)
+                .count(),
+        )
+        .unwrap_or(u32::MAX)
+    }
+
     async fn apply_engine_pause(&self, previous_paused: bool) -> Result<(), BridgeError> {
         let paused = self.playback_paused();
         let audio_suspended = self.audio_capture_suspended();
@@ -922,6 +992,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         let project_models = self.state.configured_project_models(&app_config);
         let paused = self.playback_paused();
         let suspended_displays = self.state.suspended_displays.clone();
+        let native_video_rejected_snapshot = self.state.native_video_rejected.clone();
         let paths = self.paths.clone();
         tokio::spawn(async move {
             let result = reconcile_with(
@@ -933,6 +1004,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                 suspended_displays,
                 paths,
                 false,
+                native_video_rejected_snapshot,
             )
             .await;
             let _ = actor
@@ -975,6 +1047,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             self.state.suspended_displays.clone(),
             self.paths.clone(),
             false,
+            self.state.native_video_rejected.clone(),
         )
         .await
     }
@@ -992,6 +1065,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         let suspended_displays = self.state.suspended_displays.clone();
         let actor = ctx.actor_ref().clone();
         let engine = self.engine.clone();
+        let native_video_rejected_snapshot = self.state.native_video_rejected.clone();
         let paths = self.paths.clone();
         ctx.spawn(async move {
             let scenes = match reconcile_with(
@@ -1003,6 +1077,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                 suspended_displays,
                 paths,
                 false,
+                native_video_rejected_snapshot,
             )
             .await
             {
@@ -1333,6 +1408,7 @@ async fn reconcile_with<E: EngineFacade>(
     suspended_displays: BTreeSet<u32>,
     paths: BridgePaths,
     force_shader_refresh: bool,
+    native_video_rejected: BTreeMap<String, String>,
 ) -> Result<Vec<SceneDesc>, BridgeError> {
     let displays = engine.display_snapshot();
     let scenes = ActivationInputs {
@@ -1344,6 +1420,8 @@ async fn reconcile_with<E: EngineFacade>(
         paths: &paths,
         force_shader_refresh,
         project_models: &project_models,
+        native_video_enabled: app_config.experimental.native_video_backend,
+        native_video_rejected: &native_video_rejected,
     }
     .build()?;
     let results = engine
@@ -1558,6 +1636,7 @@ impl<E: EngineFacade + Clone> Message<ClearShaderCache> for BridgeActor<E> {
             self.state.suspended_displays.clone(),
             self.paths.clone(),
             true,
+            self.state.native_video_rejected.clone(),
         )
         .await;
         self.refresh_mouse_polling_policy();
@@ -2357,6 +2436,178 @@ impl<E: EngineFacade + Clone> Message<SetDisplayPresentationSuspended> for Bridg
     }
 }
 
+impl<E: EngineFacade + Clone> Message<SetNativeVideoBackendEnabled> for BridgeActor<E> {
+    type Reply = messages::SetNativeVideoBackendEnabledReply;
+
+    async fn handle(
+        &mut self,
+        msg: SetNativeVideoBackendEnabled,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        if self.state.app_config.experimental.native_video_backend == msg.enabled {
+            return Ok(self.all_snapshots());
+        }
+        let mut app_config = self.state.app_config.clone();
+        app_config.experimental.native_video_backend = msg.enabled;
+        // Turning the backend on or off moves wallpapers between renderers, so
+        // the refusals recorded against the previous setting no longer describe
+        // anything: keeping them would permanently exclude a wallpaper that was
+        // only ever refused by a configuration the user has since changed.
+        self.state.native_video_rejected.clear();
+        // A wallpaper that changes backend must stop being rendered by the old
+        // one in the same transition, so the scene list is rebuilt before the
+        // new setting is committed: a failure leaves the previous backend
+        // running rather than nothing at all.
+        let wallpaper_configs = self.state.wallpaper_configs.clone();
+        let scenes = self.reconcile_engine(app_config.clone(), wallpaper_configs).await?;
+        if let Some(store) = &self.config_store {
+            store.save_app_config(&app_config)?;
+        }
+        self.state.app_config = app_config;
+        self.state.set_active_ids_from_scenes(&scenes);
+        Ok(self.all_snapshots())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<GetNativeVideoWallpapers> for BridgeActor<E> {
+    type Reply = messages::GetNativeVideoWallpapersReply;
+
+    async fn handle(
+        &mut self,
+        _msg: GetNativeVideoWallpapers,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.native_video_wallpapers()
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<RejectNativeVideo> for BridgeActor<E> {
+    type Reply = messages::RejectNativeVideoReply;
+
+    async fn handle(
+        &mut self,
+        msg: RejectNativeVideo,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // Recorded once and never retried, so a wallpaper the player cannot
+        // honour cannot bounce between the two backends.
+        if self
+            .state
+            .native_video_rejected
+            .insert(msg.wallpaper_id.clone(), msg.reason.clone())
+            .is_some()
+        {
+            return Ok(());
+        }
+        log::info!(
+            "native video wallpaper {} refused: {}; falling back to the scene engine",
+            msg.wallpaper_id,
+            msg.reason
+        );
+        // The scene engine has to take it back now, or the display shows
+        // nothing until something else triggers a reconcile.
+        let app_config = self.state.app_config.clone();
+        let wallpaper_configs = self.state.wallpaper_configs.clone();
+        let scenes = self.reconcile_engine(app_config, wallpaper_configs).await?;
+        self.state.set_active_ids_from_scenes(&scenes);
+        Ok(())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<SetRendererCountersEnabled> for BridgeActor<E> {
+    type Reply = messages::SetRendererCountersEnabledReply;
+
+    async fn handle(
+        &mut self,
+        msg: SetRendererCountersEnabled,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.engine
+            .set_renderer_counters_enabled(msg.enabled)
+            .map_err(|error| BridgeError::engine(error.to_string()))?;
+        self.state.renderer_counters_enabled = msg.enabled;
+        Ok(())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<RendererCounters> for BridgeActor<E> {
+    type Reply = messages::RendererCountersReply;
+
+    async fn handle(
+        &mut self,
+        _msg: RendererCounters,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let (surfaces, shared) = self
+            .engine
+            .renderer_counters()
+            .await
+            .map_err(|error| BridgeError::engine(error.to_string()))?;
+        Ok(BridgeRendererCountersReport {
+            recording: self.state.renderer_counters_enabled,
+            surfaces: surfaces.iter().map(renderer_surface_row).collect(),
+            audio_analysis_deliveries: shared_value(
+                &shared,
+                RendererSharedCounterKind::AudioAnalysisDeliveries,
+            ),
+            audio_accepted_frames: shared_value(
+                &shared,
+                RendererSharedCounterKind::AudioAcceptedFrames,
+            ),
+            audio_active_consumers: self.audio_consumer_count(),
+            // MoltenVK over a CAMetalLayer swapchain exposes no presentation
+            // feedback here. Present requests are reported as requests; the
+            // frames the compositor actually showed are not observable, and are
+            // never approximated by the request count.
+            presentation_feedback_available: false,
+        })
+    }
+}
+
+/// Maps one renderer surface's counters onto the reported row. Named fields
+/// only: no caller outside this crate handles raw counter indices.
+fn renderer_surface_row(counters: &RendererSurfaceCounters) -> BridgeRendererSurfaceCounters {
+    use RendererCounterKind as K;
+    BridgeRendererSurfaceCounters {
+        display_id: counters.display_id.to_string(),
+        surface_id: counters.handle.raw().to_string(),
+        generation: counters.generation,
+        source_id: match counters.value(K::VideoSourceInstance) {
+            0 => "unknown".to_string(),
+            instance => format!("instance:{instance}"),
+        },
+        source_path: counters.source_path.clone(),
+        source_count: counters.value(K::VideoSourceCount),
+        backend: "scene".to_string(),
+        effective_pause_reasons: counters
+            .pause_reasons()
+            .into_iter()
+            .map(|reason| reason.name().to_string())
+            .collect(),
+        paused: counters.paused,
+        timer_wakeups: counters.value(K::TimerWakeups),
+        draw_requests: counters.value(K::DrawRequests),
+        draw_ticks_suppressed: counters.value(K::DrawTicksSuppressed),
+        draws_executed: counters.value(K::DrawsExecuted),
+        draws_dropped: counters.value(K::DrawsDropped),
+        render_submissions: counters.value(K::RenderSubmissions),
+        render_failures: counters.value(K::RenderFailures),
+        present_requests: counters.value(K::PresentRequests),
+        gpu_completions: counters.value(K::GpuCompletions),
+        simulation_ticks: counters.value(K::SimulationTicks),
+        tick_interval_micros: counters.value(K::TickIntervalMicros),
+        content_period_micros: counters.value(K::ContentPeriodMicros),
+        video_decode_outputs: counters.value(K::VideoDecodeOutputs),
+        video_seeks: counters.value(K::VideoSeeks),
+        video_frames_selected: counters.value(K::VideoFramesSelected),
+        video_frames_reused: counters.value(K::VideoFramesReused),
+        video_frames_skipped: counters.value(K::VideoFramesSkipped),
+        video_selected_generation: counters.value(K::VideoSelectedGeneration),
+        video_conversions: counters.value(K::VideoConversions),
+        video_imports: counters.value(K::VideoImports),
+    }
+}
+
 impl<E: EngineFacade + Clone> Message<SetPowerSource> for BridgeActor<E> {
     type Reply = messages::SetPowerSourceReply;
 
@@ -2887,6 +3138,8 @@ impl<E: EngineFacade + Clone> Message<ApplyWallpaperOptions> for BridgeActor<E> 
                         paths: &self.paths,
                         force_shader_refresh: false,
                         project_models: &self.state.project_models,
+                        native_video_enabled: app_config.experimental.native_video_backend,
+                        native_video_rejected: &self.state.native_video_rejected,
                     }
                     .build()
                 })
@@ -2899,6 +3152,7 @@ impl<E: EngineFacade + Clone> Message<ApplyWallpaperOptions> for BridgeActor<E> 
             let actor = ctx.actor_ref().clone();
             let engine = self.engine.clone();
             let wallpaper_id = msg.wallpaper_id;
+            let native_video_rejected_snapshot = self.state.native_video_rejected.clone();
             let paths = self.paths.clone();
             return ctx.spawn(async move {
                 let scenes = match reconcile_with(
@@ -2910,6 +3164,7 @@ impl<E: EngineFacade + Clone> Message<ApplyWallpaperOptions> for BridgeActor<E> 
                     suspended_displays,
                     paths,
                     false,
+                    native_video_rejected_snapshot,
                 )
                 .await
                 {

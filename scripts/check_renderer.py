@@ -266,7 +266,7 @@ def main():
         steps = [
             (["cargo", "build", "-p", "shader", "--features", "ffi", "--release"], "shader-build", RENDERER),
             (["cmake", "-S", RENDERER / "external/open-wallpaper-engine", "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTS=ON", "-DBUILD_QML=OFF", "-DBUILD_WAYWALLEN=OFF", "-DRUST_SHADER_FFI=ON", "-DRUST_SHADER_STATICLIB=" + str(RENDERER / "target/release/libshader.a")], "configure", ROOT),
-            (["cmake", "--build", build, "--target", "offscreen_scene_probe", "scene_reload_cycle_probe", "render_target_lifetime_test", "text_object_runtime_test", "shader_cache_metadata_test", "video_decode_pump_test", "video_color_conversion_test", "timer_tests", "playback_gpu_test", "-j", "6"], "build", ROOT),
+            (["cmake", "--build", build, "--target", "offscreen_scene_probe", "scene_reload_cycle_probe", "render_target_lifetime_test", "text_object_runtime_test", "shader_cache_metadata_test", "video_decode_pump_test", "video_color_conversion_test", "video_frame_pacing_test", "video_conversion_budget_test", "video_source_input_test", "timer_tests", "playback_gpu_test", "-j", "6"], "build", ROOT),
         ]
         for command, name, cwd in steps:
             if run(command, out / (name + ".log"), env, 600, cwd):
@@ -276,8 +276,9 @@ def main():
     # video_decode_pump_test and video_color_conversion_test need no GPU at all;
     # playback_gpu_test imports synthetic video frames into private textures.
     for binary in ["render_target_lifetime_test", "text_object_runtime_test", "shader_cache_metadata_test",
-                   "video_decode_pump_test", "video_color_conversion_test", "timer_tests",
-                   "playback_gpu_test"]:
+                   "video_decode_pump_test", "video_color_conversion_test", "video_frame_pacing_test",
+                   "video_conversion_budget_test", "video_source_input_test",
+                   "timer_tests", "playback_gpu_test"]:
         status = run([build / "tests" / binary], out / (binary + ".log"), env, 600)
         report[ binary ] = status
     for project in [*fixtures(out / "fixtures"), alpha_composite_fixture(out / "fixtures"),
@@ -342,7 +343,7 @@ def main():
     (out / "report.json").write_text(json.dumps(report, indent=2))
     print(f"reload cycles ({len(reload_projects)} projects x2): {report['scene_reload_cycle_probe']}", flush=True)
     print(f"Evidence: {out}")
-    return int(any(report[k] for k in ["render_target_lifetime_test", "text_object_runtime_test", "shader_cache_metadata_test", "video_decode_pump_test", "video_color_conversion_test", "timer_tests", "playback_gpu_test", "scene_reload_cycle_probe"]) or any(not c["pixels_equal"] for c in report["cases"]) or any(c["diagnostics"] or not c.get("expected_pixels", False) for c in report["cases"][:GENERATED_CASE_COUNT]))
+    return int(any(report[k] for k in ["render_target_lifetime_test", "text_object_runtime_test", "shader_cache_metadata_test", "video_decode_pump_test", "video_color_conversion_test", "video_frame_pacing_test", "video_conversion_budget_test", "video_source_input_test", "timer_tests", "playback_gpu_test", "scene_reload_cycle_probe"]) or any(not c["pixels_equal"] for c in report["cases"]) or any(c["diagnostics"] or not c.get("expected_pixels", False) for c in report["cases"][:GENERATED_CASE_COUNT]))
 
 
 if __name__ == "__main__":

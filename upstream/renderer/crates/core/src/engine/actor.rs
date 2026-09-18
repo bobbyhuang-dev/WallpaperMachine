@@ -17,6 +17,7 @@ use crate::{
         state::{DisplayRuntimeRecord, EngineState},
     },
     owe::backend::OweBackend,
+    render::RendererSurfaceCounters,
     project::{SceneDescSliceExt, SceneHandle},
 };
 
@@ -742,6 +743,25 @@ impl Message<messages::SetAllPaused> for EngineActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.with_snapshot_update(|actor| actor.set_all_paused(msg.paused))
+    }
+}
+
+impl Message<messages::RendererCounters> for EngineActor {
+    type Reply = Result<Vec<RendererSurfaceCounters>, EngineError>;
+
+    async fn handle(
+        &mut self,
+        _msg: messages::RendererCounters,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // Reading counters must never disturb the scenes it reads: no snapshot
+        // update, no pause transition, no renderer mutation.
+        self.state
+            .display_records
+            .iter()
+            .filter_map(|record| record.runtime.as_ref())
+            .map(SceneRuntime::counters)
+            .collect()
     }
 }
 

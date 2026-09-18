@@ -6,6 +6,7 @@ use crate::{
         BridgeAppSnapshot, BridgeDisplayMode, BridgeDisplayMutationBundle,
         BridgeDisplaySettingsRow, BridgeError, BridgeLibrarySnapshot, BridgeLockScreenScene,
         BridgeMonitorInformationSnapshot, BridgePlaybackState, BridgePropertyValue,
+        BridgeNativeVideoWallpaper, BridgeRendererCountersReport,
         BridgeScalingMode, BridgeSettingsSnapshot, BridgeSnapshotBundle, BridgeWallpaperEntry,
         BridgeWallpaperKind, BridgeWallpaperMutationBundle, BridgeWallpaperOptionsSnapshot,
         BridgeWebWallpaper,
@@ -189,6 +190,24 @@ pub struct SetDisplayPresentationSuspended {
     pub suspended: bool,
 }
 
+pub struct SetRendererCountersEnabled {
+    pub enabled: bool,
+}
+
+pub struct RendererCounters;
+
+pub struct SetNativeVideoBackendEnabled {
+    pub enabled: bool,
+}
+
+pub struct GetNativeVideoWallpapers;
+
+/// The host could not play a wallpaper natively and hands it back.
+pub struct RejectNativeVideo {
+    pub wallpaper_id: String,
+    pub reason: String,
+}
+
 pub struct SetPowerSource {
     pub source: PowerSource,
     pub initial_sample: bool,
@@ -282,5 +301,10 @@ pub type ShutdownReply = Result<(), BridgeError>;
 pub type WallpaperMutationReply = Result<BridgeWallpaperMutationBundle, crate::api::BridgeError>;
 pub type CommitApplyAfterReconcileReply = WallpaperMutationReply;
 pub type CommitDisplayAfterReconcileReply = DisplayMutationReply;
+pub type SetRendererCountersEnabledReply = Result<(), BridgeError>;
+pub type RendererCountersReply = Result<BridgeRendererCountersReport, BridgeError>;
+pub type SetNativeVideoBackendEnabledReply = Result<BridgeSnapshotBundle, BridgeError>;
+pub type GetNativeVideoWallpapersReply = Result<Vec<BridgeNativeVideoWallpaper>, BridgeError>;
+pub type RejectNativeVideoReply = Result<(), BridgeError>;
 pub type CompleteRestoreAfterReconcileReply = Result<(), BridgeError>;
 pub type ReconcileFailedReply = Result<(), BridgeError>;

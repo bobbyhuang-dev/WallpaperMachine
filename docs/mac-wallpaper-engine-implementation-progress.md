@@ -5,13 +5,30 @@ Implementation record for the work packages in
 Task IDs are the plan's own. The plan itself is not rewritten; corrections to it
 are recorded here.
 
-Scope of this round: phase A (M00, V01, V02, W01, V03) and phase B (P01, W02,
-P02 first version, A01 consumer gating, E01). Phases C/D/E are out of scope.
+Three rounds are recorded here, newest first after the shared preamble. Round 1
+covered phase A (M00, V01, V02, W01, V03) and phase B (P01, W02, P02 first
+version, A01 consumer gating, E01). Round 2 closed out M00's unbuilt half —
+renderer-side counters on the production paths — re-examined P02's correctness
+argument, and recorded phase C admission per task. Round 3 is the first phase C
+batch: P02's remaining scheduling guarantee, counter attribution, R02, I01 and
+an opt-in V04. R01, D01, R03, the full Metal backend, static-scene
+classification and V05 are deliberately not in it. Phases D/E remain out of
+scope.
 
 ## Evidence vocabulary
 
-Each task carries these fields separately, as the plan requires. A single "pass"
-is never written in place of them.
+A task is never marked done as a whole. These five are tracked separately,
+because passing one says nothing about the others:
+
+| Field | Meaning |
+|---|---|
+| implementation | The change exists on the production call path |
+| automated verification | A suite that runs in this environment covers it |
+| runtime verification | The real production process was exercised and observed |
+| visual verification | Real rendered output was compared on a real display |
+| power verification | Equal-quality paired power measurement |
+
+Within those, the following sub-evidence is cited where it applies:
 
 | Field | Meaning |
 |---|---|
@@ -19,13 +36,23 @@ is never written in place of them.
 | counter-example | A test that fails before the change and passes after it exists |
 | fixed-in-production | The fix is on the production call path, not a test helper |
 | tests-passing | Which suites actually ran green in this environment |
-| visually-verified | Real rendered output compared. Requires desktop authorization |
-| power-verified | Equal-quality paired power measurement. Requires authorization |
 
 ## Environment and authorization
 
-Working tree started at `6dc8c327c6f7e2594d84722413f11d7168eb5898`, which is the
-plan's fixed baseline, so no problem needed re-confirmation against a newer main.
+### Round 2 build identity
+
+Round 2 started from `6bfaa1d840f2ca84feb7ff600e7b32e78a6e9610` on `main`, with
+a clean working tree: `git status --porcelain` was empty, so round 1's reported
+results — 310 `scripts/test.py` cases, the green renderer gate and 233
+`wallpaper-bridge` cases — correspond exactly to that commit and include no
+uncommitted work. Round 2's changes are uncommitted working-tree edits on top of
+it; no history was rewritten and nothing was rebased.
+
+### Round 1 build identity
+
+Round 1's working tree started at `6dc8c327c6f7e2594d84722413f11d7168eb5898`,
+which is the plan's fixed baseline, so no problem needed re-confirmation against
+a newer main. Its work is the commit named above.
 
 Available: `cargo`, `cmake`, `xcodegen`, `xcodebuild`, Homebrew `ffmpeg@8`,
 `quickjs-ng`, `glslang`, `molten-vk`.
@@ -50,7 +77,548 @@ recorded as blocked rather than failed:
 **No power number, watt figure or saving percentage is reported anywhere in this
 document.** Counters and unit tests bound what is claimed.
 
-## Status by task ID
+## Round 3 — status by task ID
+
+| ID | implementation | automated verification | runtime verification | visual | power |
+|---|---|---|---|---|---|
+| P02 stale-wait fix | done | `timer_tests` (counter-example) | — | — | — |
+| P02 pacing made opt-in | done | `video_frame_pacing_test` | — | — | — |
+| Counter attribution | done | `renderer_counters` (bridge), `RuntimeDiagnosticsReportTests` | — | — | — |
+| R02 conversion budget | done | `video_conversion_budget_test`, `playback_gpu_test` | — | synthetic GPU pixel comparison only | — |
+| I01 direct file input | done | `video_source_input_test`, `video_decode_pump_test` | — | — | — |
+| V04 routing and host rules | done, off by default | `native_video_routing` (bridge), `NativeVideoWallpaperHostTests` | — | — | — |
+| V04 player and window | done, off by default | none — needs a desktop | — | — | — |
+
+"visual" needs care. `playback_gpu_test` compares real GPU output against a CPU
+reference for synthetic frames, so R02's pixels are checked at that level. No
+wallpaper has been displayed on a real desktop and no authored reference frame
+has been compared, in this round or any previous one. V04 in particular has
+never put a pixel on a screen.
+
+## Round 3 — commands actually run
+
+| Command | Result |
+|---|---|
+| `python3 scripts/test.py` | Pass, 325 tests, 0 failed (314 before this round) |
+| `python3 scripts/check_renderer.py` | Pass, exit 0; 10 cases `pixels_equal=true`, 0 diagnostics; every binary exit 0, now including `video_conversion_budget_test` (11) and `video_source_input_test` (11) |
+| `cargo test --release --workspace` | Pass; 251 `wallpaper-bridge` cases including `native_video_routing` (7) |
+| `python3 scripts/build.py --renderer-only` | Pass; bindings carry `nativeVideoWallpapers`, `setNativeVideoBackendEnabled`, `rejectNativeVideo` |
+| `python3 scripts/build.py --configuration Release` | **BUILD SUCCEEDED**; app and embedded extension |
+| `tests/timer_tests` | Pass, 20 cases (2 new) |
+| `tests/playback_gpu_test` | Pass, 34 cases (2 new from R02) |
+
+Build identity: this round started from `6bfaa1d840f2ca84feb7ff600e7b32e78a6e9610`
+with 41 modified and 9 untracked files already present from round 2, verified
+rather than assumed. Nothing was reset, stashed, reverted or committed. The
+tree now carries 51 modified and 16 untracked paths; the new sources are
+`App/Services/Diagnostics/`, `App/Services/NativeVideo/`,
+`Tests/Unit/Diagnostics/`, `Tests/Unit/NativeVideo/`,
+`crates/bridge/src/tests/{renderer_counters,native_video_routing}.rs`,
+`crates/core/src/render/counters.rs`, `src/Core/RendererCounters.{h,hpp}`,
+`src/Video/VideoFramePacing.{hpp,cpp}`, `src/Video/VideoConversionBudget.{hpp,cpp}`
+and three new gtest files.
+
+One environment fault cost real time and is worth recording: a scratch CMake
+build directory configured without `scripts/build.py`'s environment linked the
+default Homebrew `ffmpeg` keg instead of the pinned `ffmpeg@8`, which produced
+dangling `libvpx`/`x264`/`x265` dylibs at launch and looked like a broken
+machine. The fix is to configure with the project's own `PKG_CONFIG_PATH`, not
+to set `DYLD_FALLBACK_LIBRARY_PATH`. A stale cmake cache under
+`target/release/build/wallpaper-core/*/out` with `BUILD_TESTS=ON` also broke
+`build.py --renderer-only` until that one directory was deleted.
+
+---
+
+## Round 3 — P02: the "at most one frame" claim was wrong
+
+Round 2 wrote that a rate transition could cost at most one frame. That was
+derived from the estimator's arithmetic and did not survive looking at the
+scheduler.
+
+**Defect found, on the production path.** `ThreadTimer::SetInterval` stored the
+new interval and returned. The timer thread was already inside
+`m_condition.wait_for(lock, m_interval.load(), …)`, whose duration is read once
+at entry and whose predicate only fires on stop. A shortened interval therefore
+did not apply until the previous period had elapsed in full. With a scene paced
+at 2 s and a demand change to 20 ms, the next draw was ~1.95 s late.
+
+counter-example: `AShortenedIntervalDoesNotSleepOutTheOldOne` and
+`RaisingTheTargetFpsInterruptsAPacedWait` drive the real `FrameTimer` and
+`ThreadTimer` and both failed against the old code — the first with
+`draws == 0` after a 600 ms budget — and pass now. The second is the same fault
+reached through the user's own setting rather than through content: raising the
+target FPS during a paced wait used to take a full content period to apply.
+
+fixed-in-production: the timer thread now waits to a deadline computed from the
+last tick and the *current* interval, recomputed on every wake, and
+`SetInterval` notifies. An early wake is not a tick; the loop re-checks the
+deadline. A longer interval moves the deadline out without dropping the tick.
+
+**The residual bound cannot be removed here, so pacing became opt-in.** Even
+with the wait interruptible, the content period only reaches the clock from
+`refreshFrameDemand`, which runs after a completed frame. A source whose rate
+turns out to be tighter than the interval being waited out produces frames that
+are superseded before the next frame boundary — up to `interval / period - 1`
+of them, not one. Removing that needs the source to wake the clock itself,
+which is a different change and is not in this round's scope.
+
+So the default is now the safe baseline: tick at the configured ceiling.
+`MAC_WALLPAPER_ENGINE_CONTENT_PACING=1` turns pacing on and is also the A/B
+entry point. The switch's polarity was inverted from round 2's opt-out, and
+`PacingIsOffUnlessTheEnvironmentExplicitlyOptsIn` pins the default.
+
+**What was checked and did not need changing.** The round 2 suspension-threshold
+fix is compatible with `Run`/`Stop`: `Run` resets the frame clock only when the
+timer was not already running, `Stop` leaves the busy count to `Run` to clear,
+and `StoppingWithADrawPendingDoesNotReplayTheStoppedTime` covers the pending-draw
+case. No new failing counter-example was found, so the clock architecture was
+not changed further.
+
+**Still not established.** That a real video wallpaper loses no frame at a rate
+transition with pacing on. The selection counters can falsify it on a desktop
+run; no such run has happened. The honest position is the one now in the code
+and the docs: pacing is opt-in and its bound is stated rather than denied.
+
+---
+
+## Round 3 — counter attribution
+
+Round 2 grouped counters by a `video_` prefix, which put two different things in
+one bucket and keyed source work on a file path. Both are fixed.
+
+- **Consumer work** — selected, reused, skipped, selected generation, **and the
+  colour conversions and GPU imports**. The texture cache that performs a
+  conversion is per surface, so conversion is that surface's own work; round 2
+  filed it as shared source work, which was wrong.
+- **Source work** — decode outputs and seeks, plus `OWE_RC_VIDEO_SOURCE_COUNT`
+  and `OWE_RC_VIDEO_SOURCE_INSTANCE`.
+- **Identity** — `FfmpegVideoTextureSource` carries a process-unique
+  `instance_id` assigned at construction. It is never derived from the path or
+  from content, so two decoders reading one file are two identities.
+  `TextureCache::publishVideoSourceIdentity` reports the count and, when there
+  is exactly one, its id; zero or several reports `0`, which the report renders
+  as `unknown` rather than picking one.
+- **Aggregation** — `RuntimeDiagnosticsSession.sourceRollupLines` totals decode
+  work once per instance. Two consumers of one decoder each report that
+  decoder's running total, so the instance total is the maximum, not the sum;
+  two decoders on one file stay separate; a surface with no single identifiable
+  decoder is reported `decode_outputs=unknown`, never `0`.
+
+Tests: `a_source_identity_names_a_running_decoder_not_a_file`,
+`a_surface_without_one_identifiable_decoder_reports_unknown`,
+`testOneDecoderConsumedTwiceIsTotalledOnce`,
+`testTwoDecodersOnTheSameFileAreNeverFoldedTogether`,
+`testASurfaceWithNoSingleDecoderIsReportedUnknownNotZero`.
+
+**A hidden surface does not fake stopping.** Nothing clears a counter on
+suspension, and `a_paused_surface_keeps_the_work_it_already_did` asserts a
+paused row still carries its accumulated submissions and present requests — a
+row that zeroed itself would make every surface look like it had always been
+idle.
+
+Preserved from round 2: a present request is not a displayed frame,
+`unavailable` is not `0`, and the diagnostic session starts no periodic sampling
+thread when it is off.
+
+Not done: two decoders at different consumption rates were exercised only
+through the reporting layer and through the single-cache GPU fixture. A true
+two-surface, one-source case needs D01, which is out of scope.
+
+---
+
+## Round 3 — R02 conversion budget
+
+Implemented in `src/Video/VideoConversionBudget.{hpp,cpp}` — slot sizing,
+admission, eviction choice, loan tracking and the exhaustion policy over opaque
+handles, with no GPU dependency — and executed by
+`AppleVideoMetalTexturePool` and `TextureCache`.
+
+- Reuse is keyed on decoded width, height and destination pixel format; cost is
+  the Metal texture's real `allocatedSize`. A display's resolution never reaches
+  the key.
+- The ceiling is 256 MiB per pool, one pool per `TextureCache`, derived from the
+  six destinations that can coexist for one video texture at a 3840x2160
+  reference. It replaces a flat 64 MiB that refused any single destination above
+  roughly 4096x4096.
+- `Take` opens a loan and `Recycle` — called from the lease deleter, after the
+  frame fence — closes it. A destination still referenced can never be lent
+  again. The pre-existing renderer path was checked and already gated recycling
+  on GPU completion; the rule is now enforced at the pool boundary instead of
+  being an emergent property.
+- Exhaustion stops caching, logs once per reason, and refuses a size an
+  allocation already failed at, so an unsatisfiable allocation is never retried
+  in a loop. Memory pressure is read synchronously at `Recycle` from Metal's
+  `currentAllocatedSize` against `recommendedMaxWorkingSetSize`; there is no
+  notification source and no extra thread.
+
+Measured, not estimated: a warm 6144x3456 clip over 17 imports produced
+`converted_destinations_created=4`, `converted_destinations_reused=13`,
+`pool_hits=13`, `pool_misses=4`, `pool_evictions=0`, `pool_refusals=0`, peak
+resident pool bytes 84,934,656. Creation plateaus at the imported-frame cap from
+generation 5 and every later generation is a pool hit. Under the old 64 MiB
+ceiling the same clip's `created` count kept climbing while `reused` stayed at
+0. Every rule was confirmed load-bearing by deleting it and observing the
+matching test fail.
+
+No power claim. This is allocation behaviour, not watts.
+
+---
+
+## Round 3 — I01 direct file input
+
+A plain local video no longer goes file → `ImageData` → `m_payload` → hash →
+temp file → reopen. `Image::videoFilePath` carries the source kind: non-empty
+means "already a file, open it"; empty keeps the in-package inline-payload path.
+
+Production path, verified rather than assumed:
+`MainHandler::loadScene` → `ResolveSceneSourcePaths` (type Video) →
+`loadNonSceneProject` → `CreateVideoProjectScene` →
+`video::CreateVideoProjectImage`, which resolves, canonicalises and
+containment-checks the entry, probes dimensions, and returns an `Image` with an
+empty `slots` vector. `TextureCache`'s video branch was confirmed never to read
+`slots`.
+
+- In-package extraction is now published atomically: unique staging name, size
+  completion check, rename. A concurrent open cannot observe a partial file.
+- The inline payload is released as soon as the decoder is open.
+- Manifest entries are canonicalised before the containment test, so a symlink
+  is followed first rather than after.
+- Error semantics: one message became unreachable
+  (`failed to read video project media file`) because nothing reads the file;
+  nothing referenced it. One is new
+  (`video project media file escapes the project directory`). Every other
+  message is preserved verbatim and no existing test needed changing.
+
+Measured startup peak, load time only: a 67,244,350-byte wallpaper grew the
+process footprint by 4,079,616 bytes. The previous shape's two copies were
+measured directly at 134,316,128 bytes for a 64 MiB file. So scene-load peak
+goes from roughly twice the media size to a small fixed cost, and no copy of the
+media is written to the temp directory for the local-file case.
+
+Steady-state power: no measurement and no claim.
+
+---
+
+## Round 3 — V04 native video backend, default off
+
+One candidate only: `AVQueuePlayer` + `AVPlayerLooper` + `AVPlayerLayer`. No
+second prototype exists.
+
+**It is in the production routing, not beside it.**
+`ActivationInputs::build_native_video` produces the descriptors and
+`ActivationInputs::build` *excludes* those ids, so a natively routed wallpaper
+gets no `SceneDesc` at all.
+`a_natively_routed_wallpaper_is_not_also_given_to_the_scene_engine` asserts
+exactly that — two renderers for one display would decode and present the same
+clip twice.
+
+**Default off.** `AppConfig.experimental.native_video_backend` defaults to
+false, `native_video_wallpapers()` returns empty while it is off, and
+`the_backend_is_off_until_it_is_turned_on` pins it.
+
+**The frame-rate rule, which is where an easy lie would live.** There is no
+supported way to cap an `AVPlayerLayer`'s presentation rate. Lowering the
+playback rate would slow the video down, and dropping frames by hand would mean
+copying every frame through the CPU. So a target frame rate below the clip's
+`nominalFrameRate` — with one frame of tolerance, so 29.97 is not refused
+against 30 — is **refused**, and the wallpaper goes back to the scene engine. A
+60 fps clip is never silently played at 60 while the user asked for 30.
+
+**The fallback terminates.** A refusal is recorded once in the host and once in
+the bridge (`native_video_rejected`), and
+`a_refused_wallpaper_goes_back_to_the_engine_and_stays_there` asserts that a
+repeat refusal triggers no second reconcile. Turning the backend off clears the
+refusals, because they described a configuration the user has since changed.
+
+**Wired into the rest of the app.** `MWENativeVideoDesktopWindow` was added to
+`WallpaperPresentationPolicy.wallpaperWindowClassNames`; without that the
+display would be invisible to occlusion tracking. The host takes both the global
+and the per-display suspension, and the user's own pause stays independent:
+`testRevealingADisplayDoesNotStartAWallpaperTheUserPaused` and
+`testAGlobalResumeKeepsADisplayThatIsStillHiddenStopped`. A wallpaper that
+leaves the native backend stops playing in the same pass, before anything else
+starts. Poster requests are answered from the player that is already running —
+no second player and no legacy renderer is kept for posters.
+
+**Declared subset.** Local plain-video projects; volume, mute, user pause,
+per-display suspension, fill and stretch scaling, looping, on-demand poster.
+Outside it: playback speed, horizontal flip, audio response, property overrides,
+in-package media, and any target rate below the clip's own. Those keep the scene
+engine.
+
+**Observability.** `nativeVideoItemCreated` / `nativeVideoItemReleased` are
+counted separately so a leaked player is a visible difference rather than an
+inference, and `queuedItemCount` reports what `AVPlayerLooper` actually queues
+rather than claiming a single item. Decode and present counts inside
+AVFoundation are not observable and are not invented.
+
+**The tests do not open a window, and that was a correction.** The first version
+of `NativeVideoWallpaperHostTests` let an accepted wallpaper build a real
+`NativeVideoWallpaperWindow` and call `orderFrontRegardless()`. That is a
+desktop-level window on the user's screen from an automated run, which this
+project's rules do not permit without explicit authorization, and no existing
+suite does it — the web wallpaper tests never construct their window either. The
+host now takes a `NativeVideoSurface` factory; the real implementation is the
+window plus the platform player, and the tests inject a fake. The controller
+rules — refusal handed back once, surfaces opened and stopped, suspension
+independent of the user's pause — are all checked through that boundary.
+
+**Not verified.** No frame has ever been displayed by this backend. Readiness,
+playback-time advance and actual on-screen presentation are three different
+things and none of them has been observed. `NativeVideoWallpaperWindow` and
+`NativeVideoPlayer` themselves have no automated coverage at all: nothing
+exercises `AVQueuePlayer`, `AVPlayerLooper`, `AVPlayerLayer`, the real
+`nominalFrameRate` probe or the poster generator. All of that needs the
+authorized desktop run.
+
+---
+
+## Round 2 — status by task ID
+
+Blank means the field is not claimed. Nothing in the last three columns is
+claimed anywhere in this document.
+
+| ID | implementation | automated verification | runtime verification | visual | power |
+|---|---|---|---|---|---|
+| M00 renderer counters | done | `timer_tests`, `video_frame_pacing_test`, `renderer_counters` (bridge), `RuntimeDiagnosticsReportTests` | — | — | — |
+| M00 diagnostic session | done | `RuntimeDiagnosticsReportTests` | — | — | — |
+| P02 pacing evidence | done | `video_frame_pacing_test` | — | — | — |
+| P02 playback speed | done | `video_frame_pacing_test` (resolution function) | — | — | — |
+| P02 suspension boundary | done | `timer_tests` (counter-example) | — | — | — |
+| P02 A/B switch | done | `video_frame_pacing_test` | — | — | — |
+| P01 / W02 / E01 | unchanged from round 1 | unchanged | — | — | — |
+
+"runtime verification" means the shipped application ran and its counters were
+read. That did not happen: it needs an authorized desktop session. Everything in
+the second column ran in this environment.
+
+## Round 2 — commands actually run
+
+| Command | Result |
+|---|---|
+| `python3 scripts/test.py` | Pass, 314 tests, 0 failed (310 before this round) |
+| `python3 scripts/check_renderer.py` | Pass, exit 0; 10 generated cases `pixels_equal=true`, 0 diagnostics; every test binary exit 0 |
+| `cargo test --release --workspace` (`CARGO_TARGET_DIR` unset) | Pass; 241 `wallpaper-bridge` cases, every other crate green |
+| `python3 scripts/build.py --renderer-only` | Pass; bindings regenerated with `rendererCounters` and `setRendererCountersEnabled` |
+| `python3 scripts/build.py --configuration Release` | **BUILD SUCCEEDED**; app and embedded extension at `build/Build/Products/Release/MacWallpaperEngine.app` |
+| `tests/timer_tests` | Pass, 18 cases (11 pre-existing, 7 new) |
+| `tests/video_frame_pacing_test` | Pass, 21 cases (all new) |
+| `tests/playback_gpu_test` | Pass, 32 cases |
+| `tests/video_decode_pump_test` | Pass, 13 cases |
+| `tests/video_color_conversion_test` | Pass, 9 cases |
+
+Counter-example check, run explicitly rather than asserted: with
+`FrameTimer::SuspensionThreshold` temporarily reduced to the old fixed floor and
+`timer_tests` rebuilt, `AContentWaitAtTheClampIsNotMistakenForASuspension` and
+`TheSuspensionThresholdFollowsTheIntervalAndNeverDropsBelowTheFloor` fail; with
+the real implementation restored, all 18 pass. The temporary edit was reverted
+and the file re-verified before the suites above were run.
+
+Not exercised, and therefore a skip rather than a pass: the local wallpaper
+corpus, `scripts/test.py --ui`, and every desktop, visual or power measurement.
+
+---
+
+## Round 2 — M00's renderer-side counters
+
+Round 1 recorded that the renderer half of M00 was not built and that P01, W02
+and P02 could not be accepted without it. That is what this round built.
+
+**implementation.** Counting lives where the work happens:
+
+- `src/Core/RendererCounters.h` — the counter list as a C enum, included by the
+  bindgen-visible `SceneWallpaperBindings.h`, so the names have one definition
+  rather than one per language.
+- `src/Core/RendererCounters.hpp` — an array of relaxed atomics behind one
+  process-wide enable flag, default off. No thread, no timer, no output stream;
+  reading is a pull.
+- `FrameTimer` — counts a tick, the draw it posted, and separately a tick that
+  posted nothing because a draw was still in flight, plus the interval and the
+  content period it resolved.
+- `SceneWallpaper`'s DRAW handler — draws executed, draws dropped because
+  rendering was blocked, simulation ticks, render failures, and the effective
+  pause reasons as independent bits recomputed on every transition that can
+  change one.
+- `VulkanRender` — queue submissions, present requests and frame-fence
+  completions, on both the swapchain and the offscreen path.
+- `TextureCache::UpdateVideoFrame` — the decoder's outputs and seeks, and the
+  selected / reused / skipped accounting derived from the displayed generation
+  sequence; conversions and imports mirrored from the stats it already kept.
+- `FfmpegVideoTextureSource` — its own decoded-frame and seek totals, and the
+  pacing evidence, reported through the new `VideoTextureSource::sourceStats`.
+
+**Source work and surface work are separate.** `OWE_RC_TIMER_WAKEUPS` through
+`OWE_RC_SIMULATION_TICKS` are work one surface performs alone and must stop when
+nobody can see it. `OWE_RC_VIDEO_*` describe the decoded source, which may
+legitimately keep running for another consumer. The Swift report prints them as
+two labelled rows per surface, and
+`RuntimeDiagnosticsReportTests.testSurfaceExclusiveWorkIsReportedApartFromSharedSourceWork`
+asserts that a hidden surface's row does not carry decode counts.
+
+**Exposure.** `owe_scene_wallpaper_counters` and `owe_renderer_shared_counters`
+over the C ABI; `wallpaper_core::render::RendererSurfaceCounters` and
+`WallpaperEngine::renderer_counters` with an actor message that performs no
+snapshot update and no renderer mutation; the uniffi
+`renderer_counters()` returning `BridgeRendererCountersReport` with named fields
+only — no caller outside the renderer handles a raw index; and
+`RuntimeDiagnosticsSession`, which opens both counter surfaces for a bounded
+window and produces one aggregated report.
+
+**Cost of the switch itself.** Enabling is a single relaxed atomic store; each
+counted event is one relaxed load plus, when on, one relaxed add on a path that
+already submits a command buffer or decodes a frame. Nothing polls. The
+application only opens a session when `MAC_WALLPAPER_ENGINE_DIAGNOSTICS=<seconds>`
+is set, the in-process session expires on its own, and the renderer side is
+turned off again when it does. No per-frame JSON reaches Swift, and there is no
+screenshot, pixel readback or periodic disk write anywhere in the path.
+
+**What the counters can and cannot distinguish.** Covered by tests:
+
+- Requested then cancelled: a tick that found a draw in flight increments
+  `draw_ticks_suppressed`, not `draw_requests`
+  (`timer_tests.CountersRecordWhatTheProductionSchedulerDid`). A posted draw
+  that reached a blocked renderer increments `draws_dropped`, not
+  `draws_executed`.
+- Submitted but not yet complete: `render_submissions` is incremented at the
+  queue submit and `gpu_completions` only after the frame fence signals, so the
+  two differ while a frame is in flight.
+- The same video frame used again: `video_frames_reused`
+  (`video_frame_pacing_test.ANewGenerationIsSelectedAndARepeatIsReused`).
+- A hidden surface that does not present while a shared source still serves
+  another screen:
+  `renderer_counters.a_hidden_surface_stops_its_own_work_while_a_shared_source_keeps_serving_the_other`.
+
+**What is reported as unavailable.** `present_requests` counts requests. This
+backend is MoltenVK over a `CAMetalLayer` swapchain and has no
+presentation-feedback source, so the frames a compositor actually displayed are
+reported as `presented_frames=unavailable` and are never approximated by the
+request count. `a_request_to_present_is_never_reported_as_a_displayed_frame`
+and `testPresentRequestsAreNeverReportedAsDisplayedFrames` pin that.
+
+**Honest limit on the bridge-level tests.** The increments are in the renderer;
+the bridge tests drive a fake facade and therefore check the reporting contract
+— identity, separation, labelling — not the increments. The increments are
+covered by `timer_tests` against the real `FrameTimer` and `ThreadTimer`, and by
+`video_frame_pacing_test` against the real selection accounting. Whether the
+full chain rises and stops on a real desktop is unverified.
+
+---
+
+## Round 2 — P02 re-examination
+
+Three concerns were raised. One was falsified, two were confirmed as real
+defects and fixed, and a fourth defect was found while checking them.
+
+### Falsified: the `min` was taken over the wrong quantity
+
+It was not. `ProbeShortestFrameDurationSeconds` computed `period = 1.0 / fps`
+for each declared rate and took the smallest **period**, which is `1 / max(fps)`.
+`ShortestPeriodComesFromTheHighestDeclaredRate` pins it in both argument orders.
+The unit confusion does not exist and the concern is withdrawn.
+
+### Confirmed: metadata alone was not evidence
+
+source-confirmed: `frameDurationSeconds()` returned a value derived only from
+`avg_frame_rate` and `r_frame_rate`, and the frame clock paced on it as soon as
+the container was probed. `avg_frame_rate` is an average and `r_frame_rate` is
+libavformat's estimate; neither describes a particular gap. A clip whose average
+is 10 fps but which contains a 60 fps burst would have had five frames of that
+burst stepped over per tick.
+
+fixed-in-production: `Video/VideoFramePacing.{hpp,cpp}` adds a
+`VideoFramePacingEstimator` that the decoder feeds with real presentation
+timestamps. It reports **nothing** until it has `kMinimumSamples` usable gaps,
+so an unproven stream keeps the fixed cadence. The reported period is the
+smallest of the declared bound and every observed gap, and is monotonically
+non-increasing, so a burst seen once keeps the clock fast afterwards. Deltas
+across a loop seam or a seek are discarded because they describe the seam. A
+repeated, rewound or non-finite timestamp is not counted as evidence at all,
+which leaves the fixed cadence in place rather than pacing on a guess.
+
+counter-example coverage in `video_frame_pacing_test` (21 cases): the VFR burst,
+missing and invalid declared rates, a declared rate that bounds an over-optimistic
+observation, a non-zero start timestamp, 23.976 and 29.97 as exact rationals,
+duplicate and rewound timestamps, a non-finite timestamp, the loop seam, the seek
+discontinuity, reset between streams, and 0.5x / 1x / 2x playback.
+
+Bounded honestly: at most one frame can be missed at the first transition into a
+rate tighter than both the declared bound and everything observed so far. That is
+visible as `video_frames_skipped`, not hidden.
+
+### Confirmed: playback speed was ignored
+
+source-confirmed: `refreshFrameDemand` pushed the source's period straight to
+the frame clock. `m_speed` is a real production parameter — `CMD_SET_SPEED`
+forwards it to `SetVideoPlaybackRate`, and the DRAW handler advances scene time
+by `IdeaTime() * m_speed`. At 2x a 30 fps clip delivers a new frame every 16.7 ms
+of wall time, so pacing at 33.3 ms would have dropped every other frame.
+
+fixed-in-production: `ResolveContentPeriodSeconds(source_period, rate)` divides
+by the rate, and `refreshFrameDemand` now calls it and is re-run on
+`CMD_SET_SPEED`. A non-positive or non-finite rate reports unknown and falls back
+to the fixed cadence rather than inventing a period.
+
+Gap: the resolution function is unit-tested; `refreshFrameDemand` itself needs a
+loaded scene and is not covered by a headless test.
+
+### Confirmed: the 5 s constant collided with the pacing clamp
+
+source-confirmed: `ResolveInterval` clamped the content period to
+`MAX_FRAME_DURATION` (5 s), and `FrameBegin` treated `elapsed > MAX_FRAME_DURATION`
+as a suspension and replaced the elapsed time with one ideal frame. A scene paced
+at the clamp therefore had every ordinary frame boundary misread as a resume, and
+since that elapsed time is what advances the video clock, playback fell behind by
+the difference on every frame — the "plays slower and slower" failure.
+
+fixed-in-production: `FrameTimer::SuspensionThreshold()` is
+`max(5 s, tick_interval × 3)`. An unpaced clock keeps the old floor exactly; a
+paced clock gets a threshold proportional to the interval it is actually using.
+
+counter-example: `AContentWaitAtTheClampIsNotMistakenForASuspension` and
+`TheSuspensionThresholdFollowsTheIntervalAndNeverDropsBelowTheFloor` fail against
+the old fixed floor and pass now; this was checked by temporarily restoring the
+old expression, rebuilding and running, then reverting. `ARealSuspensionIsStillDetectedAtAPacedInterval`
+keeps the other side: an eight-hour gap at a 5 s interval is still a resume, and
+the scene is not handed eight hours of simulation.
+
+Also covered now: several consecutive low-frequency updates keep reporting real
+elapsed time rather than compressing it, and stopping with a draw pending does
+not replay the stopped time or inherit a draw that will never complete.
+
+### Withdrawn: "the failure mode is only that it does not save power"
+
+Round 1 wrote that. It was wrong, and it is removed. Two of the three defects
+above are frame loss or clock drift, not a missed saving. The acceptance signal
+is no longer "fewer renders": `video_frames_selected`, `video_frames_reused`,
+`video_frames_skipped` and `video_selected_generation` distinguish a frame
+dropped by the configured FPS ceiling from one dropped by late decoding and from
+one the pacing decision stepped over. A gap between two displayed generations is
+exactly the number of decoded frames that never reached the screen.
+
+### Not attempted, deliberately
+
+The video presentation backend was not rewritten, and the static-scene classifier
+was not built. `Unknown` stays conservative.
+
+---
+
+## Round 2 — phase C admission
+
+| Task | Admission | Blocker |
+|---|---|---|
+| P02 static-scene classification | **blocked** | Needs a runtime-verified counter trail first: a wrong verdict freezes a live wallpaper, and `video_frames_skipped` plus `simulation_ticks` only bound it once they have been read from a real session |
+| R01 render resolution split | **open, safe to develop** | Independent of measurement; `OutputExtent` / `SceneExtent` / `RasterExtent` is a correctness and plumbing change, and the quality tiers it exposes are user-selected rather than defaulted |
+| D01 shared decode sessions | **open, safe to develop** | The counters now name `source_id` separately from `surface_id`, which is the identity a session would key on; correctness (independent pause, independent visibility) is testable headlessly. Any default-on sharing waits for measurement |
+| R03 frame-graph work | **opt-in prototype only** | Static subgraph caching must ship behind a switch with a full time-series equivalence check, not a single still frame |
+| A01 real-time audio path | **open, safe to develop** | SPSC ring, worker-thread FFT and anti-aliasing are correctness and latency work with their own tests; the saving claim waits for measurement |
+| New native Metal backend | **prototype only, never default** | Requires the paired power measurement and the presentation-feedback question answered; this backend cannot currently report displayed frames at all |
+
+Nothing above is blocked on power measurement for *development*. What power
+measurement gates is which of them may become the **default**.
+
+---
+
+## Round 1 — status by task ID
 
 | ID | Phase | Status | Power evidence |
 |---|---|---|---|
@@ -65,7 +633,7 @@ document.** Counters and unit tests bound what is claimed.
 | E01 | B | Implemented | unmeasured |
 | P02 | B | First version implemented (content-rate pacing) | unmeasured |
 
-## Commands actually run
+## Round 1 — commands actually run
 
 | Command | Result |
 |---|---|
@@ -574,23 +1142,59 @@ Two findings shaped the scope, and both are worth keeping:
 
 ## Next actionable task
 
-Every task ID in this round's scope is implemented. What remains is verification
-that this environment cannot provide, and it should come before any further
-optimisation:
+Everything reachable without a real desktop has been done. What remains needs
+authorization, and each item below states exactly what would be run.
 
-1. **An authorized desktop run.** Drive window occlusion on two displays,
-   Spaces, lock/unlock, display sleep and hot-plug, with a
-   `RuntimeCounters` session open, and confirm that a hidden surface's counters
-   stop rising while a visible one's keep going. This is what turns P01, W02 and
-   E01 from "the decision is correct" into "the work actually stopped".
-2. **A paired power measurement** against a manifest from
-   `scripts/power_benchmark.py`, following
-   [testing/power-benchmark.md](testing/power-benchmark.md): equal content,
-   equal output geometry, equal real presented frame rate, observing the
-   application, `WebContent`, the extension and `WindowServer`. Until then no
-   task in this document may claim a saving.
-3. **P02's second version**, only once 1 and 2 exist to measure it: the
-   conservative static classifier described above, and the renderer-side
-   counters that M00 left unbuilt (`render_requested`, `render_submitted`,
-   `presented`, `duplicate_content_presented`) so a static verdict can be
-   falsified rather than trusted.
+### 1. Authorized desktop run with a counter session
+
+Launch the Release build with `MAC_WALLPAPER_ENGINE_DIAGNOSTICS=120` and an
+isolated `MAC_WALLPAPER_ENGINE_HOME`, then exercise, in one session:
+
+- Two displays, a window fully covering one wallpaper, then uncovering it.
+- Both displays covered, then a Space switch, then display sleep and wake.
+- Lock and unlock; a system preview opened and closed.
+- A wallpaper switch on one display and a hot-plug.
+
+The three claims to check against the report:
+
+- **A.** With one display hidden, its `surface=` row stops rising —
+  `render_submissions`, `present_requests`, `gpu_completions`, `draws_executed`
+  — while the other display's keeps rising, and `reasons=` names
+  `clockStopped` on the hidden one only.
+- **B.** A web wallpaper that implements no Wallpaper Engine pause callback
+  actually stops. This needs more than `webDetached`: the page must be off the
+  window tree rather than merely hidden, and `requestAnimationFrame`,
+  `setInterval`, CSS animation, WebGL, a Worker and media each have to be
+  checked separately, on resume as well as on suspend. The probe itself must not
+  wake the page it is measuring, resume must not clear a pause the user chose,
+  and a failing page must not turn recovery into a reload loop.
+- **C.** With a 24/30 fps clip on a 60 Hz display, `draw_requests` falls toward
+  the content rate while `video_frames_skipped` stays at zero,
+  `video_frames_selected` tracks `video_decode_outputs`, and the playback
+  timeline is unchanged. Repeat at 0.5x and 2x. Then repeat the whole run with
+  `MAC_WALLPAPER_ENGINE_DISABLE_CONTENT_PACING=1` for the A/B pair.
+
+Environment to record before starting, not assumed from an earlier session: the
+chip, the attached displays with their pixel geometry and refresh rate, the
+macOS build, and the charging and thermal state. `scripts/power_benchmark.py`
+writes exactly that.
+
+Requires: desktop control, wallpaper changes, lock/unlock and display sleep.
+None of it is authorized yet.
+
+### 2. Paired power measurement
+
+Following [testing/power-benchmark.md](testing/power-benchmark.md): equal
+content, equal output geometry, equal real presented frame rate, observing the
+application, `WebContent`, the extension and `WindowServer` — not the main
+process alone. Two builds, if compared, need separate build directories and
+isolated application data, measured serially. Until raw samples exist, only work
+counts may be reported, never watts or a percentage.
+
+Requires: `powermetrics` or an equivalent, which needs elevation.
+
+### 3. Phase C, in the admission order recorded above
+
+R01, D01 and the A01 real-time path can be developed now. R03's static subgraph
+cache and any new backend stay opt-in. P02's static-scene classifier stays
+blocked until 1 has produced a counter trail that can falsify a static verdict.

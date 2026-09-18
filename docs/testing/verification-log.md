@@ -11,6 +11,42 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-18 — Trimmed vendored upstream tree
+
+Removed files under `upstream/renderer` that no build path, script or doc
+uses: upstream READMEs and screenshots, GitHub workflows, the Nix dev shell,
+stale `.gitmodules`, the Linux `waywallen` host, the Qt `qml_helper`, the
+`standalone_view` viewer, and the miniaudio/spirv_reflect extras, examples,
+tests and vendored googletest. Their `BUILD_WAYWALLEN`/`BUILD_QML` CMake
+options, presets and the matching `-D` flags in `crates/core/build.rs` and
+`scripts/check_renderer.py` were dropped. All license files stay; `wpdoc/`
+and the scene-engine `tests/` stay. Recorded in `upstream/provenance.json`.
+Rebased onto the native-video and per-display suspension commits below;
+results are from the rebased tree.
+
+- `python3 scripts/build.py --configuration Release`: BUILD SUCCEEDED
+  (renderer, regenerated bindings, app). `xcodegen generate` reordered one
+  line of the committed project file; committed as generated.
+- `python3 scripts/test.py`: Python suites and XcodeGen passed; native suite
+  **335 passed**, 0 failed, 0 skipped.
+- `python3 scripts/check_renderer.py`: shader crate and CMake configure/build
+  succeeded on the trimmed tree (the only configure warning is spirv_reflect's
+  pre-existing `cmake_minimum_required` deprecation). All compiled test
+  binaries passed: `playback_gpu_test` 34, `timer_tests` 20,
+  `video_frame_pacing_test` 21, `video_decode_pump_test` 13,
+  `video_conversion_budget_test` 11, `video_source_input_test` 11,
+  `video_color_conversion_test` 9, `render_target_lifetime_test` 4,
+  `shader_cache_metadata_test` 1, `text_object_runtime_test` 60 with the 2
+  opt-in corpus cases skipped. The ten generated GPU cases and the reload
+  cycles **did not run**: the shared
+  `~/Library/Application Support/mac-wallpaper-engine/SceneAssets` directory is
+  absent on this machine (the app data went with the earlier uninstall), so
+  every probe exited 1 at asset mount. Environmental, not a renderer result;
+  re-run once the app has restored its shared assets.
+- Before the rebase, on the pre-merge tree: `cargo test --release -p
+  wallpaper-core --lib` **197 passed**, `-p wallpaper-bridge --lib` **224
+  passed**; not repeated after the rebase.
+
 ## 2026-09-18 — Phase C first batch: P02 closeout, R02, I01 and an opt-in V04
 
 Third round, on the same uncommitted tree as round 2 (`6bfaa1d84` plus that

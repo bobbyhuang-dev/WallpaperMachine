@@ -265,7 +265,7 @@ def main():
         # rust-toolchain.toml from the working directory, not --manifest-path.
         steps = [
             (["cargo", "build", "-p", "shader", "--features", "ffi", "--release"], "shader-build", RENDERER),
-            (["cmake", "-S", RENDERER / "external/open-wallpaper-engine", "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTS=ON", "-DBUILD_QML=OFF", "-DBUILD_WAYWALLEN=OFF", "-DRUST_SHADER_FFI=ON", "-DRUST_SHADER_STATICLIB=" + str(RENDERER / "target/release/libshader.a")], "configure", ROOT),
+            (["cmake", "-S", RENDERER / "external/open-wallpaper-engine", "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTS=ON", "-DRUST_SHADER_FFI=ON", "-DRUST_SHADER_STATICLIB=" + str(RENDERER / "target/release/libshader.a")], "configure", ROOT),
             (["cmake", "--build", build, "--target", "offscreen_scene_probe", "scene_reload_cycle_probe", "render_target_lifetime_test", "text_object_runtime_test", "shader_cache_metadata_test", "video_decode_pump_test", "video_color_conversion_test", "video_frame_pacing_test", "video_conversion_budget_test", "video_source_input_test", "timer_tests", "playback_gpu_test", "-j", "6"], "build", ROOT),
         ]
         for command, name, cwd in steps:

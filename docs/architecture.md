@@ -153,8 +153,8 @@ three members:
 
 `crates/core/build.rs` drives the C++ layer: it runs `bindgen` over
 `upstream/renderer/external/open-wallpaper-engine/src/Platform/Apple/SceneWallpaperBindings.h`,
-then CMake-builds the `wescene-renderer` target of Open Wallpaper Engine with `BUILD_TESTING`,
-`BUILD_TESTS`, `BUILD_WAYWALLEN` and `BUILD_QML` off and `RUST_SHADER_FFI` on, and emits the
+then CMake-builds the `wescene-renderer` target of Open Wallpaper Engine with `BUILD_TESTING`
+and `BUILD_TESTS` off and `RUST_SHADER_FFI` on, and emits the
 static link flags. Open Wallpaper Engine stays a statically linked renderer backend: its Rust
 wrapper module (`core/src/owe/`) must not own scene registries or display maps.
 

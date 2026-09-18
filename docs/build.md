@@ -54,7 +54,7 @@ command produces the same build from a terminal, an editor, or CI.
 | `SDKROOT` | `xcrun --sdk macosx --show-sdk-path` | Pins C/C++/Rust compilation to the selected macOS SDK. |
 | `CC` / `CXX` | `/usr/bin/clang`, `/usr/bin/clang++` | Apple Clang, not a Homebrew LLVM that happens to be first on `PATH`. |
 | `MACOSX_DEPLOYMENT_TARGET` | `26.0` | Keeps renderer objects compatible with the Xcode targets. |
-| `GIT_SHORT_COMMIT` | `git rev-parse --short HEAD` in the repository root | Stamps the build with the revision it was built from; Settings shows it as `Git revision`. `upstream/renderer` has its own checkout pinned to the vendored revision, so HEAD is resolved against the root explicitly rather than by working directory. |
+| `GIT_SHORT_COMMIT` | `git rev-parse --short HEAD` in the repository root | Stamps the build with the revision it was built from; Settings shows it as `Git revision`. The renderer build runs with `upstream/renderer` as its working directory, so HEAD is resolved against the repository root explicitly. |
 
 ## Stages and outputs
 

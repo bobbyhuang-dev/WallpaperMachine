@@ -71,39 +71,5 @@ if(BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-set(_wescene_build_waywallen_default ${_wescene_is_top_level})
-if(APPLE OR NOT _wescene_is_top_level)
-    set(_wescene_build_waywallen_default OFF)
-endif()
-option(BUILD_WAYWALLEN "Build the waywallen-renderer executable" ${_wescene_build_waywallen_default})
-if(BUILD_WAYWALLEN)
-    add_subdirectory(waywallen)
-endif()
-
-set(_wescene_build_qml_default OFF)
-option(BUILD_QML "Build the QML helper library" ${_wescene_build_qml_default})
-if(BUILD_QML)
-    find_package(Qt6 COMPONENTS Gui Quick Qml REQUIRED)
-
-    set(CMAKE_AUTOMOC ON) 
-    set(CMAKE_AUTORCC ON) 
-    set(CMAKE_AUTOUIC ON)
-
-    add_library(${PROJECT_NAME}-qml
-    STATIC
-        qml_helper/SceneBackend.cpp
-        qml_helper/glExtra.cpp
-    )
-    target_link_libraries(${PROJECT_NAME}-qml
-    PUBLIC
-        Qt::Quick
-        Qt::Gui
-        glad
-        ${PROJECT_NAME}
-    )
-    target_include_directories(${PROJECT_NAME}-qml PUBLIC qml_helper third_party)
-
-    set(CMAKE_AUTOMOC OFF) 
-    set(CMAKE_AUTORCC OFF) 
-    set(CMAKE_AUTOUIC OFF) 
-endif()
+# The waywallen host, QML helper and standalone viewer were removed from this
+# vendored copy (macOS app embeds the library directly); see upstream/provenance.json.

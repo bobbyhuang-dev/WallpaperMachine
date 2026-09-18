@@ -44,7 +44,8 @@ scripts/                           developer command line; Python only
   tests/                           unit tests for the scripts, run by scripts/test.py
 upstream/                          vendored third-party code only
   provenance.json                  repositories, pinned revisions, modification status
-  renderer/                        Rust workspace (crates/), C++ scene engine (external/), cargo target/
+  renderer/                        Rust workspace (crates/), C++ scene engine (external/), cargo target/;
+                                   trimmed to what the build and renderer checks use
 artifacts/                         Git-ignored: all test and verification evidence
 build/                             Git-ignored: Xcode derived data and built products only
 .agents/                           agent skills and agent-tooling notes

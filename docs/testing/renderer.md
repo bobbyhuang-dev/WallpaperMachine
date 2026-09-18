@@ -20,8 +20,8 @@ It assembles the Homebrew environment from `scripts/build.py`, then:
    `--manifest-path`; running it from the repository root picks the default
    stable toolchain instead,
 2. configures CMake over `upstream/renderer/external/open-wallpaper-engine` with
-   `CMAKE_BUILD_TYPE=Release`, `BUILD_TESTS=ON`, `BUILD_QML=OFF`,
-   `BUILD_WAYWALLEN=OFF`, `RUST_SHADER_FFI=ON`, and `RUST_SHADER_STATICLIB`
+   `CMAKE_BUILD_TYPE=Release`, `BUILD_TESTS=ON`, `RUST_SHADER_FFI=ON`, and
+   `RUST_SHADER_STATICLIB`
    pointing at `upstream/renderer/target/release/libshader.a`,
 3. builds `offscreen_scene_probe`, `scene_reload_cycle_probe`,
    `render_target_lifetime_test`, `text_object_runtime_test` and

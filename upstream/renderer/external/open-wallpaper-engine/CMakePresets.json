@@ -1,6 +1,10 @@
 {
   "version": 6,
-  "cmakeMinimumRequired": { "major": 3, "minor": 23, "patch": 0 },
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 23,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "_clang-base",
@@ -43,50 +47,54 @@
       }
     },
     {
-      "name": "clang-release-qml",
-      "displayName": "Clang · Release + Qt6 QML viewer",
-      "inherits": "clang-release",
-      "cacheVariables": {
-        "BUILD_QML": "ON"
-      }
-    },
-    {
       "name": "clang-release-renderdoc",
       "displayName": "Clang · Release + RenderDoc hooks",
       "inherits": "clang-release",
       "cacheVariables": {
         "ENABLE_RENDERDOC": "ON"
       }
-    },
-    {
-      "name": "clang-release-no-host",
-      "displayName": "Clang · Release without waywallen-renderer host",
-      "inherits": "clang-release",
-      "cacheVariables": {
-        "BUILD_WAYWALLEN_HOST": "OFF"
-      }
     }
   ],
   "buildPresets": [
-    { "name": "clang-debug",            "configurePreset": "clang-debug" },
-    { "name": "clang-release",          "configurePreset": "clang-release" },
-    { "name": "clang-relwithdebinfo",   "configurePreset": "clang-relwithdebinfo" },
-    { "name": "clang-release-qml",      "configurePreset": "clang-release-qml" },
-    { "name": "clang-release-renderdoc","configurePreset": "clang-release-renderdoc" },
-    { "name": "clang-release-no-host",  "configurePreset": "clang-release-no-host" }
+    {
+      "name": "clang-debug",
+      "configurePreset": "clang-debug"
+    },
+    {
+      "name": "clang-release",
+      "configurePreset": "clang-release"
+    },
+    {
+      "name": "clang-relwithdebinfo",
+      "configurePreset": "clang-relwithdebinfo"
+    },
+    {
+      "name": "clang-release-renderdoc",
+      "configurePreset": "clang-release-renderdoc"
+    }
   ],
   "testPresets": [
     {
       "name": "clang-debug",
       "configurePreset": "clang-debug",
-      "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
     },
     {
       "name": "clang-release",
       "configurePreset": "clang-release",
-      "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
     }
   ]
 }

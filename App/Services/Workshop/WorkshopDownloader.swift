@@ -73,7 +73,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             sessionWarning = nil
             errorMessage = nil
         } catch {
-            errorMessage = String(localized: "Could not forget the saved Steam sign-in: \(error.localizedDescription)")
+            errorMessage = String(localized: "Could not log out of Steam: \(error.localizedDescription)")
         }
     }
 

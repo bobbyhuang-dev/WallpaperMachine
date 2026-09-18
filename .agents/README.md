@@ -12,7 +12,9 @@ themselves live in [`../AGENTS.md`](../AGENTS.md); human contributors start at
 | `.agents/skills/sources.json` | yes | Upstream commit pinned for each vendored skill |
 | `.agents/skills/<name>/` | no | Vendored third-party skill text, restored locally |
 | `.pi/settings.json` | no | Local harness settings (skill discovery overrides) |
-| `.omp/` | no | Local harness scratch state |
+| `.claude/skills/<name>` | no | Claude Code discovery: symlink to `.agents/skills/<name>` |
+| `.omp/rules/` | yes | Always-apply harness rules, e.g. release-build-on-feature |
+| `.omp/` | no | Other local harness scratch state |
 
 `AGENTS.md` stays at the repository root: the vendored skill entry points link to
 it as `../../../AGENTS.md`, and that is where agent harnesses look for it. Moving
@@ -44,6 +46,22 @@ Git-ignored so no third-party skill text ships in this repository. To restore a
 working checkout, for each entry in `sources.json` check out `sourcePath` from
 the pinned `commit` into `.agents/skills/<name>/`, then reapply the local
 adaptations below. Preserve the upstream `LICENSE` and `NOTICE` files.
+
+Claude Code discovers project skills under `.claude/skills/<name>/SKILL.md`, so
+after restoring, link each vendored directory there and leave the links
+untracked (`.claude/skills/` is Git-ignored):
+
+```sh
+mkdir -p .claude/skills
+for name in impeccable swiftui-webkit webkit-integration; do
+  ln -sfn "../../.agents/skills/$name" ".claude/skills/$name"
+done
+```
+
+The directory links keep the skills' relative `reference/` paths and the
+`.agents/skills/impeccable/scripts/impeccable` launcher path valid. Restoring
+does not run the launcher; its first `impeccable context` run downloads the
+engine binary and stays subject to the project's authorization rules.
 
 Local adaptations, which must survive every upstream update:
 

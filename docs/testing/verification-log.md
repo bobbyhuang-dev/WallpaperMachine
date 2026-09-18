@@ -11,6 +11,35 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-18 — Remove the password guide card from the Steam sign-in dialog
+
+`WebUI/panel.js`: `signInGuide` no longer returns a guide for a secure
+password prompt, so the dialog shows identity → labelled field → actions →
+footer note only. Steam Guard stages keep their guide cards.
+
+- `python3 scripts/test.py` — Passed, 455 passed, 0 failed, 9 skipped of 464.
+  `ControlPanelLayoutTests` now asserts the password prompt renders no
+  `.dialog-guide` instead of pinning the removed steps/icon.
+- `python3 scripts/build.py --swift-only --configuration Release` — BUILD
+  SUCCEEDED; bundled `panel.js` byte-identical to `WebUI/panel.js`.
+- Not run: desktop/visual check of the live dialog.
+
+## 2026-09-18 — Post-pull integration build (origin/main dd01e58 + local panel work)
+
+Pulled three upstream commits (quality settings, native video admission,
+static subgraph reuse / web audio) onto the uncommitted control-panel work;
+only `verification-log.md` conflicted (additive, both entries kept).
+
+- `python3 scripts/test.py` on the stale tree failed at link time: the local
+  renderer library predated the new bridge symbols
+  (`submit_system_media_event`, `web_audio_spectrum`). Not a source failure.
+- `python3 scripts/build.py --configuration Release` — BUILD SUCCEEDED
+  (renderer + bindings regenerated).
+- `python3 scripts/test.py` after the rebuild — Passed, 455 passed,
+  0 failed, 9 skipped of 464.
+- Bundled `Contents/Resources/WebUI/` is byte-identical to `WebUI/`.
+- Not run: `check_renderer.py` (no local renderer edits), desktop/UI checks.
+
 ## 2026-09-18 — Round 6: scene optimisation, web audio/media, file properties
 
 Feature delivery round. Commands run:
@@ -196,6 +225,218 @@ displayed by the native backend, no screenshot or capture was taken, no
 wallpaper or appearance setting was changed, `--ui` was not run, and no power
 measurement exists. The minimum authorized-session checklist is in
 [../mac-wallpaper-engine-implementation-progress.md](../mac-wallpaper-engine-implementation-progress.md).
+## 2026-09-18 — Shared-resources consent stage: two choices instead of caveats
+
+The resources stage of the download dialog in `WebUI/panel.js` / `panel.css`
+(`resourcesStep()`, new `choiceButton()`, `.dialog-choice*` rules) replaced a
+paragraph, a three-clause warning notice, a three-button row and a footnote
+(~75 words) with one lead sentence and two full-width choice buttons
+(**Download from Steam** / **Use an existing installation**, ~45 words), each
+carrying the fact that decides it; **Not now** sits alone at the bottom right.
+Title is now "Shared resources needed". The `sceneAssetsWarning` notice and
+the already-installed status still render above the choices. The "no Windows
+program is ever run" reassurance left this dialog; Settings keeps it.
+
+- Rendered `WebUI/` in the harness's headless Chromium at 424px dialog width
+  with a fake `webkit.messageHandlers.native` and a synthetic
+  `downloadRequests` snapshot: dark default, and light with
+  `sceneAssetsReady` + `sceneAssetsWarning`. Focus lands on the first choice;
+  clicking the choices posts `locateAssets` and `continueDownload` as before.
+- `impeccable detect --json WebUI/panel.js WebUI/panel.css`: no findings.
+- `python3 scripts/test.py`: Python → XcodeGen → native unit/integration,
+  336 tests passed, 0 failed, 0 skipped.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED; bundled `panel.js` / `panel.css` byte-identical to sources.
+- Not rendered in the app's own WKWebView or on the desktop.
+
+## 2026-09-18 — Steam sign-in account stage: guide card removed
+
+The account stage of the "Sign in to Steam" dialog dropped its guide card (the
+"Use the Steam account that owns Wallpaper Engine" title and the mock of Steam's
+**Sign in with account name** field) because it only restated the **Steam
+account name** field directly below it. `accountStep()` in `WebUI/panel.js` now
+renders the field, the keep-signed-in checkbox, the saved-account note, the
+actions and the password/Steam Guard note; the `.dialog-demo` / `.demo-*` rules
+left `WebUI/panel.css`. The password and Steam Guard guide cards are unchanged.
+
+- `node --check WebUI/panel.js`: ok.
+- `python3 scripts/test.py`: Python → XcodeGen → native unit/integration,
+  336 tests passed, 0 failed, 0 skipped.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED; the bundled `Contents/Resources/WebUI/panel.js` and `panel.css`
+  are byte-identical to the sources (`cmp`), so the app no longer carries the
+  `.dialog-demo` markup.
+- Not rendered on the desktop; the dialog was not viewed in the app's window.
+
+## 2026-09-18 — Steam sign-in account stage: centred step numbers, demonstration instead of prose
+
+Two fixes to the "Sign in to Steam" dialog in `WebUI/panel.js` / `panel.css`.
+The step counters sat high because `* { box-sizing: border-box }` never
+matches `::before`: the circle was a 20px content-box with a 16px line box
+pinned to its top. `.dialog-steps li::before` now sets `box-sizing: border-box`
+itself. The account stage dropped its three explanatory steps and the
+three-line footnote for a mock of Steam's own **Sign in with account name**
+field (`.dialog-demo` / `.demo-screen`), one line ruling out email and profile
+names, the field relabelled **Steam account name**, and a one-line note that
+the password and Steam Guard come next and are never saved.
+
+- Root cause measured inside an offscreen `WKWebView` through a throwaway
+  `ControlPanelLayoutTests` probe (removed afterwards): with the pseudo's
+  computed styles copied onto a real span, the digit's ink centre sat 0.87px
+  above the circle centre and the box was 20px tall; with `border-box` the box
+  is 18px and the offset is +0.13px.
+- The new account stage and a two-step password card were rendered against the
+  real `panel.css` in headless Chromium in light and dark themes (424px dialog);
+  the digits sit centred and the demo block, field, checkbox, actions and note
+  fit without overflow. Not rendered in the app's own `WKWebView`.
+- `.agents/skills/impeccable/scripts/impeccable detect --json WebUI/panel.js WebUI/panel.css`: no findings.
+- `python3 scripts/test.py`: Python → XcodeGen → native unit/integration,
+  336 tests passed, 0 failed, 0 skipped.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED; the bundled `Contents/Resources/WebUI/panel.js` contains the new
+  `.demo-screen` markup. Not run inside the app's window, so the dialog was
+  not viewed on the desktop.
+
+## 2026-09-18 — Settings "Steam account · Log out…" replaces "Forget account…"
+
+Reframed the saved-session control in Settings → Library & Steam: the row is now
+always present as **Steam account**, reading "Signed in as <name>" with a
+destructive **Log out…** button, "Not signed in" otherwise, and noting that
+log-out waits for downloads to finish while one runs. The WebUI action was
+renamed `forgetAccount` → `logOutSteam` (the dead `panel.js` case was removed),
+the native confirm and service error strings were localized (`en`, `zh-Hans`)
+under "Log out of Steam?" / "Could not log out of Steam: %@", and the privacy
+disclosure plus `docs/features/workshop-downloads.md` describe log-out as
+removing only this Mac's cache. Underlying `forgetSavedAccount()` and session
+removal are unchanged.
+
+- `python3 scripts/test.py`: Python → XcodeGen → native unit/integration,
+  336 tests passed, 0 failed, 0 skipped.
+- `Localizable.xcstrings` parsed as JSON with 527 keys and no duplicates.
+- WebUI: `renderSettings` was loaded in headless Chromium with a stub `send`
+  in three states — saved account, no account, saved account with a pending
+  download. Row text, the enabled/disabled `logOutSteam` button and the
+  disclosure wording were checked; clicking dispatched `["logOutSteam", {}]`.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED; `build/Build/Products/Release/MacWallpaperEngine.app` bundles the
+  updated `WebUI/settings.js` (`logOutSteam` present).
+- Not exercised: the native confirm sheet and a real SteamSession removal from
+  the running app (no desktop run requested); the service path is covered by
+  the existing `DownloaderTests` forget/opt-out cases.
+
+## 2026-09-18 — Vendored agent skills restored and wired into Claude Code
+
+Restored `impeccable`, `swiftui-webkit` and `webkit-integration` into
+`.agents/skills/<name>/` from the commits pinned in
+`.agents/skills/sources.json`, copied each upstream `LICENSE` (and Impeccable's
+`NOTICE.md`), and reapplied the local adaptations from `.agents/README.md`:
+every entry point opens with a project-rules block linking `../../../AGENTS.md`,
+`webkit-integration` lost its `allowed-tools` metadata and gained
+`disable-model-invocation: true` plus the `decidePolicy(for:preferences:)`
+API-disagreement note. Added `.claude/skills/<name>` directory symlinks so
+Claude Code discovers the vendored copies, ignored `.claude/skills/` in
+`.gitignore`, documented the wiring in `.agents/README.md`, and recreated the
+Git-ignored `.pi/settings.json` override. Docs/skill-only change: no app build
+or desktop test.
+
+- Checkout: each repository cloned and checked out at its pinned commit;
+  source paths matched `sources.json`.
+- Links: every `.claude/skills/<name>/SKILL.md` resolves through its symlink;
+  a script over all vendored `*.md` found 0 broken relative links; each skill
+  directory reaches `../../../AGENTS.md`.
+- Metadata: three unique `name` fields; only `webkit-integration` carries
+  `disable-model-invocation`; no `allowed-tools` key remains.
+- Not checked: the harness was not reloaded in this session, so automatic
+  routing exposing only `impeccable` and `swiftui-webkit` is unconfirmed until
+  the next Claude Code start. The Impeccable launcher was not run.
+
+## 2026-09-18 — Steam sign-in dialog explains each stage with icons and confirms the started download
+
+The sign-in dialog's one-line Steam Guard hint was replaced in
+`WebUI/panel.js` by a guide card per stage: a Lucide glyph (`smartphone`,
+`mail`, `lock`, `keyRound`, `userRound`, `logIn`, copied into `WebUI/icons.js`
+from the local lucide-react 1.45.0 cache), a title and numbered steps for the
+login name, the password, mobile approval, the authenticator code and the
+emailed code. The mobile-approval steps now say to answer **Steam Client**
+when the Steam app asks where the sign-in comes from. Once Steam accepts the
+sign-in the dialog switches to a "Signed in" card with the running job's
+status and progress, **Done** and **Show downloads**, and closes on its own
+after six seconds instead of vanishing the moment the prompt clears. Styles
+in `WebUI/panel.css` (`.dialog-guide`, `.dialog-steps`). Documented in
+`docs/features/workshop-downloads.md` and `docs/features/control-panel.md`.
+
+- `ControlPanelLayoutTests/testDiscoverTilesCarryDownloadRingsAndOnlySteamRequestsOpenTheDialogWithoutWindow`
+  now asserts that the password and mobile-approval stages render a glyph and
+  numbered steps, that mobile approval asks for nothing to type, that
+  finishing the sign-in keeps the dialog open at the started stage with
+  progress and the wallpaper's name, that later progress updates it rather
+  than closing it, and that **Done** closes it while the tile keeps reporting.
+- `python3 scripts/test.py`: Python 50 tests OK (1 + 24 + 4 + 10 + 11),
+  XcodeGen regenerated, native suite 336 passed, 0 failed, 0 skipped.
+- `python3 scripts/build.py --swift-only --configuration Release`: succeeded;
+  `build/Build/Products/Release/MacWallpaperEngine.app` carries the new dialog
+  copy (bundled `panel.js` contains the Steam Client step).
+- Headless preview (Chrome `--headless=new --screenshot` of a scratch page that
+  reuses the dialog functions from `panel.js` and the real `panel.css`) showed
+  bold words inside a step breaking into flex columns; each step's text is now
+  wrapped in a `<span>` (`.dialog-steps li > span`). Re-run after the fix:
+  `python3 scripts/test.py` native suite 336 passed, 0 failed; Release build
+  succeeded again. All eight stages rendered cleanly in dark and light.
+- Not checked: no live Steam sign-in was run, so the real SteamCMD handoff
+  timing and the Steam app's "Where are you trying to sign in?" screen were
+  not observed in this session; the copy follows the user's screenshot of it.
+  The in-app rendering inside the WKWebView panel was not inspected.
+
+## 2026-09-18 — Top bar drops the renderer-source link and adapts to narrow windows
+
+The top bar's "Renderer source" button duplicated the Settings → About
+"Scene renderer" link and was the widest control on the right, so it was
+removed from `WebUI/panel.js`. In `WebUI/panel.css` the bar's side tracks are
+now `minmax(max-content, 1fr)` instead of `minmax(0, 1fr)`, so the tabs and
+the display picker keep their width and nudge the brand off-center instead of
+running under it; at 840px and below only the name and version hide
+(`.app-title`) while the GitHub button stays, where previously the whole
+identity vanished at 1040px and below. Documented in
+`docs/features/control-panel.md`.
+
+- New `ControlPanelLayoutTests/testTopBarKeepsTheRepositoryLinkAndNeverOverlapsAtTheMinimumWindowWidth`
+  renders the bar at 760, 840, 900, 1040 and 1240px with a download in flight
+  and the 70px traffic-light inset, and asserts no two top-bar controls
+  overlap, none leaves the bar, the GitHub and downloads buttons stay, and the
+  name hides only at 840px and below. Its first draft waited on
+  `requestAnimationFrame`, which never fires in the offscreen web view and
+  timed out the sidebar run logged below; the wait was removed.
+- `python3 scripts/test.py`: Python suites and XcodeGen passed; native unit
+  tests ran 336 with 0 failures.
+- `node --check WebUI/panel.js` passed.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED; the bundled `panel.js` no longer contains the renderer link.
+- Not verified: the live look at each width (no desktop run requested).
+
+## 2026-09-18 — Filter sidebar toggle uses panel glyphs; rail is one labelled button
+
+The Discover filter sidebar's collapse control was a bare chevron that neither
+stood out nor explained itself. The heading button now renders Lucide's
+`panel-left-close` glyph (framed pane with an inward arrow, tooltip "Hide
+filters") with the normal bordered button look, and the collapsed strip became
+a single full-height `.filter-rail` button (36px, was 30px) showing
+`panel-left-open`, the active filter count and a vertical "Filters" label, so
+clicking anywhere on the rail expands it. Both glyphs were copied from the
+Lucide repository into `WebUI/icons.js`.
+
+- `python3 scripts/test.py`: Python suite and XcodeGen passed; native unit
+  tests ran 336 with 1 failure. The failure is
+  `ControlPanelLayoutTests/testTopBarKeepsTheRepositoryLinkAndNeverOverlapsAtTheMinimumWindowWidth`,
+  an uncommitted test from concurrent top-bar work that was already in the
+  working tree and does not touch the sidebar; it was left as found. The
+  sidebar test `testWorkshopFilterSidebarCollapsesPersistsAndInspectorGrowsWithWidth`
+  passed with its rail expectation updated to 36px.
+- `node --check WebUI/panel.js` passed; importing `icons.js` under Node
+  reports 24 glyphs.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED; the bundled `panel.css` matches the source tree.
+- Not verified: the live look of the new toggle and rail (no desktop run
+  requested).
 
 ## 2026-09-18 — Trimmed vendored upstream tree
 

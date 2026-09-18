@@ -188,8 +188,20 @@ owns Wallpaper Engine.
   sign-in. A submitted secret is cleared from the field immediately and is not
   retained by the panel. **Change account** cancels that job and hands the same
   intent back at the sign-in step.
-- Steam Guard prompts explain the method Steam asked for — mobile approval,
-  authenticator code or emailed code. Steam may still require another approval.
+- The account stage is just the **Steam account name** field, the keep-signed-in
+  checkbox and a note that the password and Steam Guard come next; there is no
+  guide card, because the field label already says what to type. A password
+  prompt is the same: identity, labelled field, actions and the footer note.
+  Steam Guard stages are guide cards: a glyph, a one-line title and numbered
+  steps for whichever method Steam asked for — mobile approval, authenticator
+  code or emailed code. The mobile-approval steps say to answer **Steam Client**
+  when the Steam app asks "Where are you trying to sign in?", because SteamCMD
+  signs in as the client. Steam may still require another approval.
+- When Steam accepts the sign-in the dialog does not vanish: it switches to a
+  "Signed in" card with the running job's status and progress (or notes that
+  shared resources download first), offers **Done** and **Show downloads**, and
+  closes by itself a few seconds later. The transfer is already running on the
+  tile and in the activity bar throughout.
 - Closing the popover or the sign-in dialog does not cancel work. Removing a
   waiting request prevents it from starting. Cancelling a running transfer
   lets the next queued job start after session cleanup. Quitting stops active
@@ -202,12 +214,16 @@ owns Wallpaper Engine.
 Scene wallpapers need shared shaders and materials from a purchased Wallpaper
 Engine installation; video wallpapers do not. Scene downloads request explicit
 consent before downloading missing shared resources, and one resource job is
-shared by all waiting scenes. Steam downloads the full Windows build into
-temporary storage — keep several gigabytes free — and only the shared resources
-are kept afterwards. No Windows program is ever run. A resource failure does not
-discard an already downloaded wallpaper; scene playback stays unavailable until
-its resources are installed. The resources can also be located on disk instead
-of downloaded.
+shared by all waiting scenes. The consent stage of the download dialog
+("Shared resources needed") is a choice between two full-width buttons, each
+carrying its title and the one fact that decides it: **Download from Steam**
+(needs a Steam account that owns Wallpaper Engine and several gigabytes free
+while downloading) and **Use an existing installation** (choose its folder,
+nothing downloads), with **Not now** beneath. Steam downloads the full Windows
+build into temporary storage — hence the space — and only the shared resources
+are kept afterwards. No Windows program is ever run; the Settings page still
+says so. A resource failure does not discard an already downloaded wallpaper;
+scene playback stays unavailable until its resources are installed.
 
 Scene support is experimental; [web wallpapers](web-wallpapers.md) run in a
 built-in web view; Windows application wallpapers are labeled unsupported.
@@ -236,10 +252,12 @@ download, including after an app restart, restores only that account's cache and
 pre-fills its login name. Cache directories are restricted to `0700` and files
 to `0600`. Submitted passwords and Steam Guard codes are sent only to the
 private terminal and are never saved. Downloaded content, runtime programs and
-logs are not retained in the sign-in cache. **Forget saved Steam sign-in**, or
-turning the option off, removes the local cache without signing other Steam
-devices out. Steam still controls expiry, renewal, revocation and any additional
-security checks, so indefinite authentication is not guaranteed.
+logs are not retained in the sign-in cache. Settings → **Library & Steam** shows
+the account as **Steam account · Signed in as <name>**; **Log out…** (confirmed
+natively, unavailable while downloads run) or turning the option off removes the
+local cache without signing other Steam devices out. Steam still controls
+expiry, renewal, revocation and any additional security checks, so indefinite
+authentication is not guaranteed.
 
 Authentication state is preserved even when an already-authenticated download
 fails or is cancelled, and a failed authentication does not replace a previously
@@ -251,7 +269,8 @@ child process is stopped before that staging is removed.
 **Steam Guard sign-in help** in the download form — also translated into
 Simplified Chinese — covers both methods. For mobile approval, open the Steam
 mobile app's shield tab for the same account and approve only the sign-in you
-initiated. For an authenticator or emailed code, enter the current code in the
+initiated; if Steam asks where the sign-in comes from, choose **Steam Client**.
+For an authenticator or emailed code, enter the current code in the
 app's code field and submit it. Keep the download open; it continues after
 verification. Never disable Steam Guard, and never share passwords,
 verification codes or recovery codes. Valve's

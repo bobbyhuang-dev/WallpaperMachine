@@ -362,11 +362,15 @@ extension WebPanelController {
         includeResources: false, bridge: store)
       try checkDownloadError()
     case "clearDownloads": workshop.clearDownloadActivity()
-    case "forgetAccount":
+    case "logOutSteam":
+      let account = workshop.downloader.savedAccount ?? ""
       if await confirm(
-        "Forget Steam sign-in?",
-        detail: "The saved session will be removed. You can sign in again for your next download.",
-        button: "Forget Sign-in")
+        String(localized: "Log out of Steam?"),
+        detail: String(
+          localized:
+            "The saved sign-in for \(account) will be removed from this Mac. Other Steam devices stay signed in, and the next download asks you to sign in again."
+        ),
+        button: String(localized: "Log Out"))
       {
         workshop.downloader.forgetSavedAccount()
         if let error = workshop.downloader.errorMessage {

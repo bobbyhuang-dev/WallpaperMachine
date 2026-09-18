@@ -30,9 +30,11 @@ __pycache__/
 .DS_Store
 
 # Agent harness state. Local settings only; the rules themselves are tracked
-# in AGENTS.md and .agents/README.md.
+# in AGENTS.md, .omp/rules/ and .agents/README.md.
 .pi/
-.omp/
+.omp/*
+!.omp/rules/
+.claude/skills/
 
 # Vendored agent skills: third-party copies stay local. Restore them from the
 # upstream commits pinned in .agents/skills/sources.json.

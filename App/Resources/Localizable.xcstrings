@@ -1267,8 +1267,23 @@
     "%@: %@" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "%@: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "%@：%@"}}}
     },
-    "Could not forget the saved Steam sign-in: %@" : {
-      "localizations" : { "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法忘记已保存的 Steam 登录：%@" } } }
+    "Could not log out of Steam: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Could not log out of Steam: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法退出 Steam 登录：%@"}}}
+    },
+    "Wait for active and queued downloads to finish before logging out of Steam." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wait for active and queued downloads to finish before logging out of Steam."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请等待进行中和排队的下载完成后再退出 Steam 登录。"}}}
+    },
+    "Log out of Steam?" : {
+      "extractionState" : "manual",
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Log out of Steam?"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "要退出 Steam 登录吗？"}}}
+    },
+    "The saved sign-in for %@ will be removed from this Mac. Other Steam devices stay signed in, and the next download asks you to sign in again." : {
+      "extractionState" : "manual",
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The saved sign-in for %@ will be removed from this Mac. Other Steam devices stay signed in, and the next download asks you to sign in again."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "将从这台 Mac 移除 %@ 的已保存登录。其他 Steam 设备保持登录，下次下载时需要重新登录。"}}}
+    },
+    "Log Out" : {
+      "extractionState" : "manual",
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Log Out"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "退出登录"}}}
     },
     "Could not update the saved Steam sign-in: %@. You may need to sign in again next time." : {
       "localizations" : { "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法更新已保存的 Steam 登录：%@。下次可能需要重新登录。" } } }

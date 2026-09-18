@@ -59,7 +59,8 @@ Read only task-relevant sections; keep this file to durable rules and routing.
   Report skipped asset checks as skipped; the [local corpus](docs/testing/wallpaper-corpus.md)
   is not a passing suite. Docs/skill-only changes: check links, paths and commands;
   no app build or desktop test.
-- Release builds only for an explicit build/delivery request:
+- Release builds after every new feature (`.omp/rules/release-build-on-feature.md`)
+  and for an explicit build/delivery request:
   `python3 scripts/build.py --swift-only --configuration Release` for Swift/WebUI/resources/config
   with current renderer/bindings; `python3 scripts/build.py --configuration Release`
   for renderer/bridge changes or missing outputs.

@@ -16,6 +16,9 @@ let popoverTrigger = '';
 let queueExpanded = false;
 let dialogTarget = null;
 let dialogTrigger = null;
+// Job whose finished sign-in the dialog is confirming, and the timer that then lets it close on its own.
+let dialogHandoff = null;
+let handoffTimer = 0;
 let workshopDraft = null;
 let dialogAccount = null;
 // Password / Steam Guard requests the user closed with "Not now": keyed by job and request so the
@@ -144,10 +147,10 @@ function render() {
   document.querySelectorAll('.tabs [data-page]').forEach(tab => { if (tab.dataset.page === state.page) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current'); tab.disabled = busy('navigate', { page: tab.dataset.page }); });
   document.documentElement.style.setProperty('--window-controls-inset', `${Math.max(0, Number(state.windowControlsInset) || 0)}px`);
   morph($('app-identity'), `<span class="app-title"><span class="app-name">MacWallpaperEngine</span>${state.version ? `<span class="app-version">${escapeHTML(state.version)}</span>` : ''}</span>${safeLink(state.repositoryURL) ? button('', 'openExternal', { url: state.repositoryURL }, { icon: 'github', title: 'MacWallpaperEngine on GitHub', className: 'quiet icon-button github-link' }) : ''}`);
-  morph($('top-actions'), `<label class="sr-only" for="target-display">Target display</label><select id="target-display" data-change="target" aria-label="Target display"${disabled(state.busy)}>${(state.displays || []).map(display => `<option value="${escapeHTML(display.id)}"${display.id === state.targetDisplayID ? ' selected' : ''}${disabled(!display.enabled || display.mode === 'mirror')}>${escapeHTML(display.title)}${display.mode === 'mirror' ? ' (mirrored)' : !display.enabled ? ' (disabled)' : ''}</option>`).join('')}</select>${queueButton()}${button('Renderer source', 'openExternal', { url: 'https://github.com/bigsaltyfishes/wallpaper-engine-for-macos.git' }, { icon: 'external', title: 'Renderer source on GitHub', className: 'quiet renderer-link' })}`);
+  morph($('top-actions'), `<label class="sr-only" for="target-display">Target display</label><select id="target-display" data-change="target" aria-label="Target display"${disabled(state.busy)}>${(state.displays || []).map(display => `<option value="${escapeHTML(display.id)}"${display.id === state.targetDisplayID ? ' selected' : ''}${disabled(!display.enabled || display.mode === 'mirror')}>${escapeHTML(display.title)}${display.mode === 'mirror' ? ' (mirrored)' : !display.enabled ? ' (disabled)' : ''}</option>`).join('')}</select>${queueButton()}`);
   $('library-page').hidden = settings;
   $('settings-content').hidden = !settings;
-  if (settings) renderSettings($('settings-content'), state, { send, escapeHTML, icon, challengeHint, requestAssets: (element) => run(requestDownload(null, element)), openDownloadDialog: (id, element) => openDialog(id, element) });
+  if (settings) renderSettings($('settings-content'), state, { send, escapeHTML, icon, requestAssets: (element) => run(requestDownload(null, element)), openDownloadDialog: (id, element) => openDialog(id, element) });
   else {
     const filtersCollapsed = discover && Boolean(state.workshopFiltersCollapsed);
     $('library-page').classList.toggle('discover', discover);
@@ -174,10 +177,13 @@ function renderFilters() {
   const other = workshopDraft.tags.filter(tag => !known.has(tag));
   if (other.length) groups.push(['Other selected tags', other]);
   if (state.workshopFiltersCollapsed) {
-    morph($('workshop-filters'), `${button('', 'toggleWorkshopFilters', {}, { icon: 'chevronRight', title: count ? `Show filters (${count} active)` : 'Show filters', className: 'filter-toggle', expanded: false, controls: 'workshop-filters' })}${count ? `<span class="filter-rail-count" aria-hidden="true">${count}</span>` : ''}`);
+    // The whole rail is one button: a sidebar glyph, the active count and a vertical
+    // "Filters" label so the strip explains itself instead of showing a bare arrow.
+    const title = count ? `Show filters (${count} active)` : 'Show filters';
+    morph($('workshop-filters'), `<button type="button" data-action="toggleWorkshopFilters" class="filter-rail" title="${escapeHTML(title)}" aria-label="${escapeHTML(title)}" aria-expanded="false" aria-controls="workshop-filters"${disabled(busy('toggleWorkshopFilters'))}>${icon('panelLeftOpen')}${count ? `<span class="filter-rail-count" aria-hidden="true">${count}</span>` : ''}<span class="filter-rail-label" aria-hidden="true">Filters</span></button>`);
     return;
   }
-  morph($('workshop-filters'), `<div class="filter-heading"><h3>Filters${count ? ` (${count})` : ''}</h3>${button('Clear', 'clearWorkshop', {}, { className: 'link', disabled: !count })}${button('', 'toggleWorkshopFilters', {}, { icon: 'chevronLeft', title: 'Hide filters', className: 'filter-toggle', expanded: true, controls: 'workshop-filters' })}</div><details class="filter-group" open ${keyAttr('kind')}><summary>Type${icon('chevronRight', 13)}</summary><div class="filter-options"><label class="sr-only" for="workshop-kind">Workshop type</label><select id="workshop-kind" data-change="workshopKind">${selectOptions(['All types', 'Scene', 'Video', 'Web', 'Application'], workshopDraft.kind)}</select></div></details>${groups.map(([title, values], index) => `<details class="filter-group" ${index === 0 ? 'open' : ''} ${keyAttr(title)}><summary>${escapeHTML(title)}${icon('chevronRight', 13)}</summary><div class="filter-options">${values.map(tag => `<label class="check-label" ${keyAttr(tag)}><input type="checkbox" data-change="workshopTag" value="${escapeHTML(tag)}"${checked(workshopDraft.tags.includes(tag))}><span>${escapeHTML(tag)}</span></label>`).join('')}</div></details>`).join('')}<p class="muted"><small>Match all selected tags. Filters search the entire Workshop.</small></p>`);
+  morph($('workshop-filters'), `<div class="filter-heading"><h3>Filters${count ? ` (${count})` : ''}</h3>${button('Clear', 'clearWorkshop', {}, { className: 'link', disabled: !count })}${button('', 'toggleWorkshopFilters', {}, { icon: 'panelLeftClose', title: 'Hide filters', className: 'filter-toggle', expanded: true, controls: 'workshop-filters' })}</div><details class="filter-group" open ${keyAttr('kind')}><summary>Type${icon('chevronRight', 13)}</summary><div class="filter-options"><label class="sr-only" for="workshop-kind">Workshop type</label><select id="workshop-kind" data-change="workshopKind">${selectOptions(['All types', 'Scene', 'Video', 'Web', 'Application'], workshopDraft.kind)}</select></div></details>${groups.map(([title, values], index) => `<details class="filter-group" ${index === 0 ? 'open' : ''} ${keyAttr(title)}><summary>${escapeHTML(title)}${icon('chevronRight', 13)}</summary><div class="filter-options">${values.map(tag => `<label class="check-label" ${keyAttr(tag)}><input type="checkbox" data-change="workshopTag" value="${escapeHTML(tag)}"${checked(workshopDraft.tags.includes(tag))}><span>${escapeHTML(tag)}</span></label>`).join('')}</div></details>`).join('')}<p class="muted"><small>Match all selected tags. Filters search the entire Workshop.</small></p>`);
 }
 function visibleWallpapers() {
   const target = (state.displays || []).find(display => display.id === state.targetDisplayID);
@@ -361,12 +367,39 @@ const clamp = (value) => Math.max(0, Math.min(1, Number(value)));
 const requestByID = (id) => (state?.downloadRequests || []).find(request => request.id === id);
 const jobByID = (id) => (state?.downloads || []).find(item => item.id === id);
 const stageHint = (stage) => ({ setup: 'Waiting for SteamCMD setup.', account: 'Waiting for your Steam sign-in.', resources: 'Waiting for your go-ahead on shared resources.', ready: 'Starting…' })[stage] || 'Waiting to continue.';
-const stageTitle = (stage) => ({ setup: 'Install SteamCMD', account: 'Sign in to Steam', resources: 'Shared Wallpaper Engine resources', ready: 'Starting download' })[stage] || 'Continue this download';
-const challengeHint = (challenge) => ({
-  mobileApproval: 'Open Steam on your phone, go to Steam Guard, and approve the sign-in you just started. Only approve requests you recognise.',
-  authenticatorCode: 'Open Steam Guard in the Steam mobile app and enter its current authenticator code before it changes.',
-  emailCode: 'Check the email address registered to this Steam account, including spam, then enter the latest Steam Guard code.',
-})[challenge] || (challenge ? 'Use the verification method Steam requested. Do not disable Steam Guard or share passwords or recovery codes.' : '');
+const stageTitle = (stage) => ({ setup: 'Install SteamCMD', account: 'Sign in to Steam', resources: 'Shared resources needed', ready: 'Starting download' })[stage] || 'Continue this download';
+const strong = (text) => `<b>${escapeHTML(text)}</b>`;
+// Steam Guard stages are explained as an icon, a one-line title and numbered steps, so the person
+// knows which device to pick up and what to press. A plain password prompt needs no guide: the
+// labelled field and the footer note say everything.
+function signInGuide(job, account) {
+  const who = strong(account || 'your account');
+  const guides = {
+    mobileApproval: { icon: 'smartphone', title: 'Approve the sign-in on your phone', steps: [
+      `Open the Steam app on your phone and tap ${strong('Steam Guard')}, the shield tab at the bottom.`,
+      `A request to sign in as ${who} is waiting there. Approve it.`,
+      `If Steam asks ${strong('Where are you trying to sign in?')}, choose ${strong('Steam Client')}. This app signs in through Valve’s SteamCMD, which counts as the Steam client.`,
+      'Come back here. This dialog continues by itself once Steam confirms.',
+    ], note: 'Only approve a request you just started. Deny anything you do not recognise.', phone: true },
+    authenticatorCode: { icon: 'smartphone', title: 'Enter the code from the Steam app', steps: [
+      `Open the Steam app on your phone and tap ${strong('Steam Guard')}, the shield tab at the bottom.`,
+      'Read the five-character code shown at the top. It changes every 30 seconds.',
+      'Type it below and submit before it changes. If it has already changed, use the new one.',
+    ], note: 'Codes never need to be shared with anyone; enter them only in this dialog.', phone: true },
+    emailCode: { icon: 'mail', title: 'Enter the code Steam emailed you', steps: [
+      'Check the inbox of the email address registered to this Steam account. Look in spam or junk too.',
+      'Open the newest Steam Guard message. Every sign-in attempt sends a fresh code, so older ones no longer work.',
+      'Type the five-character code below and submit it.',
+    ], note: 'Steam never asks for your password by email. Enter the code only here.', mail: true },
+    unknown: { icon: 'shield', title: 'Verify with the method Steam requested', steps: [
+      'Follow the verification Steam asked for in its app or email, then continue here.',
+      'Never disable Steam Guard or share passwords or recovery codes.',
+    ], phone: true },
+  };
+  if (job.challenge) return guides[job.challenge] || guides.unknown;
+  return job.prompt && !job.securePrompt ? guides.unknown : null;
+}
+const guideMarkup = (guide, extra = '') => `<section class="dialog-guide" aria-label="${escapeHTML(guide.title)}"><span class="dialog-guide-icon">${icon(guide.icon, 20)}</span><div class="dialog-guide-body"><p class="dialog-guide-title" role="status">${escapeHTML(guide.title)}</p>${guide.steps?.length ? `<ol class="dialog-steps">${guide.steps.map(step => `<li><span>${step}</span></li>`).join('')}</ol>` : ''}${guide.note ? `<p class="dialog-guide-note">${escapeHTML(guide.note)}</p>` : ''}${extra}</div></section>`;
 function queueState() {
   const downloads = state.downloads || [];
   const requests = state.downloadRequests || [];
@@ -494,6 +527,8 @@ function closeDialog() {
   dialogTarget = null;
   dialogTrigger = null;
   dialogAccount = null;
+  dialogHandoff = null;
+  clearTimeout(handoffTimer);
   if (node.open) node.close();
   morph(node, '');
   node.removeAttribute('data-stage');
@@ -510,21 +545,25 @@ function renderDialog() {
   const pendingAuth = (job) => job?.pending && !job.queued && (job.authenticating || job.prompt || job.challenge) ? job : null;
   const auth = pendingAuth(own) || (request || own?.queued ? pendingAuth(jobByID('scene-assets')) : null);
   const waiting = request && request.stage !== 'ready' ? request : null;
-  if (!waiting && !auth) { closeDialog(); return; }
+  // The moment a sign-in completes the transfer is already running; say so instead of closing mid-thought.
+  const running = (job) => job?.pending && !job.error && !pendingAuth(job) ? job : null;
+  const started = !waiting && !auth && (node.dataset.stage === 'auth' || dialogHandoff === dialogTarget) ? (own?.queued && running(jobByID('scene-assets'))) || running(own) : null;
+  if (!waiting && !auth && !started) { closeDialog(); return; }
+  if (started && dialogHandoff !== dialogTarget) { dialogHandoff = dialogTarget; clearTimeout(handoffTimer); handoffTimer = setTimeout(() => { if (dialogHandoff === dialogTarget && dialogTarget !== null) closeDialog(); }, 6000); }
   if (dialogAccount?.id !== dialogTarget) seedAccount(dialogTarget);
-  const stage = waiting ? waiting.stage : 'auth';
+  const stage = waiting ? waiting.stage : started ? 'started' : 'auth';
   const open = node.open;
   node.dataset.stage = stage;
-  morph(node, dialogMarkup(stage, waiting || own || auth, auth));
+  morph(node, dialogMarkup(stage, waiting || own || auth || started, auth || started));
   if (!open) {
     node.showModal();
     (node.querySelector('.dialog-body input:not([disabled]), .dialog-body button.primary:not([disabled]), .dialog-body button:not([disabled])') || node).focus();
   }
 }
 function dialogMarkup(stage, subject, auth) {
-  const body = stage === 'setup' ? setupStep() : stage === 'account' ? accountStep() : stage === 'resources' ? resourcesStep() : authStep(auth);
-  const title = stage === 'auth' ? auth.prompt || auth.challenge ? 'Verify this Steam sign-in' : 'Connecting to Steam' : stageTitle(stage);
-  const subtitle = stage === 'auth' && auth.id !== subject.id ? `${auth.title} · needed for ${subject.title}` : subject.title;
+  const body = stage === 'setup' ? setupStep() : stage === 'account' ? accountStep() : stage === 'resources' ? resourcesStep() : stage === 'started' ? startedStep(auth, subject) : authStep(auth);
+  const title = stage === 'auth' ? auth.challenge ? 'Verify this Steam sign-in' : auth.prompt ? 'Sign in to Steam' : 'Connecting to Steam' : stage === 'started' ? 'Signed in to Steam' : stageTitle(stage);
+  const subtitle = (stage === 'auth' || stage === 'started') && auth.id !== subject.id ? `${auth.title} · needed for ${subject.title}` : subject.title;
   return `<div class="dialog-head"><span class="dialog-thumb">${previewThumb(stage === 'auth' ? auth.thumbnail || auth.preview || subject.thumbnail || subject.preview : subject.thumbnail || subject.preview)}</span><div class="dialog-heading"><h2 id="download-dialog-title">${escapeHTML(title)}</h2><p class="muted">${escapeHTML(subtitle)}</p></div>${button('', 'dismissDialog', {}, { icon: 'close', title: 'Close without removing this download', className: 'quiet icon-button' })}</div><div class="dialog-body" data-stage="${stage}">${body}</div>`;
 }
 function setupStep() {
@@ -534,19 +573,33 @@ function setupStep() {
 }
 function accountStep() {
   const working = busy('continueDownload', { id: dialogTarget });
-  return `<form class="dialog-form" data-form="dialogContinue" ${keyAttr('dialog-account')}><p>Downloading needs a Steam account that owns Wallpaper Engine. Steam enforces that; this app does not check it.</p><label class="field">Steam login name<input data-input="account" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" value="${escapeHTML(dialogAccount.account)}"${disabled(working)}></label><label class="check-label"><input type="checkbox" data-change="rememberSession"${checked(dialogAccount.rememberSession)}${disabled(working)}>Keep me signed in on this Mac</label>${state.savedAccount ? `<p class="dialog-note">Saved sign-in on this Mac: ${escapeHTML(state.savedAccount)}${dialogAccount.account.trim().toLowerCase() === String(state.savedAccount).trim().toLowerCase() ? ' · will be reused' : ''}</p>` : ''}<div class="dialog-actions"><button type="submit" class="primary"${disabled(working || !dialogAccount.account.trim())}>${icon('chevronRight')}<span class="button-label">Continue</span></button>${button('Not now', 'dismissDialog', {}, { className: 'quiet' })}</div><p class="dialog-note">Passwords and Steam Guard codes are asked for only when Steam requests them, go straight to the private SteamCMD session, and are never saved by this app.</p></form>`;
+  return `<form class="dialog-form" data-form="dialogContinue" ${keyAttr('dialog-account')}><label class="field">Steam account name<input data-input="account" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" value="${escapeHTML(dialogAccount.account)}"${disabled(working)}></label><label class="check-label"><input type="checkbox" data-change="rememberSession"${checked(dialogAccount.rememberSession)}${disabled(working)}>Keep me signed in on this Mac</label>${state.savedAccount ? `<p class="dialog-note">Saved sign-in on this Mac: ${escapeHTML(state.savedAccount)}${dialogAccount.account.trim().toLowerCase() === String(state.savedAccount).trim().toLowerCase() ? ' · will be reused' : ''}</p>` : ''}<div class="dialog-actions"><button type="submit" class="primary"${disabled(working || !dialogAccount.account.trim())}>${icon('chevronRight')}<span class="button-label">Continue</span></button>${button('Not now', 'dismissDialog', {}, { className: 'quiet' })}</div><p class="dialog-note">Your password and any Steam Guard code come next. This app never saves them.</p></form>`;
 }
+// The resources stage is a choice, so each path is one button carrying its own title and the one
+// fact that decides it, instead of a paragraph of caveats above a row of buttons.
+const choiceButton = (action, args, glyph, title, note, off) => `<button type="button" class="dialog-choice" data-action="${action}" ${Object.entries(args).map(([key, value]) => `data-${key}="${escapeHTML(value)}"`).join(' ')}${disabled(off)}><span class="dialog-guide-icon">${icon(glyph, 18)}</span><span class="dialog-choice-body"><span class="dialog-choice-title">${escapeHTML(title)}</span><span class="dialog-choice-note">${escapeHTML(note)}</span></span>${icon('chevronRight', 16)}</button>`;
 function resourcesStep() {
   const settings = state.settings || {};
-  return `<p>Scene wallpapers need shared shaders and materials from a purchased Wallpaper Engine installation. Video wallpapers do not.</p><p class="notice warning">Steam downloads the full Windows build into temporary storage first — keep several gigabytes free — and only the shared resources are kept afterwards. No Windows program is ever run.</p>${settings.sceneAssetsWarning ? `<p class="notice warning">${escapeHTML(settings.sceneAssetsWarning)}</p>` : ''}${settings.sceneAssetsReady ? '<p class="dialog-status" role="status">Shared resources are already installed. Downloading again replaces them.</p>' : ''}<div class="dialog-actions">${button('Download shared resources', 'consentResources', { id: dialogTarget }, { icon: 'download', className: 'primary', disabled: busy('continueDownload', { id: dialogTarget }) })}${button('Locate an installation', 'locateAssets', {}, { icon: 'folder', disabled: state.setup?.busy })}${button('Not now', 'dismissDialog', {}, { className: 'quiet' })}</div><p class="dialog-note">Locating an existing installation skips the download entirely.</p>`;
+  const lead = settings.sceneAssetsReady ? 'Shared resources are already installed. Downloading again replaces them.' : 'Scene wallpapers need shaders and materials from Wallpaper Engine. This is a one-time setup.';
+  return `<p${settings.sceneAssetsReady ? ' class="dialog-status" role="status"' : ''}>${lead}</p>${settings.sceneAssetsWarning ? `<p class="notice warning">${escapeHTML(settings.sceneAssetsWarning)}</p>` : ''}<div class="dialog-choices">${choiceButton('consentResources', { id: dialogTarget }, 'download', 'Download from Steam', 'Needs a Steam account that owns Wallpaper Engine and several gigabytes free while downloading.', busy('continueDownload', { id: dialogTarget }))}${choiceButton('locateAssets', {}, 'folder', 'Use an existing installation', 'Already have Wallpaper Engine on a drive? Choose its folder and nothing downloads.', state.setup?.busy)}</div><div class="dialog-actions end">${button('Not now', 'dismissDialog', {}, { className: 'quiet' })}</div>`;
 }
 function authStep(job) {
-  const hint = challengeHint(job.challenge);
   const working = busy('downloadInput', { id: job.id });
   const waiting = !job.prompt && !job.challenge;
   const account = job.account || dialogAccount?.account || '';
-  const identity = `<div class="dialog-identity"><p>Signing in as <span class="dialog-account">${escapeHTML(account || 'an unnamed account')}</span></p>${button('Change account', 'changeAccount', { id: job.id }, { className: 'link' })}</div>`;
-  return `<p class="dialog-status" role="status">${escapeHTML(job.status)}</p>${identity}${waiting ? '<p>Steam is being contacted. Any password or Steam Guard request appears here.</p><progress aria-label="Connecting to Steam"></progress>' : ''}${hint ? `<p class="notice">${escapeHTML(hint)}</p>` : ''}${job.error ? `<p class="notice error">${escapeHTML(job.error)}</p>` : ''}${job.warning ? `<p class="notice warning">${escapeHTML(job.warning)}</p>` : ''}${job.prompt ? `<form class="dialog-form" data-form="dialogAuth" data-id="${escapeHTML(job.id)}" ${keyAttr(`auth-${job.id}-${job.prompt}`)}><label class="field" for="dialog-response">${escapeHTML(job.prompt)}<input id="dialog-response" name="response" type="${job.securePrompt ? 'password' : 'text'}" autocomplete="off" spellcheck="false" autocapitalize="off" required${disabled(working)}></label><div class="dialog-actions"><button type="submit" class="primary"${disabled(working)}><span class="button-label">Submit</span></button>${button('Not now', 'dismissDialog', {}, { className: 'quiet' })}</div></form>` : `<div class="dialog-actions">${button('Not now', 'dismissDialog', {}, { className: 'quiet' })}</div>`}<div class="dialog-actions">${button('Cancel this download', 'downloadCancel', { id: job.id }, { className: 'quiet' })}${button('Steam Guard in the Steam mobile app', 'openExternal', { url: 'https://store.steampowered.com/mobile' }, { icon: 'external', className: 'link' })}</div><p class="dialog-note">Only approve sign-ins you started yourself. Never share your password or recovery codes.</p>`;
+  const guide = signInGuide(job, account);
+  const identity = `<div class="dialog-identity"><p>${icon('userRound', 14)}<span>Signing in as <span class="dialog-account">${escapeHTML(account || 'an unnamed account')}</span></span></p>${button('Change account', 'changeAccount', { id: job.id }, { className: 'link' })}</div>`;
+  const connecting = guideMarkup({ icon: 'logIn', title: job.status, note: 'Steam is being contacted. Any password or Steam Guard request appears here.' }, '<progress aria-label="Connecting to Steam"></progress>');
+  const help = guide?.phone ? button('Get the Steam mobile app', 'openExternal', { url: 'https://store.steampowered.com/mobile' }, { icon: 'external', className: 'link' }) : guide?.mail ? button('Help with emailed codes', 'openExternal', { url: 'https://help.steampowered.com/en/wizard/HelpWithSteamGuardCode' }, { icon: 'external', className: 'link' }) : '';
+  return `${identity}${waiting ? connecting : guide ? guideMarkup(guide) : ''}${job.error ? `<p class="notice error">${escapeHTML(job.error)}</p>` : ''}${job.warning ? `<p class="notice warning">${escapeHTML(job.warning)}</p>` : ''}${job.prompt ? `<form class="dialog-form" data-form="dialogAuth" data-id="${escapeHTML(job.id)}" ${keyAttr(`auth-${job.id}-${job.prompt}`)}><label class="field" for="dialog-response">${escapeHTML(job.prompt)}<input id="dialog-response" name="response" type="${job.securePrompt ? 'password' : 'text'}" autocomplete="off" spellcheck="false" autocapitalize="off" required${disabled(working)}></label><div class="dialog-actions"><button type="submit" class="primary"${disabled(working)}>${icon(job.securePrompt ? 'lock' : 'keyRound')}<span class="button-label">Submit</span></button>${button('Not now', 'dismissDialog', {}, { className: 'quiet' })}</div></form>` : `<div class="dialog-actions">${button('Not now', 'dismissDialog', {}, { className: 'quiet' })}</div>`}<div class="dialog-actions">${button('Cancel this download', 'downloadCancel', { id: job.id }, { className: 'quiet' })}${help}</div><p class="dialog-note">Only approve sign-ins you started yourself. Never share your password or recovery codes.</p>`;
+}
+// Sign-in complete: the download is already running, so the dialog says so with live progress
+// instead of vanishing, then steps aside on its own.
+function startedStep(job, subject) {
+  const shared = job.id !== subject.id;
+  const guide = { icon: 'check', title: shared ? 'Signed in. Shared resources are downloading first' : `Signed in. ${subject.title} is downloading`, note: shared ? `${subject.title} starts automatically once they are installed. You can keep using the app meanwhile.` : 'You can keep using the app. Progress shows on the wallpaper and in the downloads list.' };
+  const progress = Number.isFinite(job.progress) ? `<progress max="1" value="${clamp(job.progress)}" aria-label="Download progress"></progress>` : '<progress aria-label="Download in progress"></progress>';
+  return `${guideMarkup(guide, `<p class="dialog-status" role="status">${escapeHTML(job.status)}</p>${progress}`)}<div class="dialog-actions">${button('Done', 'dismissDialog', {}, { icon: 'check', className: 'primary' })}${button('Show downloads', 'showDownloadsFromDialog', {}, { icon: 'download', className: 'quiet' })}</div>`;
 }
 let importDuplicates = 'skip';
 async function searchWorkshop() { clearTimeout(searchTimer); await send('workshopSearch', { ...workshopDraft, tags: [...workshopDraft.tags] }); }
@@ -593,6 +646,7 @@ async function handleAction(action, data, element) {
       await send('dismissError');
       return;
     case 'openDownloads': openPopover('downloads', element); return;
+    case 'showDownloadsFromDialog': { const trigger = dialogTrigger; closeDialog(); openPopover('downloads', document.querySelector('#top-actions [data-action="openDownloads"]') || (trigger ? document.querySelector(trigger) : null)); return; }
     case 'openImport': openPopover('import', element); return;
     case 'closePopover': closePopover(true); return;
     case 'toggleQueueHistory': queueExpanded = !queueExpanded; renderPopover(); return;
@@ -626,7 +680,6 @@ async function handleAction(action, data, element) {
     case 'workshopPage': await send(action, { page: Number(data.workshopPage) }); $('wallpaper-grid').scrollTop = 0; return;
     case 'openExternal': await send(action, { url: data.url }); return;
     case 'import': await send(action, { duplicates: importDuplicates }); return;
-    case 'forgetAccount': await send(action); if (dialogAccount) dialogAccount.account = ''; render(); return;
     default: {
       const args = {};
       if (id !== undefined) args.id = id;

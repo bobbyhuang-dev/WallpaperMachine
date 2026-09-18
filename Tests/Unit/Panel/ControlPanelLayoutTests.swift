@@ -433,7 +433,7 @@ final class ControlPanelLayoutTests: XCTestCase {
     await workshop.steamCMDSetup.shutdown()
   }
 
-  /// Discover's filter sidebar collapses to an arrow rail to give the grid its column
+  /// Discover's filter sidebar collapses to a labelled rail to give the grid its column
   /// back, and the inspector grows with wide windows or follows a dragged edge. Both
   /// choices are stored natively because the page's website data store is not persistent.
   func testWorkshopFilterSidebarCollapsesPersistsAndInspectorGrowsWithWidth() async throws {
@@ -531,11 +531,11 @@ final class ControlPanelLayoutTests: XCTestCase {
     XCTAssertEqual((before?["columns"] as? [Int])?.count, 3, "Discover starts with the sidebar column")
     XCTAssertEqual((before?["columns"] as? [Int])?.last, 260, "Windows under 1040px use the compact 260px inspector")
     let after = result?["after"] as? [String: Any]
-    XCTAssertEqual(after?["hidden"] as? Bool, false, "The collapsed sidebar stays as an arrow rail")
+    XCTAssertEqual(after?["hidden"] as? Bool, false, "The collapsed sidebar stays as a clickable rail")
     XCTAssertEqual(after?["collapsed"] as? Bool, true)
     XCTAssertEqual(after?["expanded"] as? String, "false")
     XCTAssertEqual((after?["columns"] as? [Int])?.count, 3)
-    XCTAssertEqual((after?["columns"] as? [Int])?.first, 30, "Collapsing shrinks the sidebar to its rail")
+    XCTAssertEqual((after?["columns"] as? [Int])?.first, 36, "Collapsing shrinks the sidebar to its rail")
     XCTAssertEqual(result?["dragStart"] as? Int, 260)
     XCTAssertEqual(result?["duringDrag"] as? Int, 320, "The inspector follows the pointer while dragging")
     XCTAssertEqual(result?["afterDrag"] as? Int, 320, "The dragged width survives a native snapshot")
@@ -1243,6 +1243,56 @@ final class ControlPanelLayoutTests: XCTestCase {
     }
   }
 
+  func testTopBarKeepsTheRepositoryLinkAndNeverOverlapsAtTheMinimumWindowWidth() async throws {
+    try await withPanel { panel in
+      panel.show()
+      try await panel.waitJS("document.querySelector('#app-identity [data-action=\"openExternal\"]') !== null")
+      // From the minimum content width up to the default, with a download in flight so the queue button is present too.
+      let widths: [Double] = [760, 840, 900, 1040, 1240]
+      for width in widths {
+        panel.web.setFrameSize(NSSize(width: width, height: 640))
+        let layout = try await panel.js("""
+          const base = window.powerProbe.received.at(-1);
+          const job = { id: 'bar-fixture', wallpaperID: 'bar-fixture', title: 'Bar fixture',
+            status: 'Downloading Workshop files…', preview: null, thumbnail: null, account: 'fixture',
+            progress: 0.5, pending: true, queued: false, bytesReceived: 1, bytesExpected: 2,
+            bytesPerSecond: 1, authenticating: false, cancelled: false, error: null, prompt: null,
+            securePrompt: false, challenge: null, warning: null };
+          // A real window clears its traffic lights with the same inset the app reports.
+          window.wallpaperUI.receive(Object.assign({}, base, { downloads: [job], downloadRequests: [], windowControlsInset: 70 }));
+          const bar = document.querySelector('.topbar');
+          const barRect = bar.getBoundingClientRect();
+          const rect = element => element.getBoundingClientRect();
+          const controls = [...bar.querySelectorAll('button, select')].filter(element => element.getClientRects().length);
+          const overlaps = [];
+          for (let i = 0; i < controls.length; i += 1) for (let j = i + 1; j < controls.length; j += 1) {
+            const a = rect(controls[i]), b = rect(controls[j]);
+            if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5)
+              overlaps.push(`${controls[i].textContent || controls[i].getAttribute('aria-label')} × ${controls[j].textContent || controls[j].getAttribute('aria-label')}`);
+          }
+          const outside = controls.filter(element => rect(element).left < barRect.left - 0.5 || rect(element).right > barRect.right + 0.5)
+            .map(element => element.textContent || element.getAttribute('aria-label'));
+          const name = document.querySelector('.app-name');
+          return {
+            width: barRect.width,
+            overlaps, outside,
+            github: !!document.querySelector('#app-identity [data-action="openExternal"]')?.getClientRects().length,
+            queue: !!document.querySelector('#top-actions [data-action="openDownloads"]')?.getClientRects().length,
+            nameVisible: !!name && name.getClientRects().length > 0,
+          };
+          """) as? [String: Any]
+        XCTAssertEqual(layout?["width"] as? Double, width, "Top bar must span the panel at \(width)px")
+        XCTAssertEqual(layout?["overlaps"] as? [String], [], "Top bar controls must not overlap at \(width)px")
+        XCTAssertEqual(layout?["outside"] as? [String], [], "Top bar controls must stay inside the bar at \(width)px")
+        XCTAssertEqual(layout?["github"] as? Bool, true, "The repository link stays available at \(width)px")
+        XCTAssertEqual(layout?["queue"] as? Bool, true, "The downloads button stays available at \(width)px")
+        XCTAssertEqual(
+          layout?["nameVisible"] as? Bool, width > 840,
+          "Only the repository button stays in the middle of a narrow window; the name returns once there is room (\(width)px)")
+      }
+    }
+  }
+
   private func withPanel(
     displayTitles: DisplayTitleResolver = .renderer, _ body: (PanelFixture) async throws -> Void
   ) async throws {
@@ -1332,21 +1382,31 @@ final class ControlPanelLayoutTests: XCTestCase {
         const authenticating = { busy: ring().classList.contains('busy'), speed: ring().querySelector('.ring-speed')?.textContent.trim(), dialogClosed: !dialog.open };
         push([Object.assign({}, job, { progress: null, authenticating: true, prompt: 'Steam password', securePrompt: true, status: 'Enter your Steam password below' })]);
         await waitFor(() => dialog.open);
-        const prompted = { attention: ring().classList.contains('attention'), passwordField: !!dialog.querySelector('input[type="password"]') };
+        const prompted = { attention: ring().classList.contains('attention'), passwordField: !!dialog.querySelector('input[type="password"]'),
+          guide: !!dialog.querySelector('.dialog-guide') };
         dialog.querySelector('[data-action="dismissDialog"]').click();
         await waitFor(() => !dialog.open);
         push([Object.assign({}, job, { progress: null, authenticating: true, prompt: 'Steam password', securePrompt: true })]);
         const dismissedStaysClosed = !dialog.open;
         push([Object.assign({}, job, { progress: null, authenticating: true, prompt: null, challenge: 'mobileApproval', status: 'Approve the sign-in in the Steam mobile app' })]);
         await waitFor(() => dialog.open);
+        const guided = { steps: dialog.querySelectorAll('.dialog-steps li').length, icon: !!dialog.querySelector('.dialog-guide-icon svg'),
+          noField: !dialog.querySelector('input'), stage: dialog.dataset.stage };
         push([Object.assign({}, job, { progress: null, authenticating: false, status: 'Downloading Workshop files…' })]);
+        await waitFor(() => dialog.dataset.stage === 'started');
+        const handoff = { open: dialog.open, progress: !!dialog.querySelector('.dialog-guide progress'), status: dialog.querySelector('.dialog-guide [role="status"]')?.textContent.includes('Ring fixture'),
+          done: !!dialog.querySelector('.dialog-actions .primary[data-action="dismissDialog"]'), ringBusy: ring().classList.contains('busy') };
+        push([Object.assign({}, job, { progress: 0.1, authenticating: false, status: 'Downloading Workshop files…' })]);
+        const handoffStays = dialog.open && dialog.dataset.stage === 'started' && Number(dialog.querySelector('.dialog-guide progress').value) > 0;
+        dialog.querySelector('.dialog-actions .primary[data-action="dismissDialog"]').click();
         await waitFor(() => !dialog.open);
-        const resumed = ring().classList.contains('busy');
+        push([Object.assign({}, job, { progress: 0.2, authenticating: false, status: 'Downloading Workshop files…' })]);
+        const resumed = ring().classList.contains('progress') && !dialog.open;
         push([Object.assign({}, job, { pending: false, progress: null, error: 'Steam denied this download.', status: 'Download could not finish' })]);
         const failed = ring()?.dataset.action === 'downloadRetry' && ring().classList.contains('failed');
         push([], { wallpapers: [{ id: 'ring-fixture', title: 'Ring fixture', kind: 'Video', preview: null, active: false, supported: true, tags: [] }] });
         const installed = { check: !!grid.querySelector('.tile-installed'), noRing: !ring() };
-        return { idle, progress, authenticating, prompted, dismissedStaysClosed, resumed, failed, installed };
+        return { idle, progress, authenticating, prompted, dismissedStaysClosed, guided, handoff, handoffStays, resumed, failed, installed };
         """, arguments: ["base": base], in: nil, contentWorld: .page) as? [String: Any]
     let idle = result?["idle"] as? [String: Any]
     XCTAssertEqual(idle?["noRing"] as? Bool, true, "An untouched tile carries no ring")
@@ -1379,8 +1439,28 @@ final class ControlPanelLayoutTests: XCTestCase {
       result?["dismissedStaysClosed"] as? Bool, true,
       "Not now silences the same request until Steam asks for something else")
     XCTAssertEqual(
+      prompted?["guide"] as? Bool, false, "A password request shows only the field, no guide card")
+    let guided = result?["guided"] as? [String: Any]
+    XCTAssertEqual(guided?["stage"] as? String, "auth")
+    XCTAssertGreaterThanOrEqual(
+      guided?["steps"] as? Int ?? 0, 3,
+      "Mobile approval lists the phone steps, including what to answer Steam")
+    XCTAssertEqual(guided?["icon"] as? Bool, true)
+    XCTAssertEqual(guided?["noField"] as? Bool, true, "Mobile approval asks for nothing to type")
+    let handoff = result?["handoff"] as? [String: Any]
+    XCTAssertEqual(
+      handoff?["open"] as? Bool, true,
+      "Once Steam is satisfied the dialog confirms the download instead of vanishing")
+    XCTAssertEqual(handoff?["progress"] as? Bool, true, "The confirmation carries live progress")
+    XCTAssertEqual(handoff?["status"] as? Bool, true, "The confirmation names the wallpaper")
+    XCTAssertEqual(handoff?["done"] as? Bool, true, "Done is the primary way out")
+    XCTAssertEqual(handoff?["ringBusy"] as? Bool, true, "The tile reports meanwhile")
+    XCTAssertEqual(
+      result?["handoffStays"] as? Bool, true,
+      "Later progress updates the confirmation instead of closing it")
+    XCTAssertEqual(
       result?["resumed"] as? Bool, true,
-      "Once Steam is satisfied the dialog closes and the tile keeps reporting")
+      "After Done the dialog stays closed and the tile keeps reporting")
     XCTAssertEqual(result?["failed"] as? Bool, true, "A failed download offers retry on its tile")
     let installed = result?["installed"] as? [String: Any]
     XCTAssertEqual(installed?["check"] as? Bool, true, "A wallpaper in the library shows a check")

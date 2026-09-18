@@ -11,9 +11,9 @@ a system dialog and renderer content is never loaded into the web view.
 | Region | Contents |
 | --- | --- |
 | Top tabs | **Discover**, **Installed**, **Settings** |
-| Top bar | Sits in the window's title-bar strip beside the traffic lights: tabs on the left, product name, version and a GitHub button (opens the repository in the default browser) centered, target-display picker, a downloads button (only while there is download activity) and renderer-source link on the right. Its background drags the window and follows the system double-click action |
+| Top bar | Sits in the window's title-bar strip beside the traffic lights: tabs on the left, product name, version and a GitHub button (opens the repository in the default browser) centered, target-display picker and a downloads button (only while there is download activity) on the right. The side groups never shrink below their content, so a long display name nudges the brand off-center rather than under the controls; in windows up to 840px wide the name and version hide and only the GitHub button stays. The renderer's own repository is linked from Settings → About. Its background drags the window and follows the system double-click action |
 | Browser column | Search field, sort menu, filters, tile grid, result summary, Workshop pagination with an editable page number. On Discover a page holds exactly the tiles that fill the grid at the current window size, so pages never scroll or end in a partial row |
-| Left sidebar | Workshop tag filters (Discover only). Fixed width; the arrow in its heading collapses it to a narrow rail whose arrow expands it again, and that choice is remembered across launches |
+| Left sidebar | Workshop tag filters (Discover only). Fixed width; the sidebar button in its heading collapses it to a narrow labelled rail that expands it again when clicked, and that choice is remembered across launches |
 | Inspector | Preview, title, kind, creator, tags, actions, and the selected wallpaper's options and properties. Grows from 280px to 340px with the window width by default; dragging its left edge sets a width (240px to 45% of the window) that is remembered, and double-clicking the edge restores the fluid width. The edge is keyboard-focusable: arrow keys resize, `Home` resets |
 | Activity bar | Pause/resume playback, import status, download progress |
 
@@ -112,8 +112,10 @@ are unchanged, so nothing persisted or sent over the bridge moves.
   activates a wallpaper. **Clear filters** resets the popover.
 - Discover: the sidebar carries the Workshop type menu and multi-select tag
   groups; sort is Trending this week, Most subscribed, Newest or Relevance.
-  The arrow beside the sidebar heading collapses it to a 30px rail that keeps
-  showing the active filter count; the rail's arrow expands it again.
+  The sidebar button beside the heading (Lucide's panel-left-close glyph,
+  tooltip "Hide filters") collapses it to a 36px rail that is one full-height
+  button: the panel-left-open glyph, the active filter count and a vertical
+  "Filters" label; clicking anywhere on the rail expands it again.
   Collapsing never changes the search; the choice is stored natively (the
   panel's web storage is not persistent) and restored on the next launch.
 
@@ -143,7 +145,11 @@ inspector. The import
 popover opens from **Import** in the Installed toolbar; imports copy source
 files into the library and leave the originals untouched, with a duplicate
 policy of **Skip duplicates** or **Keep both copies**. Closing a popover never
-cancels work.
+cancels work. The Steam sign-in dialog uses a guide card (glyph plus numbered
+steps) for Steam Guard stages; account and password prompts are just the
+labelled field. Once Steam accepts the sign-in, it confirms that the download
+is running before it closes; see
+[workshop downloads](workshop-downloads.md#the-download-queue).
 
 ## Verification
 

@@ -155,8 +155,8 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
 
   func forgetSavedAccount() {
     guard !isRunning else {
-      errorMessage =
-        "Wait for active and queued downloads to finish before changing saved sign-in settings."
+      errorMessage = String(
+        localized: "Wait for active and queued downloads to finish before logging out of Steam.")
       return
     }
     do {
@@ -164,7 +164,7 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
       savedAccount = nil
       errorMessage = nil
     } catch {
-      errorMessage = "Could not forget the saved Steam sign-in: \(error.localizedDescription)"
+      errorMessage = String(localized: "Could not log out of Steam: \(error.localizedDescription)")
     }
   }
 

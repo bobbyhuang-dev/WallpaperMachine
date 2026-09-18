@@ -43,6 +43,7 @@ pub use engine::{
     WallpaperAssignment, WallpaperEngine, WallpaperEngineConfig,
 };
 pub use error::EngineError;
+pub use owe::backend::AudioSpectrum128;
 pub use window::{PlaceholderStyle, WallpaperWindow, WallpaperWindowBuilder};
 
 #[cfg(test)]

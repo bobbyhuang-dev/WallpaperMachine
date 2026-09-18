@@ -21,6 +21,8 @@
 #include "Vulkan/Util.hpp"
 #include "VulkanRender/CustomShaderPass.hpp"
 #include "VulkanRender/PrePass.hpp"
+#include "VulkanRender/CopyPass.hpp"
+#include "VulkanRender/StaticSubgraphCache.hpp"
 #include "VulkanRender/PassCommon.hpp"
 #include "VulkanRender/Resource.hpp"
 #include "VulkanRender/SceneToRenderGraph.hpp"
@@ -369,6 +371,44 @@ int main() {
         auto result = device.tex_cache().Query(std::string(SpecTex_Default), ToTexKey(*scene->FindRenderTarget(SpecTex_Default)), true);
         Check(result.has_value(), "result target");
         CustomPassExecutionScratch scratch;
+
+        // Drives the static subgraph cache exactly as VulkanRender does, so the
+        // golden comparison covers the reuse path rather than only the code it
+        // shares with an unoptimised run. `WE_TEST_NO_SCENE_OPTIMIZATION`
+        // forces the unoptimised path for a direct A/B.
+        StaticSubgraphCache static_cache;
+        std::vector<StaticPassSample> static_samples;
+        std::vector<uint8_t> static_skip;
+        const bool scene_optimization = std::getenv("WE_TEST_NO_SCENE_OPTIMIZATION") == nullptr;
+        if (scene_optimization) {
+            std::vector<StaticPassDesc> static_descs;
+            static_descs.reserve(passes.size());
+            for (auto* pass : passes) {
+                StaticPassDesc desc;
+                if (auto* custom = dynamic_cast<CustomShaderPass*>(pass)) {
+                    desc = custom->staticPassDesc(*scene);
+                    desc.target = scene->ResolveRenderTargetName(desc.target);
+                    for (auto& input : desc.inputs) input = scene->ResolveRenderTargetName(input);
+                } else if (auto* copy = dynamic_cast<CopyPass*>(pass)) {
+                    desc.target = scene->ResolveRenderTargetName(copy->desc().dst);
+                    desc.inputs = { scene->ResolveRenderTargetName(copy->desc().src) };
+                } else if (auto* clear = dynamic_cast<PrePass*>(pass)) {
+                    desc.target = scene->ResolveRenderTargetName(clear->desc().result);
+                }
+                static_descs.push_back(std::move(desc));
+            }
+            static_cache.Compile(static_descs);
+            for (std::size_t i = 0; i < static_cache.TargetCount(); ++i) {
+                if (! static_cache.TargetCacheable(i)) continue;
+                const auto& key = static_cache.TargetKey(i);
+                const auto bytes = device.tex_cache().RenderTargetBytes(key);
+                if (bytes == 0 || ! device.tex_cache().PinRenderTarget(key)) continue;
+                static_cache.SetTargetPinned(i, true, bytes);
+            }
+            static_samples.assign(passes.size(), StaticPassSample {});
+            static_skip.assign(passes.size(), uint8_t { 0 });
+        }
+
         for (int frame = 0; frame < frame_count; ++frame) {
             scene->shaderValueUpdater->FrameBegin();
             if (audio_hz_env) {
@@ -392,7 +432,24 @@ int main() {
             }
             scene->runtime->Tick(frame_step > 0.0 ? frame_step : 1.0 / 60.0);
             Check(device.tex_cache().BeginVideoFrameRecording(), "begin frame pins");
-            Check(UpdatePreparedPasses(device, rr, passes), "update current frame");
+            std::vector<VulkanPass*> frame_passes = passes;
+            if (scene_optimization) {
+                for (std::size_t i = 0; i < passes.size(); ++i) {
+                    auto* custom = dynamic_cast<CustomShaderPass*>(passes[i]);
+                    static_samples[i] = custom != nullptr
+                                            ? custom->frameSample()
+                                            : StaticPassSample { .hash = 0, .visible = true };
+                }
+                static_cache.Plan(static_samples, static_skip);
+                frame_passes.clear();
+                for (std::size_t i = 0; i < passes.size(); ++i) {
+                    auto* custom = dynamic_cast<CustomShaderPass*>(passes[i]);
+                    if (custom != nullptr) custom->setFrameSkipped(static_skip[i] != 0);
+                    if (static_skip[i] != 0 && custom == nullptr) continue;
+                    frame_passes.push_back(passes[i]);
+                }
+            }
+            Check(UpdatePreparedPasses(device, rr, frame_passes), "update current frame");
             Begin(rr.command);
             Check(vertices.recordUpload(rr.command), "upload vertices");
             Check(dynamic.recordUpload(rr.command), "upload dynamic data");
@@ -401,7 +458,7 @@ int main() {
             const bool dump_passes =
                 std::getenv("WE_TEST_DUMP_PASSES") && frame == frame_count - 1;
             if (!dump_passes)
-                CheckRecording(device, rr, ExecutePreparedPasses(device, rr, passes, scratch));
+                CheckRecording(device, rr, ExecutePreparedPasses(device, rr, frame_passes, scratch));
             else {
                 int pass_index = 0;
                 for (auto* pass : passes) {
@@ -439,6 +496,14 @@ int main() {
             if (frame_step > 0.0 || audio_hz_env)
                 scene->PassFrameTime(frame_step > 0.0 ? frame_step : 1.0 / 60.0);
             scene->shaderValueUpdater->FrameEnd();
+        }
+        if (scene_optimization) {
+            // Reported so a golden comparison cannot pass vacuously: identical
+            // pixels prove nothing if no pass was ever reused.
+            const auto& stats = static_cache.stats();
+            std::cout << "Scene optimization: " << stats.skipped_passes << " passes reused, "
+                      << stats.executed_passes << " executed, " << stats.cacheable_targets
+                      << " cacheable targets, " << stats.pinned_targets << " pinned\n";
         }
         Check(device.handle().WaitIdle() == VK_SUCCESS, "final probe idle");
         Check(rr.command.Reset() == VK_SUCCESS, "discard final probe command");

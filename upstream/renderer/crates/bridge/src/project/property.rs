@@ -1,5 +1,35 @@
 //! Property-kind enum, metadata variants, and runtime value.
 
+/// Which media a `file` or `directory` property accepts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FileMedia {
+    #[default]
+    Image,
+    Video,
+}
+
+/// A `file` or `directory` property's declared file-type option.
+///
+/// An unrecognised or absent option falls back to [`FileMedia::Image`], which
+/// is what Wallpaper Engine does, but `raw` keeps whatever the manifest wrote
+/// so a value this build does not know is not silently discarded.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FileFilter {
+    pub media: FileMedia,
+    pub raw: Option<String>,
+}
+
+/// How a `directory` property hands its contents to the page.
+///
+/// `OnDemand` pages ask for one file at a time; `FetchAll` pages are pushed the
+/// whole set and every later change to it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DirectoryMode {
+    #[default]
+    OnDemand,
+    FetchAll,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum PropertyKind {
     Slider,
@@ -9,7 +39,14 @@ pub enum PropertyKind {
     TextInput,
     Text,
     Group,
+    /// A single user-chosen file.
+    File,
+    /// A user-chosen folder whose contents the page reads.
     Directory,
+    /// A scene texture picker. Shares the `file`/`directory` string shape but
+    /// none of their directory semantics: it selects a texture the scene
+    /// engine resolves, not a path the page opens.
+    Texture,
     Unknown(String),
 }
 
@@ -30,7 +67,14 @@ pub enum PropertyMetadata {
     TextInput,
     Text,
     Group,
-    Directory,
+    File {
+        filter: FileFilter,
+    },
+    Directory {
+        filter: FileFilter,
+        mode: DirectoryMode,
+    },
+    Texture,
     Unknown,
 }
 

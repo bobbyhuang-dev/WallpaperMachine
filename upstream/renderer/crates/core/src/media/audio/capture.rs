@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use objc2::{AnyThread, rc::Retained};
+use objc2::{AnyThread, ClassType, msg_send, rc::Retained, runtime::AnyObject, sel};
 use objc2_core_audio::{
     AudioDeviceCreateIOProcID, AudioDeviceDestroyIOProcID, AudioDeviceIOProcID, AudioDeviceStart,
     AudioDeviceStop, AudioHardwareCreateAggregateDevice, AudioHardwareCreateProcessTap,
@@ -24,7 +24,8 @@ use objc2_core_foundation::{
 use objc2_foundation::{NSMutableArray, NSNumber, NSString, NSUUID, ns_string};
 
 use super::{
-    AudioCaptureBackend, AudioCaptureError, AudioFrameConsumer, AudioResponseController, MonoPcmF32,
+    AudioCaptureBackend, AudioCaptureError, AudioFrameConsumer, AudioResponseController,
+    AudioTapChannelMode, InterleavedStereoF32, MonoPcmF32,
 };
 
 pub type DefaultAudioResponseController =
@@ -56,7 +57,8 @@ impl Drop for TapResources {
 
 impl TapResources {
     /// Creates a process tap and reads its initial stream format.
-    /// Returns the tap plus the sample rate discovered at creation time.
+    /// Returns the tap, the sample rate, and the channel layout the tap
+    /// actually delivers, all discovered at creation time.
     ///
     /// Retained as a named constructor (rather than inlined into
     /// `CaptureState::start`) because the Core Audio setup is ~100 lines and
@@ -65,7 +67,7 @@ impl TapResources {
     #[allow(clippy::single_call_fn)]
     unsafe fn new(
         _consumer: &Arc<dyn AudioFrameConsumer>,
-    ) -> Result<(Self, u32), AudioCaptureError> {
+    ) -> Result<(Self, u32, AudioTapChannelMode), AudioCaptureError> {
         let excluded = {
             let excluded = NSMutableArray::array();
             let process_id = {
@@ -101,12 +103,7 @@ impl TapResources {
             }
             excluded
         };
-        let description = unsafe {
-            CATapDescription::initMonoGlobalTapButExcludeProcesses(
-                CATapDescription::alloc(),
-                &excluded,
-            )
-        };
+        let (description, requested_mode) = unsafe { global_tap_description(&excluded) };
 
         let name = ns_string!("Wallpaper Engine System Audio Tap");
         let uuid = NSUUID::UUID();
@@ -161,12 +158,22 @@ impl TapResources {
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let sample_rate = format.mSampleRate as u32;
+        // The tap's own format is the authority on what it will deliver: a
+        // stereo description that ended up single-channel is reported as mono.
+        let channel_mode = if requested_mode == AudioTapChannelMode::Stereo
+            && format.mChannelsPerFrame >= 2
+        {
+            AudioTapChannelMode::Stereo
+        } else {
+            AudioTapChannelMode::Mono
+        };
         Ok((
             Self {
                 id: process_tap_id,
                 uid: tap_uid,
             },
             sample_rate,
+            channel_mode,
         ))
     }
 }
@@ -266,11 +273,13 @@ impl IoProcResources {
         aggregate: &AggregateResources,
         consumer: Arc<dyn AudioFrameConsumer>,
         sample_rate: u32,
+        channel_mode: AudioTapChannelMode,
     ) -> Result<Self, AudioCaptureError> {
         let callback_state = Box::new(CallbackState {
             consumer,
-            mono: Mutex::new([0.0; 1024]),
+            scratch: Mutex::new([0.0; CallbackState::SCRATCH_SAMPLES]),
             sample_rate: AtomicU32::new(sample_rate),
+            channel_mode,
         });
         let client_data = (&raw const *callback_state).cast_mut().cast::<c_void>();
         let mut io_proc_id = None;
@@ -298,6 +307,7 @@ impl IoProcResources {
 struct CaptureState {
     consumer: Arc<dyn AudioFrameConsumer>,
     sample_rate: u32,
+    channel_mode: AudioTapChannelMode,
     running: bool,
     // Drop order (reverse declaration): io_proc → aggregate → tap.
     tap: Option<TapResources>,
@@ -308,9 +318,10 @@ struct CaptureState {
 impl CaptureState {
     fn start(&mut self) -> Result<(), AudioCaptureError> {
         let result = objc2::rc::autoreleasepool(|_| unsafe {
-            let (tap, sample_rate) = TapResources::new(&self.consumer)?;
+            let (tap, sample_rate, channel_mode) = TapResources::new(&self.consumer)?;
             self.tap = Some(tap);
             self.sample_rate = sample_rate;
+            self.channel_mode = channel_mode;
 
             let aggregate = AggregateResources::new(self.tap.as_ref().unwrap())?;
             self.aggregate = Some(aggregate);
@@ -319,6 +330,7 @@ impl CaptureState {
                 self.aggregate.as_ref().unwrap(),
                 self.consumer.clone(),
                 self.sample_rate,
+                self.channel_mode,
             )?;
             self.io_proc = Some(io_proc);
 
@@ -330,6 +342,15 @@ impl CaptureState {
                 return Err(status_error(status, "AudioDeviceStart"));
             }
 
+            // The fallback is silent otherwise, and a mono tap changes what the
+            // spectrum can mean for every consumer downstream.
+            log::info!(
+                "[wallpaper-core audio] system audio tap started at {sample_rate} Hz, {}",
+                match self.channel_mode {
+                    AudioTapChannelMode::Stereo => "stereo",
+                    AudioTapChannelMode::Mono => "mono (no usable stereo tap)",
+                }
+            );
             self.running = true;
             Ok(())
         });
@@ -357,11 +378,17 @@ impl Drop for CaptureState {
 
 struct CallbackState {
     consumer: Arc<dyn AudioFrameConsumer>,
-    mono: Mutex<[f32; 1024]>,
+    /// Preallocated so the real-time I/O proc never allocates; sized for the
+    /// widest layout (`CHUNK_FRAMES` interleaved stereo frames).
+    scratch: Mutex<[f32; Self::SCRATCH_SAMPLES]>,
     sample_rate: AtomicU32,
+    channel_mode: AudioTapChannelMode,
 }
 
 impl CallbackState {
+    const CHUNK_FRAMES: usize = 1024;
+    const SCRATCH_SAMPLES: usize = Self::CHUNK_FRAMES * 2;
+
     /// C ABI I/O proc passed to `AudioDeviceCreateIOProcID`. Kept as a named
     /// associated function because it must cross the FFI boundary as a stable
     /// function pointer — closures cannot be used here.
@@ -384,19 +411,30 @@ impl CallbackState {
         let Ok(frame_count) = input_data.frame_count() else {
             return NO_ERR;
         };
-        let Ok(mut mono) = state.mono.lock() else {
+        let Ok(mut scratch) = state.scratch.lock() else {
             return NO_ERR;
         };
         let sample_rate = state.sample_rate.load(Ordering::Relaxed);
+        let stereo = state.channel_mode == AudioTapChannelMode::Stereo;
         // Fixed scratch storage keeps even larger device buffers allocation-free.
-        for frame_offset in (0..frame_count).step_by(mono.len()) {
-            let chunk_frames = (frame_count - frame_offset).min(mono.len());
-            let chunk = &mut mono[..chunk_frames];
-            if input_data.copy_to_mono_f32(frame_offset, chunk).is_err() {
-                return NO_ERR;
-            }
-            if let Ok(frames) = MonoPcmF32::borrowed(sample_rate, chunk) {
-                let _ = state.consumer.submit_mono_audio_frames(frames);
+        for frame_offset in (0..frame_count).step_by(Self::CHUNK_FRAMES) {
+            let chunk_frames = (frame_count - frame_offset).min(Self::CHUNK_FRAMES);
+            if stereo {
+                let chunk = &mut scratch[..chunk_frames * 2];
+                if input_data.copy_to_stereo_f32(frame_offset, chunk).is_err() {
+                    return NO_ERR;
+                }
+                if let Ok(frames) = InterleavedStereoF32::new(sample_rate, chunk) {
+                    let _ = state.consumer.submit_audio_frames(frames);
+                }
+            } else {
+                let chunk = &mut scratch[..chunk_frames];
+                if input_data.copy_to_mono_f32(frame_offset, chunk).is_err() {
+                    return NO_ERR;
+                }
+                if let Ok(frames) = MonoPcmF32::borrowed(sample_rate, chunk) {
+                    let _ = state.consumer.submit_mono_audio_frames(frames);
+                }
             }
         }
 
@@ -425,6 +463,18 @@ impl PlatformAudioCaptureBackend {
             permission_granted_hint: false,
         })
     }
+
+    /// Returns the channel layout of the running tap, or `None` when capture
+    /// is not running. This is the measured mode, not the requested one: on a
+    /// host without a usable stereo tap it reports
+    /// [`AudioTapChannelMode::Mono`].
+    #[must_use]
+    pub fn tap_channel_mode(&self) -> Option<AudioTapChannelMode> {
+        self.state
+            .as_ref()
+            .filter(|state| state.running)
+            .map(|state| state.channel_mode)
+    }
 }
 
 impl AudioCaptureBackend for PlatformAudioCaptureBackend {
@@ -448,6 +498,7 @@ impl AudioCaptureBackend for PlatformAudioCaptureBackend {
         let mut state = CaptureState {
             consumer,
             sample_rate: 48_000,
+            channel_mode: AudioTapChannelMode::Mono,
             running: false,
             tap: None,
             aggregate: None,
@@ -487,6 +538,33 @@ fn status_error(status: i32, operation: &str) -> AudioCaptureError {
     AudioCaptureError::Platform(format!("{operation} failed (OSStatus={status})"))
 }
 
+/// Builds the global-tap description, preferring a stereo tap.
+///
+/// `initStereoGlobalTapButExcludeProcesses:` is not present on every supported
+/// host, and Core Audio may still refuse to build the description, so both the
+/// missing-selector and the nil-result cases fall back to the mono tap rather
+/// than failing capture outright. The caller reconciles the returned mode
+/// against the tap's actual stream format.
+unsafe fn global_tap_description(
+    excluded: &NSMutableArray<NSNumber>,
+) -> (Retained<CATapDescription>, AudioTapChannelMode) {
+    let selector = sel!(initStereoGlobalTapButExcludeProcesses:);
+    if CATapDescription::class().responds_to(selector) {
+        let allocated = CATapDescription::alloc();
+        let description: Option<Retained<CATapDescription>> = unsafe {
+            msg_send![allocated, initStereoGlobalTapButExcludeProcesses: &**excluded as &AnyObject]
+        };
+        if let Some(description) = description {
+            return (description, AudioTapChannelMode::Stereo);
+        }
+    }
+
+    let description = unsafe {
+        CATapDescription::initMonoGlobalTapButExcludeProcesses(CATapDescription::alloc(), excluded)
+    };
+    (description, AudioTapChannelMode::Mono)
+}
+
 const fn fourcc(bytes: [u8; 4]) -> u32 {
     ((bytes[0] as u32) << 24)
         | ((bytes[1] as u32) << 16)
@@ -499,6 +577,7 @@ trait AudioBufferListExt {
     fn buffer_count(&self) -> usize;
     fn frame_count(&self) -> Result<usize, ()>;
     fn copy_to_mono_f32(&self, frame_offset: usize, mono: &mut [f32]) -> Result<(), ()>;
+    fn copy_to_stereo_f32(&self, frame_offset: usize, stereo: &mut [f32]) -> Result<(), ()>;
 }
 
 trait AudioBufferExt {
@@ -563,6 +642,73 @@ impl AudioBufferListExt for AudioBufferList {
         let total_channels = total_channels as f32;
         for sample in mono {
             *sample /= total_channels;
+        }
+        Ok(())
+    }
+
+    /// Writes `stereo.len() / 2` interleaved LR frames starting at
+    /// `frame_offset`. Channels are assigned by their global position across
+    /// the buffer list: even channels feed left, odd channels feed right, and a
+    /// single-channel source is duplicated into both sides.
+    fn copy_to_stereo_f32(&self, frame_offset: usize, stereo: &mut [f32]) -> Result<(), ()> {
+        if stereo.is_empty() || !stereo.len().is_multiple_of(2) {
+            return Err(());
+        }
+        let frames = stereo.len() / 2;
+        let frame_end = frame_offset.checked_add(frames).ok_or(())?;
+        if frame_end > self.frame_count()? {
+            return Err(());
+        }
+
+        let first = self.buffer_at(0).ok_or(())?;
+        if self.buffer_count() == 1 && first.mNumberChannels == 2 {
+            let source = unsafe {
+                std::slice::from_raw_parts(
+                    first.mData.cast::<f32>().add(frame_offset * 2),
+                    stereo.len(),
+                )
+            };
+            stereo.copy_from_slice(source);
+            return Ok(());
+        }
+
+        let mut side_channels = [0usize; 2];
+        let mut global_channel = 0usize;
+        stereo.fill(0.0);
+        for index in 0..self.buffer_count() {
+            let buffer = self.buffer_at(index).ok_or(())?;
+            let channels = usize::try_from(buffer.mNumberChannels).map_err(|_| ())?;
+            let source = unsafe {
+                std::slice::from_raw_parts(
+                    buffer.mData.cast::<f32>().add(frame_offset * channels),
+                    frames * channels,
+                )
+            };
+            for channel in 0..channels {
+                let side = (global_channel + channel) % 2;
+                side_channels[side] = side_channels[side].checked_add(1).ok_or(())?;
+                for (frame, samples) in source.chunks_exact(channels).enumerate() {
+                    stereo[(frame * 2) + side] += samples[channel];
+                }
+            }
+            global_channel = global_channel.checked_add(channels).ok_or(())?;
+        }
+
+        if side_channels[1] == 0 {
+            // A mono source has no right channel of its own; both sides carry it.
+            for frame in 0..frames {
+                stereo[(frame * 2) + 1] = stereo[frame * 2];
+            }
+            side_channels[1] = side_channels[0];
+        }
+        if side_channels[0] == 0 {
+            return Err(());
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        let divisors = [side_channels[0] as f32, side_channels[1] as f32];
+        for (index, sample) in stereo.iter_mut().enumerate() {
+            *sample /= divisors[index % 2];
         }
         Ok(())
     }
@@ -699,5 +845,56 @@ mod tests {
             assert!(buffers.as_list().copy_to_mono_f32(0, &mut mono).is_err());
             assert_eq!(mono, [-1.0; 2]);
         }
+    }
+
+    #[test]
+    fn interleaved_stereo_buffer_is_copied_without_downmixing() {
+        let mut samples = [1.0, -1.0, 0.25, -0.25, 0.5, -0.5];
+        let buffers = TestBufferList::new([buffer(2, &mut samples)]);
+        let mut stereo = [0.0; 4];
+        buffers.as_list().copy_to_stereo_f32(1, &mut stereo).unwrap();
+        assert_eq!(stereo, [0.25, -0.25, 0.5, -0.5]);
+    }
+
+    #[test]
+    fn separate_channel_buffers_keep_left_and_right_apart() {
+        let mut left = [1.0, 0.5];
+        let mut right = [-1.0, -0.5];
+        let buffers = TestBufferList::new([buffer(1, &mut left), buffer(1, &mut right)]);
+        let mut stereo = [0.0; 4];
+        buffers.as_list().copy_to_stereo_f32(0, &mut stereo).unwrap();
+        assert_eq!(stereo, [1.0, -1.0, 0.5, -0.5]);
+    }
+
+    #[test]
+    fn surround_channels_fold_onto_their_own_side() {
+        // Four channels: L, R, Ls, Rs. Each side averages its own members and
+        // never borrows from the other.
+        let mut samples = [1.0, -1.0, 0.0, 0.0, 0.5, -0.5, 0.5, -0.5];
+        let buffers = TestBufferList::new([buffer(4, &mut samples)]);
+        let mut stereo = [0.0; 4];
+        buffers.as_list().copy_to_stereo_f32(0, &mut stereo).unwrap();
+        assert_eq!(stereo, [0.5, -0.5, 0.5, -0.5]);
+    }
+
+    #[test]
+    fn mono_source_is_duplicated_rather_than_left_silent_on_the_right() {
+        let mut samples = [0.25, 0.75];
+        let buffers = TestBufferList::new([buffer(1, &mut samples)]);
+        let mut stereo = [0.0; 4];
+        buffers.as_list().copy_to_stereo_f32(0, &mut stereo).unwrap();
+        assert_eq!(stereo, [0.25, 0.25, 0.75, 0.75]);
+    }
+
+    #[test]
+    fn stereo_copy_rejects_out_of_range_and_odd_requests() {
+        let mut samples = [1.0, -1.0, 0.25, -0.25];
+        let buffers = TestBufferList::new([buffer(2, &mut samples)]);
+        let mut stereo = [-2.0; 4];
+        assert!(buffers.as_list().copy_to_stereo_f32(1, &mut stereo).is_err());
+        assert_eq!(stereo, [-2.0; 4]);
+        let mut odd = [-2.0; 3];
+        assert!(buffers.as_list().copy_to_stereo_f32(0, &mut odd).is_err());
+        assert_eq!(odd, [-2.0; 3]);
     }
 }

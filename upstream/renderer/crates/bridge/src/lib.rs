@@ -11,6 +11,7 @@ pub mod engine;
 pub mod library;
 pub mod logging;
 pub mod login;
+pub mod media;
 pub mod paths;
 mod power;
 pub mod project;
@@ -23,8 +24,10 @@ pub use power::handle_power_change;
 mod tests;
 
 pub use api::{
-    BridgeAppSnapshot, BridgeComboOption, BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplayMutationBundle,
-    BridgeDisplaySettingsRow, BridgeError, BridgeErrorKind, BridgeLibraryScanStatus,
+    BridgeAppSnapshot, BridgeAudioSpectrum, BridgeComboOption, BridgeDirectoryMode,
+    BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplayMutationBundle,
+    BridgeDisplaySettingsRow, BridgeError, BridgeErrorKind, BridgeFileFilter,
+    BridgeLibraryScanStatus,
     BridgeLibrarySnapshot, BridgeLockScreenScene, BridgeLogLevel, BridgeLogStatus,
     BridgeMonitorInfoRow, BridgeMonitorInformationSnapshot, BridgePlaybackState,
     BridgePropertyDescriptor, BridgePropertyKind, BridgePropertyValue, BridgeScalingMode,

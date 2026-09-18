@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use wallpaper_core::{
     media::audio::{
         AudioCaptureBackend, AudioCaptureError, AudioFrameConsumer, AudioResponseController,
-        AudioResponseEngine, InterleavedStereoF32,
+        AudioResponseEngine, InterleavedStereoF32, MonoPcmF32,
     },
     project::SceneHandle,
 };
@@ -12,6 +12,7 @@ use wallpaper_core::{
 struct FakeEngine {
     toggles: Mutex<Vec<(SceneHandle, bool)>>,
     submitted_frames: Mutex<Vec<(u32, u32)>>,
+    submitted_mono_frames: Mutex<Vec<(u32, u32)>>,
 }
 
 impl AudioFrameConsumer for FakeEngine {
@@ -20,6 +21,14 @@ impl AudioFrameConsumer for FakeEngine {
         frames: InterleavedStereoF32<'_>,
     ) -> Result<(), AudioCaptureError> {
         self.submitted_frames
+            .lock()
+            .unwrap()
+            .push((frames.sample_rate(), frames.frame_count()));
+        Ok(())
+    }
+
+    fn submit_mono_audio_frames(&self, frames: MonoPcmF32<'_>) -> Result<(), AudioCaptureError> {
+        self.submitted_mono_frames
             .lock()
             .unwrap()
             .push((frames.sample_rate(), frames.frame_count()));

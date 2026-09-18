@@ -60,6 +60,45 @@ final class WebPanelPerformanceSettingsTests: XCTestCase {
     XCTAssertEqual(profile.renderScale, 0.5, "Changing one field must not reset the other")
   }
 
+  func testSceneOptimizationDefaultsOnAndRoundTripsThroughTheEngine() async throws {
+    let context = try Context()
+    defer { context.tearDown() }
+    context.store.settingsSnapshot = BridgeSnapshotFixtures.settings()
+
+    let shipped = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])
+    XCTAssertEqual(
+      shipped["sceneOptimization"] as? Bool, true,
+      "Scene optimisation ships on; a page that renders it off would invert the default")
+
+    try await context.controller.perform(
+      "setting", body: ["key": "sceneOptimization", "value": false])
+
+    XCTAssertEqual(context.bridge.sceneOptimization, [false])
+    let off = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])
+    XCTAssertEqual(
+      off["sceneOptimization"] as? Bool, false,
+      "The page must re-render from the snapshot the engine returned, not from the click")
+
+    try await context.controller.perform(
+      "setting", body: ["key": "sceneOptimization", "value": true])
+
+    XCTAssertEqual(context.bridge.sceneOptimization, [false, true])
+    let on = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])
+    XCTAssertEqual(on["sceneOptimization"] as? Bool, true)
+  }
+
+  func testNonBooleanSceneOptimizationValueIsRefused() async throws {
+    let context = try Context()
+    defer { context.tearDown() }
+
+    do {
+      try await context.controller.perform(
+        "setting", body: ["key": "sceneOptimization", "value": 1])
+      XCTFail("A numeric value must not be accepted for a switch")
+    } catch {}
+    XCTAssertTrue(context.bridge.sceneOptimization.isEmpty)
+  }
+
   func testSnapshotPublishesPerformanceSettingsUnderTheDocumentedKeys() throws {
     let context = try Context()
     defer { context.tearDown() }
@@ -155,6 +194,7 @@ private final class RecordingBridge: WallpaperBridge {
   @MainActor var renderScales: [Float] = []
   @MainActor var videoBackends: [String] = []
   @MainActor var batteryProfiles: [Profile] = []
+  @MainActor var sceneOptimization: [Bool] = []
 
   override func setRenderScale(scale: Float) async throws -> BridgeSnapshotBundle {
     await record { $0.renderScales.append(scale) }
@@ -162,6 +202,15 @@ private final class RecordingBridge: WallpaperBridge {
 
   override func setVideoBackend(mode: String) async throws -> BridgeSnapshotBundle {
     await record { $0.videoBackends.append(mode) }
+  }
+
+  /// Returns the setting applied, the way the engine does: the page re-renders from
+  /// this, so a test that returned the old value could not tell acceptance from a
+  /// silently dropped click.
+  override func setSceneOptimizationEnabled(enabled: Bool) async throws -> BridgeSnapshotBundle {
+    var bundle = await record { $0.sceneOptimization.append(enabled) }
+    bundle.settings.sceneOptimizationEnabled = enabled
+    return bundle
   }
 
   override func setBatteryQualityProfile(

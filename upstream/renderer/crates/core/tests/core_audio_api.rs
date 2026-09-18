@@ -2,7 +2,9 @@ use std::future::Future;
 
 use wallpaper_core::{
     DisplayDesc, EngineError, WallpaperEngine,
-    media::audio::{AudioCaptureError, AudioFrameConsumer, AudioVolume, InterleavedStereoF32},
+    media::audio::{
+        AudioCaptureError, AudioFrameConsumer, AudioVolume, InterleavedStereoF32, MonoPcmF32,
+    },
     project::{SceneDesc, SceneHandle},
 };
 
@@ -129,8 +131,13 @@ fn macos_engine_exposes_audio_response_methods() {
         assert_async_audio_response_api;
     let submit: fn(&WallpaperEngine, InterleavedStereoF32<'_>) -> Result<(), AudioCaptureError> =
         <WallpaperEngine as AudioFrameConsumer>::submit_audio_frames;
+    // The engine keeps a separate mono entry point: a mono capture must never
+    // reach the interleaved one, which downstream reports as genuine stereo.
+    let submit_mono: fn(&WallpaperEngine, MonoPcmF32<'_>) -> Result<(), AudioCaptureError> =
+        <WallpaperEngine as AudioFrameConsumer>::submit_mono_audio_frames;
 
     let _ = submit;
+    let _ = submit_mono;
 }
 
 #[test]

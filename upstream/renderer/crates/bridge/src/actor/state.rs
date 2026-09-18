@@ -61,6 +61,13 @@ pub struct BridgeActorState {
     pub filter_video: bool,
     pub filter_webpage: bool,
     pub filter_unknown: bool,
+    /// Web pages that have registered an audio listener, keyed by wallpaper id
+    /// and then by the display their web view renders on.
+    ///
+    /// A web wallpaper has no scene handle, so it is invisible to the
+    /// handle-based audio accounting. Without this the system capture tap
+    /// would stay shut for a display showing nothing but web wallpapers.
+    pub web_audio_subscribers: BTreeMap<String, BTreeSet<u32>>,
 }
 
 impl Default for BridgeActorState {
@@ -90,6 +97,7 @@ impl Default for BridgeActorState {
             filter_video: true,
             filter_webpage: true,
             filter_unknown: true,
+            web_audio_subscribers: BTreeMap::new(),
         }
     }
 }

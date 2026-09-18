@@ -79,6 +79,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
             let webHost = WebWallpaperHost(bridge: store.bridge)
             webWallpaperHost = webHost
+            // The panel distinguishes the user's setting from what is actually
+            // being delivered, which only the host knows.
+            store.webWallpaperDeliveryStatus = { [weak webHost] in
+                webHost?.deliveryStatus ?? WebWallpaperHost.DeliveryStatus()
+            }
             webHost.onError = { [weak self] message in
                 self?.lastError = WallpaperActionError(message: message)
                 self?.rebuildMenu()

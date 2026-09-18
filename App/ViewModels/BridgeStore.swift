@@ -25,6 +25,12 @@ final class BridgeStore {
     var latestBridgeErrorRevision: UInt64
     var lockScreenWallpaper: LockScreenWallpaperService?
     @ObservationIgnored var onSnapshotApplied: (() -> Void)?
+    /// Reads live web-wallpaper delivery state from whoever owns the web host.
+    /// A closure rather than a reference because the host belongs to the app
+    /// delegate and outlives no snapshot; nil while no host is running, which
+    /// the panel reports as unknown rather than as "nothing is being
+    /// delivered".
+    @ObservationIgnored var webWallpaperDeliveryStatus: (@MainActor () -> WebWallpaperHost.DeliveryStatus)?
     let editorState = WallpaperEditorState()
     private(set) var activatingWallpaperID: String?
     private(set) var applyingWallpaperID: String?
@@ -287,6 +293,13 @@ final class BridgeStore {
         }
     }
 
+    func setMediaIntegrationEnabledAsync(wallpaperId: String, enabled: Bool) async throws {
+        beginWallpaperEdit(wallpaperId)
+        defer { endWallpaperEdit(wallpaperId) }
+        let bundle = try await bridge.setMediaIntegrationEnabled(wallpaperId: wallpaperId, enabled: enabled)
+        apply(bundle)
+    }
+
     func setDisplayConfigEnabledAsync(
         wallpaperId: String,
         displayId: String,
@@ -339,6 +352,15 @@ final class BridgeStore {
         beginWallpaperEdit(wallpaperId)
         defer { endWallpaperEdit(wallpaperId) }
         let bundle = try await bridge.editProperty(wallpaperId: wallpaperId, propertyId: propertyId, value: value)
+        apply(bundle)
+    }
+
+    /// The path a `file` or `directory` property points at. `nil` clears it; the engine
+    /// stores the string verbatim, so what is passed here is what the panel reads back.
+    func setPropertyPathAsync(wallpaperId: String, propertyId: String, path: String?) async throws {
+        beginWallpaperEdit(wallpaperId)
+        defer { endWallpaperEdit(wallpaperId) }
+        let bundle = try await bridge.setPropertyPath(wallpaperId: wallpaperId, propertyId: propertyId, path: path)
         apply(bundle)
     }
 
@@ -422,6 +444,14 @@ final class BridgeStore {
 
     func setSharedVideoDecodeEnabledAsync(_ enabled: Bool) async throws {
         let bundle = try await bridge.setSharedVideoDecodeEnabled(enabled: enabled)
+        apply(bundle)
+    }
+
+    /// Scene subgraph reuse and redundant-pass removal. The engine publishes the saved
+    /// preference rather than a reading taken from a running scene, so the snapshot this
+    /// returns is what the page reports back.
+    func setSceneOptimizationEnabledAsync(_ enabled: Bool) async throws {
+        let bundle = try await bridge.setSceneOptimizationEnabled(enabled: enabled)
         apply(bundle)
     }
 
@@ -624,6 +654,7 @@ final class BridgeStore {
                 sharedVideoDecodeEnabled: false,
                 sharedVideoDecodeSessions: 0,
                 sharedVideoDecodeConsumers: 0,
+                sceneOptimizationEnabled: true,
                 renderScale: 1,
                 preferredRenderScale: 1,
                 batteryProfileEnabled: false,

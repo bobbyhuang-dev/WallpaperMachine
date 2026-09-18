@@ -16,8 +16,8 @@ use futures_util::future::{BoxFuture, FutureExt};
 #[cfg(test)]
 use wallpaper_core::project::SceneTemplate;
 use wallpaper_core::{
-    DisplaySelector, DisplaySnapshotEntry, EngineError, FirstFrameCallback, WallpaperAssignment,
-    WallpaperEngine,
+    AudioSpectrum128, DisplaySelector, DisplaySnapshotEntry, EngineError, FirstFrameCallback,
+    WallpaperAssignment, WallpaperEngine,
     media::audio::{AudioCaptureController, AudioVolume, PlatformAudioCaptureBackend},
     project::{ScalingMode, SceneDesc, SceneHandle, SceneResult},
     render::RendererSurfaceCounters,
@@ -116,6 +116,31 @@ pub trait EngineFacade: Send + Sync + 'static {
     fn set_shared_video_decode_enabled(&self, enabled: bool) -> Result<(), EngineError> {
         let _ = enabled;
         Ok(())
+    }
+    /// Turns the scene renderer's static-subgraph caching and redundant
+    /// copy-pass elimination on or off for the whole process. On by default.
+    ///
+    /// Applied live to running scenes: it changes how a frame is built, not
+    /// what the scene is, so it must never force a rebuild.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the renderer rejects the call.
+    fn set_scene_optimization_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        let _ = enabled;
+        Ok(())
+    }
+    /// The most recent process-wide audio analysis, or `None` when no analysis
+    /// has been produced yet.
+    ///
+    /// One analysis serves the whole process: it is not per scene and not per
+    /// display, so a web page reads the same bins a scene does.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the renderer rejects the call.
+    fn current_audio_spectrum(&self) -> Result<Option<AudioSpectrum128>, EngineError> {
+        Ok(None)
     }
     /// What the renderer has switched on and what its decode is doing now.
     fn video_pipeline_state(&self) -> RendererVideoPipelineState {
@@ -249,6 +274,14 @@ impl EngineFacade for RealEngineFacade {
 
     fn set_shared_video_decode_enabled(&self, enabled: bool) -> Result<(), EngineError> {
         self.engine.set_shared_video_decode_enabled(enabled)
+    }
+
+    fn set_scene_optimization_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        self.engine.set_scene_optimization_enabled(enabled)
+    }
+
+    fn current_audio_spectrum(&self) -> Result<Option<AudioSpectrum128>, EngineError> {
+        self.engine.current_audio_spectrum()
     }
 
     fn video_pipeline_state(&self) -> RendererVideoPipelineState {
@@ -575,6 +608,8 @@ pub struct FakeEngineFacade {
     content_pacing_enabled: Arc<ArcSwap<bool>>,
     shared_video_decode_enabled: Arc<ArcSwap<bool>>,
     shared_video_decode_counts: Arc<ArcSwap<(u32, u32)>>,
+    scene_optimization_calls: Arc<ArcSwap<Vec<bool>>>,
+    audio_spectrum: Arc<ArcSwap<Option<AudioSpectrum128>>>,
     mouse_poll_calls: Arc<ArcSwap<Vec<()>>>,
     mouse_poll_block: Arc<SegQueue<ReconcileBlockGate>>,
     mouse_input: Arc<ArcSwap<(f64, f64)>>,
@@ -747,6 +782,17 @@ impl FakeEngineFacade {
     #[must_use]
     pub fn audio_capture_suspend_calls(&self) -> Vec<bool> {
         load_log(&self.audio_capture_suspend_calls)
+    }
+
+    /// Every scene-optimization change the bridge pushed, in order.
+    #[must_use]
+    pub fn scene_optimization_calls(&self) -> Vec<bool> {
+        load_log(&self.scene_optimization_calls)
+    }
+
+    /// Sets what the next spectrum read returns. `None` is "no analysis yet".
+    pub fn set_audio_spectrum(&self, spectrum: Option<AudioSpectrum128>) {
+        self.audio_spectrum.store(Arc::new(spectrum));
     }
 
     #[must_use]
@@ -1232,6 +1278,15 @@ impl EngineFacade for FakeEngineFacade {
     fn set_shared_video_decode_enabled(&self, enabled: bool) -> Result<(), EngineError> {
         self.shared_video_decode_enabled.store(Arc::new(enabled));
         Ok(())
+    }
+
+    fn set_scene_optimization_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        push_log(&self.scene_optimization_calls, enabled);
+        Ok(())
+    }
+
+    fn current_audio_spectrum(&self) -> Result<Option<AudioSpectrum128>, EngineError> {
+        Ok(**self.audio_spectrum.load())
     }
 
     fn video_pipeline_state(&self) -> RendererVideoPipelineState {

@@ -5,6 +5,7 @@
 #include "SceneWallpaper.hpp"
 #include "SceneWallpaperSurface.hpp"
 #include "Utils/Logging.h"
+#include "VulkanRender/StaticSubgraphCache.hpp"
 #include "Video/SharedVideoSession.hpp"
 #include "Video/VideoFramePacing.hpp"
 
@@ -699,6 +700,36 @@ extern "C" uint32_t owe_shared_video_decode_session_count(void)
 extern "C" uint32_t owe_shared_video_decode_consumer_count(void)
 {
     return wallpaper::video::SharedVideoDecodeConsumerCount();
+}
+
+extern "C" int owe_audio_spectrum_is_stereo(void)
+{
+    const auto snapshot = wallpaper::audio::CurrentAudioSpectrumSnapshot();
+    if (snapshot.generation == 0) return -1;
+    return snapshot.stereo ? 1 : 0;
+}
+
+extern "C" void owe_set_scene_optimization_enabled(bool enabled)
+{
+    wallpaper::vulkan::SetSceneOptimizationEnabled(enabled);
+}
+
+extern "C" bool owe_scene_optimization_enabled(void)
+{
+    return wallpaper::vulkan::SceneOptimizationEnabled();
+}
+
+extern "C" void owe_scene_optimization_stats(
+    uint64_t* out_executed_passes,
+    uint64_t* out_skipped_passes,
+    uint64_t* out_elided_copies,
+    uint64_t* out_pinned_bytes)
+{
+    const auto totals = wallpaper::vulkan::CurrentSceneOptimizationTotals();
+    if (out_executed_passes != nullptr) *out_executed_passes = totals.executed_passes;
+    if (out_skipped_passes != nullptr) *out_skipped_passes = totals.skipped_passes;
+    if (out_elided_copies != nullptr) *out_elided_copies = totals.elided_copies;
+    if (out_pinned_bytes != nullptr) *out_pinned_bytes = totals.pinned_bytes;
 }
 
 extern "C" int owe_audio_submit_mono_frames(

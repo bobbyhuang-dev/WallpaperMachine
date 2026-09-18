@@ -20,10 +20,15 @@ App/                               MacWallpaperEngine application target sources
   Logging/                         AppLog.swift; the only Swift logging entry point
   Services/Appearance/             AppTheme.swift: theme preference model and store
   Services/Desktop/                desktop picture APIs, original-wallpaper ledger, poster sync, presentation policy
+  Services/Diagnostics/            runtime diagnostics session and counter sampling
   Services/GitHub/                 GitHub release client, update models, update store, installer
   Services/Library/                ClientPaths and library import/deletion; owns the app-support layout
   Services/LockScreen/             lock-screen selection overrides and configuration publishing
+  Services/NativeVideo/            AVFoundation video backend: admission, player and host window
   Services/Steam/                  SteamCMD runtime discovery and setup state
+  Services/SystemMedia/            system now-playing provider and artwork palette for the web media integration
+  Services/UserAssets/             staging, watching and picking for file/directory wallpaper properties;
+                                   hard-links user selections into <project>/.mwe-user-assets/
   Services/WebWallpaper/           WKWebView host windows and page protocol for web wallpapers
   Services/Workshop/               Workshop query model, browse store, downloader and queue
   ViewModels/                      BridgeStore and editor draft state; observable, no view code
@@ -35,8 +40,8 @@ Shared/                            contracts compiled into both targets: LockScr
 WebUI/                             HTML/CSS/JS control panel; bundled verbatim as the app resource folder WebUI
 Resources/StarterWallpaper/        bundled sample wallpaper (Aurora.mp4, preview.jpg, project.json)
 Tests/Unit/<Domain>/               MacWallpaperEngineTests, grouped Appearance, Desktop, Diagnostics, GitHub,
-                                   Library, LockScreen, Panel, Steam, WebWallpaper, Workshop; hosted in the
-                                   app binary
+                                   Library, LockScreen, NativeVideo, Panel, Steam, SystemMedia, UserAssets,
+                                   WebWallpaper, Workshop; hosted in the app binary
 Tests/UI/                          MacWallpaperEngineUITests; desktop-driving XCUITest suite
 docs/                              all project documentation; see docs/README.md for the index
 scripts/                           developer command line; Python only

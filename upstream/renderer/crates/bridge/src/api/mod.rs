@@ -9,8 +9,9 @@ use std::{
 pub use error::{BridgeError, BridgeErrorKind};
 use futures_util::Future;
 pub use types::{
-    BridgeAppSnapshot, BridgeComboOption, BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplayMutationBundle,
-    BridgeDisplaySettingsRow, BridgeLibraryScanStatus, BridgeLibrarySnapshot,
+    BridgeAppSnapshot, BridgeAudioSpectrum, BridgeComboOption, BridgeDirectoryMode,
+    BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplayMutationBundle,
+    BridgeDisplaySettingsRow, BridgeFileFilter, BridgeLibraryScanStatus, BridgeLibrarySnapshot,
     BridgeLockScreenScene, BridgeLogLevel, BridgeLogStatus, BridgeMonitorInfoRow,
     BridgeNativeVideoWallpaper,
     BridgeMonitorInformationSnapshot, BridgePlaybackState, BridgePropertyDescriptor,
@@ -50,16 +51,19 @@ use crate::{
             SetDisplayPresentationSuspended,
             SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMirrorMuted, SetMirrorScalingFactor,
             SetMirrorScalingMode, SetMirrorTarget, SetMirrorTargetFps, SetMirrorVolume, SetMuted,
-            SetBatteryQualityProfile, SetContentPacingEnabled,
-            SetPauseOnBatteryPower, SetPresentationSuspended, SetRenderScale,
+            SetBatteryQualityProfile, SetContentPacingEnabled, SetMediaIntegrationEnabled,
+            SetPauseOnBatteryPower, SetPresentationSuspended, SetPropertyPath, SetRenderScale,
             SetRendererCountersEnabled, SetScalingFactor, SetScalingMode,
-            SetSharedVideoDecodeEnabled, SetTargetFps, SetVideoBackend, SetVolume, Shutdown,
+            SetSceneOptimizationEnabled,
+            SetSharedVideoDecodeEnabled, SetTargetFps, SetVideoBackend, SetVolume,
+            SetWebAudioSubscribed, Shutdown,
         },
         state::BridgeActorState,
     },
     config::{ConfigStore, VideoBackendModeCfg},
     engine::{EngineFacade, RealEngineFacade},
     login::LaunchAtLoginController,
+    media::SystemMediaStore,
     paths::BridgePaths,
     power::{PowerSource, PowerWatcher, SystemPowerSource},
 };
@@ -201,6 +205,8 @@ impl<E: EngineFacade> BridgeBuilder<E> {
             actor,
             mouse_poller,
             power_watcher,
+            system_media: SystemMediaStore::default(),
+            engine,
             _config_store: self.config_store,
         })
     }
@@ -386,6 +392,13 @@ pub struct WallpaperBridge {
     mouse_poller: Option<MousePoller>,
     #[allow(dead_code)]
     power_watcher: Option<PowerWatcher<ArcEngineFacade>>,
+    /// Last known system media state, held for replay into pages that load
+    /// after the fact. Process-wide, like the system player it describes, so
+    /// it is deliberately not actor state.
+    system_media: SystemMediaStore,
+    /// The engine the actor drives, kept here so the process-wide audio
+    /// analysis can be read without an actor round trip on every poll.
+    engine: ArcEngineFacade,
     _config_store: Option<ConfigStore>,
 }
 
@@ -458,6 +471,19 @@ impl EngineFacade for ArcEngineFacade {
         enabled: bool,
     ) -> Result<(), wallpaper_core::EngineError> {
         self.0.set_shared_video_decode_enabled(enabled)
+    }
+
+    fn set_scene_optimization_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<(), wallpaper_core::EngineError> {
+        self.0.set_scene_optimization_enabled(enabled)
+    }
+
+    fn current_audio_spectrum(
+        &self,
+    ) -> Result<Option<wallpaper_core::AudioSpectrum128>, wallpaper_core::EngineError> {
+        self.0.current_audio_spectrum()
     }
 
     fn video_pipeline_state(&self) -> crate::engine::RendererVideoPipelineState {
@@ -1247,6 +1273,153 @@ impl WallpaperBridge {
         self.actor.ask(SetSharedVideoDecodeEnabled { enabled }).await
     }
 
+    /// Turns the scene renderer's static-subgraph caching and redundant
+    /// copy-pass elimination on or off for the renderer process.
+    ///
+    /// On by default, and applied to running scenes in place: it changes how a
+    /// frame is built, never what the scene is, so nothing is rebuilt and no
+    /// wallpaper restarts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the setting cannot be saved or the renderer
+    /// rejects the call.
+    pub async fn set_scene_optimization_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<BridgeSnapshotBundle, BridgeError> {
+        self.actor.ask(SetSceneOptimizationEnabled { enabled }).await
+    }
+
+    /// The most recent process-wide audio analysis, or `None` when none has
+    /// been produced. `None` and a spectrum with `stereo` false are different
+    /// states: nothing has been analysed yet, versus a mono capture.
+    ///
+    /// 128 bins: 0..=63 the left channel, 64..=127 the right, low index meaning
+    /// low frequency. `stereo` reports how the signal was captured, not whether
+    /// the halves differ; see [`BridgeAudioSpectrum`].
+    ///
+    /// Synchronous on purpose: this is polled at the page's callback rate and
+    /// reads a process-wide buffer that no actor owns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the renderer rejects the read.
+    pub fn web_audio_spectrum(&self) -> Result<Option<BridgeAudioSpectrum>, BridgeError> {
+        let spectrum = self
+            .engine
+            .current_audio_spectrum()
+            .map_err(|error| BridgeError::engine(error.to_string()))?;
+
+        Ok(spectrum.map(|spectrum| BridgeAudioSpectrum {
+            generation: spectrum.generation,
+            stereo: spectrum.stereo,
+            bins: spectrum.bins.to_vec(),
+        }))
+    }
+
+    /// Records or withdraws one web page as a live consumer of the system
+    /// audio capture.
+    ///
+    /// A web wallpaper has no renderer scene, so without this the capture tap
+    /// stays shut for a display showing only web wallpapers. Withdrawing the
+    /// last consumer closes the tap again. Mute and volume are unrelated: a
+    /// silenced wallpaper still analyses what the system is playing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the renderer rejects the capture change.
+    pub async fn set_web_audio_subscribed(
+        &self,
+        wallpaper_id: String,
+        display_id: u32,
+        subscribed: bool,
+    ) -> Result<(), BridgeError> {
+        self.actor
+            .ask(SetWebAudioSubscribed {
+                wallpaper_id,
+                display_id,
+                subscribed,
+            })
+            .await
+    }
+
+    /// Turns system media integration on or off for one wallpaper.
+    ///
+    /// Off by default. This is the user's consent to look for a system media
+    /// source, not a promise that one exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the wallpaper id is unknown or the setting cannot
+    /// be saved.
+    pub async fn set_media_integration_enabled(
+        &self,
+        wallpaper_id: String,
+        enabled: bool,
+    ) -> Result<BridgeWallpaperMutationBundle, BridgeError> {
+        self.actor
+            .ask(SetMediaIntegrationEnabled {
+                wallpaper_id,
+                enabled,
+            })
+            .await
+    }
+
+    /// Records one system media event so a page loading later can be brought
+    /// up to date.
+    ///
+    /// The bridge neither reads the system player nor delivers to any page:
+    /// the host owns both ends and this only remembers the latest event of
+    /// each kind, verbatim. An event carrying a `generation` older than one
+    /// already stored is dropped rather than overwriting newer state, which is
+    /// what makes a late artwork fetch harmless.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `json` is not an object or its `type` is not a
+    /// media event tag.
+    pub fn submit_system_media_event(&self, json: String) -> Result<(), BridgeError> {
+        let _ = self.system_media.submit(&json)?;
+        Ok(())
+    }
+
+    /// Every retained media event as a JSON array, in replay order, or `None`
+    /// when nothing has been submitted yet.
+    #[must_use]
+    pub fn current_system_media_state(&self) -> Option<String> {
+        self.system_media.current_state_json()
+    }
+
+    /// Stores the path the host staged for a file or directory property, or
+    /// clears it when `path` is `None`.
+    ///
+    /// The value is persisted exactly as given and reaches the page's
+    /// `applyUserProperties` unchanged. The host decides what a page can open,
+    /// so nothing here rewrites, resolves or escapes the path. Refused for any
+    /// other property kind, including texture pickers, which name scene assets
+    /// rather than paths.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the wallpaper or property id is unknown, the
+    /// property is not a file or directory property, or the value cannot be
+    /// saved.
+    pub async fn set_property_path(
+        &self,
+        wallpaper_id: String,
+        property_id: String,
+        path: Option<String>,
+    ) -> Result<BridgeWallpaperMutationBundle, BridgeError> {
+        self.actor
+            .ask(SetPropertyPath {
+                wallpaper_id,
+                property_id,
+                path,
+            })
+            .await
+    }
+
     /// Plain local videos the host should play natively. Empty while the
     /// backend is off.
     ///
@@ -1580,7 +1753,9 @@ impl From<&crate::project::PropertyKind> for BridgePropertyKind {
             crate::project::PropertyKind::TextInput => Self::TextInput,
             crate::project::PropertyKind::Text => Self::Text,
             crate::project::PropertyKind::Group => Self::Group,
+            crate::project::PropertyKind::File => Self::File,
             crate::project::PropertyKind::Directory => Self::Directory,
+            crate::project::PropertyKind::Texture => Self::Texture,
             crate::project::PropertyKind::Unknown(_) => Self::Unknown,
         }
     }

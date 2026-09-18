@@ -19,6 +19,14 @@ pub struct WallpaperConfig {
     pub r#type: String,
     #[serde(default)]
     pub audio: AudioCfg,
+    /// The user's consent for this wallpaper to read system media state.
+    ///
+    /// Off by default, and deliberately so: on current macOS the only system
+    /// now-playing source needs a private entitlement this application does
+    /// not hold, so turning it on may find nothing. Opting in must be a
+    /// decision, not something a wallpaper inherits.
+    #[serde(default)]
+    pub media_integration_enabled: bool,
     #[serde(default)]
     pub monitors: Vec<MonitorRender>,
     #[serde(default)]
@@ -32,6 +40,7 @@ impl Default for WallpaperConfig {
             workshop_id: String::new(),
             r#type: String::new(),
             audio: AudioCfg::default(),
+            media_integration_enabled: false,
             monitors: Vec::new(),
             property_overrides: BTreeMap::new(),
         }

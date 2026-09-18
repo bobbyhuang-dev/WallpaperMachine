@@ -3096,6 +3096,60 @@
         "en" : {"stringUnit" : {"state" : "translated", "value" : "Update download progress"}},
         "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "更新下载进度"}}
       }
+    },
+    "Choose a file, not a folder." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose a file, not a folder."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请选择文件，而不是文件夹。"}}}
+    },
+    "Choose a folder, not a file." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose a folder, not a file."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请选择文件夹，而不是文件。"}}}
+    },
+    "This wallpaper property has a name that cannot be used as a folder." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper property has a name that cannot be used as a folder."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此壁纸属性的名称无法用作文件夹名。"}}}
+    },
+    "The wallpaper folder is missing, so the chosen file cannot be prepared." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The wallpaper folder is missing, so the chosen file cannot be prepared."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "找不到壁纸文件夹，因此无法准备所选文件。"}}}
+    },
+    "%@ could not be prepared for this wallpaper." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "%@ could not be prepared for this wallpaper."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法为此壁纸准备 %@。"}}}
+    },
+    "Choose a file outside the wallpaper’s own prepared assets." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose a file outside the wallpaper’s own prepared assets."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请选择壁纸已准备素材目录之外的文件。"}}}
+    },
+    "%@ cannot be read." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "%@ cannot be read."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法读取 %@。"}}}
+    },
+    "This wallpaper property takes an image: %@." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper property takes an image: %@."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此壁纸属性需要图片：%@。"}}}
+    },
+    "This wallpaper property takes a video: %@." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper property takes a video: %@."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此壁纸属性需要视频：%@。"}}}
+    },
+    "This wallpaper property takes one of: %@." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper property takes one of: %@."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此壁纸属性需要以下格式之一：%@。"}}}
+    },
+    "The wallpaper folder cannot be written to: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The wallpaper folder cannot be written to: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法写入壁纸文件夹：%@"}}}
+    },
+    "The wallpaper folder is read-only, so the chosen file cannot be prepared." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The wallpaper folder is read-only, so the chosen file cannot be prepared."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸文件夹为只读，因此无法准备所选文件。"}}}
+    },
+    "Web wallpaper “%@” uses only the first %lld files in the folder you chose." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Web wallpaper “%@” uses only the first %lld files in the folder you chose."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "网页壁纸“%1$@”只会使用所选文件夹中的前 %2$lld 个文件。"}}}
+    },
+    "Web wallpaper “%@” could not use the file you chose: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Web wallpaper “%@” could not use the file you chose: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "网页壁纸“%1$@”无法使用你选择的文件：%2$@"}}}
+    },
+    "Media integration has not been started." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Media integration has not been started."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "媒体集成尚未启动。"}}}
+    },
+    "This system has no service for reporting what is playing." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This system has no service for reporting what is playing."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此系统未提供用于报告正在播放内容的服务。"}}}
+    },
+    "The system media service on this machine does not provide %@." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The system media service on this machine does not provide %@."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此设备上的系统媒体服务未提供 %@。"}}}
+    },
+    "macOS did not let this app read what is playing. Since macOS 15.4 only Apple-signed apps may." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "macOS did not let this app read what is playing. Since macOS 15.4 only Apple-signed apps may."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 未允许本应用读取正在播放的内容。自 macOS 15.4 起，仅 Apple 签名的应用可读取。"}}}
     }
   },
   "version" : "1.0"

@@ -15,6 +15,23 @@ use std::{
 
 use serde_json::Value;
 
+/// One system-audio analysis result in the layout Wallpaper Engine's web audio
+/// listener expects: 128 values, indices 0..=63 the left channel and 64..=127
+/// the right, low index meaning low frequency.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AudioSpectrum128 {
+    pub generation: u64,
+    /// True only when the captured signal genuinely had two channels. When
+    /// false the two halves are equal because the source was mono, which is
+    /// not the same thing as stereo.
+    pub stereo: bool,
+    pub bins: [f32; AudioSpectrum128::BIN_COUNT],
+}
+
+impl AudioSpectrum128 {
+    pub const BIN_COUNT: usize = 128;
+}
+
 use crate::{
     EngineError,
     media::audio::{AudioVolume, InterleavedStereoF32, MonoPcmF32},
@@ -188,6 +205,54 @@ impl OweBackend {
             UnwindSafeFFI::new("owe_shared_video_decode_enabled")
                 .call(|| sys::owe_shared_video_decode_enabled())
         }
+    }
+
+    /// Turns scene render optimisation on or off for the whole renderer
+    /// process. On by default; switching it off makes every pass execute every
+    /// frame so the two paths can be compared directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if the call unwinds.
+    pub fn set_scene_optimization_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        unsafe {
+            UnwindSafeFFI::new("owe_set_scene_optimization_enabled")
+                .call(|| sys::owe_set_scene_optimization_enabled(enabled))
+        }
+    }
+
+    /// Latest system-audio spectrum, or `None` when no analysis has run yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if the call unwinds.
+    pub fn current_audio_spectrum(&self) -> Result<Option<AudioSpectrum128>, EngineError> {
+        let mut bins = [0.0f32; AudioSpectrum128::BIN_COUNT];
+        let mut generation: u64 = 0;
+        let written = unsafe {
+            UnwindSafeFFI::new("owe_audio_current_spectrum_128").call(|| {
+                sys::owe_audio_current_spectrum_128(
+                    bins.as_mut_ptr(),
+                    AudioSpectrum128::BIN_COUNT,
+                    &raw mut generation,
+                )
+            })?
+        };
+        if written != 0 || generation == 0 {
+            return Ok(None);
+        }
+        let stereo = unsafe {
+            UnwindSafeFFI::new("owe_audio_spectrum_is_stereo")
+                .call(|| sys::owe_audio_spectrum_is_stereo())?
+        };
+        Ok(Some(AudioSpectrum128 {
+            generation,
+            // Anything other than an explicit 1 means the analysis did not
+            // carry two distinct channels. A mono source is never reported as
+            // stereo just because both halves are populated.
+            stereo: stereo == 1,
+            bins,
+        }))
     }
 
     /// Live decoder instances currently serving at least one surface, and the

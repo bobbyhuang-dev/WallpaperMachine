@@ -37,11 +37,14 @@ use crate::{
             SetAudioResponseEnabled, SetBatteryQualityProfile, SetContentPacingEnabled,
             SetDisplayConfigEnabled, SetDisplayEnabled, SetDisplayMode,
             SetDisplayPresentationSuspended,
-            SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMirrorMuted, SetMirrorScalingFactor,
+            SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMediaIntegrationEnabled,
+            SetMirrorMuted, SetMirrorScalingFactor,
             SetMirrorScalingMode, SetMirrorTarget, SetMirrorTargetFps, SetMirrorVolume, SetMuted,
-            SetPauseOnBatteryPower, SetPowerSource, SetPresentationSuspended, SetRenderScale,
+            SetPauseOnBatteryPower, SetPowerSource, SetPresentationSuspended, SetPropertyPath,
+            SetRenderScale,
             SetRendererCountersEnabled, SetScalingFactor, SetScalingMode,
-            SetSharedVideoDecodeEnabled, SetTargetFps, SetVideoBackend, SetVolume,
+            SetSceneOptimizationEnabled, SetSharedVideoDecodeEnabled, SetTargetFps,
+            SetVideoBackend, SetVolume, SetWebAudioSubscribed,
             Shutdown,
         },
         state::BridgeActorState,
@@ -63,7 +66,10 @@ use crate::{
     library::scan,
     login::LaunchAtLoginController,
     paths::BridgePaths,
-    project::{ProjectModel, PropertyKind, PropertyMetadata, PropertyValue},
+    project::{
+        DirectoryMode, FileMedia, ProjectModel, ProjectProperty, PropertyKind, PropertyMetadata,
+        PropertyValue,
+    },
     state::drafts::WallpaperOptionsDraft,
 };
 
@@ -205,6 +211,95 @@ fn duplicate_error(error: &BridgeError) -> BridgeError {
     BridgeError::Error {
         kind: error.kind(),
         message: error.message().to_string(),
+    }
+}
+
+/// Web pages that are registered audio listeners and are in a position to hear
+/// anything: their wallpaper has audio response on and their own display is
+/// not paused.
+///
+/// A page that never registered a listener is not a consumer no matter what
+/// its wallpaper's settings say, which is what keeps the tap shut for the
+/// common case of a web wallpaper that does not use audio at all.
+fn web_audio_consumers(
+    inputs: &ActivationInputs<'_>,
+    subscribers: &BTreeMap<String, BTreeSet<u32>>,
+) -> u32 {
+    if subscribers.is_empty() {
+        return 0;
+    }
+    let Ok(web) = inputs.build_web() else {
+        return 0;
+    };
+
+    u32::try_from(
+        web.iter()
+            .filter(|desc| desc.audio_response_enabled && !desc.paused)
+            .filter(|desc| {
+                subscribers
+                    .get(&desc.wallpaper_id)
+                    .is_some_and(|displays| displays.contains(&desc.display.display_id))
+            })
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
+}
+
+/// Adds the authored kind, and the file/directory options, beside a property's
+/// value in an `applyUserProperties` payload.
+///
+/// Wallpaper Engine passes the property type through to the page, and a page
+/// cannot act on a file or directory property without it: the value alone says
+/// nothing about whether to screen extensions, nor whether the directory is
+/// pulled from on demand or pushed wholesale.
+fn describe_property_kind(
+    property: &ProjectProperty,
+    entry: &mut serde_json::Map<String, serde_json::Value>,
+) {
+    let kind = match &property.kind {
+        PropertyKind::Slider => "slider",
+        PropertyKind::Combo => "combo",
+        PropertyKind::Bool => "bool",
+        PropertyKind::Color => "color",
+        PropertyKind::TextInput => "textinput",
+        PropertyKind::Text => "text",
+        PropertyKind::Group => "group",
+        PropertyKind::File => "file",
+        PropertyKind::Directory => "directory",
+        PropertyKind::Texture => "texture",
+        PropertyKind::Unknown(raw) => raw.as_str(),
+    };
+    let _ = entry.insert(
+        "type".to_string(),
+        serde_json::Value::String(kind.to_string()),
+    );
+
+    let (filter, mode) = match &property.metadata {
+        PropertyMetadata::File { filter } => (Some(filter), None),
+        PropertyMetadata::Directory { filter, mode } => (Some(filter), Some(*mode)),
+        _ => return,
+    };
+    // Absent when the project declared nothing, so a page can tell "any file"
+    // from a filter this build happened to fall back to.
+    if filter.is_some_and(|filter| filter.raw.is_some()) {
+        let media = match filter.map(|filter| filter.media) {
+            Some(FileMedia::Video) => "video",
+            _ => "image",
+        };
+        let _ = entry.insert(
+            "fileFilter".to_string(),
+            serde_json::Value::String(media.to_string()),
+        );
+    }
+    if let Some(mode) = mode {
+        let mode = match mode {
+            DirectoryMode::FetchAll => "fetchall",
+            DirectoryMode::OnDemand => "ondemand",
+        };
+        let _ = entry.insert(
+            "mode".to_string(),
+            serde_json::Value::String(mode.to_string()),
+        );
     }
 }
 
@@ -910,16 +1005,26 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                     .into_os_string()
                     .into_string()
                     .map_err(|_| BridgeError::invalid_input("web wallpaper path is not UTF-8"))?;
+                let model = self.state.project_models.get(&desc.wallpaper_id);
                 let properties = desc
                     .properties
                     .iter()
                     .map(|(id, value)| {
-                        (
-                            id.clone(),
-                            serde_json::json!({ "value": value.to_json() }),
-                        )
+                        let mut entry = serde_json::Map::new();
+                        let _ = entry.insert("value".to_string(), value.to_json());
+                        if let Some(property) = model.and_then(|model| {
+                            model.properties.iter().find(|property| property.id == *id)
+                        }) {
+                            describe_property_kind(property, &mut entry);
+                        }
+                        (id.clone(), serde_json::Value::Object(entry))
                     })
                     .collect::<serde_json::Map<_, _>>();
+                let media_integration_enabled = self
+                    .state
+                    .wallpaper_configs
+                    .get(&desc.wallpaper_id)
+                    .is_some_and(|config| config.media_integration_enabled);
                 Ok(BridgeWebWallpaper {
                     display_id: desc.display.display_id,
                     wallpaper_id: desc.wallpaper_id,
@@ -929,6 +1034,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                     fps: desc.fps,
                     paused: desc.paused,
                     audio_response_enabled: desc.audio_response_enabled,
+                    media_integration_enabled,
                     properties_json: serde_json::Value::Object(properties).to_string(),
                 })
             })
@@ -1053,43 +1159,48 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         Ok(())
     }
 
-    /// System audio capture only needs to run while some display that is
-    /// actually presenting consumes it. Volume and mute are separate controls:
-    /// silencing a wallpaper does not switch off its audio response, and an
-    /// audio-response scene on a hidden display is not a consumer.
+    /// System audio capture only needs to run while something that is actually
+    /// presenting consumes it. Volume and mute are separate controls: silencing
+    /// a wallpaper does not switch off its audio response, and an
+    /// audio-response wallpaper on a hidden display is not a consumer.
+    ///
+    /// Both kinds of consumer count. A scene consumes through its renderer
+    /// handle. A web page has no handle at all and consumes only once it has
+    /// registered an audio listener, so leaving it out would keep the tap shut
+    /// on a display showing nothing but web wallpapers.
     fn audio_capture_suspended(&self) -> bool {
         let displays = self.engine.display_snapshot();
-        let Ok(scenes) = self
-            .activation_inputs(&displays, self.playback_paused())
-            .build()
-        else {
+        let inputs = self.activation_inputs(&displays, self.playback_paused());
+        let Ok(scenes) = inputs.build() else {
             // Without a resolvable scene list, fall back to the coarse global
             // condition rather than guessing that nothing consumes audio.
             return self.playback_paused();
         };
+
         !scenes
             .iter()
             .any(|scene| scene.audio_response_enabled && !scene.paused)
+            && web_audio_consumers(&inputs, &self.state.web_audio_subscribers) == 0
     }
 
-    /// Scenes that both enable audio response and are not paused for their own
-    /// display. This is the same rule the capture tap follows, reported as a
-    /// number so a diagnostic session can see why the tap is open or closed.
+    /// Wallpapers that both enable audio response and are not paused for their
+    /// own display, counting subscribed web pages alongside scenes. This is the
+    /// same rule the capture tap follows, reported as a number so a diagnostic
+    /// session can see why the tap is open or closed.
     fn audio_consumer_count(&self) -> u32 {
         let displays = self.engine.display_snapshot();
-        let Ok(scenes) = self
-            .activation_inputs(&displays, self.playback_paused())
-            .build()
-        else {
+        let inputs = self.activation_inputs(&displays, self.playback_paused());
+        let Ok(scenes) = inputs.build() else {
             return 0;
         };
-        u32::try_from(
-            scenes
-                .iter()
-                .filter(|scene| scene.audio_response_enabled && !scene.paused)
-                .count(),
-        )
-        .unwrap_or(u32::MAX)
+        let scene_consumers = scenes
+            .iter()
+            .filter(|scene| scene.audio_response_enabled && !scene.paused)
+            .count();
+
+        u32::try_from(scene_consumers)
+            .unwrap_or(u32::MAX)
+            .saturating_add(web_audio_consumers(&inputs, &self.state.web_audio_subscribers))
     }
 
     async fn apply_engine_pause(&self, previous_paused: bool) -> Result<(), BridgeError> {
@@ -1669,6 +1780,12 @@ impl<E: EngineFacade + Clone> Message<Bootstrap> for BridgeActor<E> {
         if let Err(error) = self
             .engine
             .set_shared_video_decode_enabled(experimental.shared_video_decode)
+        {
+            self.state.errors.push(error.to_string());
+        }
+        if let Err(error) = self
+            .engine
+            .set_scene_optimization_enabled(self.state.app_config.quality.scene_optimization_enabled)
         {
             self.state.errors.push(error.to_string());
         }
@@ -2765,6 +2882,113 @@ impl<E: EngineFacade + Clone> Message<SetSharedVideoDecodeEnabled> for BridgeAct
     }
 }
 
+impl<E: EngineFacade + Clone> Message<SetSceneOptimizationEnabled> for BridgeActor<E> {
+    type Reply = messages::SetSceneOptimizationEnabledReply;
+
+    async fn handle(
+        &mut self,
+        msg: SetSceneOptimizationEnabled,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.state.app_config.quality.scene_optimization_enabled = msg.enabled;
+        if let Some(store) = &self.config_store {
+            store.save_app_config(&self.state.app_config)?;
+        }
+        // Frame-building strategy, not scene content: running scenes pick it
+        // up where they are, so nothing here rebuilds or reparses anything.
+        self.engine
+            .set_scene_optimization_enabled(msg.enabled)
+            .map_err(|error| BridgeError::engine(error.to_string()))?;
+        self.bump_generation();
+        Ok(self.all_snapshots())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<SetWebAudioSubscribed> for BridgeActor<E> {
+    type Reply = messages::SetWebAudioSubscribedReply;
+
+    async fn handle(
+        &mut self,
+        msg: SetWebAudioSubscribed,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let subscribers = &mut self.state.web_audio_subscribers;
+        if msg.subscribed {
+            let _ = subscribers
+                .entry(msg.wallpaper_id)
+                .or_default()
+                .insert(msg.display_id);
+        } else if let Some(displays) = subscribers.get_mut(&msg.wallpaper_id) {
+            let _ = displays.remove(&msg.display_id);
+            if displays.is_empty() {
+                let _ = subscribers.remove(&msg.wallpaper_id);
+            }
+        }
+
+        // The last consumer of either kind going away has to close the tap,
+        // so this is re-evaluated rather than only ever opened.
+        self.engine
+            .set_audio_capture_suspended(self.audio_capture_suspended())
+            .await
+            .map_err(|error| BridgeError::engine(error.to_string()))
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<SetMediaIntegrationEnabled> for BridgeActor<E> {
+    type Reply = messages::SetMediaIntegrationEnabledReply;
+
+    async fn handle(
+        &mut self,
+        msg: SetMediaIntegrationEnabled,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let wallpaper_config = self
+            .state
+            .wallpaper_draft_mut(&msg.wallpaper_id)?
+            .set_media_integration_enabled_immediate(msg.enabled);
+        self.save_wallpaper(msg.wallpaper_id.clone(), wallpaper_config)?;
+        self.bump_generation();
+        self.wallpaper_bundle(msg.wallpaper_id)
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<SetPropertyPath> for BridgeActor<E> {
+    type Reply = messages::SetPropertyPathReply;
+
+    async fn handle(
+        &mut self,
+        msg: SetPropertyPath,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let model = self.state.project_model(&msg.wallpaper_id)?.clone();
+        let kind = model
+            .properties
+            .iter()
+            .find(|property| property.id == msg.property_id)
+            .map(|property| property.kind.clone())
+            .ok_or_else(|| {
+                BridgeError::invalid_input(format!("unknown property id {}", msg.property_id))
+            })?;
+        // A texture picker names a scene asset, not a path the host may stage,
+        // so it is refused here rather than quietly accepting a path the scene
+        // engine would then fail to resolve.
+        if !matches!(kind, PropertyKind::File | PropertyKind::Directory) {
+            return Err(BridgeError::invalid_input(format!(
+                "property id {} is not a file or directory property",
+                msg.property_id
+            )));
+        }
+
+        let wallpaper_config = self
+            .state
+            .wallpaper_draft_mut(&msg.wallpaper_id)?
+            .set_property_path_immediate(&model, &msg.property_id, msg.path);
+        self.save_wallpaper(msg.wallpaper_id.clone(), wallpaper_config)?;
+        self.bump_generation();
+        self.wallpaper_bundle(msg.wallpaper_id)
+    }
+}
+
 impl<E: EngineFacade + Clone> Message<GetNativeVideoWallpapers> for BridgeActor<E> {
     type Reply = messages::GetNativeVideoWallpapersReply;
 
@@ -3372,7 +3596,9 @@ impl<E: EngineFacade + Clone> Message<EditProperty> for BridgeActor<E> {
         match (&property.kind, &property.metadata, &msg.value) {
             (PropertyKind::Bool, _, BridgePropertyValue::Bool { .. })
             | (PropertyKind::TextInput, _, BridgePropertyValue::String { .. })
-            | (PropertyKind::Directory, _, BridgePropertyValue::String { .. }) => {}
+            | (PropertyKind::File, _, BridgePropertyValue::String { .. })
+            | (PropertyKind::Directory, _, BridgePropertyValue::String { .. })
+            | (PropertyKind::Texture, _, BridgePropertyValue::String { .. }) => {}
             (
                 PropertyKind::Slider,
                 PropertyMetadata::Slider { min, max, .. },

@@ -199,12 +199,38 @@ void AnalyzeAudioResponseMonoBlock(
     AnalyzeMono(mono_pcm, snapshot->average64);
     snapshot->left64 = snapshot->average64;
     snapshot->right64 = snapshot->average64;
+    snapshot->stereo = false;
 
     DeriveBands(snapshot->average64, snapshot->average32, snapshot->average16);
     snapshot->left32 = snapshot->average32;
     snapshot->right32 = snapshot->average32;
     snapshot->left16 = snapshot->average16;
     snapshot->right16 = snapshot->average16;
+}
+
+void AnalyzeAudioResponseStereoBlock(
+    const float* left_pcm,
+    const float* right_pcm,
+    uint32_t frame_count,
+    AudioSpectrumSnapshot* snapshot)
+{
+    if (left_pcm == nullptr || right_pcm == nullptr || snapshot == nullptr ||
+        frame_count < kFftSize) {
+        return;
+    }
+
+    // Each channel carries its own smoothing state across blocks, so the two
+    // spectra are analysed independently rather than derived from one another.
+    AnalyzeMono(left_pcm, snapshot->left64);
+    AnalyzeMono(right_pcm, snapshot->right64);
+    for (size_t band = 0; band < snapshot->average64.size(); ++band) {
+        snapshot->average64[band] = 0.5f * (snapshot->left64[band] + snapshot->right64[band]);
+    }
+    snapshot->stereo = true;
+
+    DeriveBands(snapshot->left64, snapshot->left32, snapshot->left16);
+    DeriveBands(snapshot->right64, snapshot->right32, snapshot->right16);
+    DeriveBands(snapshot->average64, snapshot->average32, snapshot->average16);
 }
 
 void DecayAudioResponseSnapshot(AudioSpectrumSnapshot* snapshot)
@@ -221,15 +247,13 @@ void DecayAudioResponseSnapshot(AudioSpectrumSnapshot* snapshot)
 
     decay_array(snapshot->left64);
     decay_array(snapshot->right64);
-    decay_array(snapshot->average64);
+    for (size_t band = 0; band < snapshot->average64.size(); ++band) {
+        snapshot->average64[band] = 0.5f * (snapshot->left64[band] + snapshot->right64[band]);
+    }
 
+    DeriveBands(snapshot->left64, snapshot->left32, snapshot->left16);
+    DeriveBands(snapshot->right64, snapshot->right32, snapshot->right16);
     DeriveBands(snapshot->average64, snapshot->average32, snapshot->average16);
-    snapshot->left64 = snapshot->average64;
-    snapshot->right64 = snapshot->average64;
-    snapshot->left32 = snapshot->average32;
-    snapshot->right32 = snapshot->average32;
-    snapshot->left16 = snapshot->average16;
-    snapshot->right16 = snapshot->average16;
 }
 
 void ClearAudioResponseSnapshot(AudioSpectrumSnapshot* snapshot)

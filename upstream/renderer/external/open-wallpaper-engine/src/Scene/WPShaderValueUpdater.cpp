@@ -51,6 +51,31 @@ void WPShaderValueUpdater::FrameBegin() {
 
 void WPShaderValueUpdater::FrameEnd() {}
 
+uint32_t WPShaderValueUpdater::FrameVaryingUniforms(SceneNode* node,
+                                                    uint32_t    material_slot) const {
+    // Reflection captured at InitUniforms is the authority. A node the updater
+    // never saw is reported as varying in every way, because absence of a
+    // record is not evidence that nothing advances.
+    if (node == nullptr || ! exists(m_nodeUniformInfoMap, node)) return frame_varying_uniform::kAll;
+    const auto& slot_infos = m_nodeUniformInfoMap.at(node);
+    auto        it         = slot_infos.find(material_slot);
+    if (it == slot_infos.end()) it = slot_infos.find(0);
+    if (it == slot_infos.end()) return frame_varying_uniform::kAll;
+
+    const auto& info  = it->second;
+    uint32_t    flags = frame_varying_uniform::kNone;
+    if (info.has_TIME) flags |= frame_varying_uniform::kTime;
+    if (info.has_DAYTIME) flags |= frame_varying_uniform::kDayTime;
+    if (info.has_POINTERPOSITION) flags |= frame_varying_uniform::kPointer;
+    if (info.has_PARALLAXPOSITION) flags |= frame_varying_uniform::kParallax;
+    if (info.has_BONES) flags |= frame_varying_uniform::kBones;
+    if (info.has_AudioSpectrum16Left || info.has_AudioSpectrum16Right ||
+        info.has_AudioSpectrum32Left || info.has_AudioSpectrum32Right ||
+        info.has_AudioSpectrum64Left || info.has_AudioSpectrum64Right)
+        flags |= frame_varying_uniform::kAudio;
+    return flags;
+}
+
 void WPShaderValueUpdater::RegisterPuppetAttachments(
     WPPuppetLayer layer, std::vector<PuppetAttachment> attachments) {
     auto& group = m_puppetAttachments.emplace_back(

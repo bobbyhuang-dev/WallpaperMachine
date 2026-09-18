@@ -195,6 +195,20 @@ public:
 
     void MarkShareReady(std::string_view key);
 
+    /// Takes a render target out of the reuse pool so its pixels survive into
+    /// the next frame. Fails when the key no longer owns an allocation,
+    /// because another key may already have been handed the same image.
+    bool PinRenderTarget(std::string_view key);
+
+    /// Points `key` at the allocation `source` already owns, so an eliminated
+    /// copy leaves both names reading the same pixels. Both keys are pinned:
+    /// releasing one would let the pool re-issue an image the other still
+    /// reads. Fails when `source` owns no allocation.
+    bool AliasRenderTarget(std::string_view key, std::string_view source);
+
+    /// Allocated size of a render target, or zero when the key owns none.
+    uint64_t RenderTargetBytes(std::string_view key) const;
+
     void RecGenerateMipmaps(vvk::CommandBuffer& cmd, const ImageParameters& image) const;
 
 private:

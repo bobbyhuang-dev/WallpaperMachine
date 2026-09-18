@@ -18,6 +18,24 @@ using sprite_map_t    = Map<usize, SpriteAnimation>;
 using UpdateUniformOp = std::function<void(std::string_view, const ShaderValue&)>;
 using ExistsUniformOp = std::function<bool(std::string_view)>;
 
+/// Uniforms whose value advances on its own, independently of anything the
+/// scene graph records. A material that binds any of these produces a
+/// different image every frame even when nothing else moved.
+///
+/// The set is reported from shader reflection captured at `InitUniforms`, not
+/// from inspecting shader source text.
+namespace frame_varying_uniform
+{
+inline constexpr uint32_t kNone     = 0u;
+inline constexpr uint32_t kTime     = 1u << 0;
+inline constexpr uint32_t kDayTime  = 1u << 1;
+inline constexpr uint32_t kPointer  = 1u << 2;
+inline constexpr uint32_t kParallax = 1u << 3;
+inline constexpr uint32_t kBones    = 1u << 4;
+inline constexpr uint32_t kAudio    = 1u << 5;
+inline constexpr uint32_t kAll      = 0x3Fu;
+} // namespace frame_varying_uniform
+
 class IShaderValueUpdater : NoCopy, NoMove {
 public:
     IShaderValueUpdater()          = default;
@@ -35,6 +53,16 @@ public:
                                 const UpdateUniformOp& update_op) {
         (void)material_slot;
         UpdateUniforms(node, sprites, update_op);
+    }
+
+    /// Which self-advancing uniforms this node's material actually binds.
+    ///
+    /// The default reports all of them, so an updater that does not track
+    /// reflection can never make a pass look reusable by omission.
+    virtual uint32_t FrameVaryingUniforms(SceneNode* node, uint32_t material_slot) const {
+        (void)node;
+        (void)material_slot;
+        return frame_varying_uniform::kAll;
     }
     virtual void FrameEnd()                                                        = 0;
 

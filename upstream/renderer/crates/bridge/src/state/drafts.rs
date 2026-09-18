@@ -114,6 +114,35 @@ impl WallpaperOptionsDraft {
         self.committed.clone()
     }
 
+    /// Media integration is applied immediately, like audio response: it is a
+    /// switch the user flips, not an option staged behind Apply.
+    #[must_use]
+    pub fn set_media_integration_enabled_immediate(&mut self, enabled: bool) -> WallpaperConfig {
+        self.current.media_integration_enabled = enabled;
+        self.committed.media_integration_enabled = enabled;
+        self.committed.clone()
+    }
+
+    /// Stores or clears a file or directory property's path immediately.
+    ///
+    /// The host has already staged the file and decided what the page must be
+    /// given, so the value is persisted exactly as handed over and reaches the
+    /// page on the next `applyUserProperties` instead of waiting behind Apply.
+    /// Clearing writes the property's own default back, which for these kinds
+    /// is the empty string the page reads as "nothing chosen".
+    #[must_use]
+    pub fn set_property_path_immediate(
+        &mut self,
+        model: &ProjectModel,
+        id: &str,
+        path: Option<String>,
+    ) -> WallpaperConfig {
+        let value = PropertyValue::String(path.unwrap_or_default());
+        model.edit_overrides(&mut self.current.property_overrides, id, value.clone());
+        model.edit_overrides(&mut self.committed.property_overrides, id, value);
+        self.committed.clone()
+    }
+
     pub fn set_display_enabled(
         &mut self,
         selector: SerializedSelector,

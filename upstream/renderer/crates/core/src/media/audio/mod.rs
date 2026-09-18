@@ -127,19 +127,6 @@ impl<'a> MonoPcmF32<'a> {
     }
 
     #[must_use]
-    pub fn from_interleaved_stereo(frames: &InterleavedStereoF32<'_>) -> MonoPcmF32<'static> {
-        let samples = frames
-            .samples()
-            .chunks_exact(2)
-            .map(|pair| 0.5 * (pair[0] + pair[1]))
-            .collect::<Vec<_>>();
-        MonoPcmF32 {
-            sample_rate: frames.sample_rate(),
-            samples: Cow::Owned(samples),
-        }
-    }
-
-    #[must_use]
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
@@ -155,20 +142,43 @@ impl<'a> MonoPcmF32<'a> {
     }
 }
 
+/// Channel layout of the platform system-audio tap actually in use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioTapChannelMode {
+    Mono,
+    Stereo,
+}
+
+/// One fixed-size analysis block ready for the renderer, borrowed from the
+/// resampler's own storage so steady-state resampling never allocates.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AudioResponseBlock<'a> {
+    Mono(MonoPcmF32<'a>),
+    Stereo(InterleavedStereoF32<'a>),
+}
+
+/// Resamples captured PCM to the fixed analysis rate, preserving the channel
+/// layout it was fed: a stereo submission stays two independent channels all
+/// the way to the analyser.
 #[derive(Debug)]
 pub struct AudioResponseResampler {
-    pending_mono: Vec<f32>,
+    /// Interleaved when `channels == 2`, otherwise one sample per frame.
+    pending: Vec<f32>,
+    channels: usize,
     source_position: f64,
-    previous_mono: Option<f32>,
+    previous: [f32; 2],
+    has_previous: bool,
     source_sample_rate: Option<u32>,
 }
 
 impl Default for AudioResponseResampler {
     fn default() -> Self {
         Self {
-            pending_mono: Vec::new(),
+            pending: Vec::new(),
+            channels: 1,
             source_position: 0.0,
-            previous_mono: None,
+            previous: [0.0; 2],
+            has_previous: false,
             source_sample_rate: None,
         }
     }
@@ -183,38 +193,82 @@ impl AudioResponseResampler {
         Self::default()
     }
 
-    /// Appends mono PCM and returns any complete fixed-size response blocks.
+    /// Appends mono PCM and emits every complete fixed-size mono block.
     ///
     /// # Panics
     ///
     /// Panics only if the fixed-size block emitted internally is rejected as an
     /// invalid mono PCM buffer, which would indicate a broken resampler
     /// invariant.
-    #[must_use]
-    pub fn push(&mut self, frames: &MonoPcmF32<'_>) -> Vec<MonoPcmF32<'static>> {
-        if self.source_sample_rate != Some(frames.sample_rate()) {
-            self.source_sample_rate = Some(frames.sample_rate());
-            self.previous_mono = None;
+    pub fn push_mono(
+        &mut self,
+        frames: &MonoPcmF32<'_>,
+        mut emit: impl FnMut(AudioResponseBlock<'_>),
+    ) {
+        self.accept(frames.sample_rate(), frames.samples(), 1);
+        self.drain_blocks(|block| {
+            emit(AudioResponseBlock::Mono(
+                MonoPcmF32::borrowed(Self::TARGET_SAMPLE_RATE, block)
+                    .expect("resampler emits non-empty fixed-size blocks"),
+            ));
+        });
+    }
+
+    /// Appends interleaved stereo PCM and emits every complete fixed-size
+    /// stereo block, keeping the two channels independent.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the fixed-size block emitted internally is rejected as an
+    /// invalid stereo PCM buffer, which would indicate a broken resampler
+    /// invariant.
+    pub fn push_stereo(
+        &mut self,
+        frames: &InterleavedStereoF32<'_>,
+        mut emit: impl FnMut(AudioResponseBlock<'_>),
+    ) {
+        self.accept(frames.sample_rate(), frames.samples(), 2);
+        self.drain_blocks(|block| {
+            emit(AudioResponseBlock::Stereo(
+                InterleavedStereoF32::new(Self::TARGET_SAMPLE_RATE, block)
+                    .expect("resampler emits non-empty fixed-size blocks"),
+            ));
+        });
+    }
+
+    fn accept(&mut self, source_sample_rate: u32, samples: &[f32], channels: usize) {
+        // Interpolation state and buffered frames belong to one rate and one
+        // channel layout; either change restarts from an empty buffer.
+        if self.source_sample_rate != Some(source_sample_rate) || self.channels != channels {
+            if self.channels != channels {
+                self.pending.clear();
+                self.channels = channels;
+            }
+            self.source_sample_rate = Some(source_sample_rate);
+            self.has_previous = false;
             self.source_position = 0.0;
         }
-        if frames.sample_rate() == Self::TARGET_SAMPLE_RATE {
-            self.pending_mono.extend_from_slice(frames.samples());
-        } else {
-            self.append_resampled(frames.sample_rate(), frames.samples());
-        }
 
-        let mut blocks = Vec::new();
-        while self.pending_mono.len() >= Self::BLOCK_FRAMES {
-            let samples = self
-                .pending_mono
-                .drain(..Self::BLOCK_FRAMES)
-                .collect::<Vec<_>>();
-            blocks.push(
-                MonoPcmF32::owned(Self::TARGET_SAMPLE_RATE, samples)
-                    .expect("resampler emits non-empty fixed-size blocks"),
-            );
+        if source_sample_rate == Self::TARGET_SAMPLE_RATE {
+            self.pending.extend_from_slice(samples);
+        } else {
+            self.append_resampled(source_sample_rate, samples);
         }
-        blocks
+    }
+
+    fn drain_blocks(&mut self, mut emit: impl FnMut(&[f32])) {
+        let block_len = Self::BLOCK_FRAMES * self.channels;
+        let mut consumed = 0usize;
+        while consumed + block_len <= self.pending.len() {
+            emit(&self.pending[consumed..consumed + block_len]);
+            consumed += block_len;
+        }
+        if consumed > 0 {
+            // One compaction of the sub-block remainder per call, never a
+            // prefix shuffle per emitted block.
+            self.pending.copy_within(consumed.., 0);
+            self.pending.truncate(self.pending.len() - consumed);
+        }
     }
 
     #[allow(
@@ -222,35 +276,46 @@ impl AudioResponseResampler {
         clippy::cast_precision_loss,
         clippy::cast_sign_loss
     )]
-    fn append_resampled(&mut self, source_sample_rate: u32, mono: &[f32]) {
+    fn append_resampled(&mut self, source_sample_rate: u32, samples: &[f32]) {
+        let channels = self.channels;
         let step = f64::from(source_sample_rate) / f64::from(Self::TARGET_SAMPLE_RATE);
-        let mut extended =
-            Vec::with_capacity(mono.len() + usize::from(self.previous_mono.is_some()));
-        if let Some(previous) = self.previous_mono {
-            extended.push(previous);
-        }
-        extended.extend_from_slice(mono);
+        let carried = usize::from(self.has_previous);
+        let previous = self.previous;
+        let total_frames = carried + (samples.len() / channels);
+        // The carried tail frame is addressed in place instead of being
+        // prepended into a scratch buffer.
+        let sample_at = |frame: usize, channel: usize| {
+            if frame < carried {
+                previous[channel]
+            } else {
+                samples[((frame - carried) * channels) + channel]
+            }
+        };
 
-        while self.source_position + 1.0 < extended.len() as f64 {
+        while self.source_position + 1.0 < total_frames as f64 {
             let index = self.source_position.floor() as usize;
             let fraction = (self.source_position - index as f64) as f32;
-            let current = extended[index];
-            let next = extended[index + 1];
-            self.pending_mono
-                .push(current + ((next - current) * fraction));
+            for channel in 0..channels {
+                let current = sample_at(index, channel);
+                let next = sample_at(index + 1, channel);
+                self.pending.push(current + ((next - current) * fraction));
+            }
             self.source_position += step;
         }
 
-        if !extended.is_empty() {
-            self.previous_mono = extended.last().copied();
-            self.source_position = (self.source_position - (extended.len() - 1) as f64).max(0.0);
+        if total_frames > 0 {
+            for channel in 0..channels {
+                self.previous[channel] = sample_at(total_frames - 1, channel);
+            }
+            self.has_previous = true;
+            self.source_position = (self.source_position - (total_frames - 1) as f64).max(0.0);
         }
     }
 
     #[cfg(test)]
     #[must_use]
-    pub fn pending_mono_for_testing(&self) -> &[f32] {
-        &self.pending_mono
+    pub fn pending_for_testing(&self) -> &[f32] {
+        &self.pending
     }
 }
 
@@ -318,25 +383,16 @@ pub trait AudioFrameConsumer: Send + Sync {
 
     /// Accepts mono `float32` PCM.
     ///
+    /// Consumers must not satisfy this by duplicating the mono samples into an
+    /// interleaved pair and forwarding them to [`Self::submit_audio_frames`]:
+    /// downstream analysis reports a two-channel submission as stereo, and a
+    /// mono source is not stereo.
+    ///
     /// # Errors
     ///
     /// Returns [`AudioCaptureError`] when the consumer cannot forward or
     /// process the supplied frames.
-    ///
-    /// # Panics
-    ///
-    /// Panics if duplicating a validated mono buffer into stereo somehow
-    /// creates an invalid stereo buffer.
-    fn submit_mono_audio_frames(&self, frames: MonoPcmF32<'_>) -> Result<(), AudioCaptureError> {
-        let mut stereo = Vec::with_capacity(frames.samples().len() * 2);
-        for sample in frames.samples() {
-            stereo.push(*sample);
-            stereo.push(*sample);
-        }
-        let frames = InterleavedStereoF32::new(frames.sample_rate(), &stereo)
-            .expect("duplicated mono frames should be valid stereo");
-        self.submit_audio_frames(frames)
-    }
+    fn submit_mono_audio_frames(&self, frames: MonoPcmF32<'_>) -> Result<(), AudioCaptureError>;
 }
 
 pub trait AudioResponseEngine: AudioFrameConsumer {
@@ -639,6 +695,13 @@ mod capture_controller_tests {
         fn submit_audio_frames(
             &self,
             _frames: InterleavedStereoF32<'_>,
+        ) -> Result<(), AudioCaptureError> {
+            Ok(())
+        }
+
+        fn submit_mono_audio_frames(
+            &self,
+            _frames: MonoPcmF32<'_>,
         ) -> Result<(), AudioCaptureError> {
             Ok(())
         }

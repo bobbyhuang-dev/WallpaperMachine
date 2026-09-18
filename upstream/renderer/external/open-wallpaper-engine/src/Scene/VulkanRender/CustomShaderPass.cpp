@@ -747,6 +747,11 @@ bool CustomShaderPass::updateFrame(const Device&, RenderingResources&) {
         m_desc.visibility_node == nullptr || m_desc.visibility_node->EffectiveVisible();
     m_frame_clear_only = ! m_frame_visible && m_desc.clear_on_first_use;
     if (! m_frame_visible) return true;
+    // A skipped pass keeps the pixels it wrote last frame, so re-uploading its
+    // uniforms would only produce a buffer nothing reads. Its dynamic inputs
+    // were already proven unchanged, and the scene runtime still ticks, so no
+    // script or animation side effect is lost by not running the update.
+    if (m_frame_skipped) return true;
     if (m_desc.update_op && ! m_desc.update_op()) {
         m_frame_visible = false;
         return false;
@@ -761,10 +766,92 @@ bool CustomShaderPass::updateFrame(const Device&, RenderingResources&) {
 CustomPassBatchCandidate CustomShaderPass::batchCandidate() const {
     return CustomPassBatchCandidate {
         .batchable = true,
-        .visible = m_frame_visible,
-        .clear_only = m_frame_clear_only,
+        // A skipped pass must also stop claiming a clear. Clearing its target
+        // and drawing nothing is what would erase the pixels being reused.
+        .visible = m_frame_visible && ! m_frame_skipped,
+        .clear_only = m_frame_clear_only && ! m_frame_skipped,
         .render = renderInfo(),
     };
+}
+
+StaticPassDesc CustomShaderPass::staticPassDesc(const Scene& scene) const {
+    StaticPassDesc desc;
+    desc.target = m_desc.output;
+    desc.inputs = m_desc.textures;
+
+    uint32_t reasons = 0;
+    const auto* updater = scene.shaderValueUpdater.get();
+    const uint32_t varying =
+        updater != nullptr
+            ? updater->FrameVaryingUniforms(m_desc.node, m_desc.material_slot)
+            : frame_varying_uniform::kAll;
+    if ((varying & (frame_varying_uniform::kTime | frame_varying_uniform::kDayTime)) != 0)
+        reasons |= DynamicReason::TimeUniform;
+    if ((varying & frame_varying_uniform::kAudio) != 0) reasons |= DynamicReason::AudioUniform;
+    if ((varying & (frame_varying_uniform::kPointer | frame_varying_uniform::kParallax)) != 0)
+        reasons |= DynamicReason::PointerUniform;
+    if ((varying & frame_varying_uniform::kBones) != 0) reasons |= DynamicReason::BoneUniform;
+
+    if (std::any_of(m_desc.video_textures.begin(), m_desc.video_textures.end(),
+                    [](bool video) { return video; }))
+        reasons |= DynamicReason::VideoInput;
+    if (m_desc.dyn_vertex) reasons |= DynamicReason::DynamicMesh;
+    for (const auto& [index, sprite] : m_desc.sprites_map) {
+        (void)index;
+        if (sprite.FrameCount() > 1) {
+            reasons |= DynamicReason::AnimatedSprite;
+            break;
+        }
+    }
+    // An image the runtime may swap in place changes without any graph edit,
+    // and the swap leaves no trace in the values this cache samples.
+    const auto* runtime_images =
+        dynamic_cast<const wallpaper::RuntimeImageSource*>(scene.imageParser.get());
+    if (runtime_images != nullptr) {
+        for (const auto& texture : m_desc.textures) {
+            if (texture.empty()) continue;
+            if (runtime_images->IsRuntimeImage(texture)) {
+                reasons |= DynamicReason::RuntimeImage;
+                break;
+            }
+        }
+    }
+    desc.dynamic_reasons = reasons;
+    return desc;
+}
+
+StaticPassSample CustomShaderPass::frameSample() const {
+    StaticPassSample sample;
+    sample.visible =
+        m_desc.visibility_node == nullptr || m_desc.visibility_node->EffectiveVisible();
+
+    uint64_t hash = 0xcbf29ce484222325ULL;
+    auto* node = m_desc.node;
+    if (node != nullptr) {
+        // Idempotent, and the transform has to be current before it can be
+        // compared: a parent moved by a script updates lazily.
+        node->UpdateTrans();
+        const auto model = node->ModelTrans();
+        hash = StaticHashBytes(hash, model.data(), sizeof(double) * 16);
+        if (node->Mesh() != nullptr) {
+            hash = StaticHashMix(hash, node->Mesh()->DirtyGeneration());
+            const auto* material = node->Mesh()->MaterialForSlot(m_desc.material_slot);
+            if (material != nullptr) {
+                for (const auto& [name, value] : material->customShader.constValues) {
+                    hash = StaticHashBytes(hash, name.data(), name.size());
+                    hash = StaticHashBytes(hash, value.data(), value.size() * sizeof(float));
+                }
+            }
+        }
+    }
+    for (const auto& [index, sprite] : m_desc.sprites_map) {
+        hash = StaticHashMix(hash, index);
+        hash = StaticHashMix(hash, static_cast<uint64_t>(sprite.GetCurFrame().imageId));
+    }
+    hash = StaticHashMix(hash, m_desc.vk_output.extent.width);
+    hash = StaticHashMix(hash, m_desc.vk_output.extent.height);
+    sample.hash = hash;
+    return sample;
 }
 
 bool CustomShaderPass::textureDescriptorsReady() const {

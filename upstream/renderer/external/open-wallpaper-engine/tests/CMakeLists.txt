@@ -433,6 +433,19 @@ gtest_discover_tests(
     DISCOVERY_TIMEOUT 60
 )
 
+# Pure analysis: no device, no surface, no GPU.
+add_executable(static_subgraph_cache_test static_subgraph_cache_test.cpp)
+target_link_libraries(static_subgraph_cache_test PRIVATE wpVulkanRender wpVulkan wpScene wpRGraph nlohmann_json::nlohmann_json GTest::gtest_main)
+target_include_directories(static_subgraph_cache_test PRIVATE
+    . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender/include)
+target_compile_features(static_subgraph_cache_test PRIVATE cxx_std_20)
+gtest_discover_tests(
+    static_subgraph_cache_test
+    TEST_PREFIX static_subgraph_cache_test.
+    PROPERTIES TIMEOUT 60
+    DISCOVERY_TIMEOUT 60
+)
+
 add_executable(timer_tests timer/frame_timer_test.cpp)
 target_link_libraries(timer_tests PRIVATE wpTimer GTest::gtest_main)
 target_include_directories(timer_tests PRIVATE . ${CMAKE_SOURCE_DIR}/src)

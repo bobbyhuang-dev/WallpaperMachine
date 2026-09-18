@@ -5,11 +5,12 @@ use wallpaper_core::{DisplaySnapshotEntry, WallpaperAssignment, project::Scaling
 use crate::{
     actor::state::BridgeActorState,
     api::{
-        BridgeComboOption, BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplaySettingsRow,
-        BridgeError, BridgeMonitorInfoRow, BridgeMonitorInformationSnapshot, BridgePlaybackState,
-        BridgePropertyDescriptor, BridgePropertyKind, BridgePropertyValue, BridgeScalingMode,
-        BridgeSettingsSnapshot, BridgeSliderMetadata, BridgeStorageStatus,
-        BridgeVideoBackendReport, BridgeWallpaperOptionsSnapshot, bridge_log_status,
+        BridgeComboOption, BridgeDirectoryMode, BridgeDisplayConfigRow, BridgeDisplayMode,
+        BridgeDisplaySettingsRow, BridgeError, BridgeFileFilter, BridgeMonitorInfoRow,
+        BridgeMonitorInformationSnapshot, BridgePlaybackState, BridgePropertyDescriptor,
+        BridgePropertyKind, BridgePropertyValue, BridgeScalingMode, BridgeSettingsSnapshot,
+        BridgeSliderMetadata, BridgeStorageStatus, BridgeVideoBackendReport,
+        BridgeWallpaperOptionsSnapshot, bridge_log_status,
     },
     config::{SerializedSelector, VideoBackendModeCfg},
     engine::{ActivationInputs, RendererVideoPipelineState},
@@ -17,7 +18,7 @@ use crate::{
     logging::{ApplicationLogger, LogStatus},
     login::LaunchAtLoginStatus,
     paths::BridgePaths,
-    project::{Condition, PropertyMetadata, PropertyValue},
+    project::{Condition, DirectoryMode, FileFilter, FileMedia, PropertyMetadata, PropertyValue},
 };
 
 const MIRROR_DISPLAY_MODE: &str = "mirror";
@@ -27,6 +28,17 @@ const VIDEO_BACKEND_COMPATIBILITY: &str = "compatibility";
 const VIDEO_BACKEND_NATIVE_PREFERRED: &str = "native_preferred";
 const RUNNING_BACKEND_NATIVE: &str = "native";
 const RUNNING_BACKEND_LEGACY: &str = "legacy";
+
+/// The filter a file or directory property declared, or `None` when the
+/// project declared none: an editor showing "image" there would be inventing a
+/// restriction the author never wrote.
+fn bridge_file_filter(filter: &FileFilter) -> Option<BridgeFileFilter> {
+    filter.raw.as_ref()?;
+    Some(match filter.media {
+        FileMedia::Image => BridgeFileFilter::Image,
+        FileMedia::Video => BridgeFileFilter::Video,
+    })
+}
 
 fn directory_size(path: &Path) -> u64 {
     let Ok(metadata) = fs::metadata(path) else {
@@ -119,6 +131,19 @@ impl BridgeActorState {
                                 .collect(),
                             _ => Vec::new(),
                         };
+                        let (file_filter, directory_mode) = match &property.metadata {
+                            PropertyMetadata::File { filter } => {
+                                (bridge_file_filter(filter), None)
+                            }
+                            PropertyMetadata::Directory { filter, mode } => (
+                                bridge_file_filter(filter),
+                                Some(match mode {
+                                    DirectoryMode::OnDemand => BridgeDirectoryMode::OnDemand,
+                                    DirectoryMode::FetchAll => BridgeDirectoryMode::FetchAll,
+                                }),
+                            ),
+                            _ => (None, None),
+                        };
 
                         BridgePropertyDescriptor {
                             id: property.id.clone(),
@@ -128,6 +153,8 @@ impl BridgeActorState {
                             default_value: BridgePropertyValue::from(default_value),
                             slider,
                             combo_options,
+                            file_filter,
+                            directory_mode,
                             dirty,
                             can_restore_defaults: dirty,
                             enabled: true,
@@ -195,6 +222,7 @@ impl BridgeActorState {
             properties,
             display_configurations,
             audio_response_enabled: config.audio.response_enabled,
+            media_integration_enabled: config.media_integration_enabled,
             muted: config.audio.muted,
             volume: config.audio.volume,
         })
@@ -478,6 +506,7 @@ impl BridgeActorState {
             shared_video_decode_enabled: renderer.shared_video_decode_enabled,
             shared_video_decode_sessions: renderer.shared_video_decode_sessions,
             shared_video_decode_consumers: renderer.shared_video_decode_consumers,
+            scene_optimization_enabled: self.app_config.quality.scene_optimization_enabled,
             render_scale: self.app_config.effective_render_scale(on_battery),
             preferred_render_scale: self.app_config.quality.render_scale,
             battery_profile_enabled: self.app_config.quality.battery_profile_enabled,

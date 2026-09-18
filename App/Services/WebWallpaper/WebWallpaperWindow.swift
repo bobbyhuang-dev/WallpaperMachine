@@ -107,14 +107,80 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
     var onFailure: (@MainActor (String) -> Void)?
     var onLoaded: (@MainActor () -> Void)?
 
+    /// Which of the page's own media listeners a payload belongs to. Kept as a
+    /// plain slot name so this file never has to know what a media property or
+    /// a thumbnail actually contains.
+    enum MediaSlot: String {
+        case status, properties, thumbnail, playback, timeline
+    }
+
+    /// What the host must currently do for this page. `listening` is the page's
+    /// own registration; `consuming` additionally requires the user's media
+    /// integration setting, because a page that asked for the status listener
+    /// still has to be told the feature is off without anything being captured.
+    struct MediaDemand: Equatable {
+        var listening = false
+        var consuming = false
+    }
+
+    private struct RandomFileReply {
+        var requestId: String
+        var property: String
+        var path: String
+    }
+
+    private struct DirectoryChange {
+        var property: String
+        var added: [String]
+        var removed: [String]
+    }
+
+    /// Registered by the current document, so a reload or a crash restart starts
+    /// from no subscription at all rather than inheriting the old one.
+    private var audioListenerRegistered = false
+    private var mediaListenerRegistered = false
+    private var audioResponseEnabled = false
+    private var mediaIntegrationEnabled = false
+    private var audioDemand = false
+    private var mediaDemand = MediaDemand()
+    private var pendingRandomFileRequests: Set<String> = []
+    /// Answers and directory deltas that arrived while the page was suspended.
+    /// Media and audio are dropped instead: both are re-derived from current
+    /// state on resume, whereas a dropped reply strands the page's callback and
+    /// a dropped removal leaves a deleted file in its list.
+    private var deferredRandomFileReplies: [RandomFileReply] = []
+    private var deferredDirectoryChanges: [DirectoryChange] = []
+    /// A page cannot be allowed to grow host memory by asking without waiting,
+    /// nor to bank an unbounded replay across a long suspension.
+    private static let maximumPendingRandomFileRequests = 32
+    private static let maximumDeferredDirectoryChanges = 64
+    private let messageProxy = ScriptMessageProxy()
+    /// Raised when the page's audio subscription actually changes, so the host
+    /// can open and close the capture tap on real demand.
+    var onAudioDemandChanged: (@MainActor (Bool) -> Void)?
+    var onMediaDemandChanged: (@MainActor (MediaDemand) -> Void)?
+    var onRandomFileRequest: (@MainActor (_ requestId: String, _ propertyId: String) -> Void)?
+
+    /// Name of the single page-to-host channel. Everything the page initiates —
+    /// listener registration and random-file requests — arrives here as one
+    /// tagged object, so there is exactly one place that has to distrust the page.
+    static let messageHandlerName = "mweWallpaper"
+
     static let hostScript = """
     (() => {
       if (window.__mweWallpaperHost) return;
+      const post = message => {
+        try { window.webkit.messageHandlers.\(WebWallpaperPage.messageHandlerName).postMessage(message); }
+        catch (error) { console.error("wallpaper host channel unavailable", error); }
+      };
       let listener = null;
       let lastUser = null, lastGeneral = null, lastPaused = null;
-      const call = (name, value) => {
+      // What the host has told this document about each watched directory, so a
+      // listener registered after the files arrived still sees them.
+      const directories = new Map();
+      const call = (name, ...args) => {
         if (listener && typeof listener[name] === "function") {
-          try { listener[name](value); } catch (error) { console.error("wallpaperPropertyListener." + name + " failed", error); }
+          try { listener[name](...args); } catch (error) { console.error("wallpaperPropertyListener." + name + " failed", error); }
         }
       };
       // Wallpaper Engine only calls a listener that exists when the page has
@@ -128,18 +194,120 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
           if (lastGeneral) call("applyGeneralProperties", lastGeneral);
           if (lastUser) call("applyUserProperties", lastUser);
           if (lastPaused !== null) call("setPaused", lastPaused);
+          for (const [property, files] of directories) {
+            if (files.length) call("userDirectoryFilesAddedOrChanged", property, files.slice());
+          }
         },
       });
       // Right clicks are forwarded to the page, never to WebKit's own context
       // menu: a wallpaper has no Reload or Inspect Element. Page handlers still run.
       window.addEventListener("contextmenu", event => event.preventDefault(), true);
+
+      // Registration replaces, never accumulates: a page that re-registers, or
+      // that is reloaded after a crash, must not end up receiving every frame
+      // twice. The host is told only when the page crosses between having no
+      // listener and having one, so capture opens and closes on real demand.
+      let audioListener = null;
+      window.wallpaperRegisterAudioListener = value => {
+        const next = typeof value === "function" ? value : null;
+        const had = audioListener !== null;
+        audioListener = next;
+        if ((next !== null) !== had) post({ type: next ? "audioSubscribed" : "audioUnsubscribed" });
+      };
+
+      const MEDIA_SLOTS = ["status", "properties", "thumbnail", "playback", "timeline"];
+      const mediaListeners = {};
+      const mediaValue = {};
+      const mediaEncoded = {};
+      const mediaCount = () => MEDIA_SLOTS.reduce((total, slot) => total + (mediaListeners[slot] ? 1 : 0), 0);
+      const fireMedia = (slot, event) => {
+        const target = mediaListeners[slot];
+        if (!target) return;
+        try { target(event); } catch (error) { console.error("wallpaper media listener " + slot + " failed", error); }
+      };
+      for (const slot of MEDIA_SLOTS) {
+        mediaListeners[slot] = null;
+        mediaValue[slot] = null;
+        mediaEncoded[slot] = null;
+        const name = "wallpaperRegisterMedia" + slot.charAt(0).toUpperCase() + slot.slice(1) + "Listener";
+        window[name] = value => {
+          const next = typeof value === "function" ? value : null;
+          const before = mediaCount();
+          mediaListeners[slot] = next;
+          const after = mediaCount();
+          if (before === 0 && after > 0) post({ type: "mediaSubscribed" });
+          else if (before > 0 && after === 0) post({ type: "mediaUnsubscribed" });
+          if (next && mediaValue[slot] !== null) fireMedia(slot, mediaValue[slot]);
+        };
+      }
+      // The official documentation uses both spellings in its own examples.
+      const PLAYING = 0, PAUSED = 1, STOPPED = 2;
+      window.wallpaperMediaIntegration = Object.freeze({
+        PLAYBACK_PLAYING: PLAYING, PLAYBACK_PAUSED: PAUSED, PLAYBACK_STOPPED: STOPPED,
+        playback: Object.freeze({ PLAYING, PAUSED, STOPPED }),
+      });
+
+      let randomFileSequence = 0;
+      const randomFileCallbacks = new Map();
+      window.wallpaperRequestRandomFileForProperty = (property, callback) => {
+        if (typeof property !== "string" || property === "" || typeof callback !== "function") return;
+        const requestId = "r" + (++randomFileSequence);
+        randomFileCallbacks.set(requestId, callback);
+        post({ type: "randomFileRequest", requestId, propertyId: property });
+      };
+
       window.__mweWallpaperHost = Object.freeze({
         applyUserProperties(properties) { lastUser = properties; call("applyUserProperties", properties); },
         applyGeneralProperties(properties) { lastGeneral = properties; call("applyGeneralProperties", properties); },
         setPaused(paused) { lastPaused = !!paused; call("setPaused", lastPaused); },
+        deliverAudio(bins) {
+          if (!audioListener) return;
+          try { audioListener(bins); } catch (error) { console.error("wallpaperRegisterAudioListener callback failed", error); }
+        },
+        // Each media listener fires only when its own part changed. The host
+        // already drops unchanged values, but a resume replay and a provider
+        // re-emission can still race, so the last payload is compared here too.
+        // Compared key by key in sorted order: the host builds these objects
+        // from a dictionary, whose key order is not part of the contract.
+        deliverMedia(slot, event) {
+          if (!MEDIA_SLOTS.includes(slot)) return;
+          const encoded = JSON.stringify(Object.keys(event).sort().map(key => [key, event[key]]));
+          if (mediaEncoded[slot] === encoded) return;
+          mediaEncoded[slot] = encoded;
+          mediaValue[slot] = event;
+          fireMedia(slot, event);
+        },
+        deliverRandomFile(requestId, property, filePath) {
+          const callback = randomFileCallbacks.get(requestId);
+          if (!callback) return;
+          randomFileCallbacks.delete(requestId);
+          try { callback(property, filePath); } catch (error) { console.error("wallpaperRequestRandomFileForProperty callback failed", error); }
+        },
+        userDirectoryFilesAddedOrChanged(property, files) {
+          const known = directories.get(property) || [];
+          directories.set(property, known.concat(files.filter(file => !known.includes(file))));
+          call("userDirectoryFilesAddedOrChanged", property, files);
+        },
+        userDirectoryFilesRemoved(property, files) {
+          const known = directories.get(property);
+          if (known) directories.set(property, known.filter(file => !files.includes(file)));
+          call("userDirectoryFilesRemoved", property, files);
+        },
       });
     })();
     """
+
+    /// `WKUserContentController` retains its message handlers, and the page owns
+    /// that controller through its web view: conforming the page itself would
+    /// make the pair immortal. The proxy owns nothing.
+    private final class ScriptMessageProxy: NSObject, WKScriptMessageHandler {
+        weak var page: WebWallpaperPage?
+
+        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+            let body = message.body
+            MainActor.assumeIsolated { page?.receiveScriptMessage(body) }
+        }
+    }
 
     /// `WKWebView` has no public entry point for hover: moves reach it through a
     /// private tracking-area owner, so hover uses the `_simulateMouseMove:`
@@ -209,6 +377,11 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
         configuration.userContentController = content
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
+        messageProxy.page = self
+        // Registered on the web view's own controller rather than the one built
+        // above: `WKWebView` copies the configuration it is given, so only this
+        // one is guaranteed to be the live object.
+        webView.configuration.userContentController.add(messageProxy, name: Self.messageHandlerName)
         webView.navigationDelegate = self
         webView.underPageBackgroundColor = .black
         webView.allowsBackForwardNavigationGestures = false
@@ -223,6 +396,7 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
         isLoaded = false
         documentGeneration += 1
         lastLoadFinished = nil
+        forgetDocumentState()
         webView.loadFileURL(entryURL, allowingReadAccessTo: projectURL)
     }
 
@@ -234,12 +408,29 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
         // down, so it cannot reach the blank page that replaces it.
         documentGeneration += 1
         isLoaded = false
+        forgetDocumentState()
+        messageProxy.page = nil
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: Self.messageHandlerName)
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.loadHTMLString("", baseURL: nil)
     }
 
-    /// `propertiesJSON` is the bridge's `{ id: { value } }` payload.
+    /// Drops everything that belonged to the document being replaced. The new
+    /// document re-registers its own listeners, so inheriting the old ones would
+    /// leave the capture tap open for a page that never asked for it, and would
+    /// let a reply to a request the previous document made reach the new one.
+    private func forgetDocumentState() {
+        audioListenerRegistered = false
+        mediaListenerRegistered = false
+        pendingRandomFileRequests.removeAll()
+        deferredRandomFileReplies.removeAll()
+        deferredDirectoryChanges.removeAll()
+        refreshDemand()
+    }
+
+    /// `propertiesJSON` is the bridge's `{ id: { value, type, … } }` payload,
+    /// with any staged `file` value already substituted by the host.
     func applyUserProperties(json propertiesJSON: String) {
         committed.propertiesJSON = propertiesJSON
         deliverUserProperties()
@@ -253,6 +444,23 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
     func setPaused(_ paused: Bool) {
         committed.userPaused = paused
         deliverPaused()
+    }
+
+    /// The user's per-wallpaper audio-response setting. Audio only reaches the
+    /// page when the page asked for it *and* the user allowed it, so a page that
+    /// registers a listener on a wallpaper with the setting off opens no tap.
+    func setAudioResponseEnabled(_ enabled: Bool) {
+        guard enabled != audioResponseEnabled else { return }
+        audioResponseEnabled = enabled
+        refreshDemand()
+    }
+
+    /// The user's per-wallpaper media-integration setting. Unlike audio this
+    /// does not gate the status listener: a page is told the feature is off.
+    func setMediaIntegrationEnabled(_ enabled: Bool) {
+        guard enabled != mediaIntegrationEnabled else { return }
+        mediaIntegrationEnabled = enabled
+        refreshDemand()
     }
 
     /// Hosts the web view inside its window's container and remembers it, so
@@ -297,6 +505,10 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
             webView.setAllMediaPlaybackSuspended(false)
             counters.record(.webMediaResumed, for: surface)
         }
+        // After the view tree has settled, so a resume flushes into a page that
+        // is back where WebKit will run it.
+        refreshDemand()
+        if !suspended { flushDeferredDeliveries() }
     }
 
     /// Keeps the last frame on screen while the web view is out of the window.
@@ -371,6 +583,149 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
         deliverPaused()
     }
 
+    // MARK: - author API delivery
+
+    /// One audio frame: 128 floats, indices 0-63 the left channel and 64-127
+    /// the right, as the Wallpaper Engine listener contract specifies.
+    func deliverAudio(_ bins: [Float]) {
+        guard audioDemand else { return }
+        run("window.__mweWallpaperHost.deliverAudio(bins)", arguments: ["bins": bins.map { Double($0) }])
+    }
+
+    /// One media listener payload. The host builds the event object, so this
+    /// file never has to model what the system knows about the playing track.
+    /// Dropped rather than deferred while suspended: the host replays current
+    /// state on resume, and a stale event is worse than a late one.
+    func deliverMediaEvent(slot: MediaSlot, event: [String: Any]) {
+        guard mediaDemand.listening else { return }
+        run("window.__mweWallpaperHost.deliverMedia(slot, event)",
+            arguments: ["slot": slot.rawValue, "event": event])
+    }
+
+    /// Answers a `wallpaperRequestRandomFileForProperty` call. `token` is the
+    /// value handed out with the request. A token the current document never
+    /// asked for is dropped: the page numbers its own requests from one per
+    /// document, so after a reload the previous wallpaper's answer would
+    /// otherwise match the new page's first request exactly.
+    func deliverRandomFile(requestId token: String, property: String, path: String) {
+        guard pendingRandomFileRequests.remove(token) != nil,
+              let separator = token.firstIndex(of: ":")
+        else { return }
+        let reply = RandomFileReply(
+            requestId: String(token[token.index(after: separator)...]), property: property, path: path)
+        guard isLoaded, !hostSuspended else {
+            deferredRandomFileReplies.append(reply)
+            return
+        }
+        send(reply)
+    }
+
+    /// A `fetchall` directory delta. Deltas are ordered, so a suspension holds
+    /// them rather than dropping them: replaying only the current set would
+    /// leave files the user deleted in the page's list.
+    func deliverDirectoryFiles(property: String, added: [String], removed: [String]) {
+        guard !added.isEmpty || !removed.isEmpty else { return }
+        // A new document is sent the whole current set instead, so anything
+        // buffered for the old one would arrive twice.
+        guard isLoaded else { return }
+        let change = DirectoryChange(property: property, added: added, removed: removed)
+        guard !hostSuspended else {
+            if deferredDirectoryChanges.count >= Self.maximumDeferredDirectoryChanges {
+                deferredDirectoryChanges.removeFirst()
+                AppLog.debug("""
+                    web wallpaper \(projectURL.lastPathComponent): directory changes outran \
+                    the suspension buffer; the oldest delta was dropped
+                    """)
+            }
+            deferredDirectoryChanges.append(change)
+            return
+        }
+        send(change)
+    }
+
+    private func send(_ reply: RandomFileReply) {
+        run("window.__mweWallpaperHost.deliverRandomFile(requestId, property, path)",
+            arguments: ["requestId": reply.requestId, "property": reply.property, "path": reply.path])
+    }
+
+    private func send(_ change: DirectoryChange) {
+        if !change.added.isEmpty {
+            run("window.__mweWallpaperHost.userDirectoryFilesAddedOrChanged(property, files)",
+                arguments: ["property": change.property, "files": change.added])
+        }
+        if !change.removed.isEmpty {
+            run("window.__mweWallpaperHost.userDirectoryFilesRemoved(property, files)",
+                arguments: ["property": change.property, "files": change.removed])
+        }
+    }
+
+    private func flushDeferredDeliveries() {
+        guard isLoaded, !hostSuspended else { return }
+        let replies = deferredRandomFileReplies
+        deferredRandomFileReplies.removeAll()
+        for reply in replies { send(reply) }
+        let changes = deferredDirectoryChanges
+        deferredDirectoryChanges.removeAll()
+        for change in changes { send(change) }
+    }
+
+    /// Recomputes what the host owes this page and reports only real changes,
+    /// so a reconcile that alters nothing does not reopen the capture tap or
+    /// re-add a consumer to the media provider.
+    private func refreshDemand() {
+        let live = isLoaded && !hostSuspended
+        let audio = live && audioListenerRegistered && audioResponseEnabled
+        if audio != audioDemand {
+            audioDemand = audio
+            onAudioDemandChanged?(audio)
+        }
+        let media = MediaDemand(
+            listening: live && mediaListenerRegistered,
+            consuming: live && mediaListenerRegistered && mediaIntegrationEnabled)
+        if media != mediaDemand {
+            mediaDemand = media
+            onMediaDemandChanged?(media)
+        }
+    }
+
+    /// The one place that distrusts the page. Anything that is not a recognised
+    /// tagged object with well-formed fields is dropped.
+    fileprivate func receiveScriptMessage(_ body: Any) {
+        guard let payload = body as? [String: Any], let type = payload["type"] as? String else {
+            AppLog.debug("web wallpaper \(projectURL.lastPathComponent): malformed host message dropped")
+            return
+        }
+        switch type {
+        case "audioSubscribed": audioListenerRegistered = true
+        case "audioUnsubscribed": audioListenerRegistered = false
+        case "mediaSubscribed": mediaListenerRegistered = true
+        case "mediaUnsubscribed": mediaListenerRegistered = false
+        case "randomFileRequest":
+            guard let requestId = payload["requestId"] as? String, !requestId.isEmpty,
+                  let propertyId = payload["propertyId"] as? String, !propertyId.isEmpty,
+                  pendingRandomFileRequests.count < Self.maximumPendingRandomFileRequests
+            else {
+                AppLog.debug("""
+                    web wallpaper \(projectURL.lastPathComponent): random file request dropped \
+                    (malformed, or more than \(Self.maximumPendingRandomFileRequests) unanswered)
+                    """)
+                return
+            }
+            // The page numbers its requests from one per document, so the id it
+            // chose is only unique within that document. The token handed to
+            // the host carries the generation, which makes it unique for the
+            // life of the page.
+            let token = "\(documentGeneration):\(requestId)"
+            pendingRandomFileRequests.insert(token)
+            onRandomFileRequest?(token, propertyId)
+            return
+        default:
+            AppLog.debug("web wallpaper \(projectURL.lastPathComponent): unknown host message “\(type)” dropped")
+            return
+        }
+        refreshDemand()
+    }
+
     private func run(_ script: String, arguments: [String: Any]) {
         let generation = documentGeneration
         Task { @MainActor [weak self] in
@@ -428,6 +783,9 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
         isLoaded = true
         lastLoadFinished = now()
         replayCommittedState()
+        // A document that already registered its listeners during load only
+        // becomes deliverable now.
+        refreshDemand()
         onLoaded?()
     }
 
@@ -444,6 +802,10 @@ final class WebWallpaperPage: NSObject, WKNavigationDelegate {
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         isLoaded = false
+        // The crashed document's listeners died with it. Restarting inherits
+        // nothing, so a page that crashes repeatedly cannot accumulate
+        // subscriptions the host would keep feeding.
+        forgetDocumentState()
         let moment = now()
         // A load that finishes proves nothing on its own: a page that crashes
         // shortly after every load would otherwise clear its budget forever.

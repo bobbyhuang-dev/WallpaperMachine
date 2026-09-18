@@ -18,9 +18,39 @@ enum BridgeSnapshotFixtures {
         logsRoot: "", activeSession: "", activeFile: "", activeFileSizeBytes: 0))
   }
 
+  /// A wallpaper options snapshot carrying shipped defaults: audio response on,
+  /// media integration off, unmuted at full volume. Tests that care about one of
+  /// those pass it explicitly.
+  static func options(
+    wallpaperId: String = "wallpaper",
+    title: String = "Wallpaper",
+    kind: BridgeWallpaperKind = .projectScene,
+    supported: Bool = true,
+    dirty: Bool = false,
+    properties: [BridgePropertyDescriptor] = [],
+    displayConfigurations: [BridgeDisplayConfigRow] = [],
+    audioResponseEnabled: Bool = true,
+    mediaIntegrationEnabled: Bool = false,
+    muted: Bool = false,
+    volume: Float = 1
+  ) -> BridgeWallpaperOptionsSnapshot {
+    BridgeWallpaperOptionsSnapshot(
+      wallpaperId: wallpaperId,
+      title: title,
+      kind: kind,
+      supported: supported,
+      dirty: dirty,
+      properties: properties,
+      displayConfigurations: displayConfigurations,
+      audioResponseEnabled: audioResponseEnabled,
+      mediaIntegrationEnabled: mediaIntegrationEnabled,
+      muted: muted,
+      volume: volume)
+  }
+
   /// A settings snapshot carrying shipped defaults: compatibility backend, full
-  /// render scale, no battery profile and both experiments off. Tests that care
-  /// about one of those pass it explicitly.
+  /// render scale, no battery profile, both experiments off and scene optimisation
+  /// on. Tests that care about one of those pass it explicitly.
   static func settings(
     displays: [BridgeDisplaySettingsRow] = [],
     pauseOnBatteryPower: Bool = false,
@@ -30,6 +60,7 @@ enum BridgeSnapshotFixtures {
     sharedVideoDecodeEnabled: Bool = false,
     sharedVideoDecodeSessions: UInt32 = 0,
     sharedVideoDecodeConsumers: UInt32 = 0,
+    sceneOptimizationEnabled: Bool = true,
     renderScale: Float = 1,
     preferredRenderScale: Float = 1,
     batteryProfileEnabled: Bool = false,
@@ -54,6 +85,7 @@ enum BridgeSnapshotFixtures {
       sharedVideoDecodeEnabled: sharedVideoDecodeEnabled,
       sharedVideoDecodeSessions: sharedVideoDecodeSessions,
       sharedVideoDecodeConsumers: sharedVideoDecodeConsumers,
+      sceneOptimizationEnabled: sceneOptimizationEnabled,
       renderScale: renderScale,
       preferredRenderScale: preferredRenderScale,
       batteryProfileEnabled: batteryProfileEnabled,

@@ -42,6 +42,9 @@ public:
         return m_frames.at((usize)m_curFrame);
     }
     const auto& GetCurFrame() const { return m_frames.at((usize)m_curFrame); }
+    /// A single-frame sprite never advances, so it does not make its pass
+    /// time-varying.
+    usize FrameCount() const { return m_frames.size(); }
     void        AppendFrame(const SpriteFrame& frame) { m_frames.push_back(frame); }
 
     usize numFrames() const { return m_frames.size(); }

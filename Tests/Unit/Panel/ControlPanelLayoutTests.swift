@@ -1713,14 +1713,14 @@ private final class PanelFixture {
       ("primary", "first", UInt32(24), Float(0.2)),
       ("secondary", "second", UInt32(48), Float(0.7)),
     ] {
-      bridge.options[id] = BridgeWallpaperOptionsSnapshot(
-        wallpaperId: id, title: id, kind: .projectScene, supported: true, dirty: false,
-        properties: [], displayConfigurations: [
+      bridge.options[id] = BridgeSnapshotFixtures.options(
+        wallpaperId: id, title: id,
+        displayConfigurations: [
           BridgeDisplayConfigRow(
             displayId: display, title: display, enabled: true, scalingMode: .fill,
             scalingFactor: 1, targetFps: fps, maxFps: 60, muted: false, volume: volume,
             dirty: false, canRestoreDefaults: false)
-        ], audioResponseEnabled: false, muted: false, volume: volume)
+        ], audioResponseEnabled: false, volume: volume)
     }
     store.wallpaperOptionsSnapshot = bridge.options["first"]
     store.snapshotRevision &+= 1

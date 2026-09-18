@@ -218,6 +218,30 @@ pub struct SetSharedVideoDecodeEnabled {
     pub enabled: bool,
 }
 
+pub struct SetSceneOptimizationEnabled {
+    pub enabled: bool,
+}
+
+/// A web page registered or dropped its audio listener.
+pub struct SetWebAudioSubscribed {
+    pub wallpaper_id: String,
+    pub display_id: u32,
+    pub subscribed: bool,
+}
+
+pub struct SetMediaIntegrationEnabled {
+    pub wallpaper_id: String,
+    pub enabled: bool,
+}
+
+/// Stores the absolute path the host staged for a file or directory property,
+/// or clears it. The path is persisted exactly as given.
+pub struct SetPropertyPath {
+    pub wallpaper_id: String,
+    pub property_id: String,
+    pub path: Option<String>,
+}
+
 pub struct GetNativeVideoWallpapers;
 
 /// The host could not play a wallpaper natively and hands it back.
@@ -330,6 +354,10 @@ pub type SetRenderScaleReply = AllSnapshotsReply;
 pub type SetBatteryQualityProfileReply = AllSnapshotsReply;
 pub type SetContentPacingEnabledReply = AllSnapshotsReply;
 pub type SetSharedVideoDecodeEnabledReply = AllSnapshotsReply;
+pub type SetSceneOptimizationEnabledReply = AllSnapshotsReply;
+pub type SetWebAudioSubscribedReply = Result<(), BridgeError>;
+pub type SetMediaIntegrationEnabledReply = WallpaperMutationReply;
+pub type SetPropertyPathReply = WallpaperMutationReply;
 pub type GetNativeVideoWallpapersReply = Result<Vec<BridgeNativeVideoWallpaper>, BridgeError>;
 pub type RejectNativeVideoReply = Result<(), BridgeError>;
 pub type CompleteRestoreAfterReconcileReply = Result<(), BridgeError>;

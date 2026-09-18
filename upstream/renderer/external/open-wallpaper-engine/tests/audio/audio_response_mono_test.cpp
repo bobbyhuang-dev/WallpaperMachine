@@ -227,6 +227,8 @@ TEST(AudioResponseMonoTest, MonoSubmitUpdatesSnapshotAt12Khz) {
     EXPECT_EQ(snapshot.accepted_frame_count, samples.size() * kChunkSubmitCount);
     EXPECT_GT(snapshot.generation, 0u);
     EXPECT_TRUE(HasNonZeroAverage64Bin(snapshot));
+    EXPECT_FALSE(snapshot.stereo);
+    EXPECT_FALSE(CurrentAudioSpectrumIsStereo());
     EXPECT_EQ(snapshot.left64, snapshot.average64);
     EXPECT_EQ(snapshot.right64, snapshot.average64);
     EXPECT_EQ(snapshot.left32, snapshot.average32);
@@ -598,13 +600,92 @@ TEST(AudioResponseMonoTest, OversizedMonoSubmitIsAcceptedAndAnalyzed) {
     EXPECT_TRUE(HasNonZeroAverage64Bin(snapshot));
 }
 
-TEST(AudioResponseMonoTest, StereoCompatibilityWrapperDownmixesToMono) {
+TEST(AudioResponseMonoTest, StereoSubmitKeepsLeftAndRightSpectraApart) {
+    ResetAudioResponseServiceForTesting();
+
+    // Left carries a bass tone, right a treble tone, so a channel collapse
+    // would show up as two identical spectra peaking in the same band.
+    constexpr unsigned kLeftBin = 20u;
+    constexpr unsigned kRightBin = 300u;
+    constexpr std::size_t kFrames = 2048u;
+    std::vector<float> stereo(kFrames * 2u, 0.0f);
+    for (std::size_t frame = 0; frame < kFrames; ++frame) {
+        const double phase = 2.0 * 3.141592653589793 * static_cast<double>(frame % 1024u) / 1024.0;
+        stereo[frame * 2u] = 0.25f * static_cast<float>(std::cos(phase * kLeftBin));
+        stereo[(frame * 2u) + 1u] = 0.25f * static_cast<float>(std::cos(phase * kRightBin));
+    }
+
+    std::string error;
+    for (uint32_t submit = 0; submit < 4u; ++submit) {
+        ASSERT_TRUE(SubmitAudioFrames(kSubmitSampleRate, static_cast<uint32_t>(kFrames), stereo.data(), &error))
+            << error;
+    }
+
+    const auto snapshot = WaitForGeneration();
+    ASSERT_GT(snapshot.generation, 0u);
+    EXPECT_TRUE(snapshot.stereo);
+    EXPECT_TRUE(CurrentAudioSpectrumIsStereo());
+    EXPECT_NE(snapshot.left64, snapshot.right64);
+
+    const auto left_peak = std::max_element(snapshot.left64.begin(), snapshot.left64.end());
+    const auto right_peak = std::max_element(snapshot.right64.begin(), snapshot.right64.end());
+    EXPECT_GT(*left_peak, 0.1f);
+    EXPECT_GT(*right_peak, 0.1f);
+    EXPECT_EQ(std::distance(snapshot.left64.begin(), left_peak), kLeftBin / 8u);
+    EXPECT_EQ(std::distance(snapshot.right64.begin(), right_peak), kRightBin / 8u);
+
+    for (std::size_t band = 0; band < snapshot.average64.size(); ++band) {
+        EXPECT_NEAR(
+            snapshot.average64[band],
+            0.5f * (snapshot.left64[band] + snapshot.right64[band]),
+            0.000001f);
+    }
+}
+
+TEST(AudioResponseMonoTest, MonoSubmitAfterStereoClearsTheStereoFlagAndRejoinsChannels) {
+    ResetAudioResponseServiceForTesting();
+
+    constexpr std::size_t kFrames = 2048u;
+    std::vector<float> stereo(kFrames * 2u, 0.0f);
+    for (std::size_t frame = 0; frame < kFrames; ++frame) {
+        const float value = 0.25f * std::sin(static_cast<float>(frame) * 0.08f);
+        stereo[frame * 2u] = value;
+        stereo[(frame * 2u) + 1u] = -value;
+    }
+
+    std::string error;
+    ASSERT_TRUE(SubmitAudioFrames(kSubmitSampleRate, static_cast<uint32_t>(kFrames), stereo.data(), &error))
+        << error;
+    const auto stereo_snapshot = WaitForGeneration();
+    ASSERT_GT(stereo_snapshot.generation, 0u);
+    ASSERT_TRUE(stereo_snapshot.stereo);
+
+    std::vector<float> mono(kFrames, 0.0f);
+    for (std::size_t frame = 0; frame < kFrames; ++frame) {
+        mono[frame] = 0.25f * std::sin(static_cast<float>(frame) * 0.08f);
+    }
+    ASSERT_TRUE(SubmitMonoAudioFrames(kSubmitSampleRate, static_cast<uint32_t>(kFrames), mono.data(), &error))
+        << error;
+
+    const auto mono_snapshot = WaitForGenerationAfter(stereo_snapshot.generation, std::chrono::milliseconds(500));
+    ASSERT_GT(mono_snapshot.generation, stereo_snapshot.generation);
+    EXPECT_FALSE(mono_snapshot.stereo);
+    EXPECT_FALSE(CurrentAudioSpectrumIsStereo());
+    EXPECT_EQ(mono_snapshot.left64, mono_snapshot.average64);
+    EXPECT_EQ(mono_snapshot.right64, mono_snapshot.average64);
+    EXPECT_EQ(mono_snapshot.left32, mono_snapshot.average32);
+    EXPECT_EQ(mono_snapshot.right32, mono_snapshot.average32);
+    EXPECT_EQ(mono_snapshot.left16, mono_snapshot.average16);
+    EXPECT_EQ(mono_snapshot.right16, mono_snapshot.average16);
+}
+
+TEST(AudioResponseMonoTest, StereoSubmitWithIdenticalChannelsMatchesMonoAnalysis) {
     ResetAudioResponseServiceForTesting();
 
     std::array<float, 400> stereo {};
     for (std::size_t frame = 0; frame < 200; ++frame) {
-        stereo[frame * 2u] = 0.25f;
-        stereo[(frame * 2u) + 1u] = 0.75f;
+        stereo[frame * 2u] = 0.5f;
+        stereo[(frame * 2u) + 1u] = 0.5f;
     }
 
     std::string error;
@@ -635,19 +716,22 @@ TEST(AudioResponseMonoTest, StereoCompatibilityWrapperDownmixesToMono) {
     EXPECT_EQ(mono_snapshot.last_submit_sample_rate, kSubmitSampleRate);
     EXPECT_EQ(mono_snapshot.accepted_frame_count, kChunkFrameCount * kChunkSubmitCount);
     EXPECT_GT(mono_snapshot.generation, 0u);
+    // Two identical channels are still two channels, so the flag stays set even
+    // though the analysed spectra coincide.
+    EXPECT_TRUE(stereo_snapshot.stereo);
+    EXPECT_FALSE(mono_snapshot.stereo);
+    EXPECT_EQ(stereo_snapshot.left64, stereo_snapshot.right64);
     EXPECT_EQ(stereo_snapshot.average64, mono_snapshot.average64);
-    EXPECT_EQ(stereo_snapshot.left64, stereo_snapshot.average64);
-    EXPECT_EQ(stereo_snapshot.right64, stereo_snapshot.average64);
     EXPECT_EQ(mono_snapshot.left64, mono_snapshot.average64);
     EXPECT_EQ(mono_snapshot.right64, mono_snapshot.average64);
 }
 
-TEST(AudioResponseMonoTest, OversizedStereoSubmitDownmixesOnlyRetainedSamples) {
+TEST(AudioResponseMonoTest, OversizedStereoSubmitAnalyzesOnlyRetainedFrames) {
     ResetAudioResponseServiceForTesting();
 
     constexpr uint32_t oversized_frame_count = kRetainedFrameCapacity + 400u;
     std::vector<float> stereo(static_cast<std::size_t>(oversized_frame_count) * 2u, 0.0f);
-    std::vector<float> retained_mono(kRetainedFrameCapacity, 0.0f);
+    std::vector<float> retained_stereo(static_cast<std::size_t>(kRetainedFrameCapacity) * 2u, 0.0f);
 
     for (uint32_t frame = 0; frame < oversized_frame_count; ++frame) {
         const float left = frame < 400u ? 0.0f : std::sin(static_cast<float>(frame) * 0.03f);
@@ -657,7 +741,10 @@ TEST(AudioResponseMonoTest, OversizedStereoSubmitDownmixesOnlyRetainedSamples) {
         stereo[stereo_index + 1u] = right;
 
         if (frame >= oversized_frame_count - kRetainedFrameCapacity) {
-            retained_mono[frame - (oversized_frame_count - kRetainedFrameCapacity)] = 0.5f * (left + right);
+            const std::size_t retained_index =
+                static_cast<std::size_t>(frame - (oversized_frame_count - kRetainedFrameCapacity)) * 2u;
+            retained_stereo[retained_index] = left;
+            retained_stereo[retained_index + 1u] = right;
         }
     }
 
@@ -673,18 +760,22 @@ TEST(AudioResponseMonoTest, OversizedStereoSubmitDownmixesOnlyRetainedSamples) {
     EXPECT_EQ(stereo_snapshot.last_submit_sample_rate, kSubmitSampleRate);
     EXPECT_EQ(stereo_snapshot.accepted_frame_count, oversized_frame_count);
     EXPECT_GT(stereo_snapshot.generation, 0u);
+    EXPECT_TRUE(stereo_snapshot.stereo);
     EXPECT_TRUE(HasNonZeroAverage64Bin(stereo_snapshot));
+    // No staging copy of the submitted interleaved buffer: the deinterleave
+    // writes straight into the retained FIFOs.
     EXPECT_LT(g_largest_allocation.load(std::memory_order_relaxed), static_cast<std::size_t>(oversized_frame_count) * sizeof(float));
 
     ResetAudioResponseServiceForTesting();
 
     error.clear();
-    ASSERT_TRUE(SubmitMonoAudioFrames(kSubmitSampleRate, kRetainedFrameCapacity, retained_mono.data(), &error))
+    ASSERT_TRUE(SubmitAudioFrames(kSubmitSampleRate, kRetainedFrameCapacity, retained_stereo.data(), &error))
         << error;
 
-    auto mono_snapshot = WaitForGeneration();
-    EXPECT_GT(mono_snapshot.generation, 0u);
-    EXPECT_EQ(stereo_snapshot.average64, mono_snapshot.average64);
+    auto retained_snapshot = WaitForGeneration();
+    EXPECT_GT(retained_snapshot.generation, 0u);
+    EXPECT_EQ(stereo_snapshot.left64, retained_snapshot.left64);
+    EXPECT_EQ(stereo_snapshot.right64, retained_snapshot.right64);
 }
 
 TEST(AudioResponseMonoTest, StereoCompatibilityWrapperRejectsNonAnalysisSampleRate) {

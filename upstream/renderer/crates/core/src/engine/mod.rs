@@ -33,10 +33,10 @@ use crate::{
     },
     engine::state::EngineState,
     media::audio::{
-        AudioCaptureError, AudioFrameConsumer, AudioResponseResampler, AudioVolume,
-        InterleavedStereoF32, MonoPcmF32,
+        AudioCaptureError, AudioFrameConsumer, AudioResponseBlock, AudioResponseResampler,
+        AudioVolume, InterleavedStereoF32, MonoPcmF32,
     },
-    owe::backend::OweBackend,
+    owe::backend::{AudioSpectrum128, OweBackend},
     project::{ScalingMode, SceneDesc, SceneHandle, SceneResult, SerdeValudeExt},
     window::{MouseButtonEdges, MouseButtonTracker, MouseButtons, NormalizedMousePosition},
 };
@@ -576,6 +576,28 @@ impl WallpaperEngine {
         self.backend.shared_video_decode_enabled()
     }
 
+    /// Turns scene render optimisation on or off for the renderer process.
+    ///
+    /// On by default. It reuses the previous frame's pixels for render targets
+    /// whose inputs have not changed and removes copy passes proven redundant;
+    /// it does not change resolution, frame rate or animation timing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the renderer rejects the call.
+    pub fn set_scene_optimization_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        self.backend.set_scene_optimization_enabled(enabled)
+    }
+
+    /// Latest system-audio spectrum, or `None` when no analysis has run.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the renderer rejects the call.
+    pub fn current_audio_spectrum(&self) -> Result<Option<AudioSpectrum128>, EngineError> {
+        self.backend.current_audio_spectrum()
+    }
+
     /// Live decode sessions and the number of surfaces consuming them.
     ///
     /// A session is one running decoder instance, not one file: two decoders
@@ -932,12 +954,35 @@ impl<M> From<kameo::error::SendError<M, EngineError>> for EngineError {
     }
 }
 
+impl WallpaperEngine {
+    fn submit_audio_response_block(
+        &self,
+        block: &AudioResponseBlock<'_>,
+    ) -> Result<(), AudioCaptureError> {
+        match block {
+            AudioResponseBlock::Mono(frames) => self.backend.submit_audio_mono_frames(frames),
+            AudioResponseBlock::Stereo(frames) => self.backend.submit_audio_frames(*frames),
+        }
+        .map_err(|error| AudioCaptureError::Engine(error.to_string()))
+    }
+}
+
 impl AudioFrameConsumer for WallpaperEngine {
     fn submit_audio_frames(
         &self,
         frames: InterleavedStereoF32<'_>,
     ) -> Result<(), AudioCaptureError> {
-        self.submit_mono_audio_frames(MonoPcmF32::from_interleaved_stereo(&frames))
+        let Ok(mut resampler) = self.audio_response_resampler.try_lock() else {
+            return Ok(());
+        };
+
+        let mut result = Ok(());
+        resampler.push_stereo(&frames, |block| {
+            if result.is_ok() {
+                result = self.submit_audio_response_block(&block);
+            }
+        });
+        result
     }
 
     fn submit_mono_audio_frames(&self, frames: MonoPcmF32<'_>) -> Result<(), AudioCaptureError> {
@@ -945,13 +990,13 @@ impl AudioFrameConsumer for WallpaperEngine {
             return Ok(());
         };
 
-        for block in resampler.push(&frames) {
-            self.backend
-                .submit_audio_mono_frames(&block)
-                .map_err(|error| AudioCaptureError::Engine(error.to_string()))?;
-        }
-
-        Ok(())
+        let mut result = Ok(());
+        resampler.push_mono(&frames, |block| {
+            if result.is_ok() {
+                result = self.submit_audio_response_block(&block);
+            }
+        });
+        result
     }
 }
 

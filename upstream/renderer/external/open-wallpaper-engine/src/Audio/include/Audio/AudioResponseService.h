@@ -13,6 +13,10 @@ struct AudioSpectrumSnapshot
     uint32_t sample_rate { 12000 };
     uint32_t last_submit_sample_rate { 0 };
     uint64_t accepted_frame_count { 0 };
+    // True when the analysed block came from two independently submitted
+    // channels. A mono submission, or a stereo tap that fell back to mono,
+    // leaves this false and keeps left/right identical.
+    bool stereo { false };
     std::array<float, 64> left64 {};
     std::array<float, 64> right64 {};
     std::array<float, 64> average64 {};
@@ -37,6 +41,7 @@ bool SubmitAudioFrames(
     std::string* error);
 
 AudioSpectrumSnapshot CurrentAudioSpectrumSnapshot();
+bool CurrentAudioSpectrumIsStereo();
 void ResetAudioResponseServiceForTesting();
 
 } // namespace wallpaper::audio

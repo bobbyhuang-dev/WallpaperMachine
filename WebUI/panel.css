@@ -386,6 +386,8 @@ details[open] > summary svg { transform: rotate(90deg); }
 .range-field { display: flex; align-items: center; gap: 9px; }
 .range-field output { min-width: 35px; text-align: right; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .file-value { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+/* The chosen file or folder is shown, not edited: the field stays focusable so its name can be read and copied, and carries no caret. */
+.asset-value[readonly] { color: var(--muted); cursor: default; caret-color: transparent; }
 .display-options { border-top: 1px solid var(--line); padding-top: 10px; }
 .display-options:first-child { border-top: 0; padding-top: 0; }
 .display-options .section-content { display: grid; gap: 12px; padding-top: 12px; }

@@ -64,6 +64,27 @@ The scale and frame-rate controls are shown only while the profile is enabled.
 The engine owns the profile as one value, so changing one control resends the
 other two exactly as the engine currently reports them.
 
+## Scene wallpapers
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| Scene render optimisation | Off / On | **On** |
+
+The only control here that ships on. It reuses the result of scene subgraphs
+whose inputs have not changed and removes render passes proven redundant, inside
+the scene renderer's own render graph. It is not a quality tier: the same pixels
+are produced, and resolution, frame rate and animation speed are untouched. It
+reaches legacy scene wallpapers only — video, native video and web wallpapers do
+not go through that graph.
+
+It is two clicks from the window (**Settings -> Performance**) so the setting can
+be turned off and on for an A/B comparison without an environment variable.
+
+Unlike content pacing and shared video decode, which are read back from the
+renderer, this row reports the saved preference: the renderer publishes no query
+for it. The engine applies a change to running scenes in place, so nothing
+restarts and no wallpaper reloads.
+
 ## Advanced
 
 Both switches are experimental and off by default.
@@ -81,5 +102,5 @@ where it genuinely happens: surfaces still submit and present separately.
 
 See [Testing](../testing/README.md) and
 `Tests/Unit/Panel/WebPanelPerformanceSettingsTests.swift`, which covers the
-clamping, the refusal of an unknown backend name and the snapshot keys the page
-reads.
+clamping, the refusal of an unknown backend name, the scene optimisation default
+and round trip, and the snapshot keys the page reads.

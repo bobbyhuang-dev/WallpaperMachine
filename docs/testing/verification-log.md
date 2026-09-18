@@ -11,6 +11,68 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-18 — Round 6: scene optimisation, web audio/media, file properties
+
+Feature delivery round. Commands run:
+
+- `python3 scripts/check_renderer.py` — exit 0. All ten generated cases
+  `pixels_equal=True`, zero diagnostics, reload cycles 0. New target
+  **`static_subgraph_cache_test` 21** registered in the gate.
+- **R03 A/B on the production analysis**, eight generated fixtures, each run
+  twice through `offscreen_scene_probe` with and without
+  `WE_TEST_NO_SCENE_OPTIMIZATION`: output byte-identical in 8/8, and 8/8
+  genuinely reused passes (6–8 reused against 3–7 executed over a three-frame
+  run). This matters because the golden probe previously did **not** exercise
+  the skip path at all: it drives `UpdatePreparedPasses` /
+  `ExecutePreparedPasses` directly and never calls `VulkanRender::drawFrame`,
+  so a passing golden run proved nothing about reuse. The probe now drives the
+  cache the same way the renderer does, and reports its reuse counts so an
+  identical-pixels result cannot pass vacuously.
+- `cargo test -p wallpaper-bridge` — 292 passed, 0 failed.
+- `cargo test -p wallpaper-core audio` — 29 lib + 5 `core_audio_api` passed.
+  C++ analyser `audio_tests` 21/21.
+- `python3 scripts/test.py` — **463 tests, 9 skipped, 1 failure.** The failure
+  is the pre-existing `ControlPanelLayoutTests`
+  `testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes` (overflow 52 px,
+  tile 166, 5 columns, 4 rows), numbers identical to the round 4 and round 5
+  entries. The Discover grid was not touched this round. The 9 skips are the
+  opt-in `NativeVideoPlayerMediaTests`.
+- `python3 scripts/build.py --configuration Release` — succeeded; app and
+  extension at 22:19.
+
+Two test-integrity corrections made during the round, both of the same shape as
+the round 5 pacing-test fault — a test that could not have failed for the reason
+it claimed:
+
+- `DirectoryWatcherTests` failed all four cases in its shared `settle()` helper,
+  which created an **inverted** `XCTestExpectation` and then fulfilled it on a
+  timer. An inverted expectation fails when fulfilled, so every test that waited
+  failed by construction and the watcher's behaviour was never exercised.
+  Replaced with a plain run-loop pump; all four now pass against the real
+  FSEvents stream.
+- A first attempt at the R03 A/B reported `identical=True` for six cases while
+  both sides exited non-zero and produced no output at all. The probe needs
+  `WE_TEST_PROJECT`, `WE_TEST_ASSETS` and `WE_TEST_OUTPUT`; the comparison was
+  of two empty sets. Re-run with the right environment, and the reuse counters
+  above exist so that failure mode is visible rather than silent.
+
+Late in the round the panel's audio/media status was changed from a static
+sentence to the live state read from the running web host, because "see the
+feature status" was part of the ask and a sentence is not a status. The first
+version of that wiring had the bug it was meant to prevent: an available media
+source and "no host running" both serialised to `null`, so the panel would have
+reported a capability it had not observed. `WebPanelDeliveryStatusTests` pins the
+three states apart; deleting the line that distinguishes them fails exactly
+`testAnAvailableMediaSourceIsDistinguishableFromAnUnknownOne` and
+`testAnUnavailableMediaSourceCarriesItsReason`, which was checked by making that
+edit and re-running, not assumed.
+
+Not verified: no desktop session, no visual check, no power measurement, no
+system audio captured, and MediaRemote was never called, so the media
+provider's runtime availability on this machine is unobserved. Scene
+optimisation, web audio delivery, media listeners and file/directory properties
+have not been seen on a real display.
+
 ## 2026-09-18 — Round 5: render scale, settings, shared decode
 
 Feature delivery round. Commands run:

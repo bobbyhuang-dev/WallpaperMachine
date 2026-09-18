@@ -11,6 +11,26 @@ CopyPass::CopyPass(const Desc& desc): m_desc(desc) {}
 
 CopyPass::~CopyPass() {};
 
+ElisionPassDesc CopyPass::elisionDesc(const Scene& scene) const {
+    ElisionPassDesc desc;
+    desc.kind   = ElisionPassDesc::Kind::Copy;
+    desc.writes = scene.ResolveRenderTargetName(m_desc.dst);
+    desc.reads  = { scene.ResolveRenderTargetName(m_desc.src) };
+
+    const auto* src_rt = scene.FindRenderTarget(desc.reads.front());
+    const auto* dst_rt = scene.FindRenderTarget(desc.writes);
+    if (src_rt != nullptr && dst_rt != nullptr) {
+        // Comparing the texture keys is the same equivalence the render-target
+        // pool uses when it hands one allocation to another name, so a pair
+        // that passes here is a pair the pool would already treat as
+        // interchangeable: extent, usage, format, sampling and mip count.
+        desc.copy_compatible = TextureKey::HashValue(ToTexKey(*src_rt)) ==
+                               TextureKey::HashValue(ToTexKey(*dst_rt));
+        desc.copy_generates_mipmaps = dst_rt->mipmap_level > 1;
+    }
+    return desc;
+}
+
 void CopyPass::prepare(Scene& scene, const Device& device, RenderingResources& rr) {
     setPrepared(false);
     const std::string src_name = scene.ResolveRenderTargetName(m_desc.src);
@@ -19,10 +39,36 @@ void CopyPass::prepare(Scene& scene, const Device& device, RenderingResources& r
         LOG_ERROR("%s not found", m_desc.src.c_str());
         return;
     }
+    if (m_desc.elision == CopyElision::Dead) {
+        // Nothing reads the destination, so neither the copy nor an allocation
+        // for its result is needed.
+        for (auto& tex : releaseTexs()) device.tex_cache().MarkShareReady(tex);
+        setPrepared();
+        return;
+    }
     if (!scene.HasRenderTarget(dst_name)) {
         auto& rt                            = *scene.FindRenderTarget(src_name);
         scene.renderTargets[dst_name]       = rt;
         scene.renderTargets[dst_name].allowReuse = true;
+    }
+
+    if (m_desc.elision == CopyElision::Alias) {
+        auto& src_rt = *scene.FindRenderTarget(src_name);
+        auto  opt    = device.tex_cache().Query(src_name, ToTexKey(src_rt), true);
+        if (! opt.has_value()) {
+            LOG_ERROR("query image from cache failed");
+            return;
+        }
+        if (! device.tex_cache().AliasRenderTarget(dst_name, src_name)) {
+            LOG_ERROR("cannot alias %s onto %s", dst_name.c_str(), src_name.c_str());
+            return;
+        }
+        m_desc.vk_src = opt.value();
+        m_desc.vk_dst = opt.value();
+        // Both names are pinned by the alias, so releasing either would let the
+        // pool hand the image to a third key while these two still read it.
+        setPrepared();
+        return;
     }
 
     std::array<std::string, 2>      textures    = { src_name, dst_name };
@@ -55,6 +101,7 @@ void CopyPass::prepare(Scene& scene, const Device& device, RenderingResources& r
     setPrepared();
 };
 VkResult CopyPass::execute(const Device& device, RenderingResources& rr) {
+    if (m_desc.elision != CopyElision::None) return VK_SUCCESS;
     auto& cmd = rr.command;
     auto& src = m_desc.vk_src;
     auto& dst = m_desc.vk_dst;

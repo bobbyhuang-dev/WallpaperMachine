@@ -3,11 +3,34 @@ use std::sync::{Arc, Mutex};
 use crate::{
     media::audio::{
         AudioCaptureBackend, AudioCaptureError, AudioFrameConsumer, AudioInputError,
-        AudioResponseController, AudioResponseEngine, AudioResponseResampler, InterleavedStereoF32,
-        MonoPcmF32, PlatformAudioCaptureBackend,
+        AudioResponseBlock, AudioResponseController, AudioResponseEngine, AudioResponseResampler,
+        InterleavedStereoF32, MonoPcmF32, PlatformAudioCaptureBackend,
     },
     project::SceneHandle,
 };
+
+/// Collects emitted blocks as owned samples so assertions can outlive the
+/// resampler's borrow.
+#[derive(Default)]
+struct CollectedBlocks {
+    mono: Vec<Vec<f32>>,
+    stereo: Vec<Vec<f32>>,
+}
+
+impl CollectedBlocks {
+    fn collector(&mut self) -> impl FnMut(AudioResponseBlock<'_>) + '_ {
+        |block| match block {
+            AudioResponseBlock::Mono(frames) => {
+                assert_eq!(frames.sample_rate(), AudioResponseResampler::TARGET_SAMPLE_RATE);
+                self.mono.push(frames.samples().to_vec());
+            }
+            AudioResponseBlock::Stereo(frames) => {
+                assert_eq!(frames.sample_rate(), AudioResponseResampler::TARGET_SAMPLE_RATE);
+                self.stereo.push(frames.samples().to_vec());
+            }
+        }
+    }
+}
 
 #[test]
 pub fn case_audio_capture_controller_starts_and_stops_backend() {
@@ -63,13 +86,13 @@ pub fn case_audio_response_resampler_preserves_12khz_mono() {
     let input = vec![0.5f32; 200];
     let input = MonoPcmF32::borrowed(12_000, &input).expect("valid mono input");
 
-    let blocks = resampler.push(&input);
+    let mut collected = CollectedBlocks::default();
+    resampler.push_mono(&input, collected.collector());
 
-    assert_eq!(blocks.len(), 1);
-    assert_eq!(blocks[0].sample_rate(), 12_000);
-    assert_eq!(blocks[0].frame_count(), 200);
-    assert_eq!(blocks[0].samples(), &[0.5f32; 200]);
-    assert!(resampler.pending_mono_for_testing().is_empty());
+    assert!(collected.stereo.is_empty());
+    assert_eq!(collected.mono.len(), 1);
+    assert_eq!(collected.mono[0], vec![0.5f32; 200]);
+    assert!(resampler.pending_for_testing().is_empty());
 }
 
 #[test]
@@ -79,11 +102,13 @@ pub fn case_audio_response_resampler_converts_48khz_mono_to_12khz() {
     let input = (0..800).map(|frame| frame as f32).collect::<Vec<_>>();
     let input = MonoPcmF32::borrowed(48_000, &input).expect("valid mono input");
 
-    let blocks = resampler.push(&input);
+    let mut collected = CollectedBlocks::default();
+    resampler.push_mono(&input, collected.collector());
 
-    assert_eq!(blocks.len(), 1);
+    assert_eq!(collected.mono.len(), 1);
+    #[allow(clippy::cast_precision_loss)]
     let expected = (0..200).map(|frame| (frame * 4) as f32).collect::<Vec<_>>();
-    assert_eq!(blocks[0].samples(), expected);
+    assert_eq!(collected.mono[0], expected);
 }
 
 #[test]
@@ -93,41 +118,84 @@ pub fn case_audio_response_resampler_buffers_partial_blocks() {
     let second = vec![1.0f32; 100];
 
     let first = MonoPcmF32::borrowed(12_000, &first).expect("valid first chunk");
-    let blocks = resampler.push(&first);
-    assert!(blocks.is_empty());
+    let mut collected = CollectedBlocks::default();
+    resampler.push_mono(&first, collected.collector());
+    assert!(collected.mono.is_empty());
 
     let second = MonoPcmF32::borrowed(12_000, &second).expect("valid second chunk");
-    let blocks = resampler.push(&second);
-    assert_eq!(blocks.len(), 1);
-    assert_eq!(blocks[0].frame_count(), 200);
-    assert!(resampler.pending_mono_for_testing().is_empty());
+    resampler.push_mono(&second, collected.collector());
+    assert_eq!(collected.mono.len(), 1);
+    assert_eq!(collected.mono[0].len(), 200);
+    assert!(resampler.pending_for_testing().is_empty());
 }
 
 #[test]
 pub fn case_audio_response_resampler_resets_interpolation_across_rate_changes() {
     let mut resampler = AudioResponseResampler::new();
+    let mut collected = CollectedBlocks::default();
     let first = MonoPcmF32::borrowed(24_000, &[1.0, 2.0, 99.0]).unwrap();
-    assert!(resampler.push(&first).is_empty());
+    resampler.push_mono(&first, collected.collector());
+    assert!(collected.mono.is_empty());
     let bypass_samples = [3.0; 198];
     let bypass = MonoPcmF32::borrowed(12_000, &bypass_samples).unwrap();
-    assert!(resampler.push(&bypass).is_empty());
+    resampler.push_mono(&bypass, collected.collector());
+    assert!(collected.mono.is_empty());
     let last = MonoPcmF32::borrowed(24_000, &[4.0, 5.0]).unwrap();
-    let blocks = resampler.push(&last);
-    assert_eq!(blocks.len(), 1);
-    assert_eq!(blocks[0].samples()[0], 1.0);
-    assert_eq!(&blocks[0].samples()[1..199], &bypass_samples);
-    assert_eq!(blocks[0].samples()[199], 4.0);
+    resampler.push_mono(&last, collected.collector());
+
+    assert_eq!(collected.mono.len(), 1);
+    let block = &collected.mono[0];
+    assert_eq!(block[0], 1.0);
+    assert_eq!(&block[1..199], &bypass_samples);
+    assert_eq!(block[199], 4.0);
 }
 
 #[test]
-pub fn case_interleaved_stereo_fallback_downmixes_to_mono() {
-    let input =
-        InterleavedStereoF32::new(12_000, &[1.0, 0.0, 0.25, 0.75]).expect("valid stereo input");
+pub fn case_audio_response_resampler_keeps_stereo_channels_independent() {
+    // 48 kHz stereo where the two channels never share a value: a downmix
+    // would show up immediately as averaged samples.
+    let mut source = Vec::with_capacity(1600);
+    for frame in 0..800u32 {
+        source.push(f32::from(u16::try_from(frame).unwrap()));
+        source.push(-f32::from(u16::try_from(frame).unwrap()));
+    }
+    let input = InterleavedStereoF32::new(48_000, &source).expect("valid stereo input");
 
-    let mono = MonoPcmF32::from_interleaved_stereo(&input);
+    let mut resampler = AudioResponseResampler::new();
+    let mut collected = CollectedBlocks::default();
+    resampler.push_stereo(&input, collected.collector());
 
-    assert_eq!(mono.sample_rate(), 12_000);
-    assert_eq!(mono.samples(), &[0.5, 0.5]);
+    assert!(collected.mono.is_empty());
+    assert_eq!(collected.stereo.len(), 1);
+    let block = &collected.stereo[0];
+    assert_eq!(block.len(), 400);
+    for frame in 0..200usize {
+        let expected = f32::from(u16::try_from(frame * 4).unwrap());
+        assert_eq!(block[frame * 2], expected);
+        assert_eq!(block[(frame * 2) + 1], -expected);
+    }
+}
+
+#[test]
+pub fn case_audio_response_resampler_discards_buffered_frames_on_layout_change() {
+    let mut resampler = AudioResponseResampler::new();
+    let mut collected = CollectedBlocks::default();
+
+    let partial = vec![1.0f32; 100];
+    let partial = MonoPcmF32::borrowed(12_000, &partial).expect("valid mono chunk");
+    resampler.push_mono(&partial, collected.collector());
+    assert!(!resampler.pending_for_testing().is_empty());
+
+    // 200 stereo frames are a whole block only if the buffered mono frames were
+    // dropped rather than reinterpreted as interleaved samples.
+    let stereo = vec![0.25f32; 400];
+    let stereo = InterleavedStereoF32::new(12_000, &stereo).expect("valid stereo chunk");
+    resampler.push_stereo(&stereo, collected.collector());
+
+    assert!(collected.mono.is_empty());
+    assert_eq!(collected.stereo.len(), 1);
+    assert_eq!(collected.stereo[0], vec![0.25f32; 400]);
+    assert!(resampler.pending_for_testing().is_empty());
 }
 
 #[test]
@@ -141,7 +209,8 @@ pub fn case_platform_audio_backend_constructs_or_reports_unsupported() {
 
 #[derive(Default)]
 struct FakeEngine {
-    frames: Mutex<usize>,
+    stereo_frames: Mutex<usize>,
+    mono_frames: Mutex<usize>,
 }
 
 impl AudioFrameConsumer for FakeEngine {
@@ -149,7 +218,16 @@ impl AudioFrameConsumer for FakeEngine {
         &self,
         frames: InterleavedStereoF32<'_>,
     ) -> Result<(), AudioCaptureError> {
-        *self.frames.lock().expect("frames lock should be valid") += frames.frame_count() as usize;
+        *self
+            .stereo_frames
+            .lock()
+            .expect("frames lock should be valid") += frames.frame_count() as usize;
+        Ok(())
+    }
+
+    fn submit_mono_audio_frames(&self, frames: MonoPcmF32<'_>) -> Result<(), AudioCaptureError> {
+        *self.mono_frames.lock().expect("frames lock should be valid") +=
+            frames.frame_count() as usize;
         Ok(())
     }
 }

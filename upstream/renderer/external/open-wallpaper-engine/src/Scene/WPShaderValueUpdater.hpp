@@ -82,6 +82,7 @@ public:
     void UpdateUniforms(SceneNode*, uint32_t material_slot, sprite_map_t&,
                         const UpdateUniformOp&) override;
     void FrameEnd() override;
+    uint32_t FrameVaryingUniforms(SceneNode*, uint32_t material_slot) const override;
     void MouseInput(double, double) override;
     void SetTexelSize(float x, float y) override;
 

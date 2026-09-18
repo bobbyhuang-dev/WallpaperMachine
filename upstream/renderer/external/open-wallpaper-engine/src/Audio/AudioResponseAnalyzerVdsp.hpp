@@ -13,6 +13,12 @@ void AnalyzeAudioResponseMonoBlock(
     uint32_t frame_count,
     AudioSpectrumSnapshot* snapshot);
 
+void AnalyzeAudioResponseStereoBlock(
+    const float* left_pcm,
+    const float* right_pcm,
+    uint32_t frame_count,
+    AudioSpectrumSnapshot* snapshot);
+
 void ClearAudioResponseSnapshot(AudioSpectrumSnapshot* snapshot);
 void DecayAudioResponseSnapshot(AudioSpectrumSnapshot* snapshot);
 

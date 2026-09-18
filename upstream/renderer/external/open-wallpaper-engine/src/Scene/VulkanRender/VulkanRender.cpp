@@ -17,6 +17,9 @@
 
 #include "VulkanPass.hpp"
 #include "CustomShaderPass.hpp"
+#include "CopyPass.hpp"
+#include "VulkanRender/StaticSubgraphCache.hpp"
+#include "VulkanRender/CopyElision.hpp"
 #include "PrePass.hpp"
 #include "FinPass.hpp"
 #include "Resource.hpp"
@@ -109,6 +112,13 @@ struct VulkanRender::Impl {
     /// restart the wallpaper.
     bool applyRenderScale(Scene&, rg::RenderGraph&, double scale);
     bool preparePasses(Scene&);
+    /// Decides copy elimination and which targets may retain their pixels.
+    /// Runs once per compiled graph, never per frame.
+    bool applySceneOptimization(Scene&, rg::RenderGraph&);
+    /// Gives every pinned target back to the reuse pool.
+    void releaseStaticCache();
+    /// Per frame: samples the varying inputs and marks reusable passes.
+    void planStaticSkips(Scene&);
     void UpdateCameraFillMode(Scene&, wallpaper::FillMode);
     void SetWallpaperScalingMode(wallpaper::WallpaperScalingMode);
     void SetWallpaperScalingFactor(double);
@@ -172,6 +182,17 @@ struct VulkanRender::Impl {
 
     std::vector<VulkanPass*> m_passes;
     CustomPassExecutionScratch m_pass_scratch;
+    StaticSubgraphCache m_static_cache;
+    std::vector<StaticPassSample> m_static_samples;
+    std::vector<uint8_t> m_static_skip;
+    /// The pass list this frame actually records, with skipped clears and
+    /// copies removed. Rebuilt in place so no allocation happens per frame.
+    std::vector<VulkanPass*> m_frame_passes;
+    /// Upper bound on what pinned render targets may occupy. Beyond it, a
+    /// target keeps taking part in the reuse pool and simply re-renders, which
+    /// costs GPU work rather than memory.
+    uint64_t m_static_cache_budget_bytes { 192ULL * 1024ULL * 1024ULL };
+    uint64_t m_static_pinned_bytes { 0 };
     /// Owned by the scene that created this renderer; may be null in tests and
     /// standalone tools. Only read on the render thread.
     RendererCounters* m_counters { nullptr };
@@ -661,6 +682,9 @@ bool VulkanRender::Impl::drawFrame(Scene& scene) {
         return failFrame(VK_ERROR_UNKNOWN);
     }
     m_draw_recording = true;
+    // Decided before the update so a reusable pass also skips re-uploading
+    // uniforms nothing will read this frame.
+    planStaticSkips(scene);
     if (! UpdatePreparedPasses(*m_device, m_rendering_resources, m_passes))
         return failFrame(VK_ERROR_UNKNOWN);
 
@@ -682,7 +706,13 @@ bool VulkanRender::Impl::drawFrame(Scene& scene) {
 }
 
 VkResult VulkanRender::Impl::executePreparedPasses(RenderingResources& rr) {
-    return ExecutePreparedPasses(*m_device, rr, m_passes, m_pass_scratch);
+    // `m_frame_passes` drops clears and copies whose target is reusing last
+    // frame's pixels. Custom passes stay so batching still sees the same
+    // neighbours; they report themselves invisible instead.
+    const auto passes = m_frame_passes.empty()
+                            ? std::span<VulkanPass* const> { m_passes }
+                            : std::span<VulkanPass* const> { m_frame_passes };
+    return ExecutePreparedPasses(*m_device, rr, passes, m_pass_scratch);
 }
 
 bool VulkanRender::Impl::drawFrameSwapchain() {
@@ -1156,9 +1186,165 @@ bool VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
     setRenderTargetSize(scene, rg);
 
     if (! preparePasses(scene)) return false;
+    if (! applySceneOptimization(scene, rg)) return false;
     m_pass_loaded = true;
     return true;
 };
+
+bool VulkanRender::Impl::applySceneOptimization(Scene& scene, rg::RenderGraph& rg) {
+    releaseStaticCache();
+    m_static_cache.Reset();
+    m_static_samples.clear();
+    m_static_skip.assign(m_passes.size(), uint8_t { 0 });
+    if (! SceneOptimizationEnabled()) return true;
+
+    // Copy elimination first: it changes which targets exist and who reads
+    // them, so the reuse analysis must see the list the renderer will run.
+    std::vector<ElisionPassDesc> elision;
+    elision.reserve(m_passes.size());
+    for (auto* pass : m_passes) {
+        ElisionPassDesc desc;
+        if (auto* copy = dynamic_cast<CopyPass*>(pass)) {
+            desc = copy->elisionDesc(scene);
+        } else if (auto* custom = dynamic_cast<CustomShaderPass*>(pass)) {
+            desc.kind   = ElisionPassDesc::Kind::Custom;
+            desc.writes = scene.ResolveRenderTargetName(custom->desc().output);
+            for (const auto& texture : custom->desc().textures) {
+                if (texture.empty()) continue;
+                desc.reads.push_back(scene.ResolveRenderTargetName(texture));
+            }
+        } else if (auto* pre = dynamic_cast<PrePass*>(pass)) {
+            desc.kind   = ElisionPassDesc::Kind::Clear;
+            desc.writes = scene.ResolveRenderTargetName(pre->desc().result);
+        } else {
+            // The final blit consumes the scene's output. Recording its read
+            // keeps that target from looking like a result nobody wants.
+            desc.kind  = ElisionPassDesc::Kind::Present;
+            desc.reads = { scene.ResolveRenderTargetName(SpecTex_Default) };
+        }
+        elision.push_back(std::move(desc));
+    }
+
+    const auto plan = PlanCopyElision(elision);
+    uint64_t   elided = 0;
+    bool       changed = false;
+    for (std::size_t i = 0; i < m_passes.size(); ++i) {
+        auto* copy = dynamic_cast<CopyPass*>(m_passes[i]);
+        if (copy == nullptr || plan[i] == CopyElision::None) continue;
+        copy->desc().elision = plan[i];
+        changed              = true;
+        ++elided;
+    }
+    if (changed) {
+        // The copies decided above change what each pass queries, so their
+        // prepared state has to be rebuilt against the new plan.
+        for (auto* pass : m_passes) {
+            if (pass != nullptr) pass->destory(*m_device, m_rendering_resources);
+        }
+        std::string error;
+        if (! m_device->tex_cache().ClearRenderTargets(&error)) {
+            LOG_ERROR("cannot drop render targets for copy elision: %s", error.c_str());
+            return failFrame(VK_ERROR_UNKNOWN);
+        }
+        setRenderTargetSize(scene, rg);
+        if (! preparePasses(scene)) return false;
+    }
+    RecordElidedCopies(elided);
+
+    std::vector<StaticPassDesc> descs;
+    descs.reserve(m_passes.size());
+    for (std::size_t i = 0; i < m_passes.size(); ++i) {
+        StaticPassDesc desc;
+        if (auto* custom = dynamic_cast<CustomShaderPass*>(m_passes[i])) {
+            desc = custom->staticPassDesc(scene);
+            desc.target = scene.ResolveRenderTargetName(desc.target);
+            for (auto& input : desc.inputs) input = scene.ResolveRenderTargetName(input);
+        } else if (auto* copy = dynamic_cast<CopyPass*>(m_passes[i])) {
+            // An elided copy produces nothing at execution time, so it neither
+            // writes a target nor forces one to re-render.
+            if (copy->desc().elision == CopyElision::None) {
+                desc.target = scene.ResolveRenderTargetName(copy->desc().dst);
+                desc.inputs = { scene.ResolveRenderTargetName(copy->desc().src) };
+            }
+        } else if (auto* pre = dynamic_cast<PrePass*>(m_passes[i])) {
+            // A clear is a writer like any other: reusing a target while still
+            // clearing it every frame is exactly how the pixels would be lost.
+            desc.target = scene.ResolveRenderTargetName(pre->desc().result);
+        }
+        descs.push_back(std::move(desc));
+    }
+    m_static_cache.Compile(descs);
+    m_static_samples.assign(m_passes.size(), StaticPassSample {});
+
+    for (std::size_t i = 0; i < m_static_cache.TargetCount(); ++i) {
+        if (! m_static_cache.TargetCacheable(i)) continue;
+        const auto& key   = m_static_cache.TargetKey(i);
+        const auto  bytes = m_device->tex_cache().RenderTargetBytes(key);
+        if (bytes == 0) continue;
+        if (m_static_pinned_bytes + bytes > m_static_cache_budget_bytes) continue;
+        if (! m_device->tex_cache().PinRenderTarget(key)) continue;
+        m_static_cache.SetTargetPinned(i, true, bytes);
+        m_static_pinned_bytes += bytes;
+    }
+    AdjustSceneOptimizationPinnedBytes(static_cast<int64_t>(m_static_pinned_bytes));
+    return true;
+}
+
+void VulkanRender::Impl::releaseStaticCache() {
+    if (m_static_pinned_bytes != 0) {
+        AdjustSceneOptimizationPinnedBytes(-static_cast<int64_t>(m_static_pinned_bytes));
+        m_static_pinned_bytes = 0;
+    }
+    for (auto* pass : m_passes) {
+        if (auto* custom = dynamic_cast<CustomShaderPass*>(pass)) custom->setFrameSkipped(false);
+    }
+}
+
+void VulkanRender::Impl::planStaticSkips(Scene& scene) {
+    (void)scene;
+    if (m_static_skip.size() != m_passes.size()) m_static_skip.assign(m_passes.size(), uint8_t { 0 });
+    if (! SceneOptimizationEnabled() || m_static_cache.TargetCount() == 0) {
+        for (auto* pass : m_passes) {
+            if (auto* custom = dynamic_cast<CustomShaderPass*>(pass)) custom->setFrameSkipped(false);
+        }
+        return;
+    }
+    if (m_static_samples.size() != m_passes.size())
+        m_static_samples.assign(m_passes.size(), StaticPassSample {});
+
+    for (std::size_t i = 0; i < m_passes.size(); ++i) {
+        if (auto* custom = dynamic_cast<CustomShaderPass*>(m_passes[i])) {
+            m_static_samples[i] = custom->frameSample();
+        } else {
+            // A clear or a copy contributes no varying state of its own; it is
+            // skipped exactly when the target it writes is.
+            m_static_samples[i] = StaticPassSample { .hash = 0, .visible = true };
+        }
+    }
+
+    std::vector<uint8_t> skip(m_passes.size(), uint8_t { 0 });
+    m_static_cache.Plan(m_static_samples, skip);
+    uint64_t skipped  = 0;
+    uint64_t executed = 0;
+    m_frame_passes.clear();
+    m_frame_passes.reserve(m_passes.size());
+    for (std::size_t i = 0; i < m_passes.size(); ++i) {
+        m_static_skip[i] = skip[i];
+        auto* custom = dynamic_cast<CustomShaderPass*>(m_passes[i]);
+        if (custom != nullptr) custom->setFrameSkipped(skip[i] != 0);
+        if (skip[i] != 0) {
+            ++skipped;
+            // A custom pass stays in the list so batching still sees the same
+            // neighbours; it reports itself invisible instead. A clear or copy
+            // has no such representation, so it leaves the list entirely.
+            if (custom != nullptr) m_frame_passes.push_back(m_passes[i]);
+            continue;
+        }
+        ++executed;
+        m_frame_passes.push_back(m_passes[i]);
+    }
+    RecordSceneOptimizationFrame(executed, skipped);
+}
 
 bool VulkanRender::Impl::preparePasses(Scene& scene) {
     glslang::InitializeProcess();

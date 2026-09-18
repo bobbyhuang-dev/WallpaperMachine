@@ -96,6 +96,70 @@ extension WebPanelController {
     return max(0, superview.convert(zoom.frame, to: nil).maxX.rounded(.up))
   }
 
+  /// What each `file` / `directory` property of this wallpaper currently points at.
+  ///
+  /// Measuring the chosen folder is a directory read, and the page re-renders from a
+  /// snapshot many times a second, so a measurement is kept until the chosen path
+  /// changes. The panel closing throws the cache away and the next snapshot measures
+  /// once more, which is why the row survives a reopen without the panel holding the
+  /// wallpaper's staged files open.
+  func measuredAssets(for options: BridgeWallpaperOptionsSnapshot)
+    -> [String: WebPanelPropertyAsset]
+  {
+    var measured: [String: WebPanelPropertyAsset] = [:]
+    for property in options.properties
+    where property.kind == .file || property.kind == .directory {
+      guard case .string(let path) = property.value, !path.isEmpty else { continue }
+      if let cached = propertyAssets[options.wallpaperId]?[property.id], cached.path == path {
+        measured[property.id] = cached
+        continue
+      }
+      let asset = Self.measure(
+        path: path, directory: property.kind == .directory,
+        filter: Self.assetFilter(property.fileFilter))
+      propertyAssets[options.wallpaperId, default: [:]][property.id] = asset
+      measured[property.id] = asset
+    }
+    return measured
+  }
+
+  /// Counts what the chosen folder offers the importer: first level only, matching
+  /// extensions only, and one past the limit so exceeding it can be reported rather
+  /// than silently dropping the remainder. A folder that cannot be read counts nothing,
+  /// which the page reports as unreadable instead of as empty.
+  ///
+  /// The three screens beyond the extension — hidden entries, anything that is not a
+  /// regular file, anything unreadable — are the ones `UserAssetStore` applies, so this
+  /// count cannot come out above what staging would take. A folder named `photos.png`
+  /// is the case a bare extension test gets wrong.
+  static func measure(path: String, directory: Bool, filter: UserAssetFilter)
+    -> WebPanelPropertyAsset
+  {
+    let url = URL(fileURLWithPath: path)
+    var asset = WebPanelPropertyAsset(path: path, name: url.lastPathComponent)
+    guard directory else { return asset }
+    guard
+      let entries = try? FileManager.default.contentsOfDirectory(
+        at: url, includingPropertiesForKeys: [.isRegularFileKey],
+        options: [.skipsSubdirectoryDescendants, .skipsHiddenFiles])
+    else { return asset }
+    let allowed = filter.allowedExtensions
+    let limit = UserAssetStore.defaultDirectoryFileLimit
+    var matches = 0
+    for entry in entries where allowed.contains(entry.pathExtension.lowercased()) {
+      guard (try? entry.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true,
+        FileManager.default.isReadableFile(atPath: entry.path)
+      else { continue }
+      guard matches < limit else {
+        asset.truncated = true
+        break
+      }
+      matches += 1
+    }
+    asset.matches = matches
+    return asset
+  }
+
   func snapshot() -> [String: Any] {
     let settings = store.settingsSnapshot
     let setup = workshop.steamCMDSetup
@@ -255,7 +319,12 @@ extension WebPanelController {
       "workshopFiltersCollapsed": workshopFiltersCollapsed,
       "inspectorWidth": inspectorWidth as Any? ?? null,
       "displays": displays,
-      "options": store.wallpaperOptionsSnapshot.map { Self.options($0, titles: titles) } as Any? ?? null,
+      "options": store.wallpaperOptionsSnapshot.map {
+        Self.options(
+          $0, titles: titles, assets: measuredAssets(for: $0),
+          errors: propertyPathErrors[$0.wallpaperId] ?? [:],
+          delivery: store.webWallpaperDeliveryStatus?())
+      } as Any? ?? null,
       "settings": [
         "launchAtLogin": settings.launchAtLoginEnabled,
         "launchAtLoginAvailable": settings.launchAtLoginAvailable,
@@ -263,6 +332,7 @@ extension WebPanelController {
         "videoBackend": settings.videoBackend, "videoBackends": videoBackends,
         "contentPacing": settings.contentPacingEnabled,
         "sharedVideoDecode": settings.sharedVideoDecodeEnabled,
+        "sceneOptimization": settings.sceneOptimizationEnabled,
         "sharedVideoDecodeSessions": Int(settings.sharedVideoDecodeSessions),
         "sharedVideoDecodeConsumers": Int(settings.sharedVideoDecodeConsumers),
         "renderScale": Double(settings.renderScale),
@@ -451,12 +521,28 @@ extension WebPanelController {
   }
 
   static func options(
-    _ value: BridgeWallpaperOptionsSnapshot, titles: ResolvedDisplayTitles
+    _ value: BridgeWallpaperOptionsSnapshot, titles: ResolvedDisplayTitles,
+    assets: [String: WebPanelPropertyAsset], errors: [String: String],
+    delivery: WebWallpaperHost.DeliveryStatus? = nil
   ) -> [String: Any] {
-    [
-      "id": value.wallpaperId, "supported": value.supported, "dirty": value.dirty,
+    let null = NSNull()
+    // Only a running host can say whether anything is being delivered. With no
+    // host these keys are absent, which the panel reports as unknown. Emitting
+    // null instead would make "available" and "cannot tell" the same value.
+    var delivered: [String: Any] = [:]
+    if let delivery {
+        delivered["audioDelivering"] = !delivery.audioSubscribedDisplayIDs.isEmpty
+        delivered["mediaAvailable"] = delivery.mediaUnavailableReason == nil
+        if let reason = delivery.mediaUnavailableReason {
+            delivered["mediaUnavailableReason"] = reason
+        }
+    }
+    var payload: [String: Any] = [
+      "id": value.wallpaperId, "kind": kind(value.kind), "supported": value.supported,
+      "dirty": value.dirty,
       "volume": value.volume, "muted": value.muted,
       "audioResponseEnabled": value.audioResponseEnabled,
+      "mediaIntegrationEnabled": value.mediaIntegrationEnabled,
       "displays": value.displayConfigurations.map { row -> [String: Any] in
         [
           "id": row.displayId, "title": titles.title(row.title, displayId: row.displayId),
@@ -469,14 +555,16 @@ extension WebPanelController {
         let kind: String
         switch property.kind {
         case .bool: kind = "boolean"
-        case .directory: kind = "file"
+        case .texture: kind = "texture"
+        case .file: kind = "file"
+        case .directory: kind = "directory"
         case .slider: kind = "slider"
         case .combo: kind = "combo"
         case .color: kind = "color"
         case .textInput: kind = "textInput"
         case .text, .group, .unknown: kind = "text"
         }
-        return [
+        var row: [String: Any] = [
           "id": property.id, "kind": kind, "label": plainLabel(property.labelHtml),
           "value": propertyValue(property.value),
           "defaultValue": propertyValue(property.defaultValue),
@@ -487,8 +575,33 @@ extension WebPanelController {
             ["label": $0.label, "value": propertyValue($0.value)]
           },
         ]
+        guard property.kind == .file || property.kind == .directory else { return row }
+        let asset = assets[property.id]
+        // The page is shown the file's own name; the staged path it reads is never displayed.
+        row["fileName"] = asset?.name as Any? ?? null
+        row["fileTypes"] = assetFilter(property.fileFilter).allowedExtensions.sorted()
+        row["error"] = errors[property.id] as Any? ?? null
+        guard property.kind == .directory else { return row }
+        row["directoryMode"] = property.directoryMode == .fetchAll ? "fetchAll" : "onDemand"
+        let matches = asset?.matches
+        row["fileCount"] = matches as Any? ?? null
+        row["fileLimit"] = UserAssetStore.defaultDirectoryFileLimit
+        row["truncated"] = asset?.truncated ?? false
+        return row
       },
     ]
+    payload.merge(delivered) { current, _ in current }
+    return payload
+  }
+
+  /// An absent `fileFilter` means the author declared no file-type option, which the
+  /// protocol defines as both kinds it knows, not as any file at all.
+  static func assetFilter(_ value: BridgeFileFilter?) -> UserAssetFilter {
+    switch value {
+    case .image: .image
+    case .video: .video
+    case nil: .any
+    }
   }
 
   static func propertyValue(_ value: BridgePropertyValue) -> Any {

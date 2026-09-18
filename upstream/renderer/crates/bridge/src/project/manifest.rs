@@ -13,7 +13,10 @@ use std::{
 use serde_json::Value;
 use wallpaper_core::project::WallpaperProjectType;
 
-use super::property::{ComboOption, PropertyKind, PropertyMetadata, PropertyValue};
+use super::property::{
+    ComboOption, DirectoryMode, FileFilter, FileMedia, PropertyKind, PropertyMetadata,
+    PropertyValue,
+};
 use crate::{BridgeError, BridgeErrorKind};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -104,11 +107,12 @@ impl ProjectModel {
                         raw if raw.eq_ignore_ascii_case("textinput") => PropertyKind::TextInput,
                         raw if raw.eq_ignore_ascii_case("text") => PropertyKind::Text,
                         raw if raw.eq_ignore_ascii_case("group") => PropertyKind::Group,
-                        raw if raw.eq_ignore_ascii_case("directory")
-                            || raw.eq_ignore_ascii_case("scenetexture")
+                        raw if raw.eq_ignore_ascii_case("file") => PropertyKind::File,
+                        raw if raw.eq_ignore_ascii_case("directory") => PropertyKind::Directory,
+                        raw if raw.eq_ignore_ascii_case("scenetexture")
                             || raw.eq_ignore_ascii_case("texture") =>
                         {
-                            PropertyKind::Directory
+                            PropertyKind::Texture
                         }
                         raw => PropertyKind::Unknown(raw.to_string()),
                     };
@@ -164,7 +168,14 @@ impl ProjectModel {
                         PropertyKind::TextInput => PropertyMetadata::TextInput,
                         PropertyKind::Text => PropertyMetadata::Text,
                         PropertyKind::Group => PropertyMetadata::Group,
-                        PropertyKind::Directory => PropertyMetadata::Directory,
+                        PropertyKind::File => PropertyMetadata::File {
+                            filter: parse_file_filter(object),
+                        },
+                        PropertyKind::Directory => PropertyMetadata::Directory {
+                            filter: parse_file_filter(object),
+                            mode: parse_directory_mode(object),
+                        },
+                        PropertyKind::Texture => PropertyMetadata::Texture,
                         PropertyKind::Unknown(_) => PropertyMetadata::Unknown,
                     };
                     let label_html = object
@@ -179,12 +190,14 @@ impl ProjectModel {
                     let order = object.get("order").and_then(Value::as_i64).unwrap_or(0);
                     let index = object.get("index").and_then(Value::as_i64).unwrap_or(0);
                     let default_value = match (&kind, object.get("value")) {
-                        (PropertyKind::Directory, Some(Value::Null) | None) => {
-                            PropertyValue::String(String::new())
-                        }
-                        (PropertyKind::Directory, Some(value)) => {
-                            PropertyValue::String(PropertyValue::json_scalar_to_string(value))
-                        }
+                        (
+                            PropertyKind::File | PropertyKind::Directory | PropertyKind::Texture,
+                            Some(Value::Null) | None,
+                        ) => PropertyValue::String(String::new()),
+                        (
+                            PropertyKind::File | PropertyKind::Directory | PropertyKind::Texture,
+                            Some(value),
+                        ) => PropertyValue::String(PropertyValue::json_scalar_to_string(value)),
                         (_, Some(value)) => PropertyValue::from_json(value),
                         _ => PropertyValue::Null,
                     };
@@ -248,6 +261,40 @@ fn project_error(message: impl Into<String>) -> BridgeError {
     BridgeError::Error {
         kind: BridgeErrorKind::Project,
         message: message.into(),
+    }
+}
+
+/// Reads a `file`/`directory` property's file-type option.
+///
+/// Wallpaper Engine has shipped this option under more than one spelling, so
+/// every accepted key is matched case-insensitively instead of looked up. An
+/// absent or unrecognised value behaves as an image filter, which is the
+/// editor's own fallback, and the raw text is retained rather than dropped.
+fn parse_file_filter(object: &serde_json::Map<String, Value>) -> FileFilter {
+    let raw = object
+        .iter()
+        .find(|(key, _)| {
+            matches!(
+                key.to_ascii_lowercase().as_str(),
+                "filetype" | "file_type"
+            )
+        })
+        .and_then(|(_, value)| value.as_str())
+        .map(str::to_owned);
+    let media = match raw.as_deref().map(str::trim) {
+        Some(value) if value.eq_ignore_ascii_case("video") => FileMedia::Video,
+        _ => FileMedia::Image,
+    };
+
+    FileFilter { media, raw }
+}
+
+/// Reads a `directory` property's `mode`. Anything other than `fetchall`,
+/// including an absent key, is the on-demand mode the page pulls from.
+fn parse_directory_mode(object: &serde_json::Map<String, Value>) -> DirectoryMode {
+    match object.get("mode").and_then(Value::as_str).map(str::trim) {
+        Some(mode) if mode.eq_ignore_ascii_case("fetchall") => DirectoryMode::FetchAll,
+        _ => DirectoryMode::OnDemand,
     }
 }
 
@@ -405,21 +452,123 @@ mod tests {
     }
 
     #[test]
-    fn scenetexture_properties_are_path_selectors() {
+    fn scenetexture_properties_are_texture_selectors_not_directories() {
         let m = ProjectModel::parse(
             "1",
             r#"{
             "type":"scene","general":{"properties":{
-                "custom_background":{"type":"scenetexture","value":"","order":1,"text":"Background"}
+                "custom_background":{"type":"scenetexture","value":"","order":1,"text":"Background"},
+                "overlay":{"type":"texture","value":"materials/x.tex","order":2,"text":"Overlay"}
             }}
         }"#,
         )
         .unwrap();
 
-        assert_eq!(m.properties[0].kind, PropertyKind::Directory);
+        assert_eq!(m.properties[0].kind, PropertyKind::Texture);
+        assert_eq!(m.properties[0].metadata, PropertyMetadata::Texture);
         assert_eq!(
             m.properties[0].default_value,
             PropertyValue::String(String::new())
         );
+        assert_eq!(m.properties[1].kind, PropertyKind::Texture);
+        assert_eq!(
+            m.properties[1].default_value,
+            PropertyValue::String("materials/x.tex".into())
+        );
+    }
+
+    #[test]
+    fn file_and_directory_properties_carry_their_filters_and_modes() {
+        let m = ProjectModel::parse(
+            "1",
+            r#"{
+            "type":"web","general":{"properties":{
+                "clip":{"type":"file","fileType":"video","order":1,"text":"Clip"},
+                "photos":{"type":"directory","mode":"fetchall","file_type":"image","order":2,"text":"Photos"},
+                "shuffle":{"type":"directory","mode":"ondemand","filetype":"VIDEO","order":3,"text":"Shuffle"},
+                "plain":{"type":"directory","order":4,"text":"Plain"},
+                "odd":{"type":"file","fileType":"model","order":5,"text":"Odd"},
+                "mystery":{"type":"hologram","order":6,"text":"Mystery"}
+            }}
+        }"#,
+        )
+        .unwrap();
+
+        let by_id = |id: &str| {
+            m.properties
+                .iter()
+                .find(|property| property.id == id)
+                .unwrap_or_else(|| panic!("{id} must parse"))
+        };
+
+        assert_eq!(by_id("clip").kind, PropertyKind::File);
+        assert_eq!(
+            by_id("clip").metadata,
+            PropertyMetadata::File {
+                filter: FileFilter {
+                    media: FileMedia::Video,
+                    raw: Some("video".into()),
+                },
+            }
+        );
+        // A file property with no value starts empty rather than null, so the
+        // page sees "nothing chosen" instead of a missing key.
+        assert_eq!(
+            by_id("clip").default_value,
+            PropertyValue::String(String::new())
+        );
+
+        assert_eq!(by_id("photos").kind, PropertyKind::Directory);
+        assert_eq!(
+            by_id("photos").metadata,
+            PropertyMetadata::Directory {
+                filter: FileFilter {
+                    media: FileMedia::Image,
+                    raw: Some("image".into()),
+                },
+                mode: DirectoryMode::FetchAll,
+            }
+        );
+
+        assert_eq!(
+            by_id("shuffle").metadata,
+            PropertyMetadata::Directory {
+                filter: FileFilter {
+                    media: FileMedia::Video,
+                    raw: Some("VIDEO".into()),
+                },
+                mode: DirectoryMode::OnDemand,
+            }
+        );
+
+        // Absent options are the on-demand image defaults, and record that the
+        // manifest said nothing rather than inventing a value it never wrote.
+        assert_eq!(
+            by_id("plain").metadata,
+            PropertyMetadata::Directory {
+                filter: FileFilter {
+                    media: FileMedia::Image,
+                    raw: None,
+                },
+                mode: DirectoryMode::OnDemand,
+            }
+        );
+
+        // An unrecognised filter behaves as an image filter but is not erased.
+        assert_eq!(
+            by_id("odd").metadata,
+            PropertyMetadata::File {
+                filter: FileFilter {
+                    media: FileMedia::Image,
+                    raw: Some("model".into()),
+                },
+            }
+        );
+
+        assert_eq!(
+            by_id("mystery").kind,
+            PropertyKind::Unknown("hologram".into())
+        );
+        assert_eq!(by_id("mystery").metadata, PropertyMetadata::Unknown);
     }
 }

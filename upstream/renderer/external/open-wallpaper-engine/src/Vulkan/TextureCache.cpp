@@ -1885,6 +1885,61 @@ void TextureCache::MarkShareReady(std::string_view key) {
     }
 }
 
+bool TextureCache::PinRenderTarget(std::string_view key) {
+    auto it = m_query_map.find(std::string(key));
+    // A key absent from the map was already released back to the pool, so its
+    // image may belong to another target by now. Reporting failure keeps the
+    // caller from reusing pixels it no longer owns.
+    if (it == m_query_map.end() || it->second == nullptr) return false;
+    it->second->persist     = true;
+    it->second->share_ready = false;
+    return true;
+}
+
+bool TextureCache::AliasRenderTarget(std::string_view key, std::string_view source) {
+    auto source_it = m_query_map.find(std::string(source));
+    if (source_it == m_query_map.end() || source_it->second == nullptr) return false;
+    auto* query = source_it->second;
+
+    auto existing = m_query_map.find(std::string(key));
+    if (existing != m_query_map.end() && existing->second == query) {
+        query->persist = true;
+        return true;
+    }
+    // The key may already own an allocation of its own. Returning it to the
+    // pool is safe: nothing writes an aliased destination, so no reader of the
+    // old image survives this call.
+    if (existing != m_query_map.end() && existing->second != nullptr) {
+        existing->second->persist     = false;
+        existing->second->share_ready = true;
+        m_query_map.erase(existing);
+    }
+    query->persist     = true;
+    query->share_ready = false;
+    query->query_keys.insert(std::string(key));
+    m_query_map[std::string(key)] = query;
+    return true;
+}
+
+uint64_t TextureCache::RenderTargetBytes(std::string_view key) const {
+    auto it = m_query_map.find(std::string(key));
+    if (it == m_query_map.end() || it->second == nullptr) return 0;
+    const auto& image = it->second->image;
+    // Derived from the extent and the mip chain, not queried from the
+    // allocator, and assuming four bytes per texel. It bounds the cache, it is
+    // not a measurement of physical residency.
+    const uint64_t width  = image.extent.width;
+    const uint64_t height = image.extent.height;
+    uint64_t       bytes  = width * height * 4ULL;
+    uint64_t       level  = bytes;
+    for (uint32_t mip = 1; mip < image.mipmap_level; ++mip) {
+        level /= 4ULL;
+        if (level == 0) break;
+        bytes += level;
+    }
+    return bytes;
+}
+
 void TextureCache::RecGenerateMipmaps(vvk::CommandBuffer& cmd, const ImageParameters& image) const {
     if (image.mipmap_level <= 1) return;
 

@@ -3,6 +3,8 @@ set(LIB_NAME wpVulkanRender)
 add_library(${LIB_NAME}
 STATIC
 CopyPass.cpp
+CopyElision.cpp
+StaticSubgraphCache.cpp
 CustomShaderPass.cpp
 FinPass.cpp
 PrePass.cpp

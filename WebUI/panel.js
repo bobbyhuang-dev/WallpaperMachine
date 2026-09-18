@@ -256,15 +256,84 @@ function renderInspector(discover) {
       ? `${download.prompt || download.challenge ? button('Finish sign-in', 'continueSetup', { id: item.id }, { icon: 'shield', className: 'primary' }) : button(download.queued ? 'Waiting to download' : percent === null ? 'Downloading' : `Downloading ${percent}%`, 'openDownloads', {}, { icon: 'download', className: 'primary' })}${button(download.queued ? 'Remove from queue' : 'Cancel', 'downloadCancel', { id: item.id }, { className: 'quiet' })}`
       : button(download?.error ? 'Download again' : 'Download', 'requestDownload', { id: item.id }, { icon: 'download', className: 'primary' });
   const options = !discover && state.options?.id === item.id ? state.options : null;
-  const compatibility = { Scene: 'Scene renderer is experimental.', Video: 'Playback depends on the video codec.', Web: 'Runs in a built-in web view. Mouse input reaches the page; audio response and keyboard input are not available yet.', Application: 'Application wallpapers cannot run on macOS.', Unknown: 'This wallpaper type is not supported.' }[item.kind] || '';
+  const compatibility = { Scene: 'Scene renderer is experimental.', Video: 'Playback depends on the video codec.', Web: 'Runs in a built-in web view. Mouse input and audio response reach the page; keyboard input does not.', Application: 'Application wallpapers cannot run on macOS.', Unknown: 'This wallpaper type is not supported.' }[item.kind] || '';
   morph($('inspector'), `<div ${keyAttr(`inspector-${item.id}-${discover}`)}><div class="inspector-preview">${preview(item.preview)}</div><div class="inspector-heading"><h2>${escapeHTML(item.title)}</h2><p class="muted">${escapeHTML(item.kind)}${discover && item.creator ? ` by ${escapeHTML(item.creator)}` : ''}</p>${tags(item.tags)}<div class="actions">${isInstalled ? button(target?.wallpaperID === item.id ? 'Reapply wallpaper' : 'Apply wallpaper', 'activate', { id: item.id }, { icon: 'play', className: 'primary', disabled: !canActivate || state.busy }) : downloadAction}${isInstalled ? button('', 'favorite', { id: item.id }, { icon: 'star', title: state.favorites.includes(item.id) ? 'Remove from favorites' : 'Add to favorites', className: state.favorites.includes(item.id) ? 'favorite-selected' : '' }) : ''}${isInstalled ? button('', 'reveal', { id: item.id }, { icon: 'folder', title: 'Show in Finder' }) : ''}${isInstalled ? button('', 'delete', { id: item.id }, { icon: 'trash', className: 'danger', title: 'Move wallpaper to Trash', disabled: state.busy }) : ''}</div>${!isInstalled && download?.pending && !download.queued ? `<progress class="inspector-progress" max="1"${Number.isFinite(download.progress) ? ` value="${clamp(download.progress)}"` : ''} aria-label="${escapeHTML(item.title)} download progress"></progress><p class="muted"><small>${escapeHTML(download.status)}${transfer(download, { includePercent: false }) ? ` · ${transfer(download, { includePercent: false })}` : ''}</small></p>` : ''}${request ? `<p class="muted"><small>${escapeHTML(stageHint(request.stage))}</small></p>` : ''}${!isInstalled && download?.error && !download.pending ? `<p class="notice error">${escapeHTML(download.error)}</p>` : ''}${isInstalled && download && !download.pending && !download.error ? button('Show in library', 'showInstalled', { id: item.id }, { icon: 'image', className: 'link' }) : ''}${download || request ? button('Show in downloads', 'openDownloads', {}, { className: 'link' }) : ''}${compatibility ? `<p class="muted"><small>${escapeHTML(compatibility)}</small></p>` : ''}${item.kind === 'Scene' && !state.settings.sceneAssetsReady ? `<div class="notice warning">Shared scene resources are required before playback.${button('Get shared resources', 'requestAssets', {}, { className: 'link' })}</div>` : ''}</div>${discover ? `<section class="inspector-section">${item.summary ? `<p>${escapeHTML(item.summary)}</p>` : ''}${bytes(item.size) ? `<p class="muted">Download size: ${bytes(item.size)}</p>` : ''}${Number.isFinite(item.subscriptions) ? `<p class="muted">${item.subscriptions.toLocaleString()} subscribers</p>` : ''}${button('View on Steam Workshop', 'openExternal', { url: `https://steamcommunity.com/sharedfiles/filedetails/?id=${encodeURIComponent(item.id)}` }, { icon: 'external', className: 'link' })}${isInstalled ? button('Show in library', 'showInstalled', { id: item.id }, { icon: 'folder' }) : ''}</section>` : `${options ? renderOptions(options) : '<section class="inspector-section"><p class="muted">Loading wallpaper options…</p></section>'}`}</div>`);
 }
 const draftKey = (id, propertyID) => `${id}\u0000${propertyID}`;
+// The audio and media status lines report the user's own setting and what it does not
+// promise. Whether a page registered a listener, and whether the system will report what
+// is playing, are facts the wallpaper host holds and the panel has no way to read, so
+// neither is asserted here and nothing stands in for them.
+function renderAudioAndMedia(options, lock) {
+  const id = options.id;
+  const web = options.kind === 'Web';
+  const check = (key, label, on) => `<label class="check-label"><input type="checkbox" data-change="wallpaperSetting" data-id="${escapeHTML(id)}" data-setting="${escapeHTML(key)}"${checked(on)}${disabled(lock)}>${escapeHTML(label)}</label>`;
+  const note = (text) => `<p class="muted"><small>${escapeHTML(text)}</small></p>`;
+  const status = (text) => `<p class="muted" role="status"><small>${escapeHTML(text)}</small></p>`;
+  // Three distinct things: the user's setting, whether the page asked for data,
+  // and whether anything can answer. Never collapse them into one sentence.
+  const delivering = options.audioDelivering;
+  const audioStatus = !options.audioResponseEnabled
+    ? 'Off. No audio is captured for this wallpaper.'
+    : !web
+      ? 'On for this wallpaper. Scenes that declare audio-reactive layers respond; the rest are unaffected.'
+      : delivering === true
+        ? 'On, and the wallpaper has registered an audio listener. Spectrum data is being delivered to the page.'
+        : delivering === false
+          ? 'On, but this wallpaper has not registered an audio listener, so it receives nothing. That is the wallpaper\u2019s choice, not a fault.'
+          : 'On for this wallpaper. Delivery starts only once the wallpaper registers an audio listener; with no desktop wallpaper running, the panel cannot tell whether it has.';
+  const media = !web ? '' : check('mediaIntegrationEnabled', 'Media integration', options.mediaIntegrationEnabled)
+    + note('Off by default. macOS publishes no API for reading what another application is playing. This uses a private interface that is restricted on current macOS, so it may well report unavailable.')
+    + status(!options.mediaIntegrationEnabled
+      ? 'Off. The wallpaper is told media integration is disabled and receives no media events.'
+      : options.mediaAvailable === true
+        ? 'On, and a media source is available. Only fields the system actually reports are sent; nothing is substituted for the rest.'
+        : options.mediaAvailable === false
+          ? `On, but no media source is available: ${options.mediaUnavailableReason || 'the system declined to report what is playing.'} The page is told nothing rather than being given a placeholder track.`
+          : 'On for this wallpaper. With no desktop wallpaper running, the panel cannot tell whether a media source is available.');
+  return check('audioResponseEnabled', 'Audio response', options.audioResponseEnabled)
+    + note('Reactive wallpapers use sound playing in other apps. macOS may request system audio recording permission.')
+    + status(audioStatus)
+    + media;
+}
 function renderOptions(options) {
   const id = options.id;
   const lock = state.busy || busy('apply', { id }) || busy('revert', { id });
   const changed = options.dirty || [...drafts.keys()].some(key => key.startsWith(`${id}\u0000`));
-  return `${!options.supported ? '<section class="inspector-section"><p class="notice warning">This wallpaper cannot be rendered on this Mac.</p></section>' : ''}<section class="inspector-section"><details open ${keyAttr(`general-${id}`)}><summary>General configuration${icon('chevronRight', 14)}</summary><div class="section-content"><label class="check-label"><input type="checkbox" data-change="wallpaperSetting" data-id="${escapeHTML(id)}" data-setting="muted"${checked(options.muted)}${disabled(lock)}>Mute wallpaper audio</label><div class="field"><label for="wallpaper-volume">Volume</label><div class="range-field"><input id="wallpaper-volume" type="range" min="0" max="100" step="1" value="${Number(options.volume) * 100}" data-change="wallpaperSetting" data-id="${escapeHTML(id)}" data-setting="volume"${disabled(lock || options.muted)}><output>${Math.round(options.volume * 100)}%</output></div></div><label class="check-label"><input type="checkbox" data-change="wallpaperSetting" data-id="${escapeHTML(id)}" data-setting="audioResponseEnabled"${checked(options.audioResponseEnabled)}${disabled(lock)}>Audio response</label><p class="muted"><small>Reactive scenes use sound playing in other apps. macOS may request system audio recording permission.</small></p></div></details></section><section class="inspector-section"><details open ${keyAttr(`displays-${id}`)}><summary>Displays${icon('chevronRight', 14)}</summary><div class="section-content">${(options.displays || []).map(display => `<details class="display-options" open ${keyAttr(display.id)}><summary>${escapeHTML(display.title)}${icon('chevronRight', 13)}</summary><div class="section-content"><label class="check-label"><input type="checkbox" data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="enabled"${checked(display.enabled)}${disabled(lock)}>Enabled</label><label class="field">Scaling mode<select data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="scalingMode"${disabled(lock)}>${selectOptions([['none', 'Original size'], ['stretch', 'Stretch'], ['match', 'Fit'], ['fill', 'Fill']], display.scalingMode)}</select></label><label class="field">Scale factor<input type="number" min="${Number.MIN_VALUE}" step="any" value="${Number(display.scalingFactor)}" data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="scalingFactor"${disabled(lock)}></label><label class="field">Frame rate<input type="number" min="1" max="${Number(display.maxFps) || 240}" step="1" value="${Number(display.fps)}" data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="fps"${disabled(lock)}></label>${button('Remove from display', 'eject', { id, displayID: display.id }, { className: 'link', disabled: lock })}</div></details>`).join('') || '<p class="muted">Apply this wallpaper to a display to configure playback.</p>'}</div></details></section>${options.properties?.length ? `<section class="inspector-section"><details open ${keyAttr(`properties-${id}`)}><summary>Wallpaper properties${icon('chevronRight', 14)}</summary><div class="section-content">${options.properties.map(property => renderProperty(id, property, lock)).join('')}</div></details></section>` : ''}<div class="inspector-save"><p>${changed ? 'You have unapplied changes.' : 'Audio, scaling mode and frame rate update immediately.'}</p>${button('Revert', 'revert', { id }, { disabled: lock || !changed })}${button('Apply changes', 'apply', { id }, { className: 'primary', disabled: lock || !changed || !options.supported })}</div>`;
+  return `${!options.supported ? '<section class="inspector-section"><p class="notice warning">This wallpaper cannot be rendered on this Mac.</p></section>' : ''}<section class="inspector-section"><details open ${keyAttr(`general-${id}`)}><summary>General configuration${icon('chevronRight', 14)}</summary><div class="section-content"><label class="check-label"><input type="checkbox" data-change="wallpaperSetting" data-id="${escapeHTML(id)}" data-setting="muted"${checked(options.muted)}${disabled(lock)}>Mute wallpaper audio</label><div class="field"><label for="wallpaper-volume">Volume</label><div class="range-field"><input id="wallpaper-volume" type="range" min="0" max="100" step="1" value="${Number(options.volume) * 100}" data-change="wallpaperSetting" data-id="${escapeHTML(id)}" data-setting="volume"${disabled(lock || options.muted)}><output>${Math.round(options.volume * 100)}%</output></div></div>${renderAudioAndMedia(options, lock)}</div></details></section><section class="inspector-section"><details open ${keyAttr(`displays-${id}`)}><summary>Displays${icon('chevronRight', 14)}</summary><div class="section-content">${(options.displays || []).map(display => `<details class="display-options" open ${keyAttr(display.id)}><summary>${escapeHTML(display.title)}${icon('chevronRight', 13)}</summary><div class="section-content"><label class="check-label"><input type="checkbox" data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="enabled"${checked(display.enabled)}${disabled(lock)}>Enabled</label><label class="field">Scaling mode<select data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="scalingMode"${disabled(lock)}>${selectOptions([['none', 'Original size'], ['stretch', 'Stretch'], ['match', 'Fit'], ['fill', 'Fill']], display.scalingMode)}</select></label><label class="field">Scale factor<input type="number" min="${Number.MIN_VALUE}" step="any" value="${Number(display.scalingFactor)}" data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="scalingFactor"${disabled(lock)}></label><label class="field">Frame rate<input type="number" min="1" max="${Number(display.maxFps) || 240}" step="1" value="${Number(display.fps)}" data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="fps"${disabled(lock)}></label>${button('Remove from display', 'eject', { id, displayID: display.id }, { className: 'link', disabled: lock })}</div></details>`).join('') || '<p class="muted">Apply this wallpaper to a display to configure playback.</p>'}</div></details></section>${options.properties?.length ? `<section class="inspector-section"><details open ${keyAttr(`properties-${id}`)}><summary>Wallpaper properties${icon('chevronRight', 14)}</summary><div class="section-content">${options.properties.map(property => renderProperty(id, property, lock)).join('')}</div></details></section>` : ''}<div class="inspector-save"><p>${changed ? 'You have unapplied changes.' : 'Audio, scaling mode and frame rate update immediately.'}</p>${button('Revert', 'revert', { id }, { disabled: lock || !changed })}${button('Apply changes', 'apply', { id }, { className: 'primary', disabled: lock || !changed || !options.supported })}</div>`;
+}
+// A `file` or `directory` property is a path the user picked, not a value typed into the
+// page: the field is read-only and carries the display name, never the staged path the
+// wallpaper actually reads. Every part of it — name, accepted types, staging failure —
+// is attacker-influenced, so it goes through escapeHTML like everything else here.
+function assetProperty(id, property, fieldID, unavailable, name) {
+  const directory = property.kind === 'directory';
+  const chosen = property.fileName || '';
+  const empty = directory ? 'No folder chosen' : 'No file chosen';
+  const types = (property.fileTypes || []).join(', ');
+  const count = Number(property.fileCount);
+  const limit = Number(property.fileLimit);
+  const notes = [];
+  // Both lines describe the folder, never an import outcome: a failed link or copy is
+  // skipped and logged by the importer, so the staged count can be under the cap.
+  if (types) notes.push(directory ? `Uses ${types} files from the chosen folder.` : `Accepts ${types}.`);
+  if (directory && chosen) {
+    if (Number.isFinite(count)) {
+      notes.push(property.truncated && Number.isFinite(limit)
+        ? `More than ${limit} files match; only the first ${limit} are used.`
+        : `${count} matching ${count === 1 ? 'file' : 'files'} in this folder.`);
+    } else {
+      notes.push('This folder could not be read. Choose it again, or pick another.');
+    }
+    notes.push(property.directoryMode === 'fetchAll'
+      ? 'The wallpaper receives the whole list of files.'
+      : 'The wallpaper picks files from the folder itself.');
+  }
+  return `<input type="text" id="${escapeHTML(fieldID)}" class="asset-value" readonly value="${escapeHTML(chosen || empty)}">`
+    + `<div class="actions">${button('Choose…', 'choosePropertyPath', { id, propertyID: property.id }, { icon: 'folder', title: directory ? `Choose a folder for ${name}` : `Choose a file for ${name}`, disabled: unavailable })}`
+    + `${button('Clear', 'clearPropertyPath', { id, propertyID: property.id }, { title: `Clear ${name}`, disabled: unavailable || !chosen })}</div>`
+    + notes.map(note => `<p class="muted"><small>${escapeHTML(note)}</small></p>`).join('')
+    + (property.error ? `<p class="notice error" role="alert">${escapeHTML(property.error)}</p>` : '');
 }
 function renderProperty(id, property, lock) {
   const name = property.label || property.id;
@@ -279,7 +348,9 @@ function renderProperty(id, property, lock) {
     case 'combo': control = `<select ${attributes}>${(property.options || []).map(option => `<option value="${escapeHTML(JSON.stringify(option.value))}"${JSON.stringify(value) === JSON.stringify(option.value) ? ' selected' : ''}>${escapeHTML(option.label)}</option>`).join('')}</select>`; break;
     case 'color': control = `<input type="color" ${attributes} value="${/^#[0-9a-f]{6}$/i.test(value) ? value : '#ffffff'}">`; break;
     case 'textInput': control = `<input type="text" ${attributes} data-input="property" value="${escapeHTML(value)}" autocomplete="off">`; break;
-    case 'file': control = `<p class="file-value">${escapeHTML(value || 'No image selected')}</p><div class="actions">${button('Choose image', 'choosePropertyFile', { id, propertyID: property.id }, { icon: 'folder', disabled: unavailable })}${value ? button('Clear', 'clearProperty', { id, propertyID: property.id }, { disabled: unavailable }) : ''}</div>`; break;
+    // A scene texture is not a user-chosen file: it keeps the image picker it always had.
+    case 'texture': control = `<p class="file-value">${escapeHTML(value || 'No image selected')}</p><div class="actions">${button('Choose image', 'choosePropertyFile', { id, propertyID: property.id }, { icon: 'folder', disabled: unavailable })}${value ? button('Clear', 'clearProperty', { id, propertyID: property.id }, { disabled: unavailable }) : ''}</div>`; break;
+    case 'file': case 'directory': control = assetProperty(id, property, fieldID, unavailable, name); break;
     case 'text': return `<p ${keyAttr(property.id)} class="muted">${escapeHTML(name)}${value && value !== name ? `<br>${escapeHTML(value)}` : ''}</p>`;
     default: return `<p ${keyAttr(property.id)} class="muted">${escapeHTML(name)}: unsupported property type.</p>`;
   }

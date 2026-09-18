@@ -295,7 +295,7 @@ final class WebWallpaperRecoveryTests: XCTestCase {
     BridgeWebWallpaper(
       displayId: 7, wallpaperId: "1", title: "Test", projectPath: project.path,
       entryFile: entryFile, fps: 30, paused: false, audioResponseEnabled: false,
-      propertiesJson: "{}")
+      mediaIntegrationEnabled: false, propertiesJson: "{}")
   }
 
   private func received(_ page: WebWallpaperPage) async throws -> [String: Any] {

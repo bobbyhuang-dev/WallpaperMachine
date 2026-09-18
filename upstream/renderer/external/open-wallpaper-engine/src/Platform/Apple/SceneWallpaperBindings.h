@@ -199,6 +199,33 @@ int owe_audio_submit_mono_frames(uint32_t sample_rate, uint32_t frame_count,
                                  const float* pcm_frames);
 int owe_audio_submit_frames(uint32_t sample_rate, uint32_t frame_count, const float* pcm_frames);
 int owe_audio_current_spectrum_128(float* out_bins, uintptr_t out_len, uint64_t* out_generation);
+/*
+ * Whether the analysis behind `owe_audio_current_spectrum_128` genuinely
+ * carried two channels. Returns 1 for stereo, 0 for a mono source whose
+ * left and right halves are therefore equal, and -1 when no analysis has run.
+ * A mono source is never reported as stereo.
+ */
+int owe_audio_spectrum_is_stereo(void);
+
+/*
+ * Scene render optimisation, process-wide.
+ *
+ * Reuses the previous frame's pixels for render targets whose inputs have not
+ * changed, and removes copy passes proven to have no consumer or to duplicate
+ * an image nothing rewrites. It does not change output resolution, frame rate
+ * or animation timing. Enabled by default; turning it off makes every pass
+ * execute every frame so the two paths can be compared directly.
+ */
+void owe_set_scene_optimization_enabled(bool enabled);
+bool owe_scene_optimization_enabled(void);
+/*
+ * Passes executed and passes skipped since the counters were last reset, plus
+ * copies removed at compile time and the size the pinned targets are estimated
+ * to occupy. The byte figure is derived from extent and mip count, not queried
+ * from the allocator, so it bounds the cache rather than measuring residency.
+ */
+void owe_scene_optimization_stats(uint64_t* out_executed_passes, uint64_t* out_skipped_passes,
+                                  uint64_t* out_elided_copies, uint64_t* out_pinned_bytes);
 
 /*
  * Renderer work counters.

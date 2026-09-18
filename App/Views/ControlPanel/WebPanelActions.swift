@@ -208,7 +208,7 @@ extension WebPanelController {
       let options = try await store.wallpaperOptionsSnapshotAsync(wallpaperId: id)
       guard
         options.properties.contains(where: {
-          $0.id == propertyID && $0.enabled && $0.kind == .directory
+          $0.id == propertyID && $0.enabled && $0.kind == .texture
         })
       else { throw WebPanelRequest.invalid }
       let panel = NSOpenPanel()
@@ -218,6 +218,8 @@ extension WebPanelController {
         try await store.editPropertyAsync(
           wallpaperId: id, propertyId: propertyID, value: .string(value: url.path))
       }
+    case "choosePropertyPath", "clearPropertyPath":
+      try await propertyPath(choosing: action == "choosePropertyPath", request: request)
     case "setting":
       let key = try request.string("key")
       switch key {
@@ -245,6 +247,8 @@ extension WebPanelController {
         try await store.setContentPacingEnabledAsync(try request.boolean("value"))
       case "sharedVideoDecode":
         try await store.setSharedVideoDecodeEnabledAsync(try request.boolean("value"))
+      case "sceneOptimization":
+        try await store.setSceneOptimizationEnabledAsync(try request.boolean("value"))
       case "batteryProfileEnabled", "batteryRenderScale", "batteryTargetFps":
         try await setBatteryQualityProfile(key: key, request: request)
       default: throw WebPanelRequest.invalid
@@ -444,8 +448,67 @@ extension WebPanelController {
     case "audioResponseEnabled":
       try await store.setAudioResponseEnabledAsync(
         wallpaperId: id, enabled: try request.boolean("value"))
+    case "mediaIntegrationEnabled":
+      try await store.setMediaIntegrationEnabledAsync(
+        wallpaperId: id, enabled: try request.boolean("value"))
     default: throw WebPanelRequest.invalid
     }
+  }
+
+  /// Chooses or clears the path a `file` / `directory` property points at.
+  ///
+  /// A failure is recorded against the property rather than thrown: the window-wide
+  /// banner cannot say which of several pickers failed, and a picker that closes and
+  /// changes nothing tells the user least of all.
+  func propertyPath(choosing: Bool, request: WebPanelRequest) async throws {
+    let id = try wallpaperID(request)
+    let propertyID = try request.string("propertyID")
+    let options = try await store.wallpaperOptionsSnapshotAsync(wallpaperId: id)
+    guard let descriptor = options.properties.first(where: { $0.id == propertyID && $0.enabled }),
+      descriptor.kind == .file || descriptor.kind == .directory
+    else { throw WebPanelRequest.invalid }
+    propertyPathErrors[id]?[propertyID] = nil
+    propertyAssets[id]?[propertyID] = nil
+    guard choosing else {
+      try await store.setPropertyPathAsync(wallpaperId: id, propertyId: propertyID, path: nil)
+      return
+    }
+    let directory = descriptor.kind == .directory
+    let label = Self.plainLabel(descriptor.labelHtml)
+    let panel = NSOpenPanel()
+    panel.title = directory ? "Choose Folder" : "Choose File"
+    panel.message = directory ? "Choose a folder for \(label)." : "Choose a file for \(label)."
+    panel.canChooseDirectories = directory
+    panel.canChooseFiles = !directory
+    panel.canCreateDirectories = false
+    if !directory {
+      let types = Self.assetFilter(descriptor.fileFilter).allowedExtensions.sorted()
+        .compactMap { UTType(filenameExtension: $0) }
+      if !types.isEmpty { panel.allowedContentTypes = types }
+    }
+    guard await choose(panel), let url = panel.url else { return }
+    if let reason = Self.stagingObstacle(wallpaperID: id) {
+      propertyPathErrors[id, default: [:]][propertyID] = reason
+      return
+    }
+    try await store.setPropertyPathAsync(wallpaperId: id, propertyId: propertyID, path: url.path)
+  }
+
+  /// Why this wallpaper cannot hold a staged copy of a user-chosen file.
+  ///
+  /// WebKit only grants a page read access below its own project folder, so the file has
+  /// to be staged inside it. A folder the app cannot write to defeats the choice before
+  /// the engine ever sees it, and the user is owed that reason at the moment of picking.
+  static func stagingObstacle(wallpaperID: String) -> String? {
+    let project = ClientPaths.libraryURL.appendingPathComponent(wallpaperID)
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: project.path, isDirectory: &isDirectory),
+      isDirectory.boolValue
+    else { return "This wallpaper’s folder is missing, so the file cannot be prepared for it." }
+    guard FileManager.default.isWritableFile(atPath: project.path) else {
+      return "This wallpaper’s folder is read-only, so the file cannot be prepared for it."
+    }
+    return nil
   }
 
   func displayConfig(_ request: WebPanelRequest) async throws {
@@ -541,7 +604,9 @@ extension WebPanelController {
       return .number(
         value: try WebPanelRequest(["value": value as Any]).number(
           "value", range: (descriptor.slider?.min ?? 0)...(descriptor.slider?.max ?? 1)))
-    case .textInput, .directory:
+    // `file` and `directory` are excluded on purpose: their path travels through
+    // setPropertyPath, not through the generic property editor.
+    case .textInput, .texture:
       guard let value = value as? String, value.count <= 65_536 else {
         throw WebPanelRequest.invalid
       }

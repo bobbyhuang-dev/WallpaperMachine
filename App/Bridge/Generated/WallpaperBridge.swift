@@ -582,6 +582,12 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func clearShaderCache() async throws  -> BridgeSettingsSnapshot
     
     /**
+     * Every retained media event as a JSON array, in replay order, or `None`
+     * when nothing has been submitted yet.
+     */
+    func currentSystemMediaState()  -> String?
+    
+    /**
      * # Errors
      *
      * Returns an error when the wallpaper id, property id, or value is
@@ -828,6 +834,19 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func setLaunchAtLogin(enabled: Bool) async throws  -> BridgeDisplayMutationBundle
     
     /**
+     * Turns system media integration on or off for one wallpaper.
+     *
+     * Off by default. This is the user's consent to look for a system media
+     * source, not a promise that one exists.
+     *
+     * # Errors
+     *
+     * Returns an error when the wallpaper id is unknown or the setting cannot
+     * be saved.
+     */
+    func setMediaIntegrationEnabled(wallpaperId: String, enabled: Bool) async throws  -> BridgeWallpaperMutationBundle
+    
+    /**
      * # Errors
      *
      * Returns an error when the display id is unknown, not in mirror mode, or
@@ -914,6 +933,24 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func setPresentationSuspended(suspended: Bool) async throws 
     
     /**
+     * Stores the path the host staged for a file or directory property, or
+     * clears it when `path` is `None`.
+     *
+     * The value is persisted exactly as given and reaches the page's
+     * `applyUserProperties` unchanged. The host decides what a page can open,
+     * so nothing here rewrites, resolves or escapes the path. Refused for any
+     * other property kind, including texture pickers, which name scene assets
+     * rather than paths.
+     *
+     * # Errors
+     *
+     * Returns an error when the wallpaper or property id is unknown, the
+     * property is not a file or directory property, or the value cannot be
+     * saved.
+     */
+    func setPropertyPath(wallpaperId: String, propertyId: String, path: String?) async throws  -> BridgeWallpaperMutationBundle
+    
+    /**
      * Sets the internal rasterization scale the user prefers.
      *
      * Clamped to the range the renderer honours. This is a preference: while
@@ -947,6 +984,21 @@ public protocol WallpaperBridgeProtocol : AnyObject {
      * persistence fails.
      */
     func setScalingMode(wallpaperId: String, displayId: String, mode: BridgeScalingMode) async throws  -> BridgeWallpaperMutationBundle
+    
+    /**
+     * Turns the scene renderer's static-subgraph caching and redundant
+     * copy-pass elimination on or off for the renderer process.
+     *
+     * On by default, and applied to running scenes in place: it changes how a
+     * frame is built, never what the scene is, so nothing is rebuilt and no
+     * wallpaper restarts.
+     *
+     * # Errors
+     *
+     * Returns an error when the setting cannot be saved or the renderer
+     * rejects the call.
+     */
+    func setSceneOptimizationEnabled(enabled: Bool) async throws  -> BridgeSnapshotBundle
     
     /**
      * Turns shared video decoding on or off for the renderer process.
@@ -997,6 +1049,21 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func setVolume(wallpaperId: String, volume: Float) async throws  -> BridgeWallpaperMutationBundle
     
     /**
+     * Records or withdraws one web page as a live consumer of the system
+     * audio capture.
+     *
+     * A web wallpaper has no renderer scene, so without this the capture tap
+     * stays shut for a display showing only web wallpapers. Withdrawing the
+     * last consumer closes the tap again. Mute and volume are unrelated: a
+     * silenced wallpaper still analyses what the system is playing.
+     *
+     * # Errors
+     *
+     * Returns an error when the renderer rejects the capture change.
+     */
+    func setWebAudioSubscribed(wallpaperId: String, displayId: UInt32, subscribed: Bool) async throws 
+    
+    /**
      * # Errors
      *
      * Returns an error when the bridge actor cannot produce settings.
@@ -1011,12 +1078,47 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func shutdown() async throws 
     
     /**
+     * Records one system media event so a page loading later can be brought
+     * up to date.
+     *
+     * The bridge neither reads the system player nor delivers to any page:
+     * the host owns both ends and this only remembers the latest event of
+     * each kind, verbatim. An event carrying a `generation` older than one
+     * already stored is dropped rather than overwriting newer state, which is
+     * what makes a late artwork fetch harmless.
+     *
+     * # Errors
+     *
+     * Returns an error when `json` is not an object or its `type` is not a
+     * media event tag.
+     */
+    func submitSystemMediaEvent(json: String) throws 
+    
+    /**
      * # Errors
      *
      * Returns an error when the wallpaper id is unknown or its options cannot
      * be read.
      */
     func wallpaperOptionsSnapshot(wallpaperId: String) async throws  -> BridgeWallpaperOptionsSnapshot
+    
+    /**
+     * The most recent process-wide audio analysis, or `None` when none has
+     * been produced. `None` and a spectrum with `stereo` false are different
+     * states: nothing has been analysed yet, versus a mono capture.
+     *
+     * 128 bins: 0..=63 the left channel, 64..=127 the right, low index meaning
+     * low frequency. `stereo` reports how the signal was captured, not whether
+     * the halves differ; see [`BridgeAudioSpectrum`].
+     *
+     * Synchronous on purpose: this is polled at the page's callback rate and
+     * reads a process-wide buffer that no actor owns.
+     *
+     * # Errors
+     *
+     * Returns an error when the renderer rejects the read.
+     */
+    func webAudioSpectrum() throws  -> BridgeAudioSpectrum?
     
     /**
      * Returns committed web wallpapers for the currently connected displays.
@@ -1239,6 +1341,17 @@ open func clearShaderCache()async throws  -> BridgeSettingsSnapshot {
             liftFunc: FfiConverterTypeBridgeSettingsSnapshot.lift,
             errorHandler: FfiConverterTypeBridgeError.lift
         )
+}
+    
+    /**
+     * Every retained media event as a JSON array, in replay order, or `None`
+     * when nothing has been submitted yet.
+     */
+open func currentSystemMediaState() -> String? {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+    uniffi_wallpaper_bridge_fn_method_wallpaperbridge_current_system_media_state(self.uniffiClonePointer(),$0
+    )
+})
 }
     
     /**
@@ -1891,6 +2004,34 @@ open func setLaunchAtLogin(enabled: Bool)async throws  -> BridgeDisplayMutationB
 }
     
     /**
+     * Turns system media integration on or off for one wallpaper.
+     *
+     * Off by default. This is the user's consent to look for a system media
+     * source, not a promise that one exists.
+     *
+     * # Errors
+     *
+     * Returns an error when the wallpaper id is unknown or the setting cannot
+     * be saved.
+     */
+open func setMediaIntegrationEnabled(wallpaperId: String, enabled: Bool)async throws  -> BridgeWallpaperMutationBundle {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_media_integration_enabled(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(wallpaperId),FfiConverterBool.lower(enabled)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBridgeWallpaperMutationBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
      * # Errors
      *
      * Returns an error when the display id is unknown, not in mirror mode, or
@@ -2127,6 +2268,39 @@ open func setPresentationSuspended(suspended: Bool)async throws  {
 }
     
     /**
+     * Stores the path the host staged for a file or directory property, or
+     * clears it when `path` is `None`.
+     *
+     * The value is persisted exactly as given and reaches the page's
+     * `applyUserProperties` unchanged. The host decides what a page can open,
+     * so nothing here rewrites, resolves or escapes the path. Refused for any
+     * other property kind, including texture pickers, which name scene assets
+     * rather than paths.
+     *
+     * # Errors
+     *
+     * Returns an error when the wallpaper or property id is unknown, the
+     * property is not a file or directory property, or the value cannot be
+     * saved.
+     */
+open func setPropertyPath(wallpaperId: String, propertyId: String, path: String?)async throws  -> BridgeWallpaperMutationBundle {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_property_path(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(wallpaperId),FfiConverterString.lower(propertyId),FfiConverterOptionString.lower(path)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBridgeWallpaperMutationBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
      * Sets the internal rasterization scale the user prefers.
      *
      * Clamped to the range the renderer honours. This is a preference: while
@@ -2202,6 +2376,36 @@ open func setScalingMode(wallpaperId: String, displayId: String, mode: BridgeSca
             completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
             freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeBridgeWallpaperMutationBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Turns the scene renderer's static-subgraph caching and redundant
+     * copy-pass elimination on or off for the renderer process.
+     *
+     * On by default, and applied to running scenes in place: it changes how a
+     * frame is built, never what the scene is, so nothing is rebuilt and no
+     * wallpaper restarts.
+     *
+     * # Errors
+     *
+     * Returns an error when the setting cannot be saved or the renderer
+     * rejects the call.
+     */
+open func setSceneOptimizationEnabled(enabled: Bool)async throws  -> BridgeSnapshotBundle {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_scene_optimization_enabled(
+                    self.uniffiClonePointer(),
+                    FfiConverterBool.lower(enabled)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBridgeSnapshotBundle.lift,
             errorHandler: FfiConverterTypeBridgeError.lift
         )
 }
@@ -2315,6 +2519,36 @@ open func setVolume(wallpaperId: String, volume: Float)async throws  -> BridgeWa
 }
     
     /**
+     * Records or withdraws one web page as a live consumer of the system
+     * audio capture.
+     *
+     * A web wallpaper has no renderer scene, so without this the capture tap
+     * stays shut for a display showing only web wallpapers. Withdrawing the
+     * last consumer closes the tap again. Mute and volume are unrelated: a
+     * silenced wallpaper still analyses what the system is playing.
+     *
+     * # Errors
+     *
+     * Returns an error when the renderer rejects the capture change.
+     */
+open func setWebAudioSubscribed(wallpaperId: String, displayId: UInt32, subscribed: Bool)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_web_audio_subscribed(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(wallpaperId),FfiConverterUInt32.lower(displayId),FfiConverterBool.lower(subscribed)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_void,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_void,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
      * # Errors
      *
      * Returns an error when the bridge actor cannot produce settings.
@@ -2359,6 +2593,28 @@ open func shutdown()async throws  {
 }
     
     /**
+     * Records one system media event so a page loading later can be brought
+     * up to date.
+     *
+     * The bridge neither reads the system player nor delivers to any page:
+     * the host owns both ends and this only remembers the latest event of
+     * each kind, verbatim. An event carrying a `generation` older than one
+     * already stored is dropped rather than overwriting newer state, which is
+     * what makes a late artwork fetch harmless.
+     *
+     * # Errors
+     *
+     * Returns an error when `json` is not an object or its `type` is not a
+     * media event tag.
+     */
+open func submitSystemMediaEvent(json: String)throws  {try rustCallWithError(FfiConverterTypeBridgeError.lift) {
+    uniffi_wallpaper_bridge_fn_method_wallpaperbridge_submit_system_media_event(self.uniffiClonePointer(),
+        FfiConverterString.lower(json),$0
+    )
+}
+}
+    
+    /**
      * # Errors
      *
      * Returns an error when the wallpaper id is unknown or its options cannot
@@ -2379,6 +2635,29 @@ open func wallpaperOptionsSnapshot(wallpaperId: String)async throws  -> BridgeWa
             liftFunc: FfiConverterTypeBridgeWallpaperOptionsSnapshot.lift,
             errorHandler: FfiConverterTypeBridgeError.lift
         )
+}
+    
+    /**
+     * The most recent process-wide audio analysis, or `None` when none has
+     * been produced. `None` and a spectrum with `stereo` false are different
+     * states: nothing has been analysed yet, versus a mono capture.
+     *
+     * 128 bins: 0..=63 the left channel, 64..=127 the right, low index meaning
+     * low frequency. `stereo` reports how the signal was captured, not whether
+     * the halves differ; see [`BridgeAudioSpectrum`].
+     *
+     * Synchronous on purpose: this is polled at the page's callback rate and
+     * reads a process-wide buffer that no actor owns.
+     *
+     * # Errors
+     *
+     * Returns an error when the renderer rejects the read.
+     */
+open func webAudioSpectrum()throws  -> BridgeAudioSpectrum? {
+    return try  FfiConverterOptionTypeBridgeAudioSpectrum.lift(try rustCallWithError(FfiConverterTypeBridgeError.lift) {
+    uniffi_wallpaper_bridge_fn_method_wallpaperbridge_web_audio_spectrum(self.uniffiClonePointer(),$0
+    )
+})
 }
     
     /**
@@ -2542,6 +2821,95 @@ public func FfiConverterTypeBridgeAppSnapshot_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeBridgeAppSnapshot_lower(_ value: BridgeAppSnapshot) -> RustBuffer {
     return FfiConverterTypeBridgeAppSnapshot.lower(value)
+}
+
+
+/**
+ * One pull of the process-wide audio analysis.
+ *
+ * `bins` is always 128 values: 0..=63 left, 64..=127 right, low index is bass.
+ *
+ * `stereo` describes how the signal was captured, not whether the two halves
+ * differ: it is true whenever the tap delivered two channels and two
+ * independent analyses ran, which includes content that happens to be
+ * identical on both. It is false only for a genuinely mono source, and then
+ * the halves are equal and nothing may present that as stereo. Equal halves
+ * with `stereo` true are therefore an ordinary state, not a contradiction.
+ *
+ * `generation` only ever increases; an unchanged generation means no new
+ * analysis has been produced.
+ */
+public struct BridgeAudioSpectrum {
+    public var generation: UInt64
+    public var stereo: Bool
+    public var bins: [Float]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(generation: UInt64, stereo: Bool, bins: [Float]) {
+        self.generation = generation
+        self.stereo = stereo
+        self.bins = bins
+    }
+}
+
+
+
+extension BridgeAudioSpectrum: Equatable, Hashable {
+    public static func ==(lhs: BridgeAudioSpectrum, rhs: BridgeAudioSpectrum) -> Bool {
+        if lhs.generation != rhs.generation {
+            return false
+        }
+        if lhs.stereo != rhs.stereo {
+            return false
+        }
+        if lhs.bins != rhs.bins {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(generation)
+        hasher.combine(stereo)
+        hasher.combine(bins)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeAudioSpectrum: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeAudioSpectrum {
+        return
+            try BridgeAudioSpectrum(
+                generation: FfiConverterUInt64.read(from: &buf), 
+                stereo: FfiConverterBool.read(from: &buf), 
+                bins: FfiConverterSequenceFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BridgeAudioSpectrum, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.generation, into: &buf)
+        FfiConverterBool.write(value.stereo, into: &buf)
+        FfiConverterSequenceFloat.write(value.bins, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeAudioSpectrum_lift(_ buf: RustBuffer) throws -> BridgeAudioSpectrum {
+    return try FfiConverterTypeBridgeAudioSpectrum.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeAudioSpectrum_lower(_ value: BridgeAudioSpectrum) -> RustBuffer {
+    return FfiConverterTypeBridgeAudioSpectrum.lower(value)
 }
 
 
@@ -3767,13 +4135,29 @@ public struct BridgePropertyDescriptor {
     public var defaultValue: BridgePropertyValue
     public var slider: BridgeSliderMetadata?
     public var comboOptions: [BridgeComboOption]
+    /**
+     * Present only on file and directory properties, and only when the
+     * project declared a file-type option.
+     */
+    public var fileFilter: BridgeFileFilter?
+    /**
+     * Present only on directory properties.
+     */
+    public var directoryMode: BridgeDirectoryMode?
     public var dirty: Bool
     public var canRestoreDefaults: Bool
     public var enabled: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, kind: BridgePropertyKind, labelHtml: String, value: BridgePropertyValue, defaultValue: BridgePropertyValue, slider: BridgeSliderMetadata?, comboOptions: [BridgeComboOption], dirty: Bool, canRestoreDefaults: Bool, enabled: Bool) {
+    public init(id: String, kind: BridgePropertyKind, labelHtml: String, value: BridgePropertyValue, defaultValue: BridgePropertyValue, slider: BridgeSliderMetadata?, comboOptions: [BridgeComboOption], 
+        /**
+         * Present only on file and directory properties, and only when the
+         * project declared a file-type option.
+         */fileFilter: BridgeFileFilter?, 
+        /**
+         * Present only on directory properties.
+         */directoryMode: BridgeDirectoryMode?, dirty: Bool, canRestoreDefaults: Bool, enabled: Bool) {
         self.id = id
         self.kind = kind
         self.labelHtml = labelHtml
@@ -3781,6 +4165,8 @@ public struct BridgePropertyDescriptor {
         self.defaultValue = defaultValue
         self.slider = slider
         self.comboOptions = comboOptions
+        self.fileFilter = fileFilter
+        self.directoryMode = directoryMode
         self.dirty = dirty
         self.canRestoreDefaults = canRestoreDefaults
         self.enabled = enabled
@@ -3812,6 +4198,12 @@ extension BridgePropertyDescriptor: Equatable, Hashable {
         if lhs.comboOptions != rhs.comboOptions {
             return false
         }
+        if lhs.fileFilter != rhs.fileFilter {
+            return false
+        }
+        if lhs.directoryMode != rhs.directoryMode {
+            return false
+        }
         if lhs.dirty != rhs.dirty {
             return false
         }
@@ -3832,6 +4224,8 @@ extension BridgePropertyDescriptor: Equatable, Hashable {
         hasher.combine(defaultValue)
         hasher.combine(slider)
         hasher.combine(comboOptions)
+        hasher.combine(fileFilter)
+        hasher.combine(directoryMode)
         hasher.combine(dirty)
         hasher.combine(canRestoreDefaults)
         hasher.combine(enabled)
@@ -3853,6 +4247,8 @@ public struct FfiConverterTypeBridgePropertyDescriptor: FfiConverterRustBuffer {
                 defaultValue: FfiConverterTypeBridgePropertyValue.read(from: &buf), 
                 slider: FfiConverterOptionTypeBridgeSliderMetadata.read(from: &buf), 
                 comboOptions: FfiConverterSequenceTypeBridgeComboOption.read(from: &buf), 
+                fileFilter: FfiConverterOptionTypeBridgeFileFilter.read(from: &buf), 
+                directoryMode: FfiConverterOptionTypeBridgeDirectoryMode.read(from: &buf), 
                 dirty: FfiConverterBool.read(from: &buf), 
                 canRestoreDefaults: FfiConverterBool.read(from: &buf), 
                 enabled: FfiConverterBool.read(from: &buf)
@@ -3867,6 +4263,8 @@ public struct FfiConverterTypeBridgePropertyDescriptor: FfiConverterRustBuffer {
         FfiConverterTypeBridgePropertyValue.write(value.defaultValue, into: &buf)
         FfiConverterOptionTypeBridgeSliderMetadata.write(value.slider, into: &buf)
         FfiConverterSequenceTypeBridgeComboOption.write(value.comboOptions, into: &buf)
+        FfiConverterOptionTypeBridgeFileFilter.write(value.fileFilter, into: &buf)
+        FfiConverterOptionTypeBridgeDirectoryMode.write(value.directoryMode, into: &buf)
         FfiConverterBool.write(value.dirty, into: &buf)
         FfiConverterBool.write(value.canRestoreDefaults, into: &buf)
         FfiConverterBool.write(value.enabled, into: &buf)
@@ -4441,6 +4839,13 @@ public struct BridgeSettingsSnapshot {
     public var sharedVideoDecodeSessions: UInt32
     public var sharedVideoDecodeConsumers: UInt32
     /**
+     * The saved preference for the scene renderer's static-subgraph caching
+     * and copy-pass elimination. On by default. Unlike the video pipeline
+     * fields above this is the preference, not a renderer read-back: the
+     * renderer has no query for it.
+     */
+    public var sceneOptimizationEnabled: Bool
+    /**
      * The internal rasterization scale in force right now, after any power
      * profile. `preferred_render_scale` is what the user saved.
      */
@@ -4471,6 +4876,12 @@ public struct BridgeSettingsSnapshot {
          * consumers exceeding sessions; the setting being on does not imply it.
          */sharedVideoDecodeSessions: UInt32, sharedVideoDecodeConsumers: UInt32, 
         /**
+         * The saved preference for the scene renderer's static-subgraph caching
+         * and copy-pass elimination. On by default. Unlike the video pipeline
+         * fields above this is the preference, not a renderer read-back: the
+         * renderer has no query for it.
+         */sceneOptimizationEnabled: Bool, 
+        /**
          * The internal rasterization scale in force right now, after any power
          * profile. `preferred_render_scale` is what the user saved.
          */renderScale: Float, preferredRenderScale: Float, batteryProfileEnabled: Bool, batteryRenderScale: Float, batteryTargetFps: UInt32, onBatteryPower: Bool, 
@@ -4493,6 +4904,7 @@ public struct BridgeSettingsSnapshot {
         self.sharedVideoDecodeEnabled = sharedVideoDecodeEnabled
         self.sharedVideoDecodeSessions = sharedVideoDecodeSessions
         self.sharedVideoDecodeConsumers = sharedVideoDecodeConsumers
+        self.sceneOptimizationEnabled = sceneOptimizationEnabled
         self.renderScale = renderScale
         self.preferredRenderScale = preferredRenderScale
         self.batteryProfileEnabled = batteryProfileEnabled
@@ -4552,6 +4964,9 @@ extension BridgeSettingsSnapshot: Equatable, Hashable {
         if lhs.sharedVideoDecodeConsumers != rhs.sharedVideoDecodeConsumers {
             return false
         }
+        if lhs.sceneOptimizationEnabled != rhs.sceneOptimizationEnabled {
+            return false
+        }
         if lhs.renderScale != rhs.renderScale {
             return false
         }
@@ -4592,6 +5007,7 @@ extension BridgeSettingsSnapshot: Equatable, Hashable {
         hasher.combine(sharedVideoDecodeEnabled)
         hasher.combine(sharedVideoDecodeSessions)
         hasher.combine(sharedVideoDecodeConsumers)
+        hasher.combine(sceneOptimizationEnabled)
         hasher.combine(renderScale)
         hasher.combine(preferredRenderScale)
         hasher.combine(batteryProfileEnabled)
@@ -4625,6 +5041,7 @@ public struct FfiConverterTypeBridgeSettingsSnapshot: FfiConverterRustBuffer {
                 sharedVideoDecodeEnabled: FfiConverterBool.read(from: &buf), 
                 sharedVideoDecodeSessions: FfiConverterUInt32.read(from: &buf), 
                 sharedVideoDecodeConsumers: FfiConverterUInt32.read(from: &buf), 
+                sceneOptimizationEnabled: FfiConverterBool.read(from: &buf), 
                 renderScale: FfiConverterFloat.read(from: &buf), 
                 preferredRenderScale: FfiConverterFloat.read(from: &buf), 
                 batteryProfileEnabled: FfiConverterBool.read(from: &buf), 
@@ -4651,6 +5068,7 @@ public struct FfiConverterTypeBridgeSettingsSnapshot: FfiConverterRustBuffer {
         FfiConverterBool.write(value.sharedVideoDecodeEnabled, into: &buf)
         FfiConverterUInt32.write(value.sharedVideoDecodeSessions, into: &buf)
         FfiConverterUInt32.write(value.sharedVideoDecodeConsumers, into: &buf)
+        FfiConverterBool.write(value.sceneOptimizationEnabled, into: &buf)
         FfiConverterFloat.write(value.renderScale, into: &buf)
         FfiConverterFloat.write(value.preferredRenderScale, into: &buf)
         FfiConverterBool.write(value.batteryProfileEnabled, into: &buf)
@@ -5226,12 +5644,21 @@ public struct BridgeWallpaperOptionsSnapshot {
     public var properties: [BridgePropertyDescriptor]
     public var displayConfigurations: [BridgeDisplayConfigRow]
     public var audioResponseEnabled: Bool
+    /**
+     * The user's consent to look for a system media source for this
+     * wallpaper. Consent, not availability.
+     */
+    public var mediaIntegrationEnabled: Bool
     public var muted: Bool
     public var volume: Float
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(wallpaperId: String, title: String, kind: BridgeWallpaperKind, supported: Bool, dirty: Bool, properties: [BridgePropertyDescriptor], displayConfigurations: [BridgeDisplayConfigRow], audioResponseEnabled: Bool, muted: Bool, volume: Float) {
+    public init(wallpaperId: String, title: String, kind: BridgeWallpaperKind, supported: Bool, dirty: Bool, properties: [BridgePropertyDescriptor], displayConfigurations: [BridgeDisplayConfigRow], audioResponseEnabled: Bool, 
+        /**
+         * The user's consent to look for a system media source for this
+         * wallpaper. Consent, not availability.
+         */mediaIntegrationEnabled: Bool, muted: Bool, volume: Float) {
         self.wallpaperId = wallpaperId
         self.title = title
         self.kind = kind
@@ -5240,6 +5667,7 @@ public struct BridgeWallpaperOptionsSnapshot {
         self.properties = properties
         self.displayConfigurations = displayConfigurations
         self.audioResponseEnabled = audioResponseEnabled
+        self.mediaIntegrationEnabled = mediaIntegrationEnabled
         self.muted = muted
         self.volume = volume
     }
@@ -5273,6 +5701,9 @@ extension BridgeWallpaperOptionsSnapshot: Equatable, Hashable {
         if lhs.audioResponseEnabled != rhs.audioResponseEnabled {
             return false
         }
+        if lhs.mediaIntegrationEnabled != rhs.mediaIntegrationEnabled {
+            return false
+        }
         if lhs.muted != rhs.muted {
             return false
         }
@@ -5291,6 +5722,7 @@ extension BridgeWallpaperOptionsSnapshot: Equatable, Hashable {
         hasher.combine(properties)
         hasher.combine(displayConfigurations)
         hasher.combine(audioResponseEnabled)
+        hasher.combine(mediaIntegrationEnabled)
         hasher.combine(muted)
         hasher.combine(volume)
     }
@@ -5312,6 +5744,7 @@ public struct FfiConverterTypeBridgeWallpaperOptionsSnapshot: FfiConverterRustBu
                 properties: FfiConverterSequenceTypeBridgePropertyDescriptor.read(from: &buf), 
                 displayConfigurations: FfiConverterSequenceTypeBridgeDisplayConfigRow.read(from: &buf), 
                 audioResponseEnabled: FfiConverterBool.read(from: &buf), 
+                mediaIntegrationEnabled: FfiConverterBool.read(from: &buf), 
                 muted: FfiConverterBool.read(from: &buf), 
                 volume: FfiConverterFloat.read(from: &buf)
         )
@@ -5326,6 +5759,7 @@ public struct FfiConverterTypeBridgeWallpaperOptionsSnapshot: FfiConverterRustBu
         FfiConverterSequenceTypeBridgePropertyDescriptor.write(value.properties, into: &buf)
         FfiConverterSequenceTypeBridgeDisplayConfigRow.write(value.displayConfigurations, into: &buf)
         FfiConverterBool.write(value.audioResponseEnabled, into: &buf)
+        FfiConverterBool.write(value.mediaIntegrationEnabled, into: &buf)
         FfiConverterBool.write(value.muted, into: &buf)
         FfiConverterFloat.write(value.volume, into: &buf)
     }
@@ -5367,8 +5801,17 @@ public struct BridgeWebWallpaper {
     public var paused: Bool
     public var audioResponseEnabled: Bool
     /**
-     * Wallpaper Engine `applyUserProperties` payload: `{ id: { value } }`
-     * for every user-editable property, overrides applied over defaults.
+     * Whether this wallpaper opted in to system media integration. The host
+     * still has to find a usable system media source; this is only the user's
+     * consent to look.
+     */
+    public var mediaIntegrationEnabled: Bool
+    /**
+     * Wallpaper Engine `applyUserProperties` payload for every user-editable
+     * property, overrides applied over defaults. Each entry is
+     * `{ "value": …, "type": "<authored kind>" }`, plus `"fileFilter"` on
+     * file and directory properties that declared one and `"mode"` on
+     * directory properties.
      */
     public var propertiesJson: String
 
@@ -5382,8 +5825,16 @@ public struct BridgeWebWallpaper {
          * Entry page relative to `project_path`.
          */entryFile: String, fps: UInt32, paused: Bool, audioResponseEnabled: Bool, 
         /**
-         * Wallpaper Engine `applyUserProperties` payload: `{ id: { value } }`
-         * for every user-editable property, overrides applied over defaults.
+         * Whether this wallpaper opted in to system media integration. The host
+         * still has to find a usable system media source; this is only the user's
+         * consent to look.
+         */mediaIntegrationEnabled: Bool, 
+        /**
+         * Wallpaper Engine `applyUserProperties` payload for every user-editable
+         * property, overrides applied over defaults. Each entry is
+         * `{ "value": …, "type": "<authored kind>" }`, plus `"fileFilter"` on
+         * file and directory properties that declared one and `"mode"` on
+         * directory properties.
          */propertiesJson: String) {
         self.displayId = displayId
         self.wallpaperId = wallpaperId
@@ -5393,6 +5844,7 @@ public struct BridgeWebWallpaper {
         self.fps = fps
         self.paused = paused
         self.audioResponseEnabled = audioResponseEnabled
+        self.mediaIntegrationEnabled = mediaIntegrationEnabled
         self.propertiesJson = propertiesJson
     }
 }
@@ -5425,6 +5877,9 @@ extension BridgeWebWallpaper: Equatable, Hashable {
         if lhs.audioResponseEnabled != rhs.audioResponseEnabled {
             return false
         }
+        if lhs.mediaIntegrationEnabled != rhs.mediaIntegrationEnabled {
+            return false
+        }
         if lhs.propertiesJson != rhs.propertiesJson {
             return false
         }
@@ -5440,6 +5895,7 @@ extension BridgeWebWallpaper: Equatable, Hashable {
         hasher.combine(fps)
         hasher.combine(paused)
         hasher.combine(audioResponseEnabled)
+        hasher.combine(mediaIntegrationEnabled)
         hasher.combine(propertiesJson)
     }
 }
@@ -5460,6 +5916,7 @@ public struct FfiConverterTypeBridgeWebWallpaper: FfiConverterRustBuffer {
                 fps: FfiConverterUInt32.read(from: &buf), 
                 paused: FfiConverterBool.read(from: &buf), 
                 audioResponseEnabled: FfiConverterBool.read(from: &buf), 
+                mediaIntegrationEnabled: FfiConverterBool.read(from: &buf), 
                 propertiesJson: FfiConverterString.read(from: &buf)
         )
     }
@@ -5473,6 +5930,7 @@ public struct FfiConverterTypeBridgeWebWallpaper: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value.fps, into: &buf)
         FfiConverterBool.write(value.paused, into: &buf)
         FfiConverterBool.write(value.audioResponseEnabled, into: &buf)
+        FfiConverterBool.write(value.mediaIntegrationEnabled, into: &buf)
         FfiConverterString.write(value.propertiesJson, into: &buf)
     }
 }
@@ -5491,6 +5949,73 @@ public func FfiConverterTypeBridgeWebWallpaper_lift(_ buf: RustBuffer) throws ->
 public func FfiConverterTypeBridgeWebWallpaper_lower(_ value: BridgeWebWallpaper) -> RustBuffer {
     return FfiConverterTypeBridgeWebWallpaper.lower(value)
 }
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * How a directory property hands its contents to the page.
+ */
+
+public enum BridgeDirectoryMode {
+    
+    case onDemand
+    case fetchAll
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeDirectoryMode: FfiConverterRustBuffer {
+    typealias SwiftType = BridgeDirectoryMode
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeDirectoryMode {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .onDemand
+        
+        case 2: return .fetchAll
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BridgeDirectoryMode, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .onDemand:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .fetchAll:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeDirectoryMode_lift(_ buf: RustBuffer) throws -> BridgeDirectoryMode {
+    return try FfiConverterTypeBridgeDirectoryMode.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeDirectoryMode_lower(_ value: BridgeDirectoryMode) -> RustBuffer {
+    return FfiConverterTypeBridgeDirectoryMode.lower(value)
+}
+
+
+
+extension BridgeDirectoryMode: Equatable, Hashable {}
+
+
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
@@ -5721,6 +6246,73 @@ extension BridgeErrorKind: Equatable, Hashable {}
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * Which media a file or directory property accepts.
+ */
+
+public enum BridgeFileFilter {
+    
+    case image
+    case video
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeFileFilter: FfiConverterRustBuffer {
+    typealias SwiftType = BridgeFileFilter
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeFileFilter {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .image
+        
+        case 2: return .video
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BridgeFileFilter, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .image:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .video:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeFileFilter_lift(_ buf: RustBuffer) throws -> BridgeFileFilter {
+    return try FfiConverterTypeBridgeFileFilter.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeFileFilter_lower(_ value: BridgeFileFilter) -> RustBuffer {
+    return FfiConverterTypeBridgeFileFilter.lower(value)
+}
+
+
+
+extension BridgeFileFilter: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum BridgeLogLevel {
     
@@ -5880,7 +6472,19 @@ public enum BridgePropertyKind {
     case textInput
     case text
     case group
+    /**
+     * A single user-chosen file.
+     */
+    case file
+    /**
+     * A user-chosen folder the page reads.
+     */
     case directory
+    /**
+     * A scene texture picker: a texture the scene engine resolves, never a
+     * path the host stages or a page opens.
+     */
+    case texture
     case unknown
 }
 
@@ -5909,9 +6513,13 @@ public struct FfiConverterTypeBridgePropertyKind: FfiConverterRustBuffer {
         
         case 7: return .group
         
-        case 8: return .directory
+        case 8: return .file
         
-        case 9: return .unknown
+        case 9: return .directory
+        
+        case 10: return .texture
+        
+        case 11: return .unknown
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -5949,12 +6557,20 @@ public struct FfiConverterTypeBridgePropertyKind: FfiConverterRustBuffer {
             writeInt(&buf, Int32(7))
         
         
-        case .directory:
+        case .file:
             writeInt(&buf, Int32(8))
         
         
-        case .unknown:
+        case .directory:
             writeInt(&buf, Int32(9))
+        
+        
+        case .texture:
+            writeInt(&buf, Int32(10))
+        
+        
+        case .unknown:
+            writeInt(&buf, Int32(11))
         
         }
     }
@@ -6263,6 +6879,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeBridgeAudioSpectrum: FfiConverterRustBuffer {
+    typealias SwiftType = BridgeAudioSpectrum?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeBridgeAudioSpectrum.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeBridgeAudioSpectrum.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeBridgeSliderMetadata: FfiConverterRustBuffer {
     typealias SwiftType = BridgeSliderMetadata?
 
@@ -6305,6 +6945,79 @@ fileprivate struct FfiConverterOptionTypeBridgeWallpaperOptionsSnapshot: FfiConv
         case 1: return try FfiConverterTypeBridgeWallpaperOptionsSnapshot.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeBridgeDirectoryMode: FfiConverterRustBuffer {
+    typealias SwiftType = BridgeDirectoryMode?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeBridgeDirectoryMode.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeBridgeDirectoryMode.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeBridgeFileFilter: FfiConverterRustBuffer {
+    typealias SwiftType = BridgeFileFilter?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeBridgeFileFilter.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeBridgeFileFilter.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceFloat: FfiConverterRustBuffer {
+    typealias SwiftType = [Float]
+
+    public static func write(_ value: [Float], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterFloat.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [Float] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [Float]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterFloat.read(from: &buf))
+        }
+        return seq
     }
 }
 
@@ -6690,6 +7403,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_clear_shader_cache() != 31799) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_current_system_media_state() != 5722) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_edit_property() != 49263) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -6774,6 +7490,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_launch_at_login() != 35969) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_media_integration_enabled() != 50186) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_mirror_muted() != 46663) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -6804,6 +7523,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_presentation_suspended() != 9550) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_property_path() != 4178) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_render_scale() != 18212) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -6811,6 +7533,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_scaling_mode() != 14052) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_scene_optimization_enabled() != 6485) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_shared_video_decode_enabled() != 19328) {
@@ -6825,13 +7550,22 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_volume() != 1489) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_web_audio_subscribed() != 60797) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_settings_snapshot() != 53732) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_shutdown() != 36634) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_submit_system_media_event() != 344) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_wallpaper_options_snapshot() != 45708) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_web_audio_spectrum() != 62382) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_web_wallpapers() != 49603) {

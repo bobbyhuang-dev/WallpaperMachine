@@ -99,7 +99,11 @@ impl ProjectProperty {
                         })
                 })
                 .map_or_else(|| default.clone(), PropertyValue::Bool),
-            PropertyKind::Combo | PropertyKind::TextInput | PropertyKind::Directory => {
+            PropertyKind::Combo
+            | PropertyKind::TextInput
+            | PropertyKind::File
+            | PropertyKind::Directory
+            | PropertyKind::Texture => {
                 PropertyValue::String(PropertyValue::json_scalar_to_string(raw))
             }
             PropertyKind::Color => match PropertyValue::from_json(raw) {
@@ -113,7 +117,11 @@ impl ProjectProperty {
     #[must_use]
     pub fn default_value(&self) -> PropertyValue {
         match self.kind {
-            PropertyKind::Combo | PropertyKind::TextInput | PropertyKind::Directory => {
+            PropertyKind::Combo
+            | PropertyKind::TextInput
+            | PropertyKind::File
+            | PropertyKind::Directory
+            | PropertyKind::Texture => {
                 PropertyValue::String(self.default_value.to_property_string())
             }
             _ => self.default_value.clone(),

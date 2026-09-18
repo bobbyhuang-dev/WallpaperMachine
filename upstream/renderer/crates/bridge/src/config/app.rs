@@ -104,6 +104,12 @@ pub struct QualityCfg {
     pub battery_profile_enabled: bool,
     #[serde(default)]
     pub battery: QualityProfileCfg,
+    /// Scene-renderer static-subgraph caching and redundant copy-pass
+    /// elimination. On by default: it is a rendering optimization with no
+    /// intended visual difference, so the switch exists to take it away when
+    /// a wallpaper disagrees, not to opt in.
+    #[serde(default = "default_true")]
+    pub scene_optimization_enabled: bool,
 }
 
 impl Default for QualityCfg {
@@ -112,6 +118,7 @@ impl Default for QualityCfg {
             render_scale: MAX_RENDER_SCALE,
             battery_profile_enabled: false,
             battery: QualityProfileCfg::default(),
+            scene_optimization_enabled: default_true(),
         }
     }
 }
@@ -396,7 +403,6 @@ fn default_schema_version() -> u32 {
     SCHEMA_VERSION
 }
 
-#[allow(clippy::single_call_fn)]
 fn default_true() -> bool {
     true
 }

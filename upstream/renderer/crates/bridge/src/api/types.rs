@@ -54,8 +54,15 @@ pub struct BridgeWebWallpaper {
     pub fps: u32,
     pub paused: bool,
     pub audio_response_enabled: bool,
-    /// Wallpaper Engine `applyUserProperties` payload: `{ id: { value } }`
-    /// for every user-editable property, overrides applied over defaults.
+    /// Whether this wallpaper opted in to system media integration. The host
+    /// still has to find a usable system media source; this is only the user's
+    /// consent to look.
+    pub media_integration_enabled: bool,
+    /// Wallpaper Engine `applyUserProperties` payload for every user-editable
+    /// property, overrides applied over defaults. Each entry is
+    /// `{ "value": …, "type": "<authored kind>" }`, plus `"fileFilter"` on
+    /// file and directory properties that declared one and `"mode"` on
+    /// directory properties.
     pub properties_json: String,
 }
 
@@ -83,8 +90,48 @@ pub enum BridgePropertyKind {
     TextInput,
     Text,
     Group,
+    /// A single user-chosen file.
+    File,
+    /// A user-chosen folder the page reads.
     Directory,
+    /// A scene texture picker: a texture the scene engine resolves, never a
+    /// path the host stages or a page opens.
+    Texture,
     Unknown,
+}
+
+/// Which media a file or directory property accepts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum BridgeFileFilter {
+    Image,
+    Video,
+}
+
+/// How a directory property hands its contents to the page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum BridgeDirectoryMode {
+    OnDemand,
+    FetchAll,
+}
+
+/// One pull of the process-wide audio analysis.
+///
+/// `bins` is always 128 values: 0..=63 left, 64..=127 right, low index is bass.
+///
+/// `stereo` describes how the signal was captured, not whether the two halves
+/// differ: it is true whenever the tap delivered two channels and two
+/// independent analyses ran, which includes content that happens to be
+/// identical on both. It is false only for a genuinely mono source, and then
+/// the halves are equal and nothing may present that as stereo. Equal halves
+/// with `stereo` true are therefore an ordinary state, not a contradiction.
+///
+/// `generation` only ever increases; an unchanged generation means no new
+/// analysis has been produced.
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
+pub struct BridgeAudioSpectrum {
+    pub generation: u64,
+    pub stereo: bool,
+    pub bins: Vec<f32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
@@ -168,6 +215,11 @@ pub struct BridgePropertyDescriptor {
     pub default_value: BridgePropertyValue,
     pub slider: Option<BridgeSliderMetadata>,
     pub combo_options: Vec<BridgeComboOption>,
+    /// Present only on file and directory properties, and only when the
+    /// project declared a file-type option.
+    pub file_filter: Option<BridgeFileFilter>,
+    /// Present only on directory properties.
+    pub directory_mode: Option<BridgeDirectoryMode>,
     pub dirty: bool,
     pub can_restore_defaults: bool,
     pub enabled: bool,
@@ -184,6 +236,9 @@ pub struct BridgeWallpaperOptionsSnapshot {
     pub properties: Vec<BridgePropertyDescriptor>,
     pub display_configurations: Vec<BridgeDisplayConfigRow>,
     pub audio_response_enabled: bool,
+    /// The user's consent to look for a system media source for this
+    /// wallpaper. Consent, not availability.
+    pub media_integration_enabled: bool,
     pub muted: bool,
     pub volume: f32,
 }
@@ -283,6 +338,11 @@ pub struct BridgeSettingsSnapshot {
     /// consumers exceeding sessions; the setting being on does not imply it.
     pub shared_video_decode_sessions: u32,
     pub shared_video_decode_consumers: u32,
+    /// The saved preference for the scene renderer's static-subgraph caching
+    /// and copy-pass elimination. On by default. Unlike the video pipeline
+    /// fields above this is the preference, not a renderer read-back: the
+    /// renderer has no query for it.
+    pub scene_optimization_enabled: bool,
     /// The internal rasterization scale in force right now, after any power
     /// profile. `preferred_render_scale` is what the user saved.
     pub render_scale: f32,

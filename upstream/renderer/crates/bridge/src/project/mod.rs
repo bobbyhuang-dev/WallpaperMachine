@@ -8,4 +8,7 @@ pub mod property;
 pub use condition::{CmpOp, Condition, Literal};
 pub use manifest::{ProjectModel, ProjectProperty};
 pub use overrides::OverrideMapExt;
-pub use property::{ComboOption, PropertyKind, PropertyMetadata, PropertyValue};
+pub use property::{
+    ComboOption, DirectoryMode, FileFilter, FileMedia, PropertyKind, PropertyMetadata,
+    PropertyValue,
+};

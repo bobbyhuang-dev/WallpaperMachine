@@ -80,6 +80,138 @@ recorded as blocked rather than failed:
 **No power number, watt figure or saving percentage is reported anywhere in this
 document.** Counters and unit tests bound what is claimed.
 
+## Round 6 — scene optimisation, web audio/media, user files
+
+Same scope discipline as round 5: implement, wire to the UI, keep it building,
+fix only what this round broke. Visual, real-wallpaper, desktop-behaviour and
+power acceptance remain the user's and are not claimed here.
+
+### What now exists
+
+| Feature | State | Default |
+|---|---|---|
+| R03 static subgraph reuse | Implemented for the legacy scene backend | **On** |
+| R03 redundant copy removal | Implemented: dead copies and alias-able copies | **On** (same switch) |
+| Web audio listener | `wallpaperRegisterAudioListener`, real 64+64 spectrum | Per wallpaper, on |
+| Stereo capture and analysis | Stereo CoreAudio tap, two independent FFTs | Automatic |
+| Web media listeners | All five official listeners | Off, opt-in |
+| `file` / `directory` properties | Implemented with native picker and staging | Per wallpaper |
+| `wallpaperRequestRandomFileForProperty` | Implemented | Per wallpaper |
+| `fetchall` directory change events | Implemented over FSEvents | Per wallpaper |
+
+### R03: what is reused, and what makes it safe
+
+The unit of reuse is a **render target**, never a single pass. Passes writing
+one target are batched into a single render pass whose first entry may carry a
+clear, so skipping part of a batch would either lose a draw or composite one
+twice. All writers of a target are skipped together or not at all.
+
+A target is reusable only when every one of these holds:
+
+- No writer binds a self-advancing uniform. This comes from the shader
+  reflection captured at `InitUniforms`, exposed as
+  `IShaderValueUpdater::FrameVaryingUniforms`, **not** from searching shader
+  source for `g_Time`. The default implementation reports every kind, so an
+  updater that does not track reflection can never make a pass look reusable by
+  omission.
+- No writer has a video texture, a dynamic mesh, a multi-frame sprite, or an
+  input image the runtime may swap underneath it.
+- It does not read a target it also writes, directly or through a cycle.
+  Feedback and cycles lose cacheability rather than read a stale input.
+- Every input target is itself reusable; non-reusability propagates downstream
+  to a fixpoint.
+- Its allocation is **pinned**. The render-target pool aliases unpinned images
+  to other keys, so an unpinned target's previous pixels are not guaranteed to
+  still be there. Pinning is budgeted at 192 MiB per renderer; beyond that a
+  target keeps taking part in the pool and simply re-renders.
+
+Per frame, each pass contributes a sample folding its node and parent
+transforms, material constants, mesh revision, sprite frame, visibility and
+target extent. A target's signature combines its writers' samples with its
+inputs' signatures, so a change at the head of a chain invalidates everything
+below it.
+
+Scripts, animations and the scene runtime still tick every frame. Only GPU
+recording and the uniform upload are skipped, so no script or event side effect
+is lost.
+
+### R03: which copies are removed
+
+Two compile-time rules, both conservative:
+
+- **Dead** — nothing anywhere reads the destination. The final blit's read of
+  `_rt_default` counts, so the presented target is never mistaken for an unread
+  result.
+- **Alias** — the source is never written again after the copy, the destination
+  is never written by anything else and never read before it, the two agree on
+  the texture key the pool itself uses for interchangeability, and the copy is
+  not the step that builds a mip chain. The destination then shares the
+  source's image.
+
+A copy that exists to break a feedback loop always has a later writer of its
+source, so it is never eliminated.
+
+### Audio: genuinely stereo
+
+The CoreAudio tap was previously created with
+`initMonoGlobalTapButExcludeProcesses`, and the analyser wrote
+`left64 = right64 = average64`. Delivering that to a page as a 64+64 stereo
+spectrum would have been a duplicated mono signal presented as stereo.
+
+The tap is now stereo, the resampler keeps both channels through 12 kHz /
+200-frame blocks, and the analyser runs two independent FFTs.
+`AudioSpectrumSnapshot.stereo` records **how the PCM was submitted**, not
+whether the two halves happen to differ: stereo content that is identical in
+both channels is still stereo, and a mono source is never described as stereo.
+`AudioFrameConsumer::submit_mono_audio_frames` became a required trait method
+precisely so no default could duplicate mono into fake stereo.
+
+The mono fallback is reachable — an absent selector, a nil initialiser, or a tap
+whose stream format reports fewer than two channels — but was not exercised,
+because this machine takes the stereo branch.
+
+### User files: where they are staged, and why there
+
+A `WKWebView`'s read-access root must be an ancestor of the page's entry file;
+a non-ancestor root fails the navigation outright. Files outside the root are
+blocked, **symlinks into the root are blocked** because WebKit resolves them,
+and **hard links load**. All four were measured, not assumed.
+
+So anything a page can read has to live inside the project tree. User
+selections are hard-linked (copied across volumes) into
+`<project>/.mwe-user-assets/<propertyId>/`, removed by clearing the property or
+by `python3 scripts/clean.py --user-assets`. No authored wallpaper file and no
+user original is ever modified. A read-only project folder surfaces a specific
+reason rather than failing silently.
+
+The value handed to a page is the staged absolute path with its leading `/`
+removed and only `%`, `#` and `?` escaped, so the page's own
+`'file:///' + value` forms a valid URL. Spaces, CJK, `+`, `&` and `'` were
+verified to load unescaped; over-escaping would break pages that use the value
+as a plain path.
+
+### Known gaps this round does not close
+
+- Scene optimisation is legacy-scene-backend only. Native video, plain video
+  and web wallpapers are unaffected.
+- The panel reports the **saved** scene-optimisation preference, not a
+  read-back from the renderer.
+- Media integration depends on the private `MediaRemote` framework, which is
+  entitlement-gated on macOS 15.4 and later. It will most likely report
+  unavailable. That is from the framework's documented behaviour and a symbol
+  check — the API was never called and the runtime outcome is unobserved.
+- The panel reports audio delivery and media availability from the running web
+  host, so "you switched it on", "the page actually asked for data" and "the
+  panel cannot tell" are three distinct states rather than one sentence. With
+  no desktop wallpaper running the keys are absent and the panel says it cannot
+  tell; it never reports "not delivering" from an observation it did not make.
+- The lock-screen extension is sandboxed and cannot read staged user assets.
+- `owe_audio_current_spectrum_128` clamps bins to `[0, 1]`. The official
+  documentation says values may occasionally exceed 1.0; the clamp is
+  pre-existing scene-path behaviour and was left alone.
+- Whole-scene sleep when everything is static is not implemented. This round
+  removes repeated GPU work for static subgraphs; scheduling is separate.
+
 ## Round 5 — three features, shipped and operable
 
 Round 5 was scoped to delivery, not audit: implement, wire to the UI, keep it

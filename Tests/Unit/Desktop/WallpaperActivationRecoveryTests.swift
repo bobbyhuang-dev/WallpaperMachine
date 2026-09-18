@@ -136,14 +136,13 @@ private final class ApplyFailureBridge: WallpaperBridge {
         scanStatus: BridgeLibraryScanStatus(scanning: false, done: 1, total: 1),
         sceneCount: 1, videoCount: 0, webpageCount: 0, unknownCount: 0)
 
-    private static let options = BridgeWallpaperOptionsSnapshot(
-        wallpaperId: "failing", title: "Failing", kind: .projectScene, supported: true, dirty: false,
-        properties: [],
+    private static let options = BridgeSnapshotFixtures.options(
+        wallpaperId: "failing", title: "Failing",
         displayConfigurations: [BridgeDisplayConfigRow(
             displayId: "primary", title: "Primary", enabled: false, scalingMode: .fill,
             scalingFactor: 1, targetFps: 30, maxFps: 60, muted: false, volume: 1,
             dirty: false, canRestoreDefaults: false)],
-        audioResponseEnabled: false, muted: false, volume: 1)
+        audioResponseEnabled: false)
 
     private static let settings = BridgeSnapshotFixtures.settings(
         displays: [BridgeDisplaySettingsRow(

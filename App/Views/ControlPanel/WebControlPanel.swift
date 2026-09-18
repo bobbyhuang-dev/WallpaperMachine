@@ -24,6 +24,18 @@ struct WebControlPanel: NSViewRepresentable {
   }
 }
 
+/// A `file` or `directory` property's chosen path, reduced to what the page shows.
+///
+/// `matches` and `truncated` describe a folder: how many files inside it the importer
+/// would take, and whether it holds more than the import limit. Both are nil / false for
+/// a single file, and `matches` stays nil for a folder that could not be read.
+struct WebPanelPropertyAsset: Equatable {
+  let path: String
+  let name: String
+  var matches: Int?
+  var truncated = false
+}
+
 @MainActor
 final class WebPanelController: NSObject, WKNavigationDelegate {
   let store: BridgeStore
@@ -58,6 +70,11 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
   var displayOptionsRevision: UInt64?
   var displayOptionsTask: Task<Void, Never>?
   var displayOptionsGeneration: UInt64 = 0
+  /// Measured `file` / `directory` property paths, by wallpaper then property id.
+  var propertyAssets: [String: [String: WebPanelPropertyAsset]] = [:]
+  /// Why choosing or clearing a path failed, by wallpaper then property id. It belongs
+  /// beside the control the user just used, not in the window-wide error banner.
+  var propertyPathErrors: [String: [String: String]] = [:]
   var recoveryAttempted = false
   var dismissedErrorRevision: UInt64 = 0
   var dismissedLibraryError: String?

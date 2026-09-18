@@ -10,6 +10,7 @@
 #include "Vulkan/GraphicsPipeline.hpp"
 #include "Vulkan/Shader.hpp"
 #include "VulkanRender/PassBatch.hpp"
+#include "VulkanRender/StaticSubgraphCache.hpp"
 #include "SpecTexs.hpp"
 #include "SpriteAnimation.hpp"
 #include "Interface/IShaderValueUpdater.h"
@@ -98,6 +99,18 @@ public:
     void                     recordClear(const Device&, RenderingResources&);
     void recordTextureBarriers(const Device&, RenderingResources&) const;
 
+    /// Compile-time shape of this pass for the static subgraph cache: the
+    /// target it writes, the targets it reads and why it may be dynamic.
+    StaticPassDesc staticPassDesc(const Scene&) const;
+    /// Everything that can change this pass's output without changing the
+    /// graph, folded into one value.
+    StaticPassSample frameSample() const;
+    /// Suppresses this frame's draw and its uniform update. The previous
+    /// frame's pixels stay in the target, so the caller must have proved the
+    /// target still owns them.
+    void setFrameSkipped(bool skipped) { m_frame_skipped = skipped; }
+    bool frameSkipped() const { return m_frame_skipped; }
+
     bool textureDescriptorsReady() const;
     bool canPresentDirectly(const RenderingResources&, VkExtent2D target_extent,
                             VkFormat target_format) const;
@@ -114,6 +127,7 @@ private:
     std::vector<CachedColorFramebuffer> m_presentation_framebuffers;
     bool m_frame_visible { false };
     bool m_frame_clear_only { false };
+    bool m_frame_skipped { false };
 };
 
 namespace detail

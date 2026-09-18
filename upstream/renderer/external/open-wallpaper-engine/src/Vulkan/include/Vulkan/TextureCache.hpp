@@ -154,6 +154,10 @@ public:
 
     enum class VideoFrameState { Idle, Recording, Submitted };
     bool Clear(std::string* error = nullptr);
+    /// Evicts render-target textures only, keeping uploaded images and live
+    /// video decoders. Used when the internal render scale changes, which
+    /// resizes render targets but nothing else.
+    bool ClearRenderTargets(std::string* error = nullptr);
     bool BeginVideoFrameRecording(std::string* error = nullptr);
     void PinVideoFrame(const ImageSlotsRef&);
     void MarkVideoFrameSubmitted();

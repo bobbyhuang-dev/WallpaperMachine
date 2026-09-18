@@ -84,6 +84,8 @@
 .settings-label .settings-note, h3 > .settings-note { margin-top: 3px; }
 .settings-control { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 7px; min-width: 0; max-width: 65%; }
 .settings-status { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.settings-list { margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 12px; text-align: right; overflow-wrap: anywhere; }
+.settings-list li + li { margin-top: 3px; }
 .settings-version { color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; text-align: right; user-select: text; }
 .settings-button {
   appearance: none;

@@ -330,6 +330,16 @@ impl SceneRuntime {
         Ok(())
     }
 
+    /// Live-updates this surface's internal rasterization scale.
+    ///
+    /// Deliberately not routed through [`Self::rebuild_for_desc`]: that
+    /// reparses the project and reopens any video, which a quality control the
+    /// user drags must never do. The renderer resizes its own targets in
+    /// place.
+    pub fn set_render_scale(&mut self, scale: f64) -> Result<(), EngineError> {
+        self.renderer.set_render_scale(scale)
+    }
+
     pub fn set_paused(&mut self, paused: bool) -> Result<(), EngineError> {
         if self.paused != paused {
             self.pointer_input.delivery.invalidate();

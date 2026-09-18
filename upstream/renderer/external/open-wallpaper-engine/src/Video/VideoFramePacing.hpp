@@ -91,6 +91,15 @@ private:
 /// defect.
 [[nodiscard]] bool ContentPacingEnabledByEnvironment(const char* value);
 
+/// Process-wide content-pacing switch, settable from the app's settings rather
+/// than only from the environment.
+///
+/// The environment variable still seeds it at first read, so an existing debug
+/// workflow keeps working; a later explicit call wins, because a persisted user
+/// setting has to be able to override an inherited environment.
+void SetContentPacingEnabled(bool enabled);
+[[nodiscard]] bool ContentPacingEnabled();
+
 struct VideoFrameSelection {
     /// A newer decoded frame became the displayed frame.
     bool selected { false };

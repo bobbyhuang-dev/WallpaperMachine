@@ -63,11 +63,6 @@ private final class CountingBridge: WallpaperBridge {
                 sceneCount: 0, videoCount: 0, webpageCount: 0, unknownCount: 0),
             wallpaperOptions: nil,
             monitorInformation: BridgeMonitorInformationSnapshot(rows: []),
-            settings: BridgeSettingsSnapshot(
-                displays: [], launchAtLoginAvailable: false, launchAtLoginEnabled: false,
-                pauseOnBatteryPower: false, gitSha: "", bridgeVersion: "", coreVersion: "",
-                shaderPipelineVersion: "",
-                storage: BridgeStorageStatus(shaderCacheSizeBytes: 0, logs: BridgeLogStatus(
-                    logsRoot: "", activeSession: "", activeFile: "", activeFileSizeBytes: 0))))
+            settings: BridgeSnapshotFixtures.settings())
     }
 }

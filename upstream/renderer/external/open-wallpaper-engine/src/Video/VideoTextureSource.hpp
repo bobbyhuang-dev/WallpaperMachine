@@ -66,6 +66,16 @@ public:
     virtual bool syncPlayback(const VideoPlaybackState& state, std::string* error) = 0;
     virtual bool refreshFrame(std::string* error) = 0;
     [[nodiscard]] virtual VideoTextureFrame currentFrame() const = 0;
+    /// Like `currentFrame`, but takes an independent reference on the frame's
+    /// platform objects so the caller can outlive the producer's own copy.
+    ///
+    /// This is what makes one decoder safe to read from several surfaces: the
+    /// retain happens under the same lock that guards promotion, so a frame
+    /// cannot be released between the read and the retain. The caller releases
+    /// the result with `ReleaseAppleVideoFrame`. Returns false when no frame is
+    /// available; sources that cannot retain report false and are simply never
+    /// shared.
+    [[nodiscard]] virtual bool retainCurrentFrame(VideoTextureFrame*) const { return false; }
     [[nodiscard]] virtual double durationSeconds() const = 0;
     [[nodiscard]] virtual double playbackSeconds() const = 0;
     [[nodiscard]] virtual uint64_t loopCount() const = 0;

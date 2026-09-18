@@ -750,6 +750,33 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func setAudioResponseEnabled(wallpaperId: String, enabled: Bool) async throws  -> BridgeWallpaperMutationBundle
     
     /**
+     * Sets the quality profile used while the machine is on battery power.
+     *
+     * Disabling it restores the user's saved render scale and per-display
+     * target rates immediately, rather than waiting for the next power
+     * transition. It never changes playback, so a pause the user asked for
+     * survives.
+     *
+     * # Errors
+     *
+     * Returns an error when the profile cannot be saved or a running scene
+     * rejects the resulting scale or rate.
+     */
+    func setBatteryQualityProfile(enabled: Bool, renderScale: Float, targetFps: UInt32) async throws  -> BridgeSnapshotBundle
+    
+    /**
+     * Turns content pacing on or off for the renderer process.
+     *
+     * Off by default.
+     *
+     * # Errors
+     *
+     * Returns an error when the setting cannot be saved or the renderer
+     * rejects the call.
+     */
+    func setContentPacingEnabled(enabled: Bool) async throws  -> BridgeSnapshotBundle
+    
+    /**
      * # Errors
      *
      * Returns an error when the wallpaper or display id is unknown.
@@ -858,11 +885,6 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     /**
      * Turns the experimental native video backend on or off.
      *
-     * Off by default. While it is on, a plain local video whose project and
-     * options fall inside the supported subset is played by the platform
-     * player and is no longer given to the scene engine at all; everything
-     * else, and anything the host refuses, stays on the scene engine.
-     *
      * # Errors
      *
      * Returns an error when the scene list cannot be rebuilt for the new
@@ -892,6 +914,20 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func setPresentationSuspended(suspended: Bool) async throws 
     
     /**
+     * Sets the internal rasterization scale the user prefers.
+     *
+     * Clamped to the range the renderer honours. This is a preference: while
+     * a power profile is in force the running scale is that profile's, and
+     * the snapshot reports both.
+     *
+     * # Errors
+     *
+     * Returns an error when the preference cannot be saved or a running
+     * scene rejects the new scale.
+     */
+    func setRenderScale(scale: Float) async throws  -> BridgeSnapshotBundle
+    
+    /**
      * Turns renderer work counting on or off for the whole process.
      *
      * Off is the default. Enabling adds one relaxed atomic increment per
@@ -913,12 +949,44 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func setScalingMode(wallpaperId: String, displayId: String, mode: BridgeScalingMode) async throws  -> BridgeWallpaperMutationBundle
     
     /**
+     * Turns shared video decoding on or off for the renderer process.
+     *
+     * Off by default. Turning it on permits sharing; it does not by itself
+     * mean any decode is shared. The snapshot's session and consumer counts
+     * are where that shows up.
+     *
+     * # Errors
+     *
+     * Returns an error when the setting cannot be saved or the renderer
+     * rejects the call.
+     */
+    func setSharedVideoDecodeEnabled(enabled: Bool) async throws  -> BridgeSnapshotBundle
+    
+    /**
      * # Errors
      *
      * Returns an error when the wallpaper or display id is unknown, or
      * persistence fails.
      */
     func setTargetFps(wallpaperId: String, displayId: String, fps: UInt32) async throws  -> BridgeWallpaperMutationBundle
+    
+    /**
+     * Chooses which renderer plays plain local videos.
+     *
+     * `"compatibility"` keeps everything on the scene engine, which supports
+     * every wallpaper. `"native_preferred"` hands a video to the platform
+     * player where its project and options fall inside the supported subset;
+     * everything else, and anything the host refuses, stays on the scene
+     * engine. The snapshot's `video_backends` reports what each display
+     * actually got.
+     *
+     * # Errors
+     *
+     * Returns an error when `mode` is not one of the two names, or when the
+     * scene list cannot be rebuilt for the new routing, in which case the
+     * previous backend keeps running.
+     */
+    func setVideoBackend(mode: String) async throws  -> BridgeSnapshotBundle
     
     /**
      * # Errors
@@ -1625,6 +1693,63 @@ open func setAudioResponseEnabled(wallpaperId: String, enabled: Bool)async throw
 }
     
     /**
+     * Sets the quality profile used while the machine is on battery power.
+     *
+     * Disabling it restores the user's saved render scale and per-display
+     * target rates immediately, rather than waiting for the next power
+     * transition. It never changes playback, so a pause the user asked for
+     * survives.
+     *
+     * # Errors
+     *
+     * Returns an error when the profile cannot be saved or a running scene
+     * rejects the resulting scale or rate.
+     */
+open func setBatteryQualityProfile(enabled: Bool, renderScale: Float, targetFps: UInt32)async throws  -> BridgeSnapshotBundle {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_battery_quality_profile(
+                    self.uniffiClonePointer(),
+                    FfiConverterBool.lower(enabled),FfiConverterFloat.lower(renderScale),FfiConverterUInt32.lower(targetFps)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBridgeSnapshotBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Turns content pacing on or off for the renderer process.
+     *
+     * Off by default.
+     *
+     * # Errors
+     *
+     * Returns an error when the setting cannot be saved or the renderer
+     * rejects the call.
+     */
+open func setContentPacingEnabled(enabled: Bool)async throws  -> BridgeSnapshotBundle {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_content_pacing_enabled(
+                    self.uniffiClonePointer(),
+                    FfiConverterBool.lower(enabled)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBridgeSnapshotBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
      * # Errors
      *
      * Returns an error when the wallpaper or display id is unknown.
@@ -1928,11 +2053,6 @@ open func setMuted(wallpaperId: String, muted: Bool)async throws  -> BridgeWallp
     /**
      * Turns the experimental native video backend on or off.
      *
-     * Off by default. While it is on, a plain local video whose project and
-     * options fall inside the supported subset is played by the platform
-     * player and is no longer given to the scene engine at all; everything
-     * else, and anything the host refuses, stays on the scene engine.
-     *
      * # Errors
      *
      * Returns an error when the scene list cannot be rebuilt for the new
@@ -2007,6 +2127,35 @@ open func setPresentationSuspended(suspended: Bool)async throws  {
 }
     
     /**
+     * Sets the internal rasterization scale the user prefers.
+     *
+     * Clamped to the range the renderer honours. This is a preference: while
+     * a power profile is in force the running scale is that profile's, and
+     * the snapshot reports both.
+     *
+     * # Errors
+     *
+     * Returns an error when the preference cannot be saved or a running
+     * scene rejects the new scale.
+     */
+open func setRenderScale(scale: Float)async throws  -> BridgeSnapshotBundle {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_render_scale(
+                    self.uniffiClonePointer(),
+                    FfiConverterFloat.lower(scale)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBridgeSnapshotBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
      * Turns renderer work counting on or off for the whole process.
      *
      * Off is the default. Enabling adds one relaxed atomic increment per
@@ -2058,6 +2207,35 @@ open func setScalingMode(wallpaperId: String, displayId: String, mode: BridgeSca
 }
     
     /**
+     * Turns shared video decoding on or off for the renderer process.
+     *
+     * Off by default. Turning it on permits sharing; it does not by itself
+     * mean any decode is shared. The snapshot's session and consumer counts
+     * are where that shows up.
+     *
+     * # Errors
+     *
+     * Returns an error when the setting cannot be saved or the renderer
+     * rejects the call.
+     */
+open func setSharedVideoDecodeEnabled(enabled: Bool)async throws  -> BridgeSnapshotBundle {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_shared_video_decode_enabled(
+                    self.uniffiClonePointer(),
+                    FfiConverterBool.lower(enabled)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBridgeSnapshotBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
      * # Errors
      *
      * Returns an error when the wallpaper or display id is unknown, or
@@ -2076,6 +2254,39 @@ open func setTargetFps(wallpaperId: String, displayId: String, fps: UInt32)async
             completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
             freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeBridgeWallpaperMutationBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Chooses which renderer plays plain local videos.
+     *
+     * `"compatibility"` keeps everything on the scene engine, which supports
+     * every wallpaper. `"native_preferred"` hands a video to the platform
+     * player where its project and options fall inside the supported subset;
+     * everything else, and anything the host refuses, stays on the scene
+     * engine. The snapshot's `video_backends` reports what each display
+     * actually got.
+     *
+     * # Errors
+     *
+     * Returns an error when `mode` is not one of the two names, or when the
+     * scene list cannot be rebuilt for the new routing, in which case the
+     * previous backend keeps running.
+     */
+open func setVideoBackend(mode: String)async throws  -> BridgeSnapshotBundle {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_video_backend(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(mode)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBridgeSnapshotBundle.lift,
             errorHandler: FfiConverterTypeBridgeError.lift
         )
 }
@@ -4212,10 +4423,61 @@ public struct BridgeSettingsSnapshot {
     public var coreVersion: String
     public var shaderPipelineVersion: String
     public var storage: BridgeStorageStatus
+    /**
+     * `"compatibility"` or `"native_preferred"`: the user's choice, which for
+     * a given display may or may not be what `video_backends` reports.
+     */
+    public var videoBackend: String
+    public var videoBackends: [BridgeVideoBackendReport]
+    /**
+     * Read back from the renderer process, not from the saved preference.
+     */
+    public var contentPacingEnabled: Bool
+    public var sharedVideoDecodeEnabled: Bool
+    /**
+     * Live decoder instances, and the surfaces consuming them. Sharing is
+     * consumers exceeding sessions; the setting being on does not imply it.
+     */
+    public var sharedVideoDecodeSessions: UInt32
+    public var sharedVideoDecodeConsumers: UInt32
+    /**
+     * The internal rasterization scale in force right now, after any power
+     * profile. `preferred_render_scale` is what the user saved.
+     */
+    public var renderScale: Float
+    public var preferredRenderScale: Float
+    public var batteryProfileEnabled: Bool
+    public var batteryRenderScale: Float
+    public var batteryTargetFps: UInt32
+    public var onBatteryPower: Bool
+    /**
+     * False when nothing running can honour an internal render scale, so the
+     * control describes a preference that changes nothing on screen today.
+     */
+    public var renderScaleSupported: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(displays: [BridgeDisplaySettingsRow], launchAtLoginAvailable: Bool, launchAtLoginEnabled: Bool, pauseOnBatteryPower: Bool, gitSha: String, bridgeVersion: String, coreVersion: String, shaderPipelineVersion: String, storage: BridgeStorageStatus) {
+    public init(displays: [BridgeDisplaySettingsRow], launchAtLoginAvailable: Bool, launchAtLoginEnabled: Bool, pauseOnBatteryPower: Bool, gitSha: String, bridgeVersion: String, coreVersion: String, shaderPipelineVersion: String, storage: BridgeStorageStatus, 
+        /**
+         * `"compatibility"` or `"native_preferred"`: the user's choice, which for
+         * a given display may or may not be what `video_backends` reports.
+         */videoBackend: String, videoBackends: [BridgeVideoBackendReport], 
+        /**
+         * Read back from the renderer process, not from the saved preference.
+         */contentPacingEnabled: Bool, sharedVideoDecodeEnabled: Bool, 
+        /**
+         * Live decoder instances, and the surfaces consuming them. Sharing is
+         * consumers exceeding sessions; the setting being on does not imply it.
+         */sharedVideoDecodeSessions: UInt32, sharedVideoDecodeConsumers: UInt32, 
+        /**
+         * The internal rasterization scale in force right now, after any power
+         * profile. `preferred_render_scale` is what the user saved.
+         */renderScale: Float, preferredRenderScale: Float, batteryProfileEnabled: Bool, batteryRenderScale: Float, batteryTargetFps: UInt32, onBatteryPower: Bool, 
+        /**
+         * False when nothing running can honour an internal render scale, so the
+         * control describes a preference that changes nothing on screen today.
+         */renderScaleSupported: Bool) {
         self.displays = displays
         self.launchAtLoginAvailable = launchAtLoginAvailable
         self.launchAtLoginEnabled = launchAtLoginEnabled
@@ -4225,6 +4487,19 @@ public struct BridgeSettingsSnapshot {
         self.coreVersion = coreVersion
         self.shaderPipelineVersion = shaderPipelineVersion
         self.storage = storage
+        self.videoBackend = videoBackend
+        self.videoBackends = videoBackends
+        self.contentPacingEnabled = contentPacingEnabled
+        self.sharedVideoDecodeEnabled = sharedVideoDecodeEnabled
+        self.sharedVideoDecodeSessions = sharedVideoDecodeSessions
+        self.sharedVideoDecodeConsumers = sharedVideoDecodeConsumers
+        self.renderScale = renderScale
+        self.preferredRenderScale = preferredRenderScale
+        self.batteryProfileEnabled = batteryProfileEnabled
+        self.batteryRenderScale = batteryRenderScale
+        self.batteryTargetFps = batteryTargetFps
+        self.onBatteryPower = onBatteryPower
+        self.renderScaleSupported = renderScaleSupported
     }
 }
 
@@ -4259,6 +4534,45 @@ extension BridgeSettingsSnapshot: Equatable, Hashable {
         if lhs.storage != rhs.storage {
             return false
         }
+        if lhs.videoBackend != rhs.videoBackend {
+            return false
+        }
+        if lhs.videoBackends != rhs.videoBackends {
+            return false
+        }
+        if lhs.contentPacingEnabled != rhs.contentPacingEnabled {
+            return false
+        }
+        if lhs.sharedVideoDecodeEnabled != rhs.sharedVideoDecodeEnabled {
+            return false
+        }
+        if lhs.sharedVideoDecodeSessions != rhs.sharedVideoDecodeSessions {
+            return false
+        }
+        if lhs.sharedVideoDecodeConsumers != rhs.sharedVideoDecodeConsumers {
+            return false
+        }
+        if lhs.renderScale != rhs.renderScale {
+            return false
+        }
+        if lhs.preferredRenderScale != rhs.preferredRenderScale {
+            return false
+        }
+        if lhs.batteryProfileEnabled != rhs.batteryProfileEnabled {
+            return false
+        }
+        if lhs.batteryRenderScale != rhs.batteryRenderScale {
+            return false
+        }
+        if lhs.batteryTargetFps != rhs.batteryTargetFps {
+            return false
+        }
+        if lhs.onBatteryPower != rhs.onBatteryPower {
+            return false
+        }
+        if lhs.renderScaleSupported != rhs.renderScaleSupported {
+            return false
+        }
         return true
     }
 
@@ -4272,6 +4586,19 @@ extension BridgeSettingsSnapshot: Equatable, Hashable {
         hasher.combine(coreVersion)
         hasher.combine(shaderPipelineVersion)
         hasher.combine(storage)
+        hasher.combine(videoBackend)
+        hasher.combine(videoBackends)
+        hasher.combine(contentPacingEnabled)
+        hasher.combine(sharedVideoDecodeEnabled)
+        hasher.combine(sharedVideoDecodeSessions)
+        hasher.combine(sharedVideoDecodeConsumers)
+        hasher.combine(renderScale)
+        hasher.combine(preferredRenderScale)
+        hasher.combine(batteryProfileEnabled)
+        hasher.combine(batteryRenderScale)
+        hasher.combine(batteryTargetFps)
+        hasher.combine(onBatteryPower)
+        hasher.combine(renderScaleSupported)
     }
 }
 
@@ -4291,7 +4618,20 @@ public struct FfiConverterTypeBridgeSettingsSnapshot: FfiConverterRustBuffer {
                 bridgeVersion: FfiConverterString.read(from: &buf), 
                 coreVersion: FfiConverterString.read(from: &buf), 
                 shaderPipelineVersion: FfiConverterString.read(from: &buf), 
-                storage: FfiConverterTypeBridgeStorageStatus.read(from: &buf)
+                storage: FfiConverterTypeBridgeStorageStatus.read(from: &buf), 
+                videoBackend: FfiConverterString.read(from: &buf), 
+                videoBackends: FfiConverterSequenceTypeBridgeVideoBackendReport.read(from: &buf), 
+                contentPacingEnabled: FfiConverterBool.read(from: &buf), 
+                sharedVideoDecodeEnabled: FfiConverterBool.read(from: &buf), 
+                sharedVideoDecodeSessions: FfiConverterUInt32.read(from: &buf), 
+                sharedVideoDecodeConsumers: FfiConverterUInt32.read(from: &buf), 
+                renderScale: FfiConverterFloat.read(from: &buf), 
+                preferredRenderScale: FfiConverterFloat.read(from: &buf), 
+                batteryProfileEnabled: FfiConverterBool.read(from: &buf), 
+                batteryRenderScale: FfiConverterFloat.read(from: &buf), 
+                batteryTargetFps: FfiConverterUInt32.read(from: &buf), 
+                onBatteryPower: FfiConverterBool.read(from: &buf), 
+                renderScaleSupported: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -4305,6 +4645,19 @@ public struct FfiConverterTypeBridgeSettingsSnapshot: FfiConverterRustBuffer {
         FfiConverterString.write(value.coreVersion, into: &buf)
         FfiConverterString.write(value.shaderPipelineVersion, into: &buf)
         FfiConverterTypeBridgeStorageStatus.write(value.storage, into: &buf)
+        FfiConverterString.write(value.videoBackend, into: &buf)
+        FfiConverterSequenceTypeBridgeVideoBackendReport.write(value.videoBackends, into: &buf)
+        FfiConverterBool.write(value.contentPacingEnabled, into: &buf)
+        FfiConverterBool.write(value.sharedVideoDecodeEnabled, into: &buf)
+        FfiConverterUInt32.write(value.sharedVideoDecodeSessions, into: &buf)
+        FfiConverterUInt32.write(value.sharedVideoDecodeConsumers, into: &buf)
+        FfiConverterFloat.write(value.renderScale, into: &buf)
+        FfiConverterFloat.write(value.preferredRenderScale, into: &buf)
+        FfiConverterBool.write(value.batteryProfileEnabled, into: &buf)
+        FfiConverterFloat.write(value.batteryRenderScale, into: &buf)
+        FfiConverterUInt32.write(value.batteryTargetFps, into: &buf)
+        FfiConverterBool.write(value.onBatteryPower, into: &buf)
+        FfiConverterBool.write(value.renderScaleSupported, into: &buf)
     }
 }
 
@@ -4559,6 +4912,112 @@ public func FfiConverterTypeBridgeStorageStatus_lift(_ buf: RustBuffer) throws -
 #endif
 public func FfiConverterTypeBridgeStorageStatus_lower(_ value: BridgeStorageStatus) -> RustBuffer {
     return FfiConverterTypeBridgeStorageStatus.lower(value)
+}
+
+
+/**
+ * Which renderer is actually playing the video on one display.
+ *
+ * `backend` reports what is running, not what was asked for. `fallback_reason`
+ * is present only when the user selected the native player and this display
+ * did not get it, so an empty reason on a legacy row means the user never
+ * asked rather than that no reason was recorded.
+ */
+public struct BridgeVideoBackendReport {
+    public var displayId: UInt32
+    public var displayName: String
+    public var wallpaperId: String
+    public var wallpaperTitle: String
+    public var backend: String
+    public var fallbackReason: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(displayId: UInt32, displayName: String, wallpaperId: String, wallpaperTitle: String, backend: String, fallbackReason: String?) {
+        self.displayId = displayId
+        self.displayName = displayName
+        self.wallpaperId = wallpaperId
+        self.wallpaperTitle = wallpaperTitle
+        self.backend = backend
+        self.fallbackReason = fallbackReason
+    }
+}
+
+
+
+extension BridgeVideoBackendReport: Equatable, Hashable {
+    public static func ==(lhs: BridgeVideoBackendReport, rhs: BridgeVideoBackendReport) -> Bool {
+        if lhs.displayId != rhs.displayId {
+            return false
+        }
+        if lhs.displayName != rhs.displayName {
+            return false
+        }
+        if lhs.wallpaperId != rhs.wallpaperId {
+            return false
+        }
+        if lhs.wallpaperTitle != rhs.wallpaperTitle {
+            return false
+        }
+        if lhs.backend != rhs.backend {
+            return false
+        }
+        if lhs.fallbackReason != rhs.fallbackReason {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(displayId)
+        hasher.combine(displayName)
+        hasher.combine(wallpaperId)
+        hasher.combine(wallpaperTitle)
+        hasher.combine(backend)
+        hasher.combine(fallbackReason)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeVideoBackendReport: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeVideoBackendReport {
+        return
+            try BridgeVideoBackendReport(
+                displayId: FfiConverterUInt32.read(from: &buf), 
+                displayName: FfiConverterString.read(from: &buf), 
+                wallpaperId: FfiConverterString.read(from: &buf), 
+                wallpaperTitle: FfiConverterString.read(from: &buf), 
+                backend: FfiConverterString.read(from: &buf), 
+                fallbackReason: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BridgeVideoBackendReport, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.displayId, into: &buf)
+        FfiConverterString.write(value.displayName, into: &buf)
+        FfiConverterString.write(value.wallpaperId, into: &buf)
+        FfiConverterString.write(value.wallpaperTitle, into: &buf)
+        FfiConverterString.write(value.backend, into: &buf)
+        FfiConverterOptionString.write(value.fallbackReason, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeVideoBackendReport_lift(_ buf: RustBuffer) throws -> BridgeVideoBackendReport {
+    return try FfiConverterTypeBridgeVideoBackendReport.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeVideoBackendReport_lower(_ value: BridgeVideoBackendReport) -> RustBuffer {
+    return FfiConverterTypeBridgeVideoBackendReport.lower(value)
 }
 
 
@@ -6077,6 +6536,31 @@ fileprivate struct FfiConverterSequenceTypeBridgeRendererSurfaceCounters: FfiCon
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeBridgeVideoBackendReport: FfiConverterRustBuffer {
+    typealias SwiftType = [BridgeVideoBackendReport]
+
+    public static func write(_ value: [BridgeVideoBackendReport], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBridgeVideoBackendReport.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BridgeVideoBackendReport] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BridgeVideoBackendReport]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBridgeVideoBackendReport.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeBridgeWallpaperEntry: FfiConverterRustBuffer {
     typealias SwiftType = [BridgeWallpaperEntry]
 
@@ -6266,6 +6750,12 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_audio_response_enabled() != 32236) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_battery_quality_profile() != 37220) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_content_pacing_enabled() != 63477) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_display_config_enabled() != 62288) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -6305,7 +6795,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_muted() != 46581) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_native_video_backend_enabled() != 49880) {
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_native_video_backend_enabled() != 10196) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_pause_on_battery_power() != 21085) {
@@ -6314,13 +6804,22 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_presentation_suspended() != 9550) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_render_scale() != 18212) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_renderer_counters_enabled() != 63277) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_scaling_mode() != 14052) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_shared_video_decode_enabled() != 19328) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_target_fps() != 37128) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_video_backend() != 4355) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_volume() != 1489) {

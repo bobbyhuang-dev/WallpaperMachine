@@ -117,6 +117,40 @@ pub struct NativeVideoWallpaperDesc {
     pub scaling_factor: f64,
 }
 
+/// Which renderer is actually playing the video on one display.
+///
+/// `native` is what is running, not what was preferred. `fallback_reason` is
+/// recorded only when the user asked for the native player and this display
+/// did not get it, so `None` never means "no reason known" on a display the
+/// user never pointed at the native player.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VideoBackendRouting {
+    pub display: DisplayDesc,
+    pub wallpaper_id: String,
+    pub native: bool,
+    pub fallback_reason: Option<String>,
+}
+
+/// What the renderers behind the current configuration actually are.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RenderBackendSurvey {
+    /// One entry per display showing a plain-video wallpaper, mirrors
+    /// included: a mirror presents on its own display and is routed with its
+    /// source.
+    pub videos: Vec<VideoBackendRouting>,
+    /// Whether anything running rasterizes through the renderer's own targets
+    /// and can therefore honour an internal render scale.
+    pub render_scale_supported: bool,
+}
+
+/// Why a video is on the scene engine when the native player was asked for and
+/// the host never got as far as judging it.
+///
+/// Deliberately narrow: this is the one case the bridge itself can see, and
+/// anything the host refused carries the host's own wording instead.
+const NATIVE_VIDEO_MEDIA_UNRESOLVED: &str =
+    "the project's video file could not be opened by the native player";
+
 /// A web wallpaper assigned to one display, rendered by the host process in a
 /// web view rather than by the scene engine.
 #[derive(Clone, Debug, PartialEq)]
@@ -466,6 +500,114 @@ impl ActivationInputs<'_> {
                 .insert(candidate.admission_key);
         }
         keys
+    }
+
+    /// What is actually rendering right now: which backend plays each video,
+    /// and whether anything on screen can honour an internal render scale.
+    ///
+    /// Reported from the same routing decision [`Self::build`] and
+    /// [`Self::build_native_video`] make, so a display cannot be described as
+    /// native here while the scene engine is the one holding it.
+    #[must_use]
+    pub fn render_backends(&self) -> RenderBackendSurvey {
+        let (direct, mirrors) = self.slots();
+        let group_targets = Self::mirror_group_targets(&mirrors);
+        let mut videos: Vec<VideoBackendRouting> = Vec::new();
+        let mut render_scale_supported = false;
+        for slot in direct {
+            let Some(model) = self.project_models.get(slot.wallpaper_id) else {
+                continue;
+            };
+            match model.project_type {
+                // Only a project scene rasterizes through the renderer's own
+                // targets. A plain video decodes to its source resolution on
+                // either backend, and a web wallpaper is not the scene engine
+                // at all, so neither honours an internal render scale.
+                WallpaperProjectType::Scene => {
+                    render_scale_supported = true;
+                    continue;
+                }
+                WallpaperProjectType::Video => {}
+                WallpaperProjectType::Web | WallpaperProjectType::Unknown => continue,
+            }
+            let admission_fps = self.slot_admission_fps(&slot, &group_targets);
+            let candidate = self.native_video_candidate(slot.wallpaper_id, admission_fps);
+            let refusal = candidate.as_ref().and_then(|candidate| {
+                self.native_video_rejected
+                    .get(slot.wallpaper_id)?
+                    .get(&candidate.admission_key)
+            });
+            let native = candidate.is_some() && refusal.is_none();
+            // A reason is a statement about a choice the user made. With the
+            // scene engine selected there is no fallback to explain.
+            let fallback_reason = (self.native_video_enabled && !native).then(|| {
+                refusal.map_or_else(
+                    || NATIVE_VIDEO_MEDIA_UNRESOLVED.to_string(),
+                    |record| record.reason.clone(),
+                )
+            });
+            videos.push(VideoBackendRouting {
+                display: slot.display,
+                wallpaper_id: slot.wallpaper_id.to_string(),
+                native,
+                fallback_reason,
+            });
+        }
+
+        let mut mirrored: Vec<DisplayDesc> = Vec::new();
+        for mirror in mirrors {
+            if mirrored
+                .iter()
+                .any(|used| used.same_physical_display(&mirror.display))
+            {
+                continue;
+            }
+            let Some(source) = videos
+                .iter()
+                .find(|routed| routed.display.display_id == mirror.source_display_id)
+                .cloned()
+            else {
+                continue;
+            };
+            mirrored.push(mirror.display.clone());
+            // A mirror never routes on its own: both backends give it a copy
+            // of the source's decision.
+            videos.push(VideoBackendRouting {
+                display: mirror.display,
+                ..source
+            });
+        }
+
+        RenderBackendSurvey {
+            videos,
+            render_scale_supported,
+        }
+    }
+
+    /// The target frame rate each display is configured for, keyed by display
+    /// id, in exactly the terms [`Self::build`] gives its scenes.
+    ///
+    /// This is what a restored quality profile has to hand back: the user's
+    /// own saved rate for that display, never a constant.
+    #[must_use]
+    pub fn target_frame_rates(&self) -> BTreeMap<u32, u32> {
+        let (direct, mirrors) = self.slots();
+        let mut rates: BTreeMap<u32, u32> = BTreeMap::new();
+        for slot in &direct {
+            rates.insert(slot.display.display_id, self.slot_fps(slot));
+        }
+        let mut mirrored: Vec<DisplayDesc> = Vec::new();
+        for mirror in &mirrors {
+            if mirrored
+                .iter()
+                .any(|used| used.same_physical_display(&mirror.display))
+            {
+                continue;
+            }
+            mirrored.push(mirror.display.clone());
+            rates.insert(mirror.display.display_id, Self::mirror_fps(mirror));
+        }
+        rates
     }
 
     /// This slot's effective target frame rate: the user's requested rate for

@@ -4,6 +4,12 @@ use wallpaper_core::{DisplayIdentity, DisplaySelector, project::ScalingMode};
 pub const SCHEMA_VERSION: u32 = 1;
 const DEFAULT_MONITOR_VOLUME: f32 = 1.0;
 const DEFAULT_MONITOR_FPS: u32 = 60;
+/// Lowest internal rasterization scale the renderer will honour. Below this a
+/// wallpaper stops being a quality tier and becomes a visibly broken image.
+pub const MIN_RENDER_SCALE: f32 = 0.25;
+pub const MAX_RENDER_SCALE: f32 = 1.0;
+const DEFAULT_BATTERY_RENDER_SCALE: f32 = 0.75;
+const DEFAULT_BATTERY_TARGET_FPS: u32 = 30;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -17,6 +23,13 @@ pub struct AppConfig {
     pub ui: UiCfg,
     #[serde(default)]
     pub experimental: ExperimentalCfg,
+    /// Which renderer plays a plain local video. Replaces the former
+    /// `experimental.native_video_backend` flag; see
+    /// [`AppConfig::migrate_legacy_keys`].
+    #[serde(default)]
+    pub video_backend: VideoBackendModeCfg,
+    #[serde(default)]
+    pub quality: QualityCfg,
     #[serde(default)]
     pub monitors: Vec<MonitorCfg>,
     #[serde(default)]
@@ -31,6 +44,8 @@ impl Default for AppConfig {
             power: PowerCfg::default(),
             ui: UiCfg::default(),
             experimental: ExperimentalCfg::default(),
+            video_backend: VideoBackendModeCfg::default(),
+            quality: QualityCfg::default(),
             monitors: Vec::new(),
             monitor_settings: Vec::new(),
         }
@@ -42,17 +57,85 @@ pub struct GeneralCfg {
     pub last_selected_wallpaper: Option<String>,
 }
 
+/// Which renderer plays a plain local video wallpaper.
+///
+/// `Compatibility` is the scene engine, which supports every wallpaper.
+/// `NativePreferred` asks for the platform player where the wallpaper falls
+/// inside its declared subset and falls back to the scene engine otherwise, so
+/// the choice is a preference rather than a guarantee.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoBackendModeCfg {
+    #[default]
+    Compatibility,
+    NativePreferred,
+}
+
+/// Internal rasterization size and frame rate the renderer targets.
+///
+/// `render_scale` is the fraction of the display's native pixel grid the scene
+/// is actually rasterized at. It is not window scaling and not wallpaper
+/// scaling: at 0.5 the renderer does a quarter of the pixel work.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct QualityProfileCfg {
+    #[serde(default = "default_battery_render_scale")]
+    pub render_scale: f32,
+    #[serde(default = "default_battery_target_fps")]
+    pub target_fps: u32,
+}
+
+impl Default for QualityProfileCfg {
+    fn default() -> Self {
+        Self {
+            render_scale: DEFAULT_BATTERY_RENDER_SCALE,
+            target_fps: DEFAULT_BATTERY_TARGET_FPS,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct QualityCfg {
+    /// The scale the user chose. Always the preference, never the value in
+    /// force: a power profile can lower what the renderer runs at without
+    /// overwriting what the user asked for.
+    #[serde(default = "default_render_scale")]
+    pub render_scale: f32,
+    #[serde(default)]
+    pub battery_profile_enabled: bool,
+    #[serde(default)]
+    pub battery: QualityProfileCfg,
+}
+
+impl Default for QualityCfg {
+    fn default() -> Self {
+        Self {
+            render_scale: MAX_RENDER_SCALE,
+            battery_profile_enabled: false,
+            battery: QualityProfileCfg::default(),
+        }
+    }
+}
+
 /// Opt-in behaviour that is not ready to be a default.
 ///
 /// Anything here is off unless the user turns it on, survives a restart, and is
 /// expected to be reported as experimental wherever it is surfaced.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExperimentalCfg {
-    /// Route plain local video wallpapers to the native AVFoundation player
-    /// instead of the scene engine. Off by default: it supports a declared
-    /// subset only, and anything outside that subset falls back.
+    /// Where the video backend choice used to live. Read so an existing opt-in
+    /// survives the move to [`AppConfig::video_backend`], and never written
+    /// again: once a config has been saved by this build the key is gone, so
+    /// the migration cannot fire against a choice the user has since changed.
+    #[serde(default, rename = "native_video_backend", skip_serializing)]
+    pub legacy_native_video_backend: Option<bool>,
+    /// Pace scene content production to the target rate instead of producing a
+    /// frame per display refresh.
     #[serde(default)]
-    pub native_video_backend: bool,
+    pub content_pacing: bool,
+    /// Let displays showing the same video share one decode session instead of
+    /// decoding the file once per surface.
+    #[serde(default)]
+    pub shared_video_decode: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,6 +350,47 @@ impl MonitorSettingsCfg {
     }
 }
 
+impl AppConfig {
+    /// Folds keys this build no longer writes into their replacements.
+    ///
+    /// Called once on load. The video backend choice moved out of
+    /// `experimental`; an existing opt-in has to keep its behaviour, so the
+    /// legacy flag is honoured exactly while the new key is still absent. A
+    /// config this build has saved never carries the legacy key again, so a
+    /// later change of mind cannot be overwritten by it.
+    pub fn migrate_legacy_keys(&mut self) {
+        let legacy_native = self.experimental.legacy_native_video_backend.take();
+        if legacy_native == Some(true) && self.video_backend == VideoBackendModeCfg::Compatibility {
+            self.video_backend = VideoBackendModeCfg::NativePreferred;
+        }
+    }
+
+    /// The render scale in force right now: the battery profile's while that
+    /// profile is enabled and the machine is on battery, the user's otherwise.
+    #[must_use]
+    pub fn effective_render_scale(&self, on_battery: bool) -> f32 {
+        let scale = if self.quality.battery_profile_enabled && on_battery {
+            self.quality.battery.render_scale
+        } else {
+            self.quality.render_scale
+        };
+        clamp_render_scale(scale)
+    }
+}
+
+/// Confines a render scale to the range the renderer honours.
+///
+/// A non-finite value is not a scale at all and falls back to native rather
+/// than to the low end, because the failure mode of guessing wrong here is a
+/// permanently blurry desktop.
+#[must_use]
+pub fn clamp_render_scale(scale: f32) -> f32 {
+    if !scale.is_finite() {
+        return MAX_RENDER_SCALE;
+    }
+    scale.clamp(MIN_RENDER_SCALE, MAX_RENDER_SCALE)
+}
+
 #[allow(clippy::single_call_fn)]
 fn default_schema_version() -> u32 {
     SCHEMA_VERSION
@@ -275,6 +399,21 @@ fn default_schema_version() -> u32 {
 #[allow(clippy::single_call_fn)]
 fn default_true() -> bool {
     true
+}
+
+#[allow(clippy::single_call_fn)]
+fn default_render_scale() -> f32 {
+    MAX_RENDER_SCALE
+}
+
+#[allow(clippy::single_call_fn)]
+fn default_battery_render_scale() -> f32 {
+    DEFAULT_BATTERY_RENDER_SCALE
+}
+
+#[allow(clippy::single_call_fn)]
+fn default_battery_target_fps() -> u32 {
+    DEFAULT_BATTERY_TARGET_FPS
 }
 
 fn default_monitor_mode() -> String {

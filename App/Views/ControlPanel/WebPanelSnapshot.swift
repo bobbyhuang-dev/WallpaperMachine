@@ -228,6 +228,14 @@ extension WebPanelController {
     case .settings, .display: page = "settings"
     default: page = "installed"
     }
+    let videoBackends: [[String: Any]] = settings.videoBackends.map { report in
+      [
+        "displayId": Int(report.displayId), "displayName": report.displayName,
+        "wallpaperId": report.wallpaperId, "wallpaperTitle": report.wallpaperTitle,
+        "backend": report.backend,
+        "fallbackReason": report.fallbackReason as Any? ?? null,
+      ]
+    }
     return [
       "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         ?? "",
@@ -252,6 +260,18 @@ extension WebPanelController {
         "launchAtLogin": settings.launchAtLoginEnabled,
         "launchAtLoginAvailable": settings.launchAtLoginAvailable,
         "pauseOnBattery": settings.pauseOnBatteryPower,
+        "videoBackend": settings.videoBackend, "videoBackends": videoBackends,
+        "contentPacing": settings.contentPacingEnabled,
+        "sharedVideoDecode": settings.sharedVideoDecodeEnabled,
+        "sharedVideoDecodeSessions": Int(settings.sharedVideoDecodeSessions),
+        "sharedVideoDecodeConsumers": Int(settings.sharedVideoDecodeConsumers),
+        "renderScale": Double(settings.renderScale),
+        "preferredRenderScale": Double(settings.preferredRenderScale),
+        "renderScaleSupported": settings.renderScaleSupported,
+        "batteryProfileEnabled": settings.batteryProfileEnabled,
+        "batteryRenderScale": Double(settings.batteryRenderScale),
+        "batteryTargetFps": Int(settings.batteryTargetFps),
+        "onBatteryPower": settings.onBatteryPower,
         "keepWindowsOnWallpaperClick": !DesktopClickRevealPreference.isEnabled,
         "lockScreenEnabled": lock?.isRequested ?? false, "lockScreenAvailable": lock != nil,
         "lockScreenBusy": lock?.isBusy ?? false, "lockScreenStatus": lock?.status ?? "Unavailable",

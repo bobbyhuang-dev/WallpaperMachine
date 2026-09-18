@@ -31,15 +31,17 @@ use crate::{
             InitialFrameReady, InjectDisplayForTest, InjectSceneProjectForTest,
             InjectSceneWallpaperConfigForTest, InjectWallpaperForTest, PollMousePosition,
             GetNativeVideoWallpapers, ReconcileFailed, RefreshDisplays, RefreshLibrary,
-            RejectNativeVideo, RendererCounters, SetNativeVideoBackendEnabled,
+            RejectNativeVideo, RendererCounters,
             ReplaceLibraryForTest,
             ReplaceWallpaperConfigForTest, RestorePropertyDefault, SelectWallpaper,
-            SetAudioResponseEnabled, SetDisplayConfigEnabled, SetDisplayEnabled, SetDisplayMode,
+            SetAudioResponseEnabled, SetBatteryQualityProfile, SetContentPacingEnabled,
+            SetDisplayConfigEnabled, SetDisplayEnabled, SetDisplayMode,
             SetDisplayPresentationSuspended,
             SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMirrorMuted, SetMirrorScalingFactor,
             SetMirrorScalingMode, SetMirrorTarget, SetMirrorTargetFps, SetMirrorVolume, SetMuted,
-            SetPauseOnBatteryPower, SetPowerSource, SetPresentationSuspended,
-            SetRendererCountersEnabled, SetScalingFactor, SetScalingMode, SetTargetFps, SetVolume,
+            SetPauseOnBatteryPower, SetPowerSource, SetPresentationSuspended, SetRenderScale,
+            SetRendererCountersEnabled, SetScalingFactor, SetScalingMode,
+            SetSharedVideoDecodeEnabled, SetTargetFps, SetVideoBackend, SetVolume,
             Shutdown,
         },
         state::BridgeActorState,
@@ -53,7 +55,9 @@ use crate::{
         BridgeSnapshotBundle, BridgeWallpaperEntry, BridgeWallpaperKind,
         BridgeWallpaperMutationBundle, BridgeWebWallpaper, MousePollingControl,
     },
-    config::{AppConfig, ConfigStore, SerializedSelector, WallpaperConfig},
+    config::{
+        AppConfig, ConfigStore, SerializedSelector, VideoBackendModeCfg, WallpaperConfig,
+    },
     display::{DisplaySelectorExt, DisplaySnapshotExt},
     engine::{ActivationInputs, EngineFacade, NativeVideoRejection, NativeVideoRejections},
     library::scan,
@@ -304,7 +308,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                 .as_ref()
                 .and_then(|id| self.state.options(&displays, id.clone()).ok()),
             monitor_information: self.state.monitor_info(&displays),
-            settings: self.state.settings(&displays, launch_at_login, &self.paths),
+            settings: self.state.settings(&displays, launch_at_login, &self.paths, self.engine.video_pipeline_state()),
         }
     }
 
@@ -319,7 +323,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             library: self.library_snapshot(),
             wallpaper_options: Some(self.state.options(&displays, wallpaper_id)?),
             monitor_information: self.state.monitor_info(&displays),
-            settings: self.state.settings(&displays, launch_at_login, &self.paths),
+            settings: self.state.settings(&displays, launch_at_login, &self.paths, self.engine.video_pipeline_state()),
         })
     }
 
@@ -334,7 +338,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             library: self.library_snapshot(),
             wallpaper_options: self.state.options(&displays, wallpaper_id)?,
             monitor_information: self.state.monitor_info(&displays),
-            settings: self.state.settings(&displays, launch_at_login, &self.paths),
+            settings: self.state.settings(&displays, launch_at_login, &self.paths, self.engine.video_pipeline_state()),
         })
     }
 
@@ -345,7 +349,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             app: self.app_snapshot(),
             library: self.library_snapshot(),
             monitor_information: self.state.monitor_info(&displays),
-            settings: self.state.settings(&displays, launch_at_login, &self.paths),
+            settings: self.state.settings(&displays, launch_at_login, &self.paths, self.engine.video_pipeline_state()),
         }
     }
 
@@ -495,7 +499,97 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         Ok(())
     }
 
+
+    /// Every open scene handle, once each.
+    #[allow(clippy::single_call_fn)]
+    fn open_scene_handles(&self) -> Vec<SceneHandle> {
+        let mut handles = Vec::new();
+        for entry in self.engine.display_snapshot() {
+            let Some(handle) = entry.handle else {
+                continue;
+            };
+            if !handles.contains(&handle) {
+                handles.push(handle);
+            }
+        }
+        handles
+    }
+
+    /// Pushes the render scale that is in force to every open scene.
+    ///
+    /// Set as a live renderer property, one open scene at a time. Going
+    /// through a reconcile instead would reparse every project and reopen
+    /// every video for what is a quality control the user drags.
+    async fn apply_effective_render_scale(&self) -> Result<(), BridgeError> {
+        let scale = self.effective_render_scale();
+        for handle in self.open_scene_handles() {
+            self.engine
+                .set_render_scale(handle, scale)
+                .await
+                .map_err(|error| BridgeError::engine(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    fn effective_render_scale(&self) -> f32 {
+        self.state
+            .app_config
+            .effective_render_scale(self.state.power_source == crate::power::PowerSource::Battery)
+    }
+
+    /// The frame-rate ceiling the active power profile imposes, if any.
+    fn active_target_fps_cap(&self) -> Option<u32> {
+        let quality = &self.state.app_config.quality;
+        (quality.battery_profile_enabled
+            && self.state.power_source == crate::power::PowerSource::Battery)
+            .then(|| quality.battery.target_fps.max(1))
+    }
+
+    fn quality_runtime(&self) -> QualityRuntime {
+        QualityRuntime {
+            render_scale: self.effective_render_scale(),
+            target_fps_cap: self.active_target_fps_cap(),
+        }
+    }
+
+    /// Puts the quality settings the current power source calls for into
+    /// effect on everything already running.
+    ///
+    /// Restoring hands back the user's own saved per-display target rate, read
+    /// from the live configuration rather than from a remembered constant.
+    /// It never touches playback, so a pause the user asked for survives.
+    async fn apply_quality_profile(&self) -> Result<(), BridgeError> {
+        self.apply_effective_render_scale().await?;
+        let cap = self.active_target_fps_cap();
+        let displays = self.engine.display_snapshot();
+        let rates = self
+            .activation_inputs(&displays, self.playback_paused())
+            .target_frame_rates();
+        for entry in &displays {
+            let Some(handle) = entry.handle else {
+                continue;
+            };
+            let Some(configured) = rates.get(&entry.desc.display_id).copied() else {
+                continue;
+            };
+            let fps = cap.map_or(configured, |cap| configured.min(cap)).max(1);
+            self.engine
+                .set_fps(handle, fps)
+                .await
+                .map_err(|error| BridgeError::engine(error.to_string()))?;
+        }
+        Ok(())
+    }
+
     async fn apply_power_policy(&mut self) -> Result<(), BridgeError> {
+        // The quality profile and the pause policy are independent opt-ins: a
+        // user who enabled only the quality profile must still have it applied
+        // when the power source changes. With the profile off this touches
+        // nothing, so a power transition cannot restate a rate or a scale on a
+        // user who never asked for the feature.
+        if self.state.app_config.quality.battery_profile_enabled {
+            self.apply_quality_profile().await?;
+        }
         if !self.state.app_config.power.pause_on_battery_power {
             self.state.auto_paused_for_battery = false;
             self.state.battery_pause_suppressed = false;
@@ -697,7 +791,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             paths: &self.paths,
             force_shader_refresh: false,
             project_models: &self.state.project_models,
-            native_video_enabled: self.state.app_config.experimental.native_video_backend,
+            native_video_enabled: self.state.app_config.video_backend == VideoBackendModeCfg::NativePreferred,
             native_video_rejected: &self.state.native_video_rejected,
         }
     }
@@ -1045,6 +1139,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         let paused = self.playback_paused();
         let suspended_displays = self.state.suspended_displays.clone();
         let native_video_rejected_snapshot = self.state.native_video_rejected.clone();
+        let quality = self.quality_runtime();
         let paths = self.paths.clone();
         tokio::spawn(async move {
             let result = reconcile_with(
@@ -1057,6 +1152,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                 paths,
                 false,
                 native_video_rejected_snapshot,
+                quality,
             )
             .await;
             let _ = actor
@@ -1100,6 +1196,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             self.paths.clone(),
             false,
             self.state.native_video_rejected.clone(),
+            self.quality_runtime(),
         )
         .await
     }
@@ -1118,6 +1215,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         let actor = ctx.actor_ref().clone();
         let engine = self.engine.clone();
         let native_video_rejected_snapshot = self.state.native_video_rejected.clone();
+        let quality = self.quality_runtime();
         let paths = self.paths.clone();
         ctx.spawn(async move {
             let scenes = match reconcile_with(
@@ -1130,6 +1228,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                 paths,
                 false,
                 native_video_rejected_snapshot,
+                quality,
             )
             .await
             {
@@ -1282,7 +1381,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         let mut candidate_state = self.state.clone();
         candidate_state.app_config = app_config.clone();
         candidate_state
-            .settings(displays, self.launch_at_login.status(), &self.paths)
+            .settings(displays, self.launch_at_login.status(), &self.paths, self.engine.video_pipeline_state())
             .displays
             .into_iter()
             .map(|row| (row.display_id.clone(), row))
@@ -1451,6 +1550,18 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
     }
 }
 
+/// The quality settings a reconcile has to re-assert on the scenes it opens.
+///
+/// A freshly opened scene starts at its descriptor's rate and at native
+/// rasterization size, so without this a wallpaper change would silently
+/// discard the render scale and the active power profile.
+#[derive(Clone, Copy, Debug)]
+struct QualityRuntime {
+    render_scale: f32,
+    target_fps_cap: Option<u32>,
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn reconcile_with<E: EngineFacade>(
     engine: E,
     app_config: AppConfig,
@@ -1461,6 +1572,7 @@ async fn reconcile_with<E: EngineFacade>(
     paths: BridgePaths,
     force_shader_refresh: bool,
     native_video_rejected: NativeVideoRejections,
+    quality: QualityRuntime,
 ) -> Result<Vec<SceneDesc>, BridgeError> {
     let displays = engine.display_snapshot();
     let scenes = ActivationInputs {
@@ -1472,7 +1584,7 @@ async fn reconcile_with<E: EngineFacade>(
         paths: &paths,
         force_shader_refresh,
         project_models: &project_models,
-        native_video_enabled: app_config.experimental.native_video_backend,
+        native_video_enabled: app_config.video_backend == VideoBackendModeCfg::NativePreferred,
         native_video_rejected: &native_video_rejected,
     }
     .build()?;
@@ -1512,6 +1624,23 @@ async fn reconcile_with<E: EngineFacade>(
             .set_audio_capture_enabled(handle, scene.audio_response_enabled)
             .await
             .map_err(|error| BridgeError::engine(error.to_string()))?;
+        // A newly opened scene already rasterizes at native size, so only a
+        // reduced scale has anything to assert here.
+        if quality.render_scale < crate::config::app::MAX_RENDER_SCALE {
+            engine
+                .set_render_scale(handle, quality.render_scale)
+                .await
+                .map_err(|error| BridgeError::engine(error.to_string()))?;
+        }
+        if let Some(cap) = quality.target_fps_cap {
+            let fps = scene.fps.min(cap).max(1);
+            if fps != scene.fps {
+                engine
+                    .set_fps(handle, fps)
+                    .await
+                    .map_err(|error| BridgeError::engine(error.to_string()))?;
+            }
+        }
     }
 
     Ok(scenes)
@@ -1526,6 +1655,23 @@ impl<E: EngineFacade + Clone> Message<Bootstrap> for BridgeActor<E> {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.state.errors.clear();
+
+        // Process-wide renderer switches live in C, not in the config file, so
+        // a persisted opt-in only survives a restart if it is pushed back in
+        // before anything opens.
+        let experimental = self.state.app_config.experimental;
+        if let Err(error) = self
+            .engine
+            .set_content_pacing_enabled(experimental.content_pacing)
+        {
+            self.state.errors.push(error.to_string());
+        }
+        if let Err(error) = self
+            .engine
+            .set_shared_video_decode_enabled(experimental.shared_video_decode)
+        {
+            self.state.errors.push(error.to_string());
+        }
 
         if let Err(error) = self.refresh_displays().await {
             self.state.errors.push(error.message().to_string());
@@ -1629,7 +1775,7 @@ impl<E: EngineFacade + Clone> Message<GetSettingsSnapshot> for BridgeActor<E> {
         let displays = self.engine.display_snapshot();
         Ok(self
             .state
-            .settings(&displays, self.launch_at_login.status(), &self.paths))
+            .settings(&displays, self.launch_at_login.status(), &self.paths, self.engine.video_pipeline_state()))
     }
 }
 
@@ -1689,6 +1835,7 @@ impl<E: EngineFacade + Clone> Message<ClearShaderCache> for BridgeActor<E> {
             self.paths.clone(),
             true,
             self.state.native_video_rejected.clone(),
+            self.quality_runtime(),
         )
         .await;
         self.refresh_mouse_polling_policy();
@@ -1699,7 +1846,7 @@ impl<E: EngineFacade + Clone> Message<ClearShaderCache> for BridgeActor<E> {
         let displays = self.engine.display_snapshot();
         Ok(self
             .state
-            .settings(&displays, self.launch_at_login.status(), &self.paths))
+            .settings(&displays, self.launch_at_login.status(), &self.paths, self.engine.video_pipeline_state()))
     }
 }
 
@@ -2488,21 +2635,21 @@ impl<E: EngineFacade + Clone> Message<SetDisplayPresentationSuspended> for Bridg
     }
 }
 
-impl<E: EngineFacade + Clone> Message<SetNativeVideoBackendEnabled> for BridgeActor<E> {
-    type Reply = messages::SetNativeVideoBackendEnabledReply;
+impl<E: EngineFacade + Clone> Message<SetVideoBackend> for BridgeActor<E> {
+    type Reply = messages::SetVideoBackendReply;
 
     async fn handle(
         &mut self,
-        msg: SetNativeVideoBackendEnabled,
+        msg: SetVideoBackend,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if self.state.app_config.experimental.native_video_backend == msg.enabled {
+        if self.state.app_config.video_backend == msg.mode {
             return Ok(self.all_snapshots());
         }
         let mut app_config = self.state.app_config.clone();
-        app_config.experimental.native_video_backend = msg.enabled;
-        // Turning the backend on or off moves wallpapers between renderers, so
-        // the refusals recorded against the previous setting no longer describe
+        app_config.video_backend = msg.mode;
+        // Changing the backend moves wallpapers between renderers, so the
+        // refusals recorded against the previous setting no longer describe
         // anything: keeping them would permanently exclude a wallpaper that was
         // only ever refused by a configuration the user has since changed.
         self.state.native_video_rejected.clear();
@@ -2517,6 +2664,103 @@ impl<E: EngineFacade + Clone> Message<SetNativeVideoBackendEnabled> for BridgeAc
         }
         self.state.app_config = app_config;
         self.state.set_active_ids_from_scenes(&scenes);
+        Ok(self.all_snapshots())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<SetRenderScale> for BridgeActor<E> {
+    type Reply = messages::SetRenderScaleReply;
+
+    async fn handle(
+        &mut self,
+        msg: SetRenderScale,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let scale = crate::config::clamp_render_scale(msg.scale);
+        self.state.app_config.quality.render_scale = scale;
+        if let Some(store) = &self.config_store {
+            store.save_app_config(&self.state.app_config)?;
+        }
+        // What the user saved is not necessarily what runs: a battery profile
+        // already in force keeps its own scale until the machine leaves
+        // battery power.
+        self.apply_effective_render_scale().await?;
+        self.bump_generation();
+        Ok(self.all_snapshots())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<SetBatteryQualityProfile> for BridgeActor<E> {
+    type Reply = messages::SetBatteryQualityProfileReply;
+
+    async fn handle(
+        &mut self,
+        msg: SetBatteryQualityProfile,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let quality = &mut self.state.app_config.quality;
+        quality.battery_profile_enabled = msg.enabled;
+        quality.battery.render_scale = crate::config::clamp_render_scale(msg.render_scale);
+        quality.battery.target_fps = msg.target_fps.max(1);
+        if let Some(store) = &self.config_store {
+            store.save_app_config(&self.state.app_config)?;
+        }
+        // Turning the profile off has to hand the renderer back the user's own
+        // settings in the same step, or a machine that is on battery right now
+        // stays degraded until it is unplugged and replugged.
+        self.apply_quality_profile().await?;
+        self.bump_generation();
+        Ok(self.all_snapshots())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<SetContentPacingEnabled> for BridgeActor<E> {
+    type Reply = messages::SetContentPacingEnabledReply;
+
+    async fn handle(
+        &mut self,
+        msg: SetContentPacingEnabled,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.state.app_config.experimental.content_pacing = msg.enabled;
+        if let Some(store) = &self.config_store {
+            store.save_app_config(&self.state.app_config)?;
+        }
+        self.engine
+            .set_content_pacing_enabled(msg.enabled)
+            .map_err(|error| BridgeError::engine(error.to_string()))?;
+        self.bump_generation();
+        Ok(self.all_snapshots())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<SetSharedVideoDecodeEnabled> for BridgeActor<E> {
+    type Reply = messages::SetSharedVideoDecodeEnabledReply;
+
+    async fn handle(
+        &mut self,
+        msg: SetSharedVideoDecodeEnabled,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        if self.state.app_config.experimental.shared_video_decode == msg.enabled {
+            return Ok(self.all_snapshots());
+        }
+        self.state.app_config.experimental.shared_video_decode = msg.enabled;
+        if let Some(store) = &self.config_store {
+            store.save_app_config(&self.state.app_config)?;
+        }
+        self.engine
+            .set_shared_video_decode_enabled(msg.enabled)
+            .map_err(|error| BridgeError::engine(error.to_string()))?;
+        // A decoder is chosen when its source is opened, so a wallpaper that is
+        // already running keeps the decoder it started with. Rebuilding the
+        // scene list is what makes the new setting describe what is on screen
+        // rather than only what the next wallpaper change will get.
+        let app_config = self.state.app_config.clone();
+        let wallpaper_configs = self.state.wallpaper_configs.clone();
+        let scenes = self.reconcile_engine(app_config, wallpaper_configs).await?;
+        self.state.set_active_ids_from_scenes(&scenes);
+        self.bump_generation();
         Ok(self.all_snapshots())
     }
 }
@@ -3228,7 +3472,7 @@ impl<E: EngineFacade + Clone> Message<ApplyWallpaperOptions> for BridgeActor<E> 
                         paths: &self.paths,
                         force_shader_refresh: false,
                         project_models: &self.state.project_models,
-                        native_video_enabled: app_config.experimental.native_video_backend,
+                        native_video_enabled: app_config.video_backend == VideoBackendModeCfg::NativePreferred,
                         native_video_rejected: &self.state.native_video_rejected,
                     }
                     .build()
@@ -3243,6 +3487,7 @@ impl<E: EngineFacade + Clone> Message<ApplyWallpaperOptions> for BridgeActor<E> 
             let engine = self.engine.clone();
             let wallpaper_id = msg.wallpaper_id;
             let native_video_rejected_snapshot = self.state.native_video_rejected.clone();
+            let quality = self.quality_runtime();
             let paths = self.paths.clone();
             return ctx.spawn(async move {
                 let scenes = match reconcile_with(
@@ -3255,6 +3500,7 @@ impl<E: EngineFacade + Clone> Message<ApplyWallpaperOptions> for BridgeActor<E> 
                     paths,
                     false,
                     native_video_rejected_snapshot,
+                    quality,
                 )
                 .await
                 {

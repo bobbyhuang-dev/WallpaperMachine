@@ -5,6 +5,8 @@
 #include "SceneWallpaper.hpp"
 #include "SceneWallpaperSurface.hpp"
 #include "Utils/Logging.h"
+#include "Video/SharedVideoSession.hpp"
+#include "Video/VideoFramePacing.hpp"
 
 #import <QuartzCore/CAMetalLayer.h>
 
@@ -409,6 +411,18 @@ extern "C" int owe_scene_wallpaper_set_paused(owe_scene_wallpaper* scene, bool p
     return 0;
 }
 
+extern "C" int owe_scene_wallpaper_set_render_scale(owe_scene_wallpaper* scene, double scale)
+{
+    clear_last_error();
+    if (!valid_scene(scene)) return finish_with_error("scene must not be null");
+    if (!std::isfinite(scale) || scale <= 0.0) {
+        return finish_with_error("render scale must be a positive finite value");
+    }
+
+    scene->scene.setPropertyFloat(wallpaper::PROPERTY_RENDER_SCALE, static_cast<float>(scale));
+    return 0;
+}
+
 extern "C" int owe_scene_wallpaper_set_first_frame_callback(
     owe_scene_wallpaper* scene,
     owe_first_frame_callback callback,
@@ -655,6 +669,36 @@ extern "C" const char* owe_property_project_property_override_json(void)
 extern "C" const char* owe_property_project_property_reset(void)
 {
     return property_name(wallpaper::PROPERTY_PROJECT_PROPERTY_RESET);
+}
+
+extern "C" void owe_set_content_pacing_enabled(bool enabled)
+{
+    wallpaper::video::SetContentPacingEnabled(enabled);
+}
+
+extern "C" bool owe_content_pacing_enabled(void)
+{
+    return wallpaper::video::ContentPacingEnabled();
+}
+
+extern "C" void owe_set_shared_video_decode_enabled(bool enabled)
+{
+    wallpaper::video::SetSharedVideoDecodeEnabled(enabled);
+}
+
+extern "C" bool owe_shared_video_decode_enabled(void)
+{
+    return wallpaper::video::SharedVideoDecodeEnabled();
+}
+
+extern "C" uint32_t owe_shared_video_decode_session_count(void)
+{
+    return wallpaper::video::SharedVideoDecodeSessionCount();
+}
+
+extern "C" uint32_t owe_shared_video_decode_consumer_count(void)
+{
+    return wallpaper::video::SharedVideoDecodeConsumerCount();
 }
 
 extern "C" int owe_audio_submit_mono_frames(

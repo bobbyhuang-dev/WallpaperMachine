@@ -219,16 +219,34 @@ extension WebPanelController {
           wallpaperId: id, propertyId: propertyID, value: .string(value: url.path))
       }
     case "setting":
-      let value = try request.boolean("value")
-      switch try request.string("key") {
-      case "launchAtLogin": try await store.setLaunchAtLoginAsync(enabled: value)
-      case "pauseOnBattery": try await store.setPauseOnBatteryPowerAsync(enabled: value)
-      case "keepWindowsOnWallpaperClick": try DesktopClickRevealPreference.setEnabled(!value)
+      let key = try request.string("key")
+      switch key {
+      case "launchAtLogin":
+        try await store.setLaunchAtLoginAsync(enabled: try request.boolean("value"))
+      case "pauseOnBattery":
+        try await store.setPauseOnBatteryPowerAsync(enabled: try request.boolean("value"))
+      case "keepWindowsOnWallpaperClick":
+        try DesktopClickRevealPreference.setEnabled(!(try request.boolean("value")))
       case "lockScreenEnabled":
         guard let lock = store.lockScreenWallpaper else {
           throw WallpaperActionError(message: "Lock Screen integration is unavailable.")
         }
-        lock.setEnabled(value)
+        lock.setEnabled(try request.boolean("value"))
+      case "videoBackend":
+        let mode = try request.string("value")
+        // Refuse an unknown mode instead of falling back: silently substituting
+        // Compatibility would leave the page reporting a choice never applied.
+        guard Self.videoBackendModes.contains(mode) else { throw WebPanelRequest.invalid }
+        try await store.setVideoBackendAsync(mode)
+      case "renderScale":
+        try await store.setRenderScaleAsync(
+          Float(try request.clampedNumber("value", to: Self.renderScaleRange)))
+      case "contentPacing":
+        try await store.setContentPacingEnabledAsync(try request.boolean("value"))
+      case "sharedVideoDecode":
+        try await store.setSharedVideoDecodeEnabledAsync(try request.boolean("value"))
+      case "batteryProfileEnabled", "batteryRenderScale", "batteryTargetFps":
+        try await setBatteryQualityProfile(key: key, request: request)
       default: throw WebPanelRequest.invalid
       }
     case "lockScreenRetry": store.lockScreenWallpaper?.refresh()
@@ -603,6 +621,29 @@ extension WebPanelController {
     }
   }
 
+  static let videoBackendModes = ["compatibility", "native_preferred"]
+  static let renderScaleRange: ClosedRange<Double> = 0.25...1
+  static let batteryTargetFpsRange: ClosedRange<Double> = 1...240
+
+  /// The engine owns the battery profile as one value, so a single changed control
+  /// is merged with the other two as the engine currently reports them.
+  func setBatteryQualityProfile(key: String, request: WebPanelRequest) async throws {
+    let settings = store.settingsSnapshot
+    var enabled = settings.batteryProfileEnabled
+    var scale = settings.batteryRenderScale
+    var fps = settings.batteryTargetFps
+    switch key {
+    case "batteryProfileEnabled": enabled = try request.boolean("value")
+    case "batteryRenderScale":
+      scale = Float(try request.clampedNumber("value", to: Self.renderScaleRange))
+    case "batteryTargetFps":
+      fps = UInt32(try request.clampedNumber("value", to: Self.batteryTargetFpsRange).rounded())
+    default: throw WebPanelRequest.invalid
+    }
+    try await store.setBatteryQualityProfileAsync(
+      enabled: enabled, renderScale: scale, targetFps: fps)
+  }
+
   func confirm(_ title: String, detail: String, button: String) async -> Bool {
     guard let window = webView?.window else { return false }
     let alert = NSAlert()
@@ -650,6 +691,15 @@ struct WebPanelRequest {
       value.doubleValue.isFinite, range.contains(value.doubleValue)
     else { throw Self.invalid }
     return value.doubleValue
+  }
+  /// Quality values are clamped rather than refused: every control only offers
+  /// values inside the range, so an outlier means a stale page, and the user's
+  /// intent (the nearest supported quality) is still unambiguous.
+  func clampedNumber(_ key: String, to range: ClosedRange<Double>) throws -> Double {
+    guard let value = body[key] as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(),
+      value.doubleValue.isFinite
+    else { throw Self.invalid }
+    return min(max(value.doubleValue, range.lowerBound), range.upperBound)
   }
   func scaling() throws -> BridgeScalingMode {
     switch try string("value") {

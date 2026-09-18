@@ -16,7 +16,8 @@ pub use types::{
     BridgeMonitorInformationSnapshot, BridgePlaybackState, BridgePropertyDescriptor,
     BridgePropertyKind, BridgePropertyValue, BridgeRendererCountersReport,
     BridgeRendererSurfaceCounters, BridgeScalingMode, BridgeSettingsSnapshot,
-    BridgeSliderMetadata, BridgeSnapshotBundle, BridgeStorageStatus, BridgeWallpaperEntry,
+    BridgeSliderMetadata, BridgeSnapshotBundle, BridgeStorageStatus, BridgeVideoBackendReport,
+    BridgeWallpaperEntry,
     BridgeWallpaperKind, BridgeWallpaperMutationBundle, BridgeWallpaperOptionsSnapshot,
     BridgeWebWallpaper,
 };
@@ -49,14 +50,14 @@ use crate::{
             SetDisplayPresentationSuspended,
             SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMirrorMuted, SetMirrorScalingFactor,
             SetMirrorScalingMode, SetMirrorTarget, SetMirrorTargetFps, SetMirrorVolume, SetMuted,
-            SetNativeVideoBackendEnabled, SetPauseOnBatteryPower, SetPresentationSuspended,
-            SetRendererCountersEnabled,
-            SetScalingFactor, SetScalingMode,
-            SetTargetFps, SetVolume, Shutdown,
+            SetBatteryQualityProfile, SetContentPacingEnabled,
+            SetPauseOnBatteryPower, SetPresentationSuspended, SetRenderScale,
+            SetRendererCountersEnabled, SetScalingFactor, SetScalingMode,
+            SetSharedVideoDecodeEnabled, SetTargetFps, SetVideoBackend, SetVolume, Shutdown,
         },
         state::BridgeActorState,
     },
-    config::ConfigStore,
+    config::{ConfigStore, VideoBackendModeCfg},
     engine::{EngineFacade, RealEngineFacade},
     login::LaunchAtLoginController,
     paths::BridgePaths,
@@ -445,6 +446,24 @@ impl EngineFacade for ArcEngineFacade {
         self.0.set_renderer_counters_enabled(enabled)
     }
 
+    fn set_content_pacing_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<(), wallpaper_core::EngineError> {
+        self.0.set_content_pacing_enabled(enabled)
+    }
+
+    fn set_shared_video_decode_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<(), wallpaper_core::EngineError> {
+        self.0.set_shared_video_decode_enabled(enabled)
+    }
+
+    fn video_pipeline_state(&self) -> crate::engine::RendererVideoPipelineState {
+        self.0.video_pipeline_state()
+    }
+
     fn renderer_counters(
         &self,
     ) -> Pin<
@@ -524,6 +543,14 @@ impl EngineFacade for ArcEngineFacade {
         fps: u32,
     ) -> Pin<Box<dyn Future<Output = Result<(), wallpaper_core::EngineError>> + Send>> {
         self.0.set_fps(handle, fps)
+    }
+
+    fn set_render_scale(
+        &self,
+        handle: SceneHandle,
+        scale: f32,
+    ) -> Pin<Box<dyn Future<Output = Result<(), wallpaper_core::EngineError>> + Send>> {
+        self.0.set_render_scale(handle, scale)
     }
 
     fn poll_mouse_position(
@@ -1097,12 +1124,37 @@ impl WallpaperBridge {
         self.actor.ask(RendererCounters).await
     }
 
-    /// Turns the experimental native video backend on or off.
+    /// Chooses which renderer plays plain local videos.
     ///
-    /// Off by default. While it is on, a plain local video whose project and
-    /// options fall inside the supported subset is played by the platform
-    /// player and is no longer given to the scene engine at all; everything
-    /// else, and anything the host refuses, stays on the scene engine.
+    /// `"compatibility"` keeps everything on the scene engine, which supports
+    /// every wallpaper. `"native_preferred"` hands a video to the platform
+    /// player where its project and options fall inside the supported subset;
+    /// everything else, and anything the host refuses, stays on the scene
+    /// engine. The snapshot's `video_backends` reports what each display
+    /// actually got.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `mode` is not one of the two names, or when the
+    /// scene list cannot be rebuilt for the new routing, in which case the
+    /// previous backend keeps running.
+    pub async fn set_video_backend(
+        &self,
+        mode: String,
+    ) -> Result<BridgeSnapshotBundle, BridgeError> {
+        let mode = match mode.as_str() {
+            "compatibility" => VideoBackendModeCfg::Compatibility,
+            "native_preferred" => VideoBackendModeCfg::NativePreferred,
+            other => {
+                return Err(BridgeError::invalid_input(format!(
+                    "unknown video backend mode {other}"
+                )));
+            }
+        };
+        self.actor.ask(SetVideoBackend { mode }).await
+    }
+
+    /// Turns the experimental native video backend on or off.
     ///
     /// # Errors
     ///
@@ -1112,7 +1164,87 @@ impl WallpaperBridge {
         &self,
         enabled: bool,
     ) -> Result<BridgeSnapshotBundle, BridgeError> {
-        self.actor.ask(SetNativeVideoBackendEnabled { enabled }).await
+        let mode = if enabled {
+            VideoBackendModeCfg::NativePreferred
+        } else {
+            VideoBackendModeCfg::Compatibility
+        };
+        self.actor.ask(SetVideoBackend { mode }).await
+    }
+
+    /// Sets the internal rasterization scale the user prefers.
+    ///
+    /// Clamped to the range the renderer honours. This is a preference: while
+    /// a power profile is in force the running scale is that profile's, and
+    /// the snapshot reports both.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the preference cannot be saved or a running
+    /// scene rejects the new scale.
+    pub async fn set_render_scale(
+        &self,
+        scale: f32,
+    ) -> Result<BridgeSnapshotBundle, BridgeError> {
+        self.actor.ask(SetRenderScale { scale }).await
+    }
+
+    /// Sets the quality profile used while the machine is on battery power.
+    ///
+    /// Disabling it restores the user's saved render scale and per-display
+    /// target rates immediately, rather than waiting for the next power
+    /// transition. It never changes playback, so a pause the user asked for
+    /// survives.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the profile cannot be saved or a running scene
+    /// rejects the resulting scale or rate.
+    pub async fn set_battery_quality_profile(
+        &self,
+        enabled: bool,
+        render_scale: f32,
+        target_fps: u32,
+    ) -> Result<BridgeSnapshotBundle, BridgeError> {
+        self.actor
+            .ask(SetBatteryQualityProfile {
+                enabled,
+                render_scale,
+                target_fps,
+            })
+            .await
+    }
+
+    /// Turns content pacing on or off for the renderer process.
+    ///
+    /// Off by default.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the setting cannot be saved or the renderer
+    /// rejects the call.
+    pub async fn set_content_pacing_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<BridgeSnapshotBundle, BridgeError> {
+        self.actor.ask(SetContentPacingEnabled { enabled }).await
+    }
+
+    /// Turns shared video decoding on or off for the renderer process.
+    ///
+    /// Off by default. Turning it on permits sharing; it does not by itself
+    /// mean any decode is shared. The snapshot's session and consumer counts
+    /// are where that shows up.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the setting cannot be saved or the renderer
+    /// rejects the call.
+    pub async fn set_shared_video_decode_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<BridgeSnapshotBundle, BridgeError> {
+        self.actor.ask(SetSharedVideoDecodeEnabled { enabled }).await
     }
 
     /// Plain local videos the host should play natively. Empty while the

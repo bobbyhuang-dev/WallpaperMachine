@@ -64,7 +64,7 @@ impl ConfigStore {
         };
 
         match toml::from_str::<AppConfig>(&raw) {
-            Ok(config) => {
+            Ok(mut config) => {
                 if config.schema_version > app::SCHEMA_VERSION {
                     return Err(config_error(format!(
                         "config schema version {} is newer than supported version {}",
@@ -72,6 +72,7 @@ impl ConfigStore {
                         app::SCHEMA_VERSION
                     )));
                 }
+                config.migrate_legacy_keys();
 
                 Ok(ConfigLoad {
                     config,
@@ -202,5 +203,49 @@ impl From<std::io::Error> for BridgeError {
             kind: BridgeErrorKind::Io,
             message: error.to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConfigStore;
+    use crate::config::VideoBackendModeCfg;
+
+    fn load_config(contents: &str) -> crate::config::AppConfig {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("config.toml"), contents).unwrap();
+        ConfigStore::open(root.path().to_path_buf())
+            .load()
+            .expect("config load")
+            .config
+    }
+
+    #[test]
+    fn legacy_native_video_opt_in_becomes_native_preferred() {
+        let config = load_config("[experimental]\nnative_video_backend = true\n");
+
+        assert_eq!(config.video_backend, VideoBackendModeCfg::NativePreferred);
+    }
+
+    #[test]
+    fn config_without_the_legacy_opt_in_stays_on_compatibility() {
+        let config = load_config("[experimental]\n");
+
+        assert_eq!(config.video_backend, VideoBackendModeCfg::Compatibility);
+    }
+
+    #[test]
+    fn migrated_config_no_longer_writes_the_legacy_key() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.toml");
+        std::fs::write(&path, "[experimental]\nnative_video_backend = true\n").unwrap();
+        let store = ConfigStore::open(root.path().to_path_buf());
+        let config = store.load().expect("config load").config;
+
+        store.save_app_config(&config).expect("config save");
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("native_video_backend"), "{written}");
+        assert!(written.contains("video_backend = \"native_preferred\""), "{written}");
     }
 }

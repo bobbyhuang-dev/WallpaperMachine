@@ -24,6 +24,9 @@ constexpr std::string_view PROPERTY_FPS                       = "fps";
 constexpr std::string_view PROPERTY_FILLMODE                  = "fillmode";
 constexpr std::string_view PROPERTY_SCALINGMODE               = "scalingmode";
 constexpr std::string_view PROPERTY_SCALINGFACTOR             = "scalingfactor";
+/// Internal rasterization scale in (0,1]. Distinct from PROPERTY_SCALINGFACTOR,
+/// which scales the presented image on the output.
+constexpr std::string_view PROPERTY_RENDER_SCALE              = "render_scale";
 constexpr std::string_view PROPERTY_HORIZONTAL_FLIP            = "horizontal_flip";
 constexpr std::string_view PROPERTY_SPEED                     = "speed";
 constexpr std::string_view PROPERTY_GRAPHIVZ                  = "graphivz";

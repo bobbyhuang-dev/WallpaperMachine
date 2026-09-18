@@ -7,6 +7,7 @@
 
 #include "Image.hpp"
 #include "Platform/Apple/FfmpegVideoInterop.hpp"
+#include "Video/SharedVideoSession.hpp"
 #include "Core/MapSet.hpp"
 #include "Core/ArrayHelper.hpp"
 #include "Utils/AutoDeletor.hpp"
@@ -779,7 +780,12 @@ ImageSlotsRef TextureCache::CreateTex(Image& image, TextureUploadSynchronization
         }
 
         std::string error;
-        auto        source = video::CreateVideoTextureSource(image, &error);
+        // Goes through the registry rather than straight to the factory: when
+        // shared decode is on and another surface already has this media open,
+        // this returns a consumer handle onto that running decoder instead of
+        // starting a second one. With sharing off it is a private source, as
+        // before.
+        auto source = video::AcquireVideoTextureSource(image, &error);
         if (! source) {
             LOG_ERROR("failed to create FFmpeg video texture source for \"%s\": %s",
                       image.key.c_str(),
@@ -1527,6 +1533,27 @@ bool TextureCache::Clear(std::string* error) {
     m_query_texs.clear();
     m_query_map.clear();
     m_video_recycling_disabled = false;
+    return true;
+}
+
+/// Drops only the render-target textures, keeping uploaded images and live
+/// video sources.
+///
+/// This is what makes an internal render-scale change cheap: render targets are
+/// the only textures whose size depends on the scale, so evicting them alone
+/// avoids re-uploading every wallpaper image and, more importantly, avoids
+/// destroying the decoders in `m_video_tex_map` — which would reopen the file
+/// and restart playback for what the user experiences as a quality slider.
+bool TextureCache::ClearRenderTargets(std::string* error) {
+    if (m_device_lost) {
+        return SetError(error, "cannot clear render targets after device loss");
+    }
+    if (m_video_frame_state != VideoFrameState::Idle) {
+        return SetError(error, "cannot clear render targets before video frame retirement");
+    }
+    if (! WaitForPendingUploads(error)) return false;
+    m_query_map.clear();
+    m_query_texs.clear();
     return true;
 }
 

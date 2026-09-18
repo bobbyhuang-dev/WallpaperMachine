@@ -43,6 +43,10 @@ public:
 
     bool clearLastRenderGraph();
     bool compileRenderGraph(Scene&, rg::RenderGraph&);
+    /// Applies a new internal rasterization scale to an already compiled graph.
+    /// Keeps the parsed scene, the render graph, uploaded images and live video
+    /// decoders; only render targets and the passes that attach them are rebuilt.
+    bool ApplyRenderScale(Scene&, rg::RenderGraph&, double scale);
     void UpdateCameraFillMode(Scene&, wallpaper::FillMode);
     void SetWallpaperScalingMode(wallpaper::WallpaperScalingMode);
     void SetWallpaperScalingFactor(double);

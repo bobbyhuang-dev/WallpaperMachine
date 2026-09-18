@@ -285,6 +285,16 @@ double FramePtsSeconds(const AVFrame* frame, AVRational time_base, double fallba
 
 class FfmpegVideoTextureSource::Impl {
 public:
+    /// Opens the decoder on a media file directly. The path has already been
+    /// resolved and validated by whoever opened the first decoder on it.
+    explicit Impl(std::string media_path)
+        : m_debug_label(media_path), m_media_path(std::move(media_path))
+    {
+        if (m_media_path.empty()) {
+            m_initial_error = "video media path must not be empty";
+        }
+    }
+
     explicit Impl(const Image& image)
         : m_debug_label(image.key)
     {
@@ -464,6 +474,18 @@ public:
         std::lock_guard lock(m_mutex);
         if (!m_display_frame_ready) return {};
         return m_display_frame.frame;
+    }
+
+    [[nodiscard]] bool retainCurrentFrame(VideoTextureFrame* out) const
+    {
+        if (out == nullptr) return false;
+        // Retaining inside the lock is the whole point: promotion releases the
+        // previous display frame under this same lock, so a reader that has the
+        // lock cannot have its frame freed underneath it.
+        std::lock_guard lock(m_mutex);
+        if (!m_display_frame_ready) return false;
+        RetainAppleVideoFrame(m_display_frame.frame, out);
+        return true;
     }
 
     [[nodiscard]] double durationSeconds() const
@@ -1106,6 +1128,11 @@ FfmpegVideoTextureSource::FfmpegVideoTextureSource(const Image& image)
 {
 }
 
+FfmpegVideoTextureSource::FfmpegVideoTextureSource(std::string media_path)
+    : m_impl(std::make_unique<Impl>(std::move(media_path)))
+{
+}
+
 FfmpegVideoTextureSource::~FfmpegVideoTextureSource() = default;
 
 bool FfmpegVideoTextureSource::prime(std::string* error)
@@ -1126,6 +1153,11 @@ bool FfmpegVideoTextureSource::refreshFrame(std::string* error)
 VideoTextureFrame FfmpegVideoTextureSource::currentFrame() const
 {
     return m_impl->currentFrame();
+}
+
+bool FfmpegVideoTextureSource::retainCurrentFrame(VideoTextureFrame* out) const
+{
+    return m_impl->retainCurrentFrame(out);
 }
 
 double FfmpegVideoTextureSource::durationSeconds() const

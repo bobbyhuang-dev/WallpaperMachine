@@ -93,6 +93,7 @@ add_library(
   Video/VideoConversionBudget.cpp
   Video/VideoDecodePump.cpp
   Video/VideoFramePacing.cpp
+  Video/SharedVideoSession.cpp
   ${PLATFORM_APPLE_SOURCES}
   SceneSourceResolver.cpp
   Scene/SceneWallpaper.cpp)

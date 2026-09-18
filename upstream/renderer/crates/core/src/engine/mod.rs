@@ -475,6 +475,32 @@ impl WallpaperEngine {
         self.ask_actor(messages::SetFps { handle, fps }).await
     }
 
+    /// Live-updates the internal rasterization scale for one scene.
+    ///
+    /// `scale` is the fraction of the surface's native pixel grid the scene is
+    /// rasterized at, in `(0, 1]`; the renderer clamps it to the range it can
+    /// honour. Unlike [`Self::set_render_resolution`] this resizes render
+    /// targets in place: the project is not reparsed and video is not
+    /// reopened.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `scale` is not finite or not positive, actor
+    /// communication fails, or the renderer cannot resize.
+    pub async fn set_render_scale(&self, handle: SceneHandle, scale: f32) -> Result<(), EngineError> {
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err(EngineError::InvalidInput(
+                "render scale must be finite and greater than zero".to_string(),
+            ));
+        }
+
+        self.ask_actor(messages::SetRenderScale {
+            handle,
+            scale: f64::from(scale),
+        })
+        .await
+    }
+
     /// Live-updates the paused state for one open scene.
     ///
     /// # Errors
@@ -506,6 +532,61 @@ impl WallpaperEngine {
     /// Returns an error if the renderer rejects the call.
     pub fn set_renderer_counters_enabled(&self, enabled: bool) -> Result<(), EngineError> {
         self.backend.set_counters_enabled(enabled)
+    }
+
+    /// Turns content pacing on or off for the whole process.
+    ///
+    /// Off by default. With it on the renderer produces content at the target
+    /// rate instead of once per display refresh.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the renderer rejects the call.
+    pub fn set_content_pacing_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        self.backend.set_content_pacing_enabled(enabled)
+    }
+
+    /// Whether the renderer process currently has content pacing on.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the renderer rejects the call.
+    pub fn content_pacing_enabled(&self) -> Result<bool, EngineError> {
+        self.backend.content_pacing_enabled()
+    }
+
+    /// Turns shared video decoding on or off for the whole process.
+    ///
+    /// Off by default. With it on, surfaces showing the same video source can
+    /// consume one decoder instance instead of one each.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the renderer rejects the call.
+    pub fn set_shared_video_decode_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        self.backend.set_shared_video_decode_enabled(enabled)
+    }
+
+    /// Whether the renderer process currently has shared video decoding on.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the renderer rejects the call.
+    pub fn shared_video_decode_enabled(&self) -> Result<bool, EngineError> {
+        self.backend.shared_video_decode_enabled()
+    }
+
+    /// Live decode sessions and the number of surfaces consuming them.
+    ///
+    /// A session is one running decoder instance, not one file: two decoders
+    /// of the same clip count as two. Sharing is visible as consumers
+    /// exceeding sessions, and is not implied by the setting being on.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the renderer rejects either call.
+    pub fn shared_video_decode_counts(&self) -> Result<(u32, u32), EngineError> {
+        self.backend.shared_video_decode_counts()
     }
 
     /// Reads renderer work counters for every open scene, plus the process-wide

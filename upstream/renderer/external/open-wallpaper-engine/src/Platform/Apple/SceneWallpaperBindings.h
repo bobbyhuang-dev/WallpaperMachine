@@ -86,6 +86,22 @@ int owe_scene_wallpaper_set_target_fps(owe_scene_wallpaper* scene, uint32_t fps)
 /* Direct SceneWallpaper::setPaused forwarding for live playback control. */
 int owe_scene_wallpaper_set_paused(owe_scene_wallpaper* scene, bool paused);
 
+/*
+ * Sets the internal rasterization scale in (0, 1]; values outside are clamped
+ * to [0.25, 1.0]. 1.0 renders at the author's canvas size.
+ *
+ * This is not a window or presentation scale: output size, fit/fill, user zoom,
+ * crop and cursor mapping are unchanged, and only the number of pixels the
+ * scene is rasterized with differs. Applied live — the project is not reparsed,
+ * uploaded images are kept and video decoders keep playing.
+ *
+ * Plain-video wallpapers ignore it: their one render target holds a frame that
+ * was already decoded at its own resolution.
+ *
+ * Returns 0 on success, non-zero on failure.
+ */
+int owe_scene_wallpaper_set_render_scale(owe_scene_wallpaper* scene, double scale);
+
 /* Direct first-frame notification forwarding from SceneWallpaper. */
 int owe_scene_wallpaper_set_first_frame_callback(owe_scene_wallpaper* scene,
                                                  owe_first_frame_callback callback,
@@ -152,6 +168,31 @@ const char* owe_property_media_integration_enabled(void);
 const char* owe_property_force_shader_refresh(void);
 const char* owe_property_project_property_override_json(void);
 const char* owe_property_project_property_reset(void);
+
+/*
+ * Process-wide playback options, applied to every renderer scene.
+ *
+ * `content_pacing` is the experimental content-demand frame scheduler; it stays
+ * off unless explicitly enabled. Setting these replaces the corresponding
+ * environment-variable overrides for new scenes and takes effect on the next
+ * scene that reads them.
+ */
+void owe_set_content_pacing_enabled(bool enabled);
+bool owe_content_pacing_enabled(void);
+
+/*
+ * Shared video decode: one decoder instance serving several display surfaces
+ * that show equivalent video content. Off by default.
+ *
+ * The counts describe live sharing right now: `session_count` is the number of
+ * distinct decoder instances currently held by the registry, and
+ * `consumer_count` is the number of surfaces consuming them. Equal counts mean
+ * nothing is actually being shared.
+ */
+void owe_set_shared_video_decode_enabled(bool enabled);
+bool owe_shared_video_decode_enabled(void);
+uint32_t owe_shared_video_decode_session_count(void);
+uint32_t owe_shared_video_decode_consumer_count(void);
 
 /* Audio-response sample submission shared by all renderer scenes. */
 int owe_audio_submit_mono_frames(uint32_t sample_rate, uint32_t frame_count,

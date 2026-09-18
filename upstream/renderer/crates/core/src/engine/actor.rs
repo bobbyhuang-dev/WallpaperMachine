@@ -233,6 +233,14 @@ impl EngineActor {
         self.with_scene_mut(handle, |scene| scene.set_fps(fps))
     }
 
+    pub fn set_render_scale(
+        &mut self,
+        handle: SceneHandle,
+        scale: f64,
+    ) -> Result<(), EngineError> {
+        self.with_scene_mut(handle, |scene| scene.set_render_scale(scale))
+    }
+
     pub fn set_paused(&mut self, handle: SceneHandle, paused: bool) -> Result<(), EngineError> {
         self.with_scene_mut(handle, |scene| scene.set_paused(paused))
     }
@@ -719,6 +727,18 @@ impl Message<messages::SetFps> for EngineActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.with_snapshot_update(|actor| actor.set_fps(msg.handle, msg.fps))
+    }
+}
+
+impl Message<messages::SetRenderScale> for EngineActor {
+    type Reply = Result<(), EngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: messages::SetRenderScale,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.with_snapshot_update(|actor| actor.set_render_scale(msg.handle, msg.scale))
     }
 }
 

@@ -25,6 +25,21 @@ use wallpaper_core::{
 
 pub type EngineFuture<T> = BoxFuture<'static, Result<T, EngineError>>;
 
+/// What the renderer process actually has switched on, and what its video
+/// decode is actually doing, right now.
+///
+/// Read back from the renderer rather than inferred from the config: a
+/// persisted preference is what the user asked for, this is what is running.
+/// A session is one live decoder instance, not one file; sharing shows up as
+/// consumers exceeding sessions and is never implied by the setting alone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RendererVideoPipelineState {
+    pub content_pacing_enabled: bool,
+    pub shared_video_decode_enabled: bool,
+    pub shared_video_decode_sessions: u32,
+    pub shared_video_decode_consumers: u32,
+}
+
 pub trait EngineFacade: Send + Sync + 'static {
     fn reconcile_scenes(&self, scenes: Vec<SceneDesc>) -> EngineFuture<Vec<SceneResult>>;
     fn refresh_displays(&self) -> EngineFuture<()>;
@@ -44,6 +59,9 @@ pub trait EngineFacade: Send + Sync + 'static {
     fn set_scaling_mode(&self, handle: SceneHandle, mode: ScalingMode) -> EngineFuture<()>;
     fn set_scaling_factor(&self, handle: SceneHandle, factor: f64) -> EngineFuture<()>;
     fn set_fps(&self, handle: SceneHandle, fps: u32) -> EngineFuture<()>;
+    /// Live-updates one scene's internal rasterization scale. Resizes render
+    /// targets in place; it must not reparse the project or reopen video.
+    fn set_render_scale(&self, handle: SceneHandle, scale: f32) -> EngineFuture<()>;
     fn poll_mouse_position(&self) -> EngineFuture<()>;
     fn set_mouse_position(&self, handle: SceneHandle, x: f64, y: f64) -> EngineFuture<()>;
     fn set_mouse_button(&self, handle: SceneHandle, button: u32, pressed: bool)
@@ -79,6 +97,29 @@ pub trait EngineFacade: Send + Sync + 'static {
     /// belong to no single surface.
     fn renderer_counters(&self) -> EngineFuture<(Vec<RendererSurfaceCounters>, Vec<u64>)> {
         async move { Ok((Vec::new(), Vec::new())) }.boxed()
+    }
+    /// Turns content pacing on or off for the whole process. Off by default.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the renderer rejects the call.
+    fn set_content_pacing_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        let _ = enabled;
+        Ok(())
+    }
+    /// Turns shared video decoding on or off for the whole process. Off by
+    /// default.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the renderer rejects the call.
+    fn set_shared_video_decode_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        let _ = enabled;
+        Ok(())
+    }
+    /// What the renderer has switched on and what its decode is doing now.
+    fn video_pipeline_state(&self) -> RendererVideoPipelineState {
+        RendererVideoPipelineState::default()
     }
 }
 
@@ -202,6 +243,30 @@ impl EngineFacade for RealEngineFacade {
         .boxed()
     }
 
+    fn set_content_pacing_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        self.engine.set_content_pacing_enabled(enabled)
+    }
+
+    fn set_shared_video_decode_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        self.engine.set_shared_video_decode_enabled(enabled)
+    }
+
+    fn video_pipeline_state(&self) -> RendererVideoPipelineState {
+        // A renderer that cannot answer is reported as off with nothing
+        // running, which is what "not observed" has to look like here: the
+        // alternative is showing the persisted preference as if it were live.
+        let (sessions, consumers) = self.engine.shared_video_decode_counts().unwrap_or((0, 0));
+        RendererVideoPipelineState {
+            content_pacing_enabled: self.engine.content_pacing_enabled().unwrap_or(false),
+            shared_video_decode_enabled: self
+                .engine
+                .shared_video_decode_enabled()
+                .unwrap_or(false),
+            shared_video_decode_sessions: sessions,
+            shared_video_decode_consumers: consumers,
+        }
+    }
+
     fn set_renderer_counters_enabled(&self, enabled: bool) -> Result<(), EngineError> {
         self.engine.set_renderer_counters_enabled(enabled)
     }
@@ -286,6 +351,11 @@ impl EngineFacade for RealEngineFacade {
     fn set_fps(&self, handle: SceneHandle, fps: u32) -> EngineFuture<()> {
         let engine = self.engine.clone();
         async move { engine.set_fps(handle, fps).await }.boxed()
+    }
+
+    fn set_render_scale(&self, handle: SceneHandle, scale: f32) -> EngineFuture<()> {
+        let engine = self.engine.clone();
+        async move { engine.set_render_scale(handle, scale).await }.boxed()
     }
 
     fn poll_mouse_position(&self) -> EngineFuture<()> {
@@ -501,6 +571,10 @@ pub struct FakeEngineFacade {
     scaling_mode_calls: Arc<ArcSwap<Vec<(SceneHandle, ScalingMode)>>>,
     scaling_factor_calls: Arc<ArcSwap<Vec<(SceneHandle, f64)>>>,
     fps_calls: Arc<ArcSwap<Vec<(SceneHandle, u32)>>>,
+    render_scale_calls: Arc<ArcSwap<Vec<(SceneHandle, f32)>>>,
+    content_pacing_enabled: Arc<ArcSwap<bool>>,
+    shared_video_decode_enabled: Arc<ArcSwap<bool>>,
+    shared_video_decode_counts: Arc<ArcSwap<(u32, u32)>>,
     mouse_poll_calls: Arc<ArcSwap<Vec<()>>>,
     mouse_poll_block: Arc<SegQueue<ReconcileBlockGate>>,
     mouse_input: Arc<ArcSwap<(f64, f64)>>,
@@ -688,6 +762,17 @@ impl FakeEngineFacade {
     #[must_use]
     pub fn fps_calls(&self) -> Vec<(SceneHandle, u32)> {
         load_log(&self.fps_calls)
+    }
+
+    #[must_use]
+    pub fn render_scale_calls(&self) -> Vec<(SceneHandle, f32)> {
+        load_log(&self.render_scale_calls)
+    }
+
+    /// Decode counts the next [`EngineFacade::video_pipeline_state`] reports.
+    pub fn set_shared_video_decode_counts(&self, sessions: u32, consumers: u32) {
+        self.shared_video_decode_counts
+            .store(Arc::new((sessions, consumers)));
     }
 
     #[must_use]
@@ -1128,6 +1213,35 @@ impl EngineFacade for FakeEngineFacade {
             Ok(())
         }
         .boxed()
+    }
+
+    fn set_render_scale(&self, handle: SceneHandle, scale: f32) -> EngineFuture<()> {
+        let fake = self.clone();
+        async move {
+            push_log(&fake.render_scale_calls, (handle, scale));
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn set_content_pacing_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        self.content_pacing_enabled.store(Arc::new(enabled));
+        Ok(())
+    }
+
+    fn set_shared_video_decode_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        self.shared_video_decode_enabled.store(Arc::new(enabled));
+        Ok(())
+    }
+
+    fn video_pipeline_state(&self) -> RendererVideoPipelineState {
+        let (sessions, consumers) = **self.shared_video_decode_counts.load();
+        RendererVideoPipelineState {
+            content_pacing_enabled: **self.content_pacing_enabled.load(),
+            shared_video_decode_enabled: **self.shared_video_decode_enabled.load(),
+            shared_video_decode_sessions: sessions,
+            shared_video_decode_consumers: consumers,
+        }
     }
 
     fn poll_mouse_position(&self) -> EngineFuture<()> {

@@ -404,6 +404,35 @@ gtest_discover_tests(
     DISCOVERY_TIMEOUT 60
 )
 
+# One decoder serving several surfaces. Driven against media the test encodes,
+# for the same reason as video_source_input_test: the thing under test is the
+# real decoder's lifetime and frame ownership, which a fake source cannot show.
+add_executable(shared_video_session_test shared_video_session_test.cpp)
+target_link_libraries(shared_video_session_test PRIVATE ${PROJECT_NAME}
+    PkgConfig::TEST_AVFORMAT PkgConfig::TEST_AVCODEC PkgConfig::TEST_AVUTIL GTest::gtest_main)
+target_include_directories(shared_video_session_test PRIVATE
+    . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/include)
+target_compile_features(shared_video_session_test PRIVATE cxx_std_20)
+gtest_discover_tests(
+    shared_video_session_test
+    TEST_PREFIX shared_video_session_test.
+    PROPERTIES TIMEOUT 120
+    DISCOVERY_TIMEOUT 60
+)
+
+# Render-target sizing only: no device, no surface, no GPU.
+add_executable(render_scale_test render_scale_test.cpp)
+target_link_libraries(render_scale_test PRIVATE ${PROJECT_NAME} wpScene wpVulkanRender wpVulkan wpRGraph nlohmann_json::nlohmann_json GTest::gtest_main)
+target_include_directories(render_scale_test PRIVATE
+    . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender)
+target_compile_features(render_scale_test PRIVATE cxx_std_20)
+gtest_discover_tests(
+    render_scale_test
+    TEST_PREFIX render_scale_test.
+    PROPERTIES TIMEOUT 60
+    DISCOVERY_TIMEOUT 60
+)
+
 add_executable(timer_tests timer/frame_timer_test.cpp)
 target_link_libraries(timer_tests PRIVATE wpTimer GTest::gtest_main)
 target_include_directories(timer_tests PRIVATE . ${CMAKE_SOURCE_DIR}/src)

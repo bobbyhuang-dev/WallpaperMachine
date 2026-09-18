@@ -490,6 +490,14 @@ impl EngineFacade for FailingPlaybackEngine {
         async move { Ok::<(), EngineError>(()) }.boxed()
     }
 
+    fn set_render_scale(
+        &self,
+        _handle: SceneHandle,
+        _scale: f32,
+    ) -> BoxFuture<'static, Result<(), EngineError>> {
+        async move { Ok::<(), EngineError>(()) }.boxed()
+    }
+
     fn poll_mouse_position(&self) -> BoxFuture<'static, Result<(), EngineError>> {
         async move { Ok::<(), EngineError>(()) }.boxed()
     }
@@ -678,6 +686,14 @@ impl EngineFacade for ShutdownEngine {
         &self,
         _handle: SceneHandle,
         _fps: u32,
+    ) -> BoxFuture<'static, Result<(), EngineError>> {
+        async move { Ok::<(), EngineError>(()) }.boxed()
+    }
+
+    fn set_render_scale(
+        &self,
+        _handle: SceneHandle,
+        _scale: f32,
     ) -> BoxFuture<'static, Result<(), EngineError>> {
         async move { Ok::<(), EngineError>(()) }.boxed()
     }

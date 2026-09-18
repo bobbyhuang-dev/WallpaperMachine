@@ -1120,6 +1120,19 @@ void ReleaseAppleVideoFrame(VideoTextureFrame* frame)
     frame->plane_count = 0;
 }
 
+void RetainAppleVideoFrame(const VideoTextureFrame& frame, VideoTextureFrame* out)
+{
+    if (out == nullptr) return;
+    ReleaseAppleVideoFrame(out);
+    *out = frame;
+    if (out->io_surface != nullptr) {
+        CFRetain(reinterpret_cast<IOSurfaceRef>(out->io_surface));
+    }
+    if (out->pixel_buffer != nullptr) {
+        CFRetain(reinterpret_cast<CVPixelBufferRef>(out->pixel_buffer));
+    }
+}
+
 std::string DescribeAppleVideoFrame(const VideoTextureFrame& frame)
 {
     std::ostringstream stream;

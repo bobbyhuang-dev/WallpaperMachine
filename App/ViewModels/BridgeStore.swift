@@ -399,6 +399,32 @@ final class BridgeStore {
         apply(bundle)
     }
 
+    func setVideoBackendAsync(_ mode: String) async throws {
+        let bundle = try await bridge.setVideoBackend(mode: mode)
+        apply(bundle)
+    }
+
+    func setRenderScaleAsync(_ scale: Float) async throws {
+        let bundle = try await bridge.setRenderScale(scale: scale)
+        apply(bundle)
+    }
+
+    func setBatteryQualityProfileAsync(enabled: Bool, renderScale: Float, targetFps: UInt32) async throws {
+        let bundle = try await bridge.setBatteryQualityProfile(
+            enabled: enabled, renderScale: renderScale, targetFps: targetFps)
+        apply(bundle)
+    }
+
+    func setContentPacingEnabledAsync(_ enabled: Bool) async throws {
+        let bundle = try await bridge.setContentPacingEnabled(enabled: enabled)
+        apply(bundle)
+    }
+
+    func setSharedVideoDecodeEnabledAsync(_ enabled: Bool) async throws {
+        let bundle = try await bridge.setSharedVideoDecodeEnabled(enabled: enabled)
+        apply(bundle)
+    }
+
     func applyWallpaperOptionsAsync(wallpaperId: String) async throws {
         try requireIdleActivation()
         try requireIdleWallpaperEdits(id: wallpaperId)
@@ -591,7 +617,20 @@ final class BridgeStore {
                         activeFile: "",
                         activeFileSizeBytes: 0
                     )
-                )
+                ),
+                videoBackend: "compatibility",
+                videoBackends: [],
+                contentPacingEnabled: false,
+                sharedVideoDecodeEnabled: false,
+                sharedVideoDecodeSessions: 0,
+                sharedVideoDecodeConsumers: 0,
+                renderScale: 1,
+                preferredRenderScale: 1,
+                batteryProfileEnabled: false,
+                batteryRenderScale: 0.75,
+                batteryTargetFps: 30,
+                onBatteryPower: false,
+                renderScaleSupported: false
             )
         )
     }

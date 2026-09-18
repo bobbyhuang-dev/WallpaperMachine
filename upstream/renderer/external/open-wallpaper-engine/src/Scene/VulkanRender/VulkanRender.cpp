@@ -102,6 +102,13 @@ struct VulkanRender::Impl {
 
     bool clearLastRenderGraph();
     bool compileRenderGraph(Scene&, rg::RenderGraph&);
+    /// Resizes the scene's render targets to a new internal render scale and
+    /// re-prepares the existing passes in place. Deliberately narrower than
+    /// `compileRenderGraph`: the render graph, the parsed scene, uploaded
+    /// images and live video decoders all survive, so changing quality does not
+    /// restart the wallpaper.
+    bool applyRenderScale(Scene&, rg::RenderGraph&, double scale);
+    bool preparePasses(Scene&);
     void UpdateCameraFillMode(Scene&, wallpaper::FillMode);
     void SetWallpaperScalingMode(wallpaper::WallpaperScalingMode);
     void SetWallpaperScalingFactor(double);
@@ -190,6 +197,9 @@ bool VulkanRender::drawFrame(Scene& scene) { return pImpl->drawFrame(scene); }
 bool VulkanRender::clearLastRenderGraph() { return pImpl->clearLastRenderGraph(); }
 bool VulkanRender::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
     return pImpl->compileRenderGraph(scene, rg);
+}
+bool VulkanRender::ApplyRenderScale(Scene& scene, rg::RenderGraph& rg, double scale) {
+    return pImpl->applyRenderScale(scene, rg, scale);
 }
 void VulkanRender::UpdateCameraFillMode(Scene& scene, wallpaper::FillMode fill) {
     pImpl->UpdateCameraFillMode(scene, fill);
@@ -903,16 +913,26 @@ bool VulkanRender::Impl::drawFrameOffscreen() {
 }
 
 void VulkanRender::Impl::setRenderTargetSize(Scene& scene, rg::RenderGraph& rg) {
-    auto&      ext           = m_device->out_extent();
-    const auto source_extent = ResolveScreenBoundRenderTargetSizes(scene, ext);
+    auto&      ext     = m_device->out_extent();
+    const auto extents = ResolveScreenBoundRenderTargetSizes(scene, ext);
+    const auto render_scale = ResolveSceneRenderScale(scene);
     for (auto& item : scene.renderTargets) {
         auto& rt = item.second;
-        if (rt.bind.screen || ! rt.bind.enable) continue;
+        if (item.first == wallpaper::SpecTex_Default) continue;
+        if (rt.bind.screen && rt.bind.enable) continue;
+        if (! rt.bind.enable) {
+            // Targets the author sized directly: effect ping-pong buffers and
+            // the engine's fixed-fraction scratch buffers. They are internal
+            // raster, so they follow the render scale from their authored size.
+            ResolveRenderScaledSize(rt, render_scale);
+            continue;
+        }
         auto bind_rt = scene.renderTargets.find(rt.bind.name);
         if (rt.bind.name.empty() || bind_rt == scene.renderTargets.end()) {
             LOG_ERROR("unknonw render target bind: %s", rt.bind.name.c_str());
             continue;
         }
+        // Relative to another target, which has already been scaled.
         rt.width  = (i32)(rt.bind.scale * bind_rt->second.width);
         rt.height = (i32)(rt.bind.scale * bind_rt->second.height);
     }
@@ -927,8 +947,15 @@ void VulkanRender::Impl::setRenderTargetSize(Scene& scene, rg::RenderGraph& rg) 
                 2u;
         }
     }
-    scene.shaderValueUpdater->SetScreenSize(static_cast<i32>(source_extent.width),
-                                            static_cast<i32>(source_extent.height));
+    // Screen-space shader inputs describe the buffer actually being rasterized,
+    // so a half-scale raster must report half-scale texels; otherwise every
+    // neighbour-tap effect samples at the wrong step. Presentation layout and
+    // cursor mapping deliberately use the authored extent instead.
+    scene.shaderValueUpdater->SetScreenSize(static_cast<i32>(extents.raster.width),
+                                            static_cast<i32>(extents.raster.height));
+    scene.shaderValueUpdater->SetTexelSize(
+        1.0f / static_cast<float>(std::max(1u, extents.raster.width)),
+        1.0f / static_cast<float>(std::max(1u, extents.raster.height)));
 }
 
 wallpaper::WallpaperScalingLayout
@@ -1128,6 +1155,12 @@ bool VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
 
     setRenderTargetSize(scene, rg);
 
+    if (! preparePasses(scene)) return false;
+    m_pass_loaded = true;
+    return true;
+};
+
+bool VulkanRender::Impl::preparePasses(Scene& scene) {
     glslang::InitializeProcess();
     for (auto* p : m_passes) {
         if (! p->prepared()) {
@@ -1162,6 +1195,54 @@ bool VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
         const auto idle_result = quiesceFrame();
         if (idle_result != VK_SUCCESS) return false;
     }
-    m_pass_loaded = true;
     return true;
-};
+}
+
+bool VulkanRender::Impl::applyRenderScale(Scene& scene, rg::RenderGraph& rg, double scale) {
+    if (! std::isfinite(scale) || scale <= 0.0) return true;
+    const double clamped = std::min(1.0, std::max(kMinRenderScale, scale));
+    if (scene.render_scale == clamped) return true;
+
+    // A plain-video scene keeps its media-sized target whatever the user
+    // selects, so record the preference but do no work: the higher layer
+    // reports the control as not applicable for those wallpapers.
+    if (scene.single_video_source) {
+        scene.render_scale = clamped;
+        return true;
+    }
+    scene.render_scale = clamped;
+
+    // Nothing is prepared yet, so the next compile reads the new scale anyway.
+    if (! m_inited || m_device_lost || m_frame_faulted || ! m_pass_loaded) return true;
+
+    if (quiesceFrame() != VK_SUCCESS) return false;
+    std::string error;
+    if (! m_device->tex_cache().WaitForPendingUploads(&error)) {
+        LOG_ERROR("cannot change render scale with pending uploads: %s", error.c_str());
+        return failFrame(VK_ERROR_UNKNOWN);
+    }
+    for (auto* command : { &m_render_cmd, &m_upload_cmd }) {
+        if (*command) {
+            const auto result = command->Reset();
+            if (result != VK_SUCCESS) return failFrame(result);
+        }
+    }
+    // The pass objects are owned by the render graph and by this Impl, so
+    // destroying their prepared state leaves them reusable. That is what lets
+    // the graph, the scene and the decoders survive a quality change.
+    for (auto* pass : m_passes) {
+        if (pass != nullptr) pass->destory(*m_device, m_rendering_resources);
+    }
+    if (! m_device->tex_cache().ClearRenderTargets(&error)) {
+        LOG_ERROR("cannot drop render targets for render scale: %s", error.c_str());
+        return failFrame(VK_ERROR_UNKNOWN);
+    }
+
+    setRenderTargetSize(scene, rg);
+    if (! preparePasses(scene)) {
+        LOG_ERROR("failed to re-prepare passes at render scale %.3f", clamped);
+        return false;
+    }
+    LOG_INFO("render scale applied: %.3f", clamped);
+    return true;
+}

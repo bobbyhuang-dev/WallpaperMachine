@@ -186,14 +186,67 @@ inline void ResolveScreenBoundRenderTargetSize(SceneRenderTarget&      target,
         static_cast<double>(source_extent.height), target.bind.scale);
 }
 
+/// The smallest internal render scale that still leaves a usable image. Below
+/// this the raster is coarse enough that the upscale at present dominates
+/// whatever is saved, and the min-dimension clamp starts distorting small
+/// targets rather than scaling them.
+inline constexpr double kMinRenderScale = 0.25;
+
+/// Scene-wide internal render scale, clamped to (0, 1].
+///
+/// Returns 1.0 for the engine's own plain-video scene: there the only content
+/// is a decoded frame that already has its own resolution, so scaling the
+/// target it is copied into would downsample and then upsample the same pixels
+/// for no useful reduction in work. Those wallpapers report the control as not
+/// applicable rather than pretending to honour it.
+inline double ResolveSceneRenderScale(const wallpaper::Scene& scene) {
+    if (scene.single_video_source) return 1.0;
+    const double scale = scene.render_scale;
+    if (! std::isfinite(scale) || scale >= 1.0) return 1.0;
+    return std::max(kMinRenderScale, scale);
+}
+
+/// Latches the authored size of a target the first time it is resolved, then
+/// derives the physical size from that latched value. Deriving from the
+/// authored size rather than the current one is what keeps 100% -> 50% -> 100%
+/// exact instead of drifting by a rounding step each way.
+inline void ResolveRenderScaledSize(SceneRenderTarget& target, double render_scale) {
+    if (target.authored_width <= 0 || target.authored_height <= 0) {
+        target.authored_width  = target.width;
+        target.authored_height = target.height;
+    }
+    if (target.media_sized) {
+        target.width  = target.authored_width;
+        target.height = target.authored_height;
+        return;
+    }
+    target.width =
+        ResolveScreenBoundRenderTargetDimension(target.authored_width, render_scale);
+    target.height =
+        ResolveScreenBoundRenderTargetDimension(target.authored_height, render_scale);
+}
+
+/// The author's canvas, in scene units. Never scaled: presentation layout and
+/// cursor mapping are computed against this, so the internal raster size
+/// cannot move the letterbox or offset the hit test.
 inline VkExtent2D ResolveSceneSourceExtent(const wallpaper::Scene& scene,
                                            const VkExtent2D&       fallback_extent) {
+    if (scene.scene_extent[0] > 0 && scene.scene_extent[1] > 0) {
+        return {
+            static_cast<uint32_t>(scene.scene_extent[0]),
+            static_cast<uint32_t>(scene.scene_extent[1]),
+        };
+    }
+
     auto spec_rt = scene.renderTargets.find(std::string(wallpaper::SpecTex_Default));
     if (spec_rt != scene.renderTargets.end()) {
-        if (spec_rt->second.width > 0 && spec_rt->second.height > 0) {
+        const auto& rt      = spec_rt->second;
+        const auto  width   = rt.authored_width > 0 ? rt.authored_width : rt.width;
+        const auto  height  = rt.authored_height > 0 ? rt.authored_height : rt.height;
+        if (width > 0 && height > 0) {
             return {
-                static_cast<uint32_t>(spec_rt->second.width),
-                static_cast<uint32_t>(spec_rt->second.height),
+                static_cast<uint32_t>(width),
+                static_cast<uint32_t>(height),
             };
         }
     }
@@ -208,17 +261,54 @@ inline VkExtent2D ResolveSceneSourceExtent(const wallpaper::Scene& scene,
     };
 }
 
-inline VkExtent2D ResolveScreenBoundRenderTargetSizes(Scene&             scene,
-                                                      const VkExtent2D&  fallback_extent) {
+/// The authored canvas and the internal raster it is drawn at. Equal at render
+/// scale 1.0.
+struct SceneRasterExtents {
+    VkExtent2D source {};
+    VkExtent2D raster {};
+};
+
+inline SceneRasterExtents ResolveScreenBoundRenderTargetSizes(Scene&            scene,
+                                                              const VkExtent2D& fallback_extent) {
     const auto source_extent = ResolveSceneSourceExtent(scene, fallback_extent);
+    const auto render_scale  = ResolveSceneRenderScale(scene);
+    const VkExtent2D raster_extent {
+        static_cast<uint32_t>(
+            ResolveScreenBoundRenderTargetDimension(source_extent.width, render_scale)),
+        static_cast<uint32_t>(
+            ResolveScreenBoundRenderTargetDimension(source_extent.height, render_scale)),
+    };
+
     for (auto& item : scene.renderTargets) {
-        if (item.first == wallpaper::SpecTex_Default) continue;
         auto& target = item.second;
+        if (item.first == wallpaper::SpecTex_Default) {
+            // The scene's own colour buffer and the source the final blit
+            // samples. It is bound to the screen with scale 1.0, so the raster
+            // extent is exactly its size.
+            if (target.authored_width <= 0 || target.authored_height <= 0) {
+                target.authored_width  = static_cast<i32>(source_extent.width);
+                target.authored_height = static_cast<i32>(source_extent.height);
+            }
+            if (target.media_sized) {
+                target.width  = target.authored_width;
+                target.height = target.authored_height;
+            } else {
+                target.width  = static_cast<i32>(raster_extent.width);
+                target.height = static_cast<i32>(raster_extent.height);
+            }
+            continue;
+        }
         if (target.bind.enable && target.bind.screen) {
-            ResolveScreenBoundRenderTargetSize(target, source_extent);
+            if (target.authored_width <= 0 || target.authored_height <= 0) {
+                target.authored_width = ResolveScreenBoundRenderTargetDimension(
+                    source_extent.width, target.bind.scale);
+                target.authored_height = ResolveScreenBoundRenderTargetDimension(
+                    source_extent.height, target.bind.scale);
+            }
+            ResolveScreenBoundRenderTargetSize(target, raster_extent);
         }
     }
-    return source_extent;
+    return { source_extent, raster_extent };
 }
 
 inline void SetAttachmentLoadOp(BlendMode bm, VkAttachmentLoadOp& load_op) {

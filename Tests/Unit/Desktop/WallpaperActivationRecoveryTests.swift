@@ -145,13 +145,9 @@ private final class ApplyFailureBridge: WallpaperBridge {
             dirty: false, canRestoreDefaults: false)],
         audioResponseEnabled: false, muted: false, volume: 1)
 
-    private static let settings = BridgeSettingsSnapshot(
+    private static let settings = BridgeSnapshotFixtures.settings(
         displays: [BridgeDisplaySettingsRow(
             displayId: "primary", title: "Primary", enabled: true, mode: .standalone,
             mirrorTargets: [], selectedMirrorTarget: nil, scalingMode: .fill, scalingFactor: 1,
-            targetFps: 30, maxFps: 60, muted: false, volume: 1)],
-        launchAtLoginAvailable: false, launchAtLoginEnabled: false, pauseOnBatteryPower: false,
-        gitSha: "", bridgeVersion: "", coreVersion: "", shaderPipelineVersion: "",
-        storage: BridgeStorageStatus(shaderCacheSizeBytes: 0, logs: BridgeLogStatus(
-            logsRoot: "", activeSession: "", activeFile: "", activeFileSizeBytes: 0)))
+            targetFps: 30, maxFps: 60, muted: false, volume: 1)])
 }

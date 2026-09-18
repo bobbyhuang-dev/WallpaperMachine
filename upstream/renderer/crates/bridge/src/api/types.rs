@@ -245,6 +245,22 @@ pub struct BridgeStorageStatus {
     pub logs: BridgeLogStatus,
 }
 
+/// Which renderer is actually playing the video on one display.
+///
+/// `backend` reports what is running, not what was asked for. `fallback_reason`
+/// is present only when the user selected the native player and this display
+/// did not get it, so an empty reason on a legacy row means the user never
+/// asked rather than that no reason was recorded.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct BridgeVideoBackendReport {
+    pub display_id: u32,
+    pub display_name: String,
+    pub wallpaper_id: String,
+    pub wallpaper_title: String,
+    pub backend: String,
+    pub fallback_reason: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct BridgeSettingsSnapshot {
     pub displays: Vec<BridgeDisplaySettingsRow>,
@@ -256,6 +272,28 @@ pub struct BridgeSettingsSnapshot {
     pub core_version: String,
     pub shader_pipeline_version: String,
     pub storage: BridgeStorageStatus,
+    /// `"compatibility"` or `"native_preferred"`: the user's choice, which for
+    /// a given display may or may not be what `video_backends` reports.
+    pub video_backend: String,
+    pub video_backends: Vec<BridgeVideoBackendReport>,
+    /// Read back from the renderer process, not from the saved preference.
+    pub content_pacing_enabled: bool,
+    pub shared_video_decode_enabled: bool,
+    /// Live decoder instances, and the surfaces consuming them. Sharing is
+    /// consumers exceeding sessions; the setting being on does not imply it.
+    pub shared_video_decode_sessions: u32,
+    pub shared_video_decode_consumers: u32,
+    /// The internal rasterization scale in force right now, after any power
+    /// profile. `preferred_render_scale` is what the user saved.
+    pub render_scale: f32,
+    pub preferred_render_scale: f32,
+    pub battery_profile_enabled: bool,
+    pub battery_render_scale: f32,
+    pub battery_target_fps: u32,
+    pub on_battery_power: bool,
+    /// False when nothing running can honour an internal render scale, so the
+    /// control describes a preference that changes nothing on screen today.
+    pub render_scale_supported: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, uniffi::Record)]

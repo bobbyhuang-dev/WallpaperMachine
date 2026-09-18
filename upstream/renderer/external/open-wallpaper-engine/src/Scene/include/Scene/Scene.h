@@ -81,6 +81,18 @@ public:
     SceneCamera* activeCamera;
 
     i32                  ortho[2] { 1920, 1080 }; // w, h
+    /// The author's canvas in scene units: what "100% render scale" means for
+    /// this scene, and the size presentation layout and cursor mapping are
+    /// computed against. Latched once when the scene is built and never
+    /// touched by the render scale, so shrinking the internal raster cannot
+    /// move the letterbox or the hit test. Zero means "not latched"; the
+    /// resolver then falls back to the default render target, then `ortho`.
+    i32                  scene_extent[2] { 0, 0 };
+    /// Internal rasterization scale in (0, 1]. Multiplies the size of the
+    /// render targets the scene draws into; it never touches the swapchain,
+    /// the camera frustum or the presentation viewport, so output size and
+    /// composition are unchanged and only the sampled detail differs.
+    double               render_scale { 1.0 };
     std::array<float, 3> clearColor { 1.0f, 1.0f, 1.0f };
     bool                 clearEnabled { true };
 

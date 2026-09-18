@@ -6,12 +6,13 @@ use crate::{
     actor::state::BridgeActorState,
     api::{
         BridgeComboOption, BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplaySettingsRow,
-        BridgeError, BridgeMonitorInfoRow, BridgeMonitorInformationSnapshot,
+        BridgeError, BridgeMonitorInfoRow, BridgeMonitorInformationSnapshot, BridgePlaybackState,
         BridgePropertyDescriptor, BridgePropertyKind, BridgePropertyValue, BridgeScalingMode,
         BridgeSettingsSnapshot, BridgeSliderMetadata, BridgeStorageStatus,
-        BridgeWallpaperOptionsSnapshot, bridge_log_status,
+        BridgeVideoBackendReport, BridgeWallpaperOptionsSnapshot, bridge_log_status,
     },
-    config::SerializedSelector,
+    config::{SerializedSelector, VideoBackendModeCfg},
+    engine::{ActivationInputs, RendererVideoPipelineState},
     display::{DisplayLabelExt, DisplaySelectorExt, DisplaySnapshotExt},
     logging::{ApplicationLogger, LogStatus},
     login::LaunchAtLoginStatus,
@@ -22,6 +23,10 @@ use crate::{
 const MIRROR_DISPLAY_MODE: &str = "mirror";
 const UNKNOWN_GIT_SHA: &str = "Unknown";
 const SHADER_PIPELINE_VERSION: &str = "0.1.0";
+const VIDEO_BACKEND_COMPATIBILITY: &str = "compatibility";
+const VIDEO_BACKEND_NATIVE_PREFERRED: &str = "native_preferred";
+const RUNNING_BACKEND_NATIVE: &str = "native";
+const RUNNING_BACKEND_LEGACY: &str = "legacy";
 
 fn directory_size(path: &Path) -> u64 {
     let Ok(metadata) = fs::metadata(path) else {
@@ -295,6 +300,7 @@ impl BridgeActorState {
         displays: &[DisplaySnapshotEntry],
         launch_at_login: LaunchAtLoginStatus,
         paths: &BridgePaths,
+        renderer: RendererVideoPipelineState,
     ) -> BridgeSettingsSnapshot {
         let app_config = self.app_config.normalized(displays);
         let rows = if displays.is_empty() {
@@ -382,6 +388,53 @@ impl BridgeActorState {
                 })
                 .collect()
         };
+        let on_battery = self.power_source == crate::power::PowerSource::Battery;
+        let backends = ActivationInputs {
+            app_config: &self.app_config,
+            wallpapers: &self.wallpaper_configs,
+            displays,
+            paused: self.playback_state == BridgePlaybackState::Paused,
+            suspended_displays: &self.suspended_displays,
+            paths,
+            force_shader_refresh: false,
+            project_models: &self.project_models,
+            native_video_enabled: self.app_config.video_backend
+                == VideoBackendModeCfg::NativePreferred,
+            native_video_rejected: &self.native_video_rejected,
+        }
+        .render_backends();
+        let video_backends = backends
+            .videos
+            .into_iter()
+            .map(|routed| BridgeVideoBackendReport {
+                display_name: displays
+                    .iter()
+                    .find(|entry| entry.desc.display_id == routed.display.display_id)
+                    .map_or_else(
+                        || routed.display.display_id.to_string(),
+                        |entry| {
+                            entry.title_with_role(
+                                displays.first().map(|first| first.desc.display_id)
+                                    == Some(entry.desc.display_id),
+                            )
+                        },
+                    ),
+                display_id: routed.display.display_id,
+                wallpaper_title: self
+                    .library
+                    .iter()
+                    .find(|entry| entry.id == routed.wallpaper_id)
+                    .map(|entry| entry.title.clone())
+                    .unwrap_or_default(),
+                wallpaper_id: routed.wallpaper_id,
+                backend: if routed.native {
+                    RUNNING_BACKEND_NATIVE.to_string()
+                } else {
+                    RUNNING_BACKEND_LEGACY.to_string()
+                },
+                fallback_reason: routed.fallback_reason,
+            })
+            .collect();
         BridgeSettingsSnapshot {
             displays: rows,
             launch_at_login_available: matches!(
@@ -414,6 +467,24 @@ impl BridgeActorState {
                     bridge_log_status,
                 ),
             },
+            video_backend: match self.app_config.video_backend {
+                VideoBackendModeCfg::Compatibility => VIDEO_BACKEND_COMPATIBILITY.to_string(),
+                VideoBackendModeCfg::NativePreferred => {
+                    VIDEO_BACKEND_NATIVE_PREFERRED.to_string()
+                }
+            },
+            video_backends,
+            content_pacing_enabled: renderer.content_pacing_enabled,
+            shared_video_decode_enabled: renderer.shared_video_decode_enabled,
+            shared_video_decode_sessions: renderer.shared_video_decode_sessions,
+            shared_video_decode_consumers: renderer.shared_video_decode_consumers,
+            render_scale: self.app_config.effective_render_scale(on_battery),
+            preferred_render_scale: self.app_config.quality.render_scale,
+            battery_profile_enabled: self.app_config.quality.battery_profile_enabled,
+            battery_render_scale: self.app_config.quality.battery.render_scale,
+            battery_target_fps: self.app_config.quality.battery.target_fps,
+            on_battery_power: on_battery,
+            render_scale_supported: backends.render_scale_supported,
         }
     }
 }
@@ -447,6 +518,7 @@ mod tests {
             &[],
             LaunchAtLoginStatus::Unavailable,
             &paths,
+            crate::engine::RendererVideoPipelineState::default(),
         );
 
         assert_eq!(snapshot.storage.shader_cache_size_bytes, 4);

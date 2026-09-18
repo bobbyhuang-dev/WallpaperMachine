@@ -11,7 +11,7 @@ use crate::{
         BridgeWallpaperKind, BridgeWallpaperMutationBundle, BridgeWallpaperOptionsSnapshot,
         BridgeWebWallpaper,
     },
-    config::{AppConfig, WallpaperConfig},
+    config::{AppConfig, VideoBackendModeCfg, WallpaperConfig},
     power::PowerSource,
 };
 
@@ -196,7 +196,25 @@ pub struct SetRendererCountersEnabled {
 
 pub struct RendererCounters;
 
-pub struct SetNativeVideoBackendEnabled {
+pub struct SetVideoBackend {
+    pub mode: VideoBackendModeCfg,
+}
+
+pub struct SetRenderScale {
+    pub scale: f32,
+}
+
+pub struct SetBatteryQualityProfile {
+    pub enabled: bool,
+    pub render_scale: f32,
+    pub target_fps: u32,
+}
+
+pub struct SetContentPacingEnabled {
+    pub enabled: bool,
+}
+
+pub struct SetSharedVideoDecodeEnabled {
     pub enabled: bool,
 }
 
@@ -307,7 +325,11 @@ pub type CommitApplyAfterReconcileReply = WallpaperMutationReply;
 pub type CommitDisplayAfterReconcileReply = DisplayMutationReply;
 pub type SetRendererCountersEnabledReply = Result<(), BridgeError>;
 pub type RendererCountersReply = Result<BridgeRendererCountersReport, BridgeError>;
-pub type SetNativeVideoBackendEnabledReply = Result<BridgeSnapshotBundle, BridgeError>;
+pub type SetVideoBackendReply = AllSnapshotsReply;
+pub type SetRenderScaleReply = AllSnapshotsReply;
+pub type SetBatteryQualityProfileReply = AllSnapshotsReply;
+pub type SetContentPacingEnabledReply = AllSnapshotsReply;
+pub type SetSharedVideoDecodeEnabledReply = AllSnapshotsReply;
 pub type GetNativeVideoWallpapersReply = Result<Vec<BridgeNativeVideoWallpaper>, BridgeError>;
 pub type RejectNativeVideoReply = Result<(), BridgeError>;
 pub type CompleteRestoreAfterReconcileReply = Result<(), BridgeError>;

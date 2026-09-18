@@ -71,6 +71,11 @@ pub struct SetFps {
     pub fps: u32,
 }
 
+pub struct SetRenderScale {
+    pub handle: SceneHandle,
+    pub scale: f64,
+}
+
 pub struct SetPaused {
     pub handle: SceneHandle,
     pub paused: bool,

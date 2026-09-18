@@ -7,7 +7,7 @@ enum SidebarSelection: String {
 }
 
 enum SettingsSection: String, CaseIterable {
-  case general, appearance, displays, library, storage, about
+  case general, appearance, performance, displays, library, storage, about
 }
 
 @MainActor

@@ -1,5 +1,28 @@
 const views = new WeakMap();
-const sections = [['general', 'General'], ['appearance', 'Appearance'], ['displays', 'Displays'], ['library', 'Library & Steam'], ['storage', 'Storage'], ['about', 'About']];
+const sections = [['general', 'General'], ['appearance', 'Appearance'], ['performance', 'Performance'], ['displays', 'Displays'], ['library', 'Library & Steam'], ['storage', 'Storage'], ['about', 'About']];
+const renderScales = [[1, '100% (native)'], [0.75, '75%'], [0.5, '50%']];
+const videoBackends = [['compatibility', 'Compatibility'], ['native_preferred', 'Native video preferred (falls back automatically)']];
+
+// Reports the scale the engine actually published. Quantizing here would let a
+// value the control cannot offer be shown as one that it can.
+function percent(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${Math.round(number * 100)}%` : 'Unavailable';
+}
+
+// A hand-edited config may hold a scale between the offered tiers. Carry it as its
+// own option so the control shows the saved value instead of snapping the display
+// to a neighbouring tier the user never chose.
+function scaleOptions(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || renderScales.some(([step]) => step === number)) return renderScales;
+  return [[number, `${percent(number)} (from configuration)`], ...renderScales];
+}
+
+function scaleValue(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : renderScales[0][0];
+}
 
 export function renderSettings(container, state, helpers) {
   let view = views.get(container);
@@ -61,6 +84,36 @@ function draw(view) {
     + row('lock-status', 'Lock screen status', `<span class="settings-status" role="status">${e(lockUnavailable ? 'Unavailable' : settings.lockScreenBusy ? `${settings.lockScreenStatus || 'Updating'}…` : settings.lockScreenStatus)}</span>${settings.lockScreenError ? button('Retry', 'lockScreenRetry', {}, busy || settings.lockScreenBusy) : ''}`)
     + error('lock-error', settings.lockScreenError)
     + disclosure('lock-context', 'Compatibility & permissions', '<p>Lock-screen animation uses private macOS wallpaper APIs and may stop working after an OS update. It replaces the Desktop and Idle provider on active wallpaper displays and reloads the wallpaper service. Disabling or quitting restores choices still owned by this app; other wallpaper changes are preserved.</p><p>Isolated asset copies need additional disk space. Rendering is not guaranteed on every macOS release. Playback respects pause and battery settings.</p>');
+
+  const scaleSupported = settings.renderScaleSupported !== false;
+  // Compare what the engine published, not the quantized select step: disabling the
+  // battery profile restores the saved scale on that same snapshot, and the override
+  // notice has to disappear with it.
+  const scaleOverridden = Number(settings.renderScale) !== Number(settings.preferredRenderScale);
+  const preferredScale = scaleValue(settings.preferredRenderScale);
+  const batteryScale = scaleValue(settings.batteryRenderScale);
+  const batteryActive = Boolean(settings.batteryProfileEnabled && settings.onBatteryPower);
+  const sessions = Number(settings.sharedVideoDecodeSessions) || 0;
+  const consumers = Number(settings.sharedVideoDecodeConsumers) || 0;
+  const plural = (count, noun) => `${count} ${noun}${count === 1 ? '' : 's'}`;
+  const backendLine = report => `${report.displayName || `Display ${report.displayId}`} — ${report.wallpaperTitle || report.wallpaperId}: ${report.backend}${report.fallbackReason ? ` (fallback: ${report.fallbackReason})` : ''}`;
+  const backendReport = (settings.videoBackends || []).map(report => `<li>${e(backendLine(report))}</li>`).join('');
+  const performance = `<h3>Video backend</h3>`
+    + row('video-backend', 'Video playback', select('videoBackend', 'Video playback backend', draft('videoBackend', settings.videoBackend), videoBackends, 'data-setting="videoBackend"', busy || unavailable), 'Native uses the system video path where a wallpaper qualifies, and returns to Compatibility on its own where it does not.')
+    + row('video-backend-report', 'In use now', backendReport ? `<ul class="settings-list">${backendReport}</ul>` : '<span class="settings-status" role="status">No video wallpaper is running.</span>')
+    + `<div class="settings-group-gap"></div><h3>Render quality</h3>`
+    + row('render-scale', 'Internal render scale', select('renderScale', 'Internal render scale', draft('renderScale', preferredScale), scaleOptions(preferredScale), 'data-setting="renderScale" data-number', busy || unavailable || !scaleSupported), scaleSupported ? 'Changes the internal rendering resolution only. Output size, placement and composition are unchanged; a lower scale is rendered smaller and drawn to the same area.' : 'Not applicable to the wallpapers currently running')
+    + (scaleSupported && scaleOverridden ? row('render-scale-effective', 'Effective now', `<span class="settings-status" role="status">${e(`${percent(settings.renderScale)}${batteryActive ? ` — the battery profile is overriding your saved ${percent(settings.preferredRenderScale)}.` : ` — your saved ${percent(settings.preferredRenderScale)} is not in force right now.`}`)}</span>`) : '')
+    + `<div class="settings-group-gap"></div><h3>Battery profile</h3>`
+    + settingToggle('batteryProfileEnabled', 'Use a reduced quality profile on battery', false, 'Off unless you turn it on. It is a quality tradeoff you choose: while on battery power the render scale and frame rate below replace your saved quality. No power saving is measured or promised.')
+    + (settings.batteryProfileEnabled ? row('battery-scale', 'Render scale on battery', select('batteryRenderScale', 'Render scale on battery', draft('batteryRenderScale', batteryScale), scaleOptions(batteryScale), 'data-setting="batteryRenderScale" data-number', busy || unavailable))
+      + row('battery-fps', 'Frame rate on battery', `<input class="settings-number" data-key="batteryTargetFps" type="number" inputmode="numeric" aria-label="Frame rate on battery" min="1" max="240" step="1" value="${e(draft('batteryTargetFps', settings.batteryTargetFps))}" data-setting="batteryTargetFps"${disabled(busy || unavailable)}><span class="settings-unit">fps</span>`)
+      + row('battery-state', 'Power source', `<span class="settings-status" role="status">${e(batteryActive ? `On battery — the battery profile is supplying the effective quality shown above.` : settings.onBatteryPower ? 'On battery' : 'Plugged in — your saved quality is in use.')}</span>`) : '')
+    + `<div class="settings-group-gap"></div><h3>Advanced</h3>`
+    + settingToggle('contentPacing', 'Content pacing', false, 'Experimental, off by default. Drives presentation from the content’s own frame cadence instead of the display refresh.')
+    + settingToggle('sharedVideoDecode', 'Shared video decode', false, 'Experimental, off by default. Lets equivalent display surfaces showing the same video share one decode session.')
+    + (sessions || consumers ? row('shared-decode-report', 'Shared decode in use', `<span class="settings-status" role="status">${e(`${plural(sessions, 'session')} serving ${plural(consumers, 'surface')}`)}</span>`) : '')
+    + disclosure('performance-context', 'What these settings change', '<p>Video playback selects a backend per wallpaper. Native is only used where the wallpaper qualifies; anything else keeps playing on Compatibility, and the list above names the backend each running wallpaper actually got.</p><p>Internal render scale is a quality tier, not a window or wallpaper size. It changes how many pixels are rasterized before the result is drawn into the same area, so text and detail soften as the scale drops.</p><p>Content pacing and shared video decode are experimental and stay off until you enable them. Shared decode only merges work that is genuinely shared; surfaces still submit and present separately.</p>');
 
   // Theme preferences live natively and stay usable even when renderer settings are unavailable.
   const theme = { mode: 'system', accent: '#80bbff', tone: 'neutral', ...(window.__appTheme || {}), ...(state.theme || {}) };
@@ -164,7 +217,7 @@ function draw(view) {
     + row('renderer-source', 'Scene renderer', button('bigsaltyfishes / Wallpaper Engine for macOS', 'openExternal', { url: 'https://github.com/bigsaltyfishes/wallpaper-engine-for-macos.git' }))
     + `<div class="settings-attribution">Not affiliated with Wallpaper Engine or Valve. Built on the GPLv2-only open-source renderer. Workshop browsing is independently implemented. No warranty is provided.</div>`
     + button('GNU General Public License v2', 'openExternal', { url: 'https://www.gnu.org/licenses/old-licenses/gpl-2.0.html' });
-  const html = `<div class="settings-layout" data-key="settings-layout"><nav class="settings-nav" aria-label="Settings categories" role="tablist" aria-orientation="vertical" data-key="settings-nav">${sections.map(([id, title]) => `<button type="button" id="settings-tab-${id}" role="tab" aria-selected="${id === view.section}" aria-controls="settings-${id}" tabindex="${id === view.section ? '0' : '-1'}" data-key="nav-${id}" data-section="${id}">${e(title)}</button>`).join('')}</nav><div class="settings-scroll" data-key="settings-scroll">${error('settings-action-error', view.error || state.error)}${unavailable ? '<div class="settings-notice" role="status">Settings are unavailable. Try refreshing the library.</div>' : ''}${section('general', 'General', general)}${section('appearance', 'Appearance', appearance)}${section('displays', 'Displays', displays, button('Refresh', 'refreshDisplays', {}, busy))}${section('library', 'Library & Steam', library)}${section('storage', 'Storage', storage)}${section('about', 'About', about)}</div></div>`;
+  const html = `<div class="settings-layout" data-key="settings-layout"><nav class="settings-nav" aria-label="Settings categories" role="tablist" aria-orientation="vertical" data-key="settings-nav">${sections.map(([id, title]) => `<button type="button" id="settings-tab-${id}" role="tab" aria-selected="${id === view.section}" aria-controls="settings-${id}" tabindex="${id === view.section ? '0' : '-1'}" data-key="nav-${id}" data-section="${id}">${e(title)}</button>`).join('')}</nav><div class="settings-scroll" data-key="settings-scroll">${error('settings-action-error', view.error || state.error)}${unavailable ? '<div class="settings-notice" role="status">Settings are unavailable. Try refreshing the library.</div>' : ''}${section('general', 'General', general)}${section('appearance', 'Appearance', appearance)}${section('performance', 'Performance', performance)}${section('displays', 'Displays', displays, button('Refresh', 'refreshDisplays', {}, busy))}${section('library', 'Library & Steam', library)}${section('storage', 'Storage', storage)}${section('about', 'About', about)}</div></div>`;
   const template = document.createElement('template');
   template.innerHTML = html;
   reconcile(view.container, template.content);
@@ -243,6 +296,11 @@ async function onChange(view, event) {
       input.reportValidity();
       return;
     }
+    value = Number(value);
+  }
+  // A <select> always yields a string; numeric settings must reach Swift as numbers.
+  if (input.dataset.number !== undefined && typeof value === 'string') {
+    if (!Number.isFinite(Number(value))) return;
     value = Number(value);
   }
   if (input.dataset.displaySetting === 'mirrorTarget' && !value) return;

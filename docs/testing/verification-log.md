@@ -11,6 +11,40 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-18 — Round 5: render scale, settings, shared decode
+
+Feature delivery round. Commands run:
+
+- `python3 scripts/check_renderer.py` — exit 0. `playback_gpu_test` 39,
+  `video_conversion_budget_test` 37, `video_source_input_test` 11,
+  `text_object_runtime_test` 60, `video_frame_pacing_test` 21,
+  `video_decode_pump_test` 13, `video_color_conversion_test` 9,
+  `render_target_lifetime_test` 4, `shader_cache_metadata_test` 1,
+  `timer_tests` 20, plus the two new targets **`render_scale_test` 8** and
+  **`shared_video_session_test` 8**. Both are registered in the gate.
+- `cargo test --release -p wallpaper-bridge` — 276 passed, including new
+  config-migration and quality-settings cases.
+- `python3 scripts/test.py` — **382 tests, 372 passed, 1 failed, 9 skipped**.
+  The failure is the pre-existing `ControlPanelLayoutTests`
+  `testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes` (overflow 52 px,
+  tile 166, 5 columns, 4 rows), with numbers identical to the round 4 entry. The
+  Discover grid was not touched this round. The 9 skips are the opt-in
+  `NativeVideoPlayerMediaTests`.
+- `python3 scripts/build.py --configuration Release` — succeeded; app and
+  extension at 20:25.
+
+`shared_video_session_test.PausingOneSurfaceLeavesTheOtherPlaying` failed on its
+first run. A control against an unshared decoder failed the same way, which
+established the fault was in the test's driving model — a tight sync/refresh loop
+never lets the decode thread produce — and not in the sharing. Fixed by letting
+real time elapse between steps. The same flaw had made
+`AFrameStaysValidAfterTheDecoderMovesOn` pass vacuously; it now asserts the
+decoder actually advanced before claiming the retained frame survived.
+
+No desktop session, no visual check, no power measurement. Render scale, video
+backend routing and shared decode have not been observed on a real display.
+
+
 ## 2026-09-18 — Round 4: R02 memory accounting audit and V04 real-media hardening
 
 Audit round on top of `c0461f7` (clean tree at start). No new plan task. R02's

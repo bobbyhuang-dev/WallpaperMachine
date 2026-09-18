@@ -3800,10 +3800,18 @@ std::shared_ptr<Scene> WPSceneParser::Parse(const SceneParseRequest& request,
             std::max(1, static_cast<i32>(context.scene->cameras.at("global")->Width()));
         const auto render_height =
             std::max(1, static_cast<i32>(context.scene->cameras.at("global")->Height()));
+        // The author's canvas. Latched before any render scale can be applied
+        // so that presentation layout and cursor mapping keep resolving against
+        // the composition the author designed, whatever the internal raster
+        // size becomes.
+        context.scene->scene_extent[0] = render_width;
+        context.scene->scene_extent[1] = render_height;
         context.scene->renderTargets[SpecTex_Default.data()] = {
-            .width  = render_width,
-            .height = render_height,
-            .bind   = { .enable = true, .screen = true },
+            .width           = render_width,
+            .height          = render_height,
+            .authored_width  = render_width,
+            .authored_height = render_height,
+            .bind            = { .enable = true, .screen = true },
         };
         context.scene->renderTargets[WE_MIP_MAPPED_FRAME_BUFFER.data()] = {
             .width      = render_width,

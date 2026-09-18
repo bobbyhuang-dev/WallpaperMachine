@@ -311,8 +311,9 @@ int main() {
 #endif
         Check(instance.ChoosePhysicalDevice([&](auto gpu) { return Device::CheckGPU(gpu, extensions, {}); }), "choose GPU");
         Device device;
-        const auto extent = ResolveScreenBoundRenderTargetSizes(*scene, {1920, 1080});
-        Check(extent.width <= 8192 && extent.height <= 8192, "probe source extent exceeds 8192");
+        const auto extents = ResolveScreenBoundRenderTargetSizes(*scene, {1920, 1080});
+        const auto extent = extents.raster;
+        Check(extent.width <= 8192 && extent.height <= 8192, "probe raster extent exceeds 8192");
         for (auto& [name, rt] : scene->renderTargets) {
             if (rt.bind.enable && !rt.bind.screen) {
                 const auto* parent = scene->FindRenderTarget(rt.bind.name);

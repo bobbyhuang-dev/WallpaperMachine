@@ -38,7 +38,11 @@ filter disclosure or popover.
   [Workshop downloads](workshop-downloads.md).
 - **Installed** shows the local library.
 - **Settings** replaces the browser with a sectioned native-feeling settings
-  view (General, Appearance, Displays, Library & Steam, Storage, About).
+  view (General, Appearance, Performance, Displays, Library & Steam, Storage,
+  About).
+  **Performance** holds the video backend choice, the internal render scale,
+  the opt-in battery quality profile and the experimental content-pacing and
+  shared-video-decode switches. See [Performance settings](performance.md).
   **About** is where in-app updates live: **Check for Updates** reads the latest
   GitHub Release, and download / restart-install happen only after confirmation.
   The application menu item **Check for Updates…** opens this section.

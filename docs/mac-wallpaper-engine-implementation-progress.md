@@ -80,6 +80,122 @@ recorded as blocked rather than failed:
 **No power number, watt figure or saving percentage is reported anywhere in this
 document.** Counters and unit tests bound what is claimed.
 
+## Round 5 — three features, shipped and operable
+
+Round 5 was scoped to delivery, not audit: implement, wire to the UI, keep it
+building, fix what this round broke. Visual, real-wallpaper and power acceptance
+are the user's, and are explicitly not claimed here.
+
+### What now exists
+
+| Feature | State | Default |
+|---|---|---|
+| R01 internal render scale | Implemented end to end for the legacy scene backend | 100%, no change |
+| Video backend selection | Implemented, with the actually-running backend reported per display | Compatibility |
+| Battery quality profile | Implemented, explicit opt-in | Off |
+| Content pacing | Promoted from environment variable to a setting | Off |
+| D01 shared video decode | Implemented for the legacy pure-video path | Off |
+
+### R01: what actually changed size
+
+Three sizes are now distinct where two were conflated:
+
+- **Output** — the swapchain. Untouched by the scale.
+- **Authored canvas** — `Scene::scene_extent`, latched once when the scene is
+  built. Presentation layout, fit/fill, user zoom, crop and cursor mapping all
+  resolve against this, so the hit test cannot drift when the raster shrinks.
+- **Internal raster** — `scene_extent x render_scale`. Sizes `_rt_default`, every
+  screen-bound target at its own relative scale, and the author-sized effect and
+  scratch buffers.
+
+`ResolveSceneSourceExtent` previously read `_rt_default`'s size, which is exactly
+what made a naive implementation move the letterbox: shrink the default target
+and the presentation layout would have followed it. The latched extent is what
+separates the two.
+
+Sizes are derived from a latched `authored_width`/`authored_height` per target
+rather than from the target's current size, so 100% -> 50% -> 75% -> 100% returns
+the exact original numbers instead of drifting a rounding step each way. Pinned
+by `render_scale_test.ReturningToFullScaleRestoresTheExactAuthoredSize`.
+
+`g_Screen` and `g_TexelSize` now describe the raster, not the canvas — a
+half-scale buffer must report half-scale texels or every neighbour-tap effect
+samples at the wrong step. `g_TexelSize` had never been set in production at all
+and sat at a hardcoded 1/1920 x 1/1080; it is now correct for every canvas size.
+
+Changing quality does not restart the wallpaper. `VulkanRender::ApplyRenderScale`
+quiesces, destroys only the prepared pass state, drops only render-target
+textures through a new `TextureCache::ClearRenderTargets`, resizes and
+re-prepares. The parsed scene, the render graph, uploaded images, animation time
+and live video decoders all survive. The pre-existing `clearLastRenderGraph`
+would have destroyed `m_video_tex_map` and reopened the file.
+
+**Not applicable, and reported as such rather than silently ignored:** plain
+video wallpapers, native video, and web wallpapers. A video render target holds a
+frame already decoded at its own resolution, so shrinking it resamples twice and
+makes nothing upstream cheaper; those targets are marked `media_sized` and the
+panel disables the control when nothing running can honour it.
+
+**Geometry, not a power claim.** 75% per axis is 56.25% of the pixels. Text
+sharpness, decode cost and WindowServer compositing do not scale with it. No
+power measurement was taken.
+
+### D01: what is shared and what is not
+
+Shared: one decoder instance, one decode thread, one frame queue. Not shared:
+the GPU import, visibility, pause, target frame rate and presentation resources
+— each surface renders on its own Vulkan device, so those could not be shared
+even if it were desirable.
+
+Sessions are keyed on **canonical path plus size and modification time**. Keying
+on the project-relative name would have been wrong in a way that shows: for video
+projects that name is the entry file, so two unrelated wallpapers both containing
+a `video.mp4` would have shared one decoder and one display would have shown the
+other's video. Pinned by
+`shared_video_session_test.SameFileNameInDifferentProjectsIsNotShared`.
+
+Each consumer holds its **own retained reference** to the frame it is showing,
+taken under the decoder's own lock. Without it, one surface promoting a new frame
+would free the buffer another surface was still importing, and a paused surface
+could not hold the frame it was displaying. One consumer drives the clock; the
+others' scene times are ignored, which is what stops two slightly different scene
+clocks from seeking the shared decoder back and forth every frame.
+
+A consumer that asks for a playback rate the session is not running is split onto
+its own decoder rather than forced onto someone else's timeline. In-memory
+package payloads are never shared: they have no path identity and could not be
+reopened for a split.
+
+**No audio risk on this path, and not because it was solved.** The legacy
+pure-video source decodes no audio at all — `videoAudioEnabled` is set and never
+read. The native AVFoundation backend does play audio and is untouched by D01.
+
+### Tests added, and one removed for being vacuous
+
+`render_scale_test` (8) and `shared_video_session_test` (8), both wired into
+`scripts/check_renderer.py`.
+
+`PausingOneSurfaceLeavesTheOtherPlaying` failed on first run. The cause was the
+test, not the product: a tight sync/refresh loop only advances the requested
+timestamp, while the decoder fills its queue on its own thread, so nothing is
+ever promoted. A control against an unshared source failed identically, which is
+what identified it. The fix was to let real time pass between steps.
+
+That same mistake had made `AFrameStaysValidAfterTheDecoderMovesOn` pass for the
+wrong reason: the decoder never moved on, so the retention it claimed to test was
+never exercised. It now asserts that the driving consumer really advanced past
+the held frame before checking that the held frame survived.
+
+### Known limitations
+
+- Render scale applies to the legacy scene backend only.
+- `_rt_shadowAtlas` and the fixed-fraction scratch buffers follow the scale with
+  everything else; shadow resolution therefore drops with the tier.
+- Shared decode is legacy pure video only. Native-backend wallpapers keep one
+  player each.
+- Text sharpness, pixel-exact shaders and heavy post-processing at 50% are the
+  cases most likely to look wrong, and none of them has been looked at.
+
 ## Round 4 — the six questions this round was set, answered
 
 **0. Was this round's own work correct?** No — not on the first pass, and the

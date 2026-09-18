@@ -20,6 +20,11 @@ bool ExtractAppleVideoFrame(const AVFrame* frame,
                             VideoTextureFrame* out,
                             std::string* error);
 void ReleaseAppleVideoFrame(VideoTextureFrame* frame);
+/// Copies `frame` into `out`, taking an independent reference on the platform
+/// objects it points at. The copy stays valid after the producer releases its
+/// own, which is what lets one decoder's frame be read by several surfaces;
+/// the caller releases it with `ReleaseAppleVideoFrame`.
+void RetainAppleVideoFrame(const VideoTextureFrame& frame, VideoTextureFrame* out);
 std::string DescribeAppleVideoFrame(const VideoTextureFrame& frame);
 
 // Imports one decoded frame and returns an opaque owned lease, or null on

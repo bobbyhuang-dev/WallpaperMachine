@@ -298,10 +298,22 @@ CreateVideoProjectScene(std::unique_ptr<wallpaper::fs::VFS> vfs,
     scene->vfs                = std::move(vfs);
 
     InstallVideoProjectCameras(*scene);
+    // This target holds one decoded frame at the resolution the file was
+    // encoded at, so it is media-sized: an internal render scale must not
+    // shrink it. Downsampling an already-decoded frame and upsampling it again
+    // at present costs quality and saves almost nothing, because the decode it
+    // would have to make cheaper is upstream of this target.
+    const auto video_width  = std::max(1, image->header.width);
+    const auto video_height = std::max(1, image->header.height);
+    scene->scene_extent[0]  = video_width;
+    scene->scene_extent[1]  = video_height;
     scene->renderTargets[std::string(wallpaper::SpecTex_Default)] = wallpaper::SceneRenderTarget {
-        .width  = std::max(1, image->header.width),
-        .height = std::max(1, image->header.height),
-        .bind   = { .enable = true, .screen = true },
+        .width           = video_width,
+        .height          = video_height,
+        .authored_width  = video_width,
+        .authored_height = video_height,
+        .media_sized     = true,
+        .bind            = { .enable = true, .screen = true },
     };
     scene->textures[image->key] = wallpaper::SceneTexture {
         .url     = image->key,
@@ -412,6 +424,7 @@ public:
         CMD_SET_FILLMODE,
         CMD_SET_SCALINGMODE,
         CMD_SET_SCALINGFACTOR,
+        CMD_SET_RENDER_SCALE,
         CMD_SET_HORIZONTAL_FLIP,
         CMD_SET_AUDIO_RESPONSE_ENABLED,
         CMD_SET_MEDIA_INTEGRATION_ENABLED,
@@ -492,9 +505,11 @@ public:
     /// stores.
     void refreshFrameDemand() {
         // Also the A/B entry point, so a comparison measures one scheduling
-        // strategy in one binary rather than two builds. Read once.
-        static const bool pacing_enabled = video::ContentPacingEnabledByEnvironment(
-            std::getenv("MAC_WALLPAPER_ENGINE_CONTENT_PACING"));
+        // strategy in one binary rather than two builds. Read per frame now
+        // that it is a live setting rather than an environment variable: the
+        // read is one relaxed atomic load, and a user toggling the option has
+        // to take effect without restarting the wallpaper.
+        const bool pacing_enabled = video::ContentPacingEnabled();
 
         FrameTimer::FrameDemand demand {};
         if (pacing_enabled && m_scene != nullptr && m_scene->single_video_source &&
@@ -582,6 +597,10 @@ private:
             suspendRendering();
             return false;
         }
+        // Seed the scale before the graph is compiled so render targets are
+        // allocated at the requested size once, instead of at full size and
+        // then immediately resized.
+        m_scene->render_scale = m_render_scale;
         m_rg = sceneToRenderGraph(*m_scene);
 
         if (main_handler.isGenGraphviz()) m_rg->ToGraphviz("graph.dot");
@@ -734,6 +753,22 @@ private:
             m_scalingfactor = value;
             if (renderInited()) {
                 m_render->SetWallpaperScalingFactor(m_scalingfactor);
+            }
+        }
+    }
+    MHANDLER_CMD(SET_RENDER_SCALE) {
+        float value { 1.0f };
+        if (msg->findFloat("value", &value)) {
+            m_render_scale = value;
+            if (renderInited() && m_scene != nullptr && m_rg) {
+                if (! m_render->ApplyRenderScale(*m_scene, *m_rg, m_render_scale)) {
+                    // A failed resize leaves the passes unprepared, so fall back
+                    // to the full graph rebuild rather than presenting nothing.
+                    LOG_ERROR("render scale change failed, rebuilding render graph");
+                    rebuildRenderGraph();
+                }
+            } else if (m_scene != nullptr) {
+                m_scene->render_scale = value;
             }
         }
     }
@@ -906,6 +941,10 @@ private:
     bool                                     m_fillmode_explicit { false };
     WallpaperScalingMode                     m_scalingmode { WallpaperScalingMode::FIT };
     float                                    m_scalingfactor { 1.0f };
+    /// Internal rasterization scale, independent of `m_scalingfactor`: that one
+    /// scales the presented image on the output, this one only changes how many
+    /// pixels the scene is drawn with.
+    float                                    m_render_scale { 1.0f };
     bool                                     m_horizontal_flip { false };
     bool                                     m_media_integration_enabled { false };
     std::optional<SystemMediaArtworkPayload> m_pending_system_media_artwork {};
@@ -1158,6 +1197,14 @@ MHANDLER_CMD_IMPL(MainHandler, SET_PROPERTY) {
             if (msg->findFloat("value", &value)) {
                 auto nmsg =
                     CreateMsgWithCmd(m_render_handler, RenderHandler::CMD::CMD_SET_SCALINGFACTOR);
+                nmsg->setFloat("value", value);
+                nmsg->post();
+            }
+        } else if (property == PROPERTY_RENDER_SCALE) {
+            float value { 1.0f };
+            if (msg->findFloat("value", &value)) {
+                auto nmsg =
+                    CreateMsgWithCmd(m_render_handler, RenderHandler::CMD::CMD_SET_RENDER_SCALE);
                 nmsg->setFloat("value", value);
                 nmsg->post();
             }

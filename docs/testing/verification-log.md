@@ -11,6 +11,320 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-18 — Batch with a saved sign-in starts together; SteamCMD sessions log their progress
+
+A live run of the concurrent queue on a real account (Release build from the
+entry below, three Scene tiles queued) still transferred one item while the
+other two sat on "Waiting for the current sign-in to finish", and the app quit
+before any of them imported. The app log showed the manager holding the
+siblings on that reason and nothing else: the worker logged nothing about the
+running session, and the saved session was never rewritten during the run, so
+the first job had not passed the point where the worker sees Steam accept the
+login. Holding on that at all was the mistake when a saved sign-in already
+exists: the siblings restore it themselves. `holdBehindRunningJobs` now starts
+a job immediately when the saved sign-in belongs to its account, holds only
+while a running job has a password/Steam Guard prompt on screen, and waits for
+a running login only when there is no saved sign-in to restore.
+`WorkshopDownloader` now logs, per session, the runtime preparation and
+whether a saved sign-in was restored, every status change, the sign-in
+handoff with the early-save result, and SteamCMD's exit status.
+
+- A direct SteamCMD probe with a copy of the saved sign-in (to read the real
+  transcript and try two sessions at once) was blocked by the harness's
+  permission classifier, so SteamCMD's actual output on this machine remains
+  unobserved.
+- `python3 scripts/test.py`: Python suites and XcodeGen passed; native suite
+  executed 277 tests with 0 failures, including the new
+  `DownloaderTests.testSavedSignInStartsAWholeBatchAtOnceWithoutWaitingForTheFirstLogin`
+  (one job signs in and saves; three more then start together with
+  `activeCount == 3` and no prompt while every fixture session is still
+  blocked before its transfer). The fresh-sign-in batch, session-conflict,
+  saved-sign-in handoff and store intent tests pass unchanged.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED; the built binary carries the per-session log strings.
+- Not verified: the live batch itself. The next live run's log under
+  **Show download logs** will carry `SteamCMD <item>: …` lines that say where
+  the first session stalls.
+
+## 2026-09-18 — Several Workshop downloads at once, sharing one accepted sign-in
+
+`WorkshopDownloadManager` runs up to `maximumConcurrentDownloads` (default 3)
+private SteamCMD sessions at once. The withdrawn attempt held every sibling
+until the first job *finished* because the session was only saved at the end;
+now `WorkshopDownloader` saves the session the moment Steam accepts the sign-in
+(`saveAcceptedSession`, then `onAuthenticated`), so siblings start silently
+while the first transfer is still running. The queue holds, in order, only
+while a running job is still authenticating, while the saved sign-in is not yet
+on disk for the account, without **Keep me signed in**, or after Steam ended a
+session with "logged in elsewhere" for another of our sessions
+(`sessionConflictDetected`: the ended job goes back in line once and the queue
+stays serial). Every queued job carries its hold reason
+(`WorkshopDownload.hold`); starts and holds go to the app log. The snapshot
+carries `downloadSlots`; `panel.js` `queueState()` sums running jobs for the
+activity bar and the queue footer states the slot rule.
+
+- `python3 scripts/test.py`: Python suites and XcodeGen passed; native suite
+  executed 276 tests with 0 failures, including the new
+  `DownloaderTests.testAcceptedSignInLetsSiblingsRunSideBySideUpToTheSlotLimit`
+  (limit 2: only the first job prompts, the other three hold for the sign-in,
+  two transfer together once the password is accepted, the third waits for a
+  slot and starts when the first releases, all four import, no staging left,
+  private session permissions) and
+  `testSessionConflictSerialisesTheQueueAndRetriesTheEndedJob` (a sibling
+  ended with "FAILED (Logged in elsewhere)" is back in line with no error, does
+  not start while the first still runs, the slot limit drops to 1, and it
+  imports on its automatic retry). The serial opt-out queue, saved-sign-in
+  handoff, failure-slot, shutdown and store intent tests pass unchanged.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED (the CoreDevice/CoreSimulator plug-in warnings are Xcode's); the
+  built app's bundled `WebUI/panel.js` carries `downloadSlots`.
+- Not verified: a live batch on a real account — whether Steam keeps two of
+  the app's sessions signed in on one account, whether SteamCMD has written a
+  reusable sign-in by the time it reports the login, and the activity bar with
+  several real transfers. No desktop run was authorised.
+
+## 2026-09-17 — Parallel Workshop downloads withdrawn; the queue is serial again
+
+On a real account the parallel queue never ran a second transfer: with one
+item transferring, the next two tiles stayed at the dimmed "waiting" ring until
+it finished (the manager's saved-sign-in gate held them, and the downloader
+writes nothing to the app log that would say why). Steam's handling of two
+SteamCMD sessions sharing one saved sign-in is undocumented and could not be
+tried without a live sign-in, so `WorkshopDownloadManager` is back to one
+private SteamCMD session at a time (the pre-parallel version): queued jobs
+start in order as each finishes and reuse the sign-in the previous job saved.
+Removed with it: `maximumConcurrentDownloads`, `canJoinRunningDownloads`,
+`WorkshopDownloader.promptedForSignIn` and `onAuthenticated`, the snapshot's
+`downloadSlots`, and the multi-job aggregate in `panel.js` `queueState()`
+(the activity bar carries the running job's own status, percentage and speed;
+the queue footer states that downloads run one at a time). The disk-measured
+progress, tile rings and page-size negotiation from the same batch stay.
+
+- `python3 scripts/test.py`: Python suites and XcodeGen passed; native suite
+  executed 274 tests with 0 failures after deleting
+  `DownloaderTests.testSavedSignInRunsDownloadsInParallelUpToTheSlotLimit` and
+  `testStaleSavedSignInHoldsTheQueueUntilTheRenewingJobFinishes`; the serial
+  queue, sign-in handoff, failure-slot and shutdown tests pass unchanged.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED (the CoreDevice/CoreSimulator plug-in warnings are Xcode's, not the
+  app target's); the built app's bundled `WebUI/panel.js` no longer mentions
+  `downloadSlots` and carries the one-at-a-time queue note.
+- Not verified: a live batch on a real account with the serial queue. No
+  desktop run was authorised.
+
+## 2026-09-17 — Discover rows fill the grid height
+
+A window whose grid was about a pixel short of a fourth row showed three rows
+and a near-row of blank space (Discover asks for 15 tiles per page). Discover
+tiles may now stretch or squash by up to 15% so the rows fill the grid exactly,
+and the page-size measurement reads the grid's outer width so a classic
+scrollbar appearing on a briefly overflowing page cannot flip the fit.
+
+- A throwaway sweep of 210 web-view sizes (900–1600 × 600–1100) through the
+  panel with a stand-in native reply: before the width change, two sizes at
+  600pt toggled the fit every frame as a 9pt scrollbar appeared and vanished;
+  after it, 0 mismatches (page size = rendered columns × rows, no overflow,
+  three or more rows leave under a pixel per row). The sweep was removed; the
+  kept `testDiscoverPageRowsFillTheGridHeight` checks five sizes including the
+  reported one and the oscillating one.
+- `python3 scripts/test.py`: Python suites and XcodeGen passed; native suite
+  executed 276 tests with 0 failures.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED; the bundled `WebUI/panel.js` carries the row-fit (`fitRows`).
+- Not verified: the live app at the reported window size with overlay
+  scrollbars and real thumbnails. No desktop run was authorised.
+
+## 2026-09-17 — Parallel Workshop downloads re-verified on the integrated tree
+
+Re-ran the routine gate and the Swift-only Release build on the tree that
+carries the parallel download manager, the disk-measured transfer progress,
+the Discover page-size negotiation and the tile download ring together.
+
+- `python3 scripts/test.py`: Python suites and XcodeGen passed; native suite
+  executed 273 tests with 0 failures, including both parallel-queue tests in
+  `DownloaderTests` and the disk-progress tests.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED (Xcode's CoreDevice/CoreSimulator plug-in warnings are unrelated
+  to the app target). The built app's bundled `WebUI/panel.js` contains
+  `queueNote()` and the `downloadSlots` slot rule, and its binary carries the
+  queued-status string.
+- Not verified: a live batch of several Steam transfers on a real account, the
+  activity bar with more than one running job, and Steam-side limits on
+  concurrent SteamCMD sessions. No desktop run was authorised.
+
+## 2026-09-17 — Workshop progress capped by bytes received over the network
+
+Workshop transfer progress was the allocated bytes under the staging's
+`steamapps/workshop` tree alone. Steam can allocate a file's full length before
+its chunks arrive, so that figure could claim 99% of an item at once and sit
+there. `NetworkReceiveMeter` now also totals the bytes the SteamCMD process
+receives (`bytesReceived`, exposed through `ProcessNetworkMonitoring`), and
+`WorkshopDownloader.sampleWorkshopDisk` reports the smaller of the tree and
+that total, both capped at the listed `file_size`; without a meter the tree
+alone is used, as before. `nettop`'s first delta row for a process carries
+everything it received since launch, so it anchors the timeline and neither
+the rate nor the total includes it.
+
+- Probe of `/usr/bin/nettop -P -L … -p <pid> -n -x -d -s 1 -J bytes_in`
+  against a rate-limited `curl` child started 3 s earlier: header `,bytes_in,`
+  then `curl.<pid>,<bytes>,` rows, no time column; the first row held ~6.6 MB
+  (everything since the process began), later rows ~2.06 MB each at the 2 MB/s
+  limit. A real Workshop browse page carried `file_size` as a decimal string.
+- `python3 scripts/test.py`: Python suites and XcodeGen passed; native suite
+  ran 275 tests with 0 failures, including the new
+  `DownloaderTests.testPreallocatedWorkshopFilesReportOnlyBytesThatCrossedTheNetwork`
+  (2048 bytes on disk at once with the meter at 0 → 0%, then 512 → 25%,
+  1536 → 75%, a meter beyond the tree → 99% at the tree's 2048, a meter that
+  stops reporting falls back to the tree, cleared on shutdown) and
+  `testNetworkReceiveMeterTotalsEveryRowAfterTheFirst` (first row dropped,
+  foreign/malformed rows ignored, out-of-window and same-timestamp rows still
+  counted, the total survives the oversized-output reset). The existing
+  disk-growth, rate and monitor tests pass unchanged.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED from the edited tree; the Release binary is stripped, so its
+  contents were not inspected beyond the build's own output.
+- Not verified: a live SteamCMD transfer (whether Steam's macOS writer really
+  preallocates, and how far compressed chunks put the network total behind
+  the listed size). No desktop run was authorised.
+
+## 2026-09-17 — Parallel Workshop downloads gated on a saved sign-in
+
+`WorkshopDownloadManager` runs up to `maximumConcurrentDownloads` (default 3)
+private SteamCMD sessions at once instead of one. A queued job joins running
+downloads only when it can sign in silently: **Keep me signed in** is on, the
+saved sign-in belongs to its account, and no running job is still
+authenticating or was prompted (`WorkshopDownloader.promptedForSignIn`, set by
+any password/code/approval prompt). The worker's new `onAuthenticated` hook
+re-pumps the queue when Steam accepts a sign-in, so the first job of a batch
+authenticates alone and the rest reuse what it saves on completion; without a
+saved sign-in behaviour is unchanged (serial). The panel snapshot carries
+`downloadSlots`; `panel.js` `queueState()` aggregates every active job (mean
+of measured percentages, summed speeds, "N downloading") for the activity bar
+and badge, and the queue footer states the slot rule.
+
+- `python3 scripts/test.py`: Python suites and XcodeGen passed; native suite
+  ran 273 tests with 0 failures, including the new
+  `DownloaderTests.testSavedSignInRunsDownloadsInParallelUpToTheSlotLimit`
+  (limit 2: the fresh sign-in runs alone, two jobs transfer together once it
+  saved, the fourth waits for a slot, all four import, no staging left,
+  private session perms) and
+  `testStaleSavedSignInHoldsTheQueueUntilTheRenewingJobFinishes` (a rejected
+  saved sign-in keeps `activeCount == 1` through the prompt and through the
+  transfer that follows it; siblings start silently after it finishes). The
+  existing serial, session-handoff, failure-slot and intent-ladder tests pass
+  unchanged.
+- Throwaway Bun evaluation of `queueState()`/`queueNote()` extracted from
+  `WebUI/panel.js`: two active jobs at 20%/60% with 1 MB/s + 500 KB/s summarise
+  as "2 downloading · 40% · Network speed: 1.5 MB/s", badge count 3 with one
+  queued; a single authenticating job keeps its status text with no percentage.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED; the built app's binary carries the new queued-status string and
+  its bundled `WebUI/panel.js` contains `queueNote()` and the multi-job
+  `queueState()` summary.
+- Not verified: the live activity bar with several transfers, and real Steam
+  behaviour for concurrent SteamCMD sessions on one account (each session uses
+  its own private copy of the saved sign-in; Steam-side session limits or rate
+  limits would surface as per-job failures). No desktop run or Release build
+  was authorised.
+
+## 2026-09-17 — Larger, steady Discover download ring with transfer speed
+
+The Discover tile ring (`.tile-download`) is redrawn closer to Wallpaper
+Engine's own: 72px (64/60px in the narrow tile breakpoints), the still dims
+behind it, no chip until hover, a 4px accent stroke on a faint track, the
+percentage centred with the transfer speed beneath it (speed alone while the
+percentage is unknown; hidden at the 116px tile size where it cannot fit).
+Hover fills the chip and shows the cancel mark. The shimmer is gone because
+nothing rotates any more: the value circle uses `pathLength="100"` so progress
+is a plain dash offset, and the busy sweep animates `stroke-dashoffset` instead
+of a `rotate()` transform on a layer centred between device pixels. Attention
+and failed states colour the track instead of a box-shadow ring; the attention
+pulse is a sonar ripple. `speed()` formats the compact value; `rate()` keeps
+its "Network speed:" prefix for the activity bar and queue.
+
+- `python3 scripts/test.py`: Python suite and XcodeGen passed; native suite
+  ran 271 tests with 0 failures, twice (before and after extending
+  `ControlPanelLayoutTests.testDiscoverTilesCarryDownloadRingsAndOnlySteamRequestsOpenTheDialogWithoutWindow`
+  to assert `.ring-speed` reads "600 KB/s" beside the 42% label and alone while
+  authenticating without a percentage; `.ring-label` still reads "42%" and the
+  progress dash offset stays positive).
+- `.agents/skills/impeccable/scripts/impeccable detect --json WebUI/panel.css WebUI/panel.js`:
+  no findings.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED; the bundled `WebUI/panel.js` and `panel.css` in the built app
+  contain the new ring markup and styles.
+- Not verified: the rendered ring, hover state and the absence of shimmer on a
+  live panel. No desktop run or screenshot was authorised; the offscreen
+  WKWebView tests cover markup and state only.
+
+## 2026-09-17 — Tile download rings, double-click download, measured Workshop progress
+
+Discover tiles now carry their download state as a ring over the thumbnail
+(`.tile-download`: percentage + filling stroke, spinning arc, queued arrow,
+pulsing shield, retry mark; `.tile-installed` check for library items), a
+double-click on a Discover tile requests the download (or applies an installed
+item), the top-bar downloads button appears only while downloads exist, and the
+sign-in dialog no longer opens for every hand-off: it opens by itself only when
+a job carries a password prompt or Steam Guard challenge, **Not now** silences
+that exact request, and it closes once Steam is satisfied. Workshop transfer
+progress is measured on disk: `WorkshopDownloader` sums allocated bytes under
+the staging's `steamapps/workshop` tree twice a second while Steam reports
+"downloading item" and divides by the Workshop `file_size`, capped at 99% until
+Steam's own success line; items without a listed size stay indeterminate.
+
+- `python3 scripts/test.py`: Python suite and XcodeGen passed; native suite
+  ran 246 tests with 5 failures, all in
+  `WorkshopStoreTests.testPanelPageSizeComposesPagesFromCachedSteamPages`,
+  which belongs to an uncommitted, concurrent panel page-size change in
+  `WorkshopStore.swift` / `WorkshopStoreTests.swift` that this work did not
+  touch. New and changed tests passed:
+  `DownloaderTests.testWorkshopDiskGrowthReportsProgressAgainstListedSize`
+  (512/2048 → 25%, 1536/2048 → 75%, over-listed bytes stay at 99%, cleared on
+  shutdown), `testWorkshopDiskGrowthWithoutListedSizeStaysIndeterminate`, and
+  `ControlPanelLayoutTests.testDiscoverTilesCarryDownloadRingsAndOnlySteamRequestsOpenTheDialogWithoutWindow`
+  (ring percentage and cancel action, no dialog while authenticating with no
+  prompt, auto-open on a password prompt, Not now stays quiet for the same
+  prompt, reopens for a mobile challenge, closes when the job resumes, retry
+  ring after failure, check once installed).
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED; the bundled `WebUI/panel.js` in the delivered app contains the
+  tile ring code.
+- Not verified: the ring against a live SteamCMD transfer (no desktop run
+  requested), and whether Steam's macOS content writer ever block-preallocates
+  Workshop files, which would inflate the on-disk measurement.
+
+## 2026-09-17 — Discover pages sized to the grid
+
+A Discover page held Steam's fixed 30 items, so wide windows ended in a partial
+row and empty space. The panel now measures its grid (columns × full rows of
+square tiles, empty-state box while the grid is hidden, `ResizeObserver` plus a
+re-measure after each grid render, 120ms debounce) and sends `workshopPageSize`.
+`WorkshopStore.setPageSize` cuts pages of that size from a per-query cache of
+Steam pages, fetching only the missing ones (the first alone while Steam's page
+count is unknown, the rest concurrently, in-flight fetches joined rather than
+repeated); a size change keeps the first visible tile by remapping the page
+number, restarts a loading page at the new size, and a fully cached page is
+published synchronously without a loading state. The snapshot carries the
+current `pageSize` and a `reachable` count for the Steam cap note.
+
+- `python3 scripts/test.py`: Python suite, XcodeGen and native unit tests
+  passed (271 tests, 0 failures). New
+  `testPanelPageSizeComposesPagesFromCachedSteamPages` drives pages of 40 across
+  Steam pages 1–3, a shrink to 30 served from cache with no request, a fresh
+  search discarding the cache, and a grow to 35 while page 3 loads. New
+  `testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes` checks the page's
+  reported size equals resolved columns × full rows at 960×640, that exactly
+  that many tiles neither scroll nor leave a full row empty, that nothing is
+  re-requested, and that a 1400×900 resize reports a larger size that the store
+  adopts.
+- Earlier attempts of the WebUI test failed on non-numeric fixture ids (the
+  parser drops them) and on measuring after the native reply had re-rendered
+  Installed; both were test-side fixes.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD
+  SUCCEEDED; the delivered app carries the new WebUI and store.
+- Not verified: the live window's look while resizing (no desktop run
+  requested).
+
 ## 2026-09-17 — Filter sidebar arrow rail and draggable inspector edge
 
 Follow-up to the collapse/fluid-width entry below: the toolbar **Filters**

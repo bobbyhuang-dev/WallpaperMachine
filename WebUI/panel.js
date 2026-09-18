@@ -18,6 +18,9 @@ let dialogTarget = null;
 let dialogTrigger = null;
 let workshopDraft = null;
 let dialogAccount = null;
+// Password / Steam Guard requests the user closed with "Not now": keyed by job and request so the
+// same request stays quiet while a new one still opens the dialog.
+const dismissedAuth = new Set();
 let searchTimer;
 const installed = { text: '', kind: 'All types', favorites: false, active: false, sort: 'title' };
 // Multi-select lives only in the page: ids of installed wallpapers checked for a batch action.
@@ -48,12 +51,13 @@ function safeImage(url) { if (!url) return ''; try { const parsed = new URL(url)
 function preview(url, className = '') { const source = safeImage(url); return `${icon('image', 32)}${source ? `<img ${keyAttr(source)} class="${className}" src="${escapeHTML(source)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ''}`; }
 function tags(values = []) { return `<div class="tags">${values.map(value => `<span class="tag">${escapeHTML(value)}</span>`).join('')}</div>`; }
 function bytes(value) { if (!Number.isFinite(value) || value <= 0) return ''; const units = ['B', 'KB', 'MB', 'GB']; const exponent = Math.min(Math.floor(Math.log(value) / Math.log(1024)), 3); return `${(value / 1024 ** exponent).toLocaleString(undefined, { maximumFractionDigits: 1 })} ${units[exponent]}`; }
-function rate(value) {
+function speed(value) {
   if (!Number.isFinite(value) || value < 0) return '';
   const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
   const exponent = value > 0 ? Math.min(Math.max(Math.floor(Math.log10(value) / 3), 0), 3) : 0;
-  return `Network speed: ${(value / 1000 ** exponent).toLocaleString(undefined, { maximumFractionDigits: 1 })} ${units[exponent]}`;
+  return `${(value / 1000 ** exponent).toLocaleString(undefined, { maximumFractionDigits: 1 })} ${units[exponent]}`;
 }
+function rate(value) { const pace = speed(value); return pace ? `Network speed: ${pace}` : ''; }
 function transfer(item, { includePercent = true } = {}) { const percent = Number.isFinite(item?.progress) ? `${Math.round(clamp(item.progress) * 100)}%` : ''; const received = bytes(item?.bytesReceived); const expected = bytes(item?.bytesExpected); const amount = received && expected ? `${received} of ${expected}` : received; return [includePercent ? percent : '', amount, rate(item?.bytesPerSecond)].filter(Boolean).join(' · '); }
 
 // Keyed reconciliation keeps loaded preview images, open disclosures and active fields alive.
@@ -156,7 +160,7 @@ function render() {
     renderGrid(discover);
     renderInspector(discover);
   }
-  renderActivity(); renderPopover(); renderDialog();
+  renderActivity(); renderPopover(); renderDialog(); surfaceAuthRequests();
 }
 function renderToolbar(discover) {
   const filterCount = Number(installed.kind !== 'All types') + Number(installed.favorites) + Number(installed.active);
@@ -189,15 +193,52 @@ function renderGrid(discover) {
   const count = `${items.length.toLocaleString()} ${items.length === 1 ? 'wallpaper' : 'wallpapers'}`;
   morph($('browser-summary'), loading ? escapeHTML(discover ? 'Searching Steam Workshop…' : 'Loading your library…') : discover ? escapeHTML(workshop.loaded ? `${Number(workshop.totalCount).toLocaleString()} results` : 'Steam Workshop') : selection.size ? `<div class="selection-bar"><span class="selection-count">${selection.size.toLocaleString()} selected</span>${button('Select all', 'selectAllVisible', {}, { className: 'link', disabled: items.every(item => selection.has(item.id)) })}${button('Clear', 'clearSelection', {}, { className: 'link' })}${button(selection.size === 1 ? 'Move to Trash' : `Move ${selection.size.toLocaleString()} to Trash`, 'deleteSelected', {}, { icon: 'trash', className: 'danger', disabled: state.busy || busy('deleteMany') })}</div>` : `<div class="selection-bar"><span>${escapeHTML(count)}</span>${items.length && selecting ? `<span class="muted">Click tiles to select them.</span>${button('Select all', 'selectAllVisible', {}, { className: 'link' })}` : ''}</div>`);
   $('wallpaper-grid').classList.toggle('selecting', !discover && (selecting || selection.size > 0));
-  morph($('wallpaper-grid'), items.map(item => `<article class="wallpaper-tile${selection.has(item.id) ? ' checked' : ''}" ${keyAttr(item.id)}><button type="button" class="tile-select" data-action="${discover ? 'workshopSelect' : 'select'}" data-id="${escapeHTML(item.id)}" aria-pressed="${item.id === selectedID}" aria-label="${escapeHTML(item.title)}, ${escapeHTML(item.kind)}${item.id === selectedID ? ', selected' : ''}"><span class="tile-placeholder">${icon('image', 28)}</span>${safeImage(item.thumbnail || item.preview) ? `<img ${keyAttr(item.thumbnail || item.preview)} src="${escapeHTML(safeImage(item.thumbnail || item.preview))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ''}${discover && item.id === animatedID && item.thumbnail && safeImage(item.preview) ? `<img ${keyAttr(`live-${item.preview}`)} class="tile-live" src="${escapeHTML(safeImage(item.preview))}" alt="" decoding="async" referrerpolicy="no-referrer">` : ''}<span class="tile-caption"><span class="tile-title">${escapeHTML(item.title)}</span><span class="tile-kind">${escapeHTML(item.kind)}</span></span></button>${!discover ? `<button type="button" class="tile-check" data-action="toggleSelect" data-id="${escapeHTML(item.id)}" aria-pressed="${selection.has(item.id)}" aria-label="${selection.has(item.id) ? 'Deselect' : 'Select'}: ${escapeHTML(item.title)}">${icon('check', 14)}</button><button type="button" class="tile-favorite" data-action="favorite" data-id="${escapeHTML(item.id)}" aria-pressed="${state.favorites.includes(item.id)}" aria-label="${state.favorites.includes(item.id) ? 'Remove favorite' : 'Add favorite'}: ${escapeHTML(item.title)}"${disabled(busy('favorite', { id: item.id }))}>${icon('star', 14)}</button>${target?.wallpaperID === item.id ? '<span class="active-badge">Active</span>' : item.active ? '<span class="active-badge">Other display</span>' : ''}` : ''}</article>`).join(''));
+  morph($('wallpaper-grid'), items.map(item => `<article class="wallpaper-tile${selection.has(item.id) ? ' checked' : ''}" ${keyAttr(item.id)}><button type="button" class="tile-select" data-action="${discover ? 'workshopSelect' : 'select'}" data-id="${escapeHTML(item.id)}" aria-pressed="${item.id === selectedID}" aria-label="${escapeHTML(item.title)}, ${escapeHTML(item.kind)}${item.id === selectedID ? ', selected' : ''}"><span class="tile-placeholder">${icon('image', 28)}</span>${safeImage(item.thumbnail || item.preview) ? `<img ${keyAttr(item.thumbnail || item.preview)} src="${escapeHTML(safeImage(item.thumbnail || item.preview))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ''}${discover && item.id === animatedID && item.thumbnail && safeImage(item.preview) ? `<img ${keyAttr(`live-${item.preview}`)} class="tile-live" src="${escapeHTML(safeImage(item.preview))}" alt="" decoding="async" referrerpolicy="no-referrer">` : ''}<span class="tile-caption"><span class="tile-title">${escapeHTML(item.title)}</span><span class="tile-kind">${escapeHTML(item.kind)}</span></span></button>${discover ? tileDownloadMarkup(item) : ''}${!discover ? `<button type="button" class="tile-check" data-action="toggleSelect" data-id="${escapeHTML(item.id)}" aria-pressed="${selection.has(item.id)}" aria-label="${selection.has(item.id) ? 'Deselect' : 'Select'}: ${escapeHTML(item.title)}">${icon('check', 14)}</button><button type="button" class="tile-favorite" data-action="favorite" data-id="${escapeHTML(item.id)}" aria-pressed="${state.favorites.includes(item.id)}" aria-label="${state.favorites.includes(item.id) ? 'Remove favorite' : 'Add favorite'}: ${escapeHTML(item.title)}"${disabled(busy('favorite', { id: item.id }))}>${icon('star', 14)}</button>${target?.wallpaperID === item.id ? '<span class="active-badge">Active</span>' : item.active ? '<span class="active-badge">Other display</span>' : ''}` : ''}</article>`).join(''));
   const empty = $('browser-empty'); empty.hidden = items.length > 0;
   $('wallpaper-grid').hidden = !items.length;
   if (!items.length) morph(empty, loading ? `<h1>${discover ? 'Loading Workshop' : 'Loading wallpapers'}</h1><p>${discover ? 'Fetching wallpapers from Steam.' : 'Reading your wallpaper library.'}</p>` : workshop.error && discover ? `<h1>Workshop unavailable</h1><p>${escapeHTML(workshop.error)}</p>${button('Try again', 'workshopRetry', {}, { icon: 'refresh' })}` : `<h1>${discover ? 'No wallpapers found' : state.wallpapers.length ? 'No matching wallpapers' : 'Your wallpaper library is empty'}</h1><p>${discover ? 'Try a different search or remove some filters. Every selected tag must match.' : state.wallpapers.length ? 'Change your search or clear filters to see more wallpapers.' : 'Import a wallpaper folder or find something on the Workshop.'}</p><div class="actions">${discover ? button('Clear search and filters', 'clearWorkshopSearch') : state.wallpapers.length ? button('Clear search and filters', 'clearInstalledSearch') : `${button('Import wallpapers', 'openImport', {}, { icon: 'plus' })}${button('Browse Workshop', 'navigate', { page: 'discover' }, { className: 'primary' })}`}</div>`);
+  if (discover) measureWorkshopPageSize(); else $('wallpaper-grid').style.removeProperty('--tile-height');
   const pages = Math.max(1, Number(workshop.totalPages) || 1);
   // Steam's public browse page stops at 1,000 pages of 30, whatever the result count says.
-  const reachable = pages * (Number(workshop.pageSize) || 30);
+  const reachable = Number(workshop.reachable) || pages * (Number(workshop.pageSize) || 30);
   const capped = Boolean(workshop.loaded) && Number(workshop.totalCount) > reachable;
   morph($('pagination'), discover ? `${workshop.error && items.length ? `<p class="error">${escapeHTML(workshop.error)}</p>${button('Retry', 'workshopRetry')}` : ''}${button('', 'workshopPage', { workshopPage: Math.max(1, workshop.page - 1) }, { icon: 'chevronLeft', title: 'Previous page', disabled: loading || workshop.page <= 1 })}<form class="page-jump" data-form="workshopPage" aria-label="Go to page" novalidate><label>Page <input type="number" name="page" ${keyAttr('workshop-page')} inputmode="numeric" min="1" max="${pages}" step="1" value="${workshop.page || 1}" title="Type a page number and press Return" aria-label="Page number"${disabled(loading || pages <= 1)}></label><span>of ${pages.toLocaleString()}</span><button type="submit" class="link"${disabled(loading || pages <= 1)}>Go</button></form>${button('', 'workshopPage', { workshopPage: workshop.page + 1 }, { icon: 'chevronRight', title: 'Next page', disabled: loading || workshop.page >= pages })}${capped ? `<p class="pagination-note">Steam only lists the first ${reachable.toLocaleString()} of ${Number(workshop.totalCount).toLocaleString()} results. Narrow the search or add filters to reach the rest.</p>` : ''}` : '');
+}
+// A Discover tile wears its download state as a ring over the still, the way Wallpaper Engine's
+// own library does: live progress while transferring, one click to cancel, a shield when Steam
+// needs the user, a retry mark after a failure, and a check once the wallpaper is in the library.
+function tileDownloadMarkup(item) {
+  const request = requestByID(item.id);
+  const job = jobByID(item.id);
+  if (request) return tileRing({ kind: 'attention', glyph: 'shield', action: 'continueSetup', id: item.id, label: `Continue setup to download ${item.title}` });
+  if (job?.pending) {
+    if (job.queued) return tileRing({ kind: 'queued', glyph: 'download', hoverGlyph: 'close', action: 'downloadCancel', id: item.id, label: `${item.title} is waiting to download. Click to remove it from the queue` });
+    if (job.prompt || job.challenge) return tileRing({ kind: 'attention', glyph: 'shield', action: 'continueSetup', id: item.id, label: `Finish the Steam sign-in to download ${item.title}` });
+    const percent = Number.isFinite(job.progress) ? Math.round(clamp(job.progress) * 100) : null;
+    const pace = speed(job.bytesPerSecond);
+    return tileRing({ kind: percent === null ? 'busy' : 'progress', progress: percent === null ? null : clamp(job.progress), text: percent === null ? '' : `${percent}%`, speed: pace, hoverGlyph: 'close', action: 'downloadCancel', id: item.id, label: `${percent === null ? job.status || 'Downloading' : `Downloading ${percent}%`}${pace ? ` at ${pace}` : ''}: ${item.title}. Click to cancel` });
+  }
+  if (job && needsReview(job)) return tileRing({ kind: 'failed', glyph: 'refresh', action: 'downloadRetry', id: item.id, label: `${job.error || 'Download cancelled.'} Click to try again`, disabled: !state.setup?.ready });
+  if (state.wallpapers.some(wallpaper => wallpaper.id === item.id)) return `<span class="tile-installed" title="In your library">${icon('check', 12)}</span>`;
+  return '';
+}
+// pathLength="100" makes the dash offset a percentage, and the busy sweep travels by dash offset rather
+// than a rotate() transform: rotating a layer whose centre lands between pixels shimmers in WebKit.
+function tileRing({ kind, glyph = '', hoverGlyph = '', progress = null, text = '', speed: pace = '', action, id, label, disabled: off = false }) {
+  const dashOffset = kind === 'busy' ? 100 : progress === null ? 0 : 100 * (1 - progress);
+  const value = kind === 'progress' || kind === 'busy' ? `<circle class="ring-value" cx="36" cy="36" r="32" pathLength="100" stroke-dasharray="${kind === 'busy' ? '26 74' : '100'}" stroke-dashoffset="${dashOffset.toFixed(1)}" transform="rotate(-90 36 36)"/>` : '';
+  const copy = text || pace ? `<span class="ring-copy"><span class="ring-label">${escapeHTML(text)}</span>${pace ? `<span class="ring-speed">${escapeHTML(pace)}</span>` : ''}</span>` : `<span class="ring-label">${glyph ? icon(glyph, 18) : ''}</span>`;
+  return `<button type="button" class="tile-download ${kind}" data-action="${action}" data-id="${escapeHTML(id)}" aria-label="${escapeHTML(label)}" title="${escapeHTML(label)}"${disabled(off)}><svg class="ring" viewBox="0 0 72 72" aria-hidden="true"><circle class="ring-track" cx="36" cy="36" r="32"/>${value}</svg>${copy}${hoverGlyph ? `<span class="ring-hover">${icon(hoverGlyph, 18)}</span>` : ''}</button>`;
+}
+// Double-clicking a Discover tile downloads it; once it is in the library the same gesture applies it.
+function tileDoubleClickAction(id) {
+  if (state.wallpapers.some(item => item.id === id)) {
+    const target = state.displays.find(display => display.id === state.targetDisplayID);
+    const kind = state.wallpapers.find(item => item.id === id)?.kind;
+    return !['Application', 'Unknown'].includes(kind) && target?.enabled && target.mode !== 'mirror' && !state.busy ? 'activate' : 'workshopSelect';
+  }
+  if (jobByID(id)?.pending) return 'workshopSelect';
+  return requestByID(id) ? 'continueSetup' : 'requestDownload';
 }
 
 function renderInspector(discover) {
@@ -212,7 +253,7 @@ function renderInspector(discover) {
   const downloadAction = request
     ? button('Continue setup', 'continueSetup', { id: request.id }, { icon: 'shield', className: 'primary' })
     : download?.pending
-      ? button(download.queued ? 'Waiting to download' : percent === null ? 'Downloading' : `Downloading ${percent}%`, 'openDownloads', {}, { icon: 'download', className: 'primary' })
+      ? `${download.prompt || download.challenge ? button('Finish sign-in', 'continueSetup', { id: item.id }, { icon: 'shield', className: 'primary' }) : button(download.queued ? 'Waiting to download' : percent === null ? 'Downloading' : `Downloading ${percent}%`, 'openDownloads', {}, { icon: 'download', className: 'primary' })}${button(download.queued ? 'Remove from queue' : 'Cancel', 'downloadCancel', { id: item.id }, { className: 'quiet' })}`
       : button(download?.error ? 'Download again' : 'Download', 'requestDownload', { id: item.id }, { icon: 'download', className: 'primary' });
   const options = !discover && state.options?.id === item.id ? state.options : null;
   const compatibility = { Scene: 'Scene renderer is experimental.', Video: 'Playback depends on the video codec.', Web: 'Runs in a built-in web view. Mouse input reaches the page; audio response and keyboard input are not available yet.', Application: 'Application wallpapers cannot run on macOS.', Unknown: 'This wallpaper type is not supported.' }[item.kind] || '';
@@ -258,22 +299,32 @@ const challengeHint = (challenge) => ({
 function queueState() {
   const downloads = state.downloads || [];
   const requests = state.downloadRequests || [];
-  const running = downloads.find(item => item.pending && !item.queued);
+  const active = downloads.filter(item => item.pending && !item.queued);
   const queued = downloads.filter(item => item.pending && item.queued);
   const attention = downloads.filter(item => item.prompt || item.challenge || item.error);
-  const percent = Number.isFinite(running?.progress) ? Math.round(clamp(running.progress) * 100) : null;
-  const count = requests.length + (running ? 1 : 0) + queued.length;
-  const summary = running ? (running.status || 'Downloading') + (percent !== null ? ` · ${percent}%` : '') + (rate(running.bytesPerSecond) ? ` · ${rate(running.bytesPerSecond)}` : '') : requests.length ? `${requests.length} download${requests.length === 1 ? '' : 's'} need setup` : queued.length ? `${queued.length} waiting to download` : downloads.length ? `${downloads.length} download${downloads.length === 1 ? '' : 's'}` : 'No downloads';
-  return { downloads, requests, running, queued, attention, percent, count, summary };
+  // Several downloads can run at once: the activity bar carries one job's own figures, or the
+  // batch's mean progress and summed speed once more than one is running.
+  const running = active[0];
+  const measured = active.filter(item => Number.isFinite(item.progress));
+  const progress = measured.length ? clamp(measured.reduce((sum, item) => sum + clamp(item.progress), 0) / measured.length) : null;
+  const percent = progress === null ? null : Math.round(progress * 100);
+  const speed = active.reduce((sum, item) => sum + (Number.isFinite(item.bytesPerSecond) ? item.bytesPerSecond : 0), 0);
+  const count = requests.length + active.length + queued.length;
+  const summary = active.length > 1 ? [`${active.length} downloading`, percent !== null ? `${percent}%` : '', speed > 0 ? rate(speed) : ''].filter(Boolean).join(' · ') : running ? [running.status || 'Downloading', percent !== null ? `${percent}%` : '', rate(running.bytesPerSecond)].filter(Boolean).join(' · ') : requests.length ? `${requests.length} download${requests.length === 1 ? '' : 's'} need setup` : queued.length ? `${queued.length} waiting to download` : downloads.length ? `${downloads.length} download${downloads.length === 1 ? '' : 's'}` : 'No downloads';
+  return { downloads, requests, active, queued, attention, progress, percent, count, summary };
 }
 function queueButton() {
-  const { attention, count, summary } = queueState();
+  const { downloads, requests, attention, count, summary } = queueState();
+  // Tiles and the activity bar carry download state; the top-bar button only appears once there is a list to open.
+  if (!downloads.length && !requests.length) return '';
   const label = `Downloads: ${summary}${attention.length ? ' · needs attention' : ''}`;
   return `<button type="button" data-action="openDownloads" class="quiet icon-button queue-button" aria-haspopup="dialog" aria-expanded="${popover === 'downloads'}" title="${escapeHTML(label)}" aria-label="${escapeHTML(label)}">${icon('download')}${count ? `<span class="queue-badge${attention.length ? ' attention' : ''}" aria-hidden="true">${count}</span>` : ''}</button>`;
 }
 function renderActivity() {
-  const { summary, attention, running, percent } = queueState();
-  morph($('activity-bar'), `<div class="activity-left">${button('', 'playback', {}, { icon: state.paused ? 'play' : 'pause', title: state.paused ? 'Resume wallpaper playback' : 'Pause wallpaper playback', className: 'quiet icon-button', disabled: state.busy || !(state.wallpapers || []).some(item => item.active) })}<span class="activity-copy">${state.paused ? 'Playback paused' : 'Playback running'}</span></div><div class="activity-right">${state.import?.busy ? button(state.import.status || 'Importing…', 'openImport', {}, { icon: 'folder', className: 'quiet' }) : ''}${state.setup?.busy ? '<span class="activity-copy">Setting up SteamCMD…</span>' : ''}${running && !running.authenticating ? `<progress class="activity-progress" max="1"${percent !== null ? ` value="${clamp(running.progress)}"` : ''} aria-label="${escapeHTML(running.title)} download progress"></progress>` : ''}${button(`${summary}${attention.length ? ' · needs attention' : ''}`, 'openDownloads', {}, { icon: 'download', className: 'quiet' })}</div>`);
+  const { summary, attention, active, progress } = queueState();
+  const transferring = active.filter(item => !item.authenticating);
+  const label = transferring.length === 1 ? `${transferring[0].title} download progress` : `${transferring.length} downloads progress`;
+  morph($('activity-bar'), `<div class="activity-left">${button('', 'playback', {}, { icon: state.paused ? 'play' : 'pause', title: state.paused ? 'Resume wallpaper playback' : 'Pause wallpaper playback', className: 'quiet icon-button', disabled: state.busy || !(state.wallpapers || []).some(item => item.active) })}<span class="activity-copy">${state.paused ? 'Playback paused' : 'Playback running'}</span></div><div class="activity-right">${state.import?.busy ? button(state.import.status || 'Importing…', 'openImport', {}, { icon: 'folder', className: 'quiet' }) : ''}${state.setup?.busy ? '<span class="activity-copy">Setting up SteamCMD…</span>' : ''}${transferring.length ? `<progress class="activity-progress" max="1"${progress !== null ? ` value="${progress}"` : ''} aria-label="${escapeHTML(label)}"></progress>` : ''}${button(`${summary}${attention.length ? ' · needs attention' : ''}`, 'openDownloads', {}, { icon: 'download', className: 'quiet' })}</div>`);
 }
 function previewThumb(url) {
   const source = safeImage(url);
@@ -296,8 +347,12 @@ function queueMarkup() {
   const succeeded = downloads.filter(item => !item.pending && !needsReview(item));
   const rows = [...requests.map(queueRequestRow), ...active.map(queueJobRow), ...unresolved.map(queueJobRow), ...(queueExpanded ? succeeded.map(queueJobRow) : [])].join('');
   const empty = succeeded.length ? 'Every download finished. Nothing needs you.' : 'No downloads yet. Pick a Workshop wallpaper and choose Download.';
-  return `<div class="popover-heading"><h2 id="queue-popover-title">Downloads</h2>${button('', 'closePopover', {}, { icon: 'close', title: 'Close downloads', className: 'quiet icon-button' })}</div>${rows ? `<ul class="queue-list">${rows}</ul>` : `<p class="queue-empty">${empty}</p>`}<div class="popover-footer"><p class="queue-note">Downloads run one at a time. Steam may ask you to approve each sign-in.</p><div class="actions">${succeeded.length ? button(queueExpanded ? 'Hide completed' : `Show completed (${succeeded.length})`, 'toggleQueueHistory', {}, { className: 'link' }) : ''}${downloads.length > active.length ? button('Clear finished', 'clearDownloads', {}, { className: 'quiet' }) : ''}${button('Show download logs', 'showLogs', {}, { icon: 'folder', className: 'link' })}</div></div>`;
+  return `<div class="popover-heading"><h2 id="queue-popover-title">Downloads</h2>${button('', 'closePopover', {}, { icon: 'close', title: 'Close downloads', className: 'quiet icon-button' })}</div>${rows ? `<ul class="queue-list">${rows}</ul>` : `<p class="queue-empty">${empty}</p>`}<div class="popover-footer"><p class="queue-note">${queueNote()}</p><div class="actions">${succeeded.length ? button(queueExpanded ? 'Hide completed' : `Show completed (${succeeded.length})`, 'toggleQueueHistory', {}, { className: 'link' }) : ''}${downloads.length > active.length ? button('Clear finished', 'clearDownloads', {}, { className: 'quiet' }) : ''}${button('Show download logs', 'showLogs', {}, { icon: 'folder', className: 'link' })}</div></div>`;
 }
+const queueNote = () => {
+  const slots = Number(state?.downloadSlots) || 1;
+  return `${slots > 1 ? `Up to ${slots} downloads run at once and share your saved sign-in` : 'Downloads run one at a time'}; the rest wait in order. Steam may still ask you to approve a sign-in.`;
+};
 const needsReview = (item) => Boolean(item.error) || Boolean(item.cancelled);
 function queueRequestRow(request) {
   return `<li class="queue-row attention" ${keyAttr(`request-${request.id}`)}><span class="queue-thumb">${previewThumb(request.thumbnail || request.preview)}</span><div class="queue-body"><p class="queue-title">${escapeHTML(request.title)}</p><p class="queue-status">${escapeHTML(stageHint(request.stage))}</p><div class="actions">${button('Continue setup', 'continueSetup', { id: request.id }, { className: 'primary' })}${button('', 'removeDownloadRequest', { id: request.id }, { icon: 'close', title: `Remove ${request.title} from downloads`, className: 'quiet icon-button' })}</div></div></li>`;
@@ -308,7 +363,7 @@ function queueJobRow(item) {
   const running = item.pending && !item.queued;
   const needsAuth = running && Boolean(item.prompt || item.challenge);
   const review = !item.pending && needsReview(item);
-  return `<li class="queue-row${needsAuth || review ? ' attention' : ''}" ${keyAttr(`job-${item.id}`)}><span class="queue-thumb">${previewThumb(item.thumbnail || item.preview)}</span><div class="queue-body"><p class="queue-title">${escapeHTML(item.title)}</p><p class="queue-status">${escapeHTML(item.status)}${item.queued ? ' · Waiting its turn' : running && transfer(item) ? ` · ${transfer(item)}` : ''}</p>${running ? `<progress max="1"${percent === null ? '' : ` value="${clamp(item.progress)}"`} aria-label="${escapeHTML(item.title)} download progress"></progress>` : ''}${item.error ? `<p class="notice error">${escapeHTML(item.error)}</p>` : ''}${item.warning ? `<p class="notice warning">${escapeHTML(item.warning)}</p>` : ''}<div class="actions">${needsAuth ? button('Finish sign-in', 'continueSetup', { id: item.id }, { icon: 'shield', className: 'primary' }) : ''}${item.pending ? button(item.queued ? 'Remove from queue' : 'Cancel', 'downloadCancel', { id: item.id }, { className: 'quiet' }) : ''}${review ? button('Try again', 'downloadRetry', { id: item.id }, { icon: 'refresh', disabled: !state.setup?.ready }) : ''}${installedItem ? `${button('Show in library', 'showInstalled', { id: item.id }, { icon: 'image', className: 'link' })}${button('Show in Finder', 'reveal', { id: item.id }, { icon: 'folder', className: 'link' })}` : ''}</div></div></li>`;
+  return `<li class="queue-row${needsAuth || review ? ' attention' : ''}" ${keyAttr(`job-${item.id}`)}><span class="queue-thumb">${previewThumb(item.thumbnail || item.preview)}</span><div class="queue-body"><p class="queue-title">${escapeHTML(item.title)}</p><p class="queue-status">${escapeHTML(item.status)}${running && transfer(item) ? ` · ${transfer(item)}` : ''}</p>${running ? `<progress max="1"${percent === null ? '' : ` value="${clamp(item.progress)}"`} aria-label="${escapeHTML(item.title)} download progress"></progress>` : ''}${item.error ? `<p class="notice error">${escapeHTML(item.error)}</p>` : ''}${item.warning ? `<p class="notice warning">${escapeHTML(item.warning)}</p>` : ''}<div class="actions">${needsAuth ? button('Finish sign-in', 'continueSetup', { id: item.id }, { icon: 'shield', className: 'primary' }) : ''}${item.pending ? button(item.queued ? 'Remove from queue' : 'Cancel', 'downloadCancel', { id: item.id }, { className: 'quiet' }) : ''}${review ? button('Try again', 'downloadRetry', { id: item.id }, { icon: 'refresh', disabled: !state.setup?.ready }) : ''}${installedItem ? `${button('Show in library', 'showInstalled', { id: item.id }, { icon: 'image', className: 'link' })}${button('Show in Finder', 'reveal', { id: item.id }, { icon: 'folder', className: 'link' })}` : ''}</div></div></li>`;
 }
 function importMarkup() {
   const status = state.import || {};
@@ -364,6 +419,7 @@ function seedAccount(id) {
 function closeDialog() {
   const node = $('download-dialog');
   const selector = dialogTrigger;
+  for (const job of (state?.downloads || [])) if (job.pending && (job.prompt || job.challenge)) dismissedAuth.add(authKey(job));
   dialogTarget = null;
   dialogTrigger = null;
   dialogAccount = null;
@@ -440,7 +496,15 @@ async function requestDownload(id, element) {
   const request = requestByID(target);
   const job = jobByID(target);
   if (request && request.stage !== 'ready') openDialog(request.id, element);
-  else if (job?.pending && !job.queued && (job.authenticating || job.prompt || job.challenge)) openDialog(target, element);
+  else if (job?.pending && !job.queued && (job.prompt || job.challenge)) openDialog(target, element);
+}
+const authKey = (job) => `${job.id}\u0000${job.prompt || job.challenge || ''}`;
+// A password or Steam Guard request is the one thing a download cannot finish by itself, so it
+// opens the dialog on its own. A saved sign-in never asks, so routine downloads stay on the tile.
+function surfaceAuthRequests() {
+  if (dialogTarget !== null || !state) return;
+  const job = (state.downloads || []).find(item => item.pending && !item.queued && (item.prompt || item.challenge));
+  if (job && !dismissedAuth.has(authKey(job))) openDialog(job.id, null);
 }
 async function continueDownload(includeResources) {
   const id = dialogTarget;
@@ -529,8 +593,8 @@ document.addEventListener('click', event => {
     // Modifier clicks on installed tiles build a selection instead of changing the inspector.
     if (control.matches('.tile-select') && state?.page === 'installed' && (selecting || event.metaKey || event.ctrlKey || event.shiftKey)) { toggleSelection(control.dataset.id, { range: event.shiftKey }); return; }
     // Apply on the second click instead of starting another selection request first.
-    const action = control.matches('.tile-select') && state?.page === 'installed' && event.detail === 2
-      ? 'activate' : control.dataset.action;
+    const action = control.matches('.tile-select') && event.detail === 2
+      ? (state?.page === 'installed' ? 'activate' : tileDoubleClickAction(control.dataset.id)) : control.dataset.action;
     run(handleAction(action, control.dataset, control));
   }
   const openFilter = document.querySelector('.installed-filter[open]');
@@ -676,6 +740,62 @@ document.addEventListener('keydown', event => {
 $('download-dialog').addEventListener('cancel', event => { event.preventDefault(); closeDialog(); });
 $('download-dialog').addEventListener('close', () => { if (dialogTarget !== null) closeDialog(); });
 window.addEventListener('resize', () => { if (popover) renderPopover(); });
+// A Discover page holds exactly the tiles the grid shows without scrolling: the grid measures
+// its columns and full rows and asks the native side to cut pages of that size, so a page fills
+// the window whatever its size. The empty state stands in while the grid is hidden.
+let pageSizeTimer = null;
+let requestedPageSize = null;
+function measureWorkshopPageSize() {
+  if (state?.page !== 'discover') return;
+  const grid = $('wallpaper-grid');
+  const box = grid.hidden ? $('browser-empty') : grid;
+  if (!box.clientWidth || !box.clientHeight) return;
+  const style = getComputedStyle(grid);
+  const gap = parseFloat(style.columnGap) || 12;
+  const rowGap = parseFloat(style.rowGap) || gap;
+  const tileMin = parseFloat(style.getPropertyValue('--tile-min')) || 154;
+  // The outer width ignores any scrollbar: a page cut to fit never scrolls, and measuring the
+  // narrower scrolling width while one is briefly shown would make the fit flip back and forth.
+  const width = box.offsetWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+  const height = box.clientHeight - (parseFloat(style.paddingTop) || 0) - (parseFloat(style.paddingBottom) || 0);
+  const columns = Math.max(1, Math.floor((width + gap) / (tileMin + gap)));
+  const tile = (width - (columns - 1) * gap) / columns;
+  const fit = fitRows(height, tile, rowGap);
+  if (fit.height === null) grid.style.removeProperty('--tile-height');
+  else grid.style.setProperty('--tile-height', `${fit.height}px`);
+  const size = Math.max(1, Math.min(240, columns * fit.rows));
+  if (size === requestedPageSize || (requestedPageSize === null && size === Number(state.workshop?.pageSize))) return;
+  clearTimeout(pageSizeTimer);
+  pageSizeTimer = setTimeout(() => {
+    pageSizeTimer = null;
+    if (state?.page !== 'discover' || size === Number(state.workshop?.pageSize)) return;
+    requestedPageSize = size;
+    const request = send('workshopPageSize', { size });
+    run(request);
+    // A rejected request must not be retried forever; a resize will measure again.
+    request.then(() => { requestedPageSize = null; measureWorkshopPageSize(); }, () => { requestedPageSize = null; });
+  }, 120);
+}
+// Square tiles sized by the grid's width rarely divide its height evenly, so whole rows would
+// leave up to a tile of blank space beneath the page (a 1px shortfall costs a whole row). Discover
+// tiles may instead stretch or squash by up to TILE_STRETCH so the rows fill the height exactly;
+// beyond that they stay square and the remainder stays empty.
+const TILE_STRETCH = 0.15;
+function fitRows(height, tile, gap) {
+  const whole = Math.max(1, Math.floor((height + gap) / (tile + gap)));
+  let best = { rows: whole, height: null };
+  let bestDelta = TILE_STRETCH;
+  for (const rows of [whole, whole + 1]) {
+    // Quarter-pixel heights keep the rows within the grid without wasting a pixel per row.
+    const stretched = Math.floor((height - (rows - 1) * gap) / rows * 4) / 4;
+    const delta = Math.abs(stretched - tile) / tile;
+    if (stretched >= 1 && delta < bestDelta) { best = { rows, height: stretched }; bestDelta = delta; }
+  }
+  return best;
+}
+const pageSizeObserver = new ResizeObserver(() => measureWorkshopPageSize());
+pageSizeObserver.observe($('wallpaper-grid'));
+pageSizeObserver.observe($('browser-empty'));
 document.addEventListener('error', event => { if (event.target.tagName === 'IMG') { event.target.classList.add('failed'); event.target.style.visibility = 'hidden'; } }, true);
 // Discover tiles show cached stills; the full animated preview streams only for the tile under the
 // pointer (or keyboard focus), after a short dwell so sweeping across the grid downloads nothing.

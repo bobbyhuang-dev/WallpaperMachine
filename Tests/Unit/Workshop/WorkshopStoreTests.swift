@@ -242,6 +242,79 @@ final class WorkshopStoreTests: XCTestCase {
     XCTAssertNil(store.errorMessage)
   }
 
+  /// The panel reports how many tiles fill its grid; pages of that size are cut from Steam's
+  /// pages of 30, fetched on demand and reused from the cache when the size changes again.
+  func testPanelPageSizeComposesPagesFromCachedSteamPages() async throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    let store = fixture.store
+    // Steam ids are numeric: 1001…1030 fill page 1, 2001…2030 page 2, and so on.
+    let steamIDs = { (page: Int, count: Int) in (1...count).map { String(page * 1000 + $0) } }
+    store.searchText = "forest"
+    store.setPageSize(40)
+    XCTAssertEqual(store.pageSize, 40)
+    store.search()
+    // Steam's page count is unknown, so the first page goes alone before the span is clamped.
+    try await fixture.reply(
+      text: "forest", kind: .scene, sort: .trending, page: 1,
+      body: pageHTML(ids: steamIDs(1, 30), page: 1, pages: 3, count: 65))
+    try await fixture.reply(
+      text: "forest", kind: .scene, sort: .trending, page: 2,
+      body: pageHTML(ids: steamIDs(2, 30), page: 2, pages: 3, count: 65))
+    try await finished(store)
+    XCTAssertEqual(store.items.map(\.id), steamIDs(1, 30) + Array(steamIDs(2, 30).prefix(10)))
+    XCTAssertEqual(store.page, 1)
+    XCTAssertEqual(store.totalPages, 2, "65 reachable results make two pages of 40")
+    XCTAssertEqual(store.totalCount, 65)
+    XCTAssertEqual(store.reachableCount, 65)
+    assertBrowseURL(store, text: "forest", kind: .scene, sort: .trending, page: 1)
+
+    // The second panel page starts inside cached Steam page 2 and only fetches page 3.
+    store.loadPage(2)
+    try await fixture.reply(
+      text: "forest", kind: .scene, sort: .trending, page: 3,
+      body: pageHTML(ids: steamIDs(3, 5), page: 3, pages: 3, count: 65))
+    try await finished(store)
+    XCTAssertEqual(store.items.map(\.id), Array(steamIDs(2, 30).dropFirst(10)) + steamIDs(3, 5))
+    XCTAssertEqual(store.page, 2)
+    assertBrowseURL(store, text: "forest", kind: .scene, sort: .trending, page: 2)
+
+    // Shrinking the grid keeps the first visible tile: offset 40 lands on page 2 of 30, which
+    // is entirely cached, so nothing is requested and the store never reports loading.
+    store.setPageSize(30)
+    XCTAssertFalse(store.isLoading)
+    XCTAssertEqual(store.page, 2)
+    XCTAssertEqual(store.totalPages, 3)
+    XCTAssertEqual(store.items.map(\.id), steamIDs(2, 30))
+    XCTAssertFalse(fixture.inbox.hasRequest, "A cached page must not hit Steam again")
+
+    // A fresh search discards the cache even for the same query.
+    store.search()
+    try await fixture.reply(
+      text: "forest", kind: .scene, sort: .trending, page: 1,
+      body: pageHTML(ids: steamIDs(1, 30), page: 1, pages: 3, count: 65))
+    try await finished(store)
+    XCTAssertEqual(store.items.count, 30)
+    XCTAssertEqual(store.page, 1)
+
+    // Growing the grid while a page is loading restarts that page at the new size, joining the
+    // fetch already in flight instead of repeating it.
+    store.loadPage(3)
+    let pending = try await fixture.request(text: "forest", kind: .scene, sort: .trending, page: 3)
+    store.setPageSize(35)
+    XCTAssertTrue(store.isLoading)
+    // Page 2 of 35 starts on Steam page 2, which the fresh cache lacks; page 3 is joined.
+    try await fixture.reply(
+      text: "forest", kind: .scene, sort: .trending, page: 2,
+      body: pageHTML(ids: steamIDs(2, 30), page: 2, pages: 3, count: 65))
+    pending.succeed(try pageHTML(ids: steamIDs(3, 5), page: 3, pages: 3, count: 65))
+    try await finished(store)
+    XCTAssertEqual(store.page, 2, "offset 60 falls on the second page of 35")
+    XCTAssertEqual(store.items.map(\.id), Array(steamIDs(2, 30).dropFirst(5)) + steamIDs(3, 5))
+    XCTAssertFalse(fixture.inbox.hasRequest)
+    XCTAssertNil(store.errorMessage)
+  }
+
   private func assertPage(
     _ store: WorkshopStore, id: String, page: Int, pages: Int, count: Int,
     file: StaticString = #filePath, line: UInt = #line
@@ -276,6 +349,14 @@ final class WorkshopStoreTests: XCTestCase {
     id: String, title: String = "Fixture wallpaper", kind: WorkshopKind = .scene,
     page: Int, pages: Int, count: Int
   ) throws -> Data {
+    try pageHTML(ids: [id], title: title, kind: kind, page: page, pages: pages, count: count)
+  }
+
+  /// Steam page `page` holding `ids` in order; a full page has 30 of them.
+  private func pageHTML(
+    ids: [String], title: String = "Fixture wallpaper", kind: WorkshopKind = .scene,
+    page: Int, pages: Int, count: Int
+  ) throws -> Data {
     let queries: [[String: Any]] = [
       [
         "queryKey": ["PlayerLinkDetails", "76561198000000001"],
@@ -286,14 +367,14 @@ final class WorkshopStoreTests: XCTestCase {
         "state": [
           "data": [
             "eresult": 1, "current_page": page, "total_pages": pages, "total_count": count,
-            "results": [
+            "results": ids.map { id -> [String: Any] in
               [
                 "publishedfileid": id, "consumer_appid": 431960, "title": title,
                 "creator": "76561198000000001",
                 "short_description": "A real SSR fixture\nwith escaped layers",
                 "tags": [["tag": kind.rawValue]], "file_size": "4096", "subscriptions": 12,
               ]
-            ],
+            },
           ]
         ],
       ],

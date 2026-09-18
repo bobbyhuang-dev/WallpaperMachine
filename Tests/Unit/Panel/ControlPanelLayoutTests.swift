@@ -643,6 +643,201 @@ final class ControlPanelLayoutTests: XCTestCase {
     await workshop.steamCMDSetup.shutdown()
   }
 
+  /// A Discover page holds exactly the tiles that fit the grid without scrolling: the page
+  /// measures its columns and full rows, reports that size, and re-measures after a resize.
+  func testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes() async throws {
+    let fixture = makeStore()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "page-size-\(UUID().uuidString)")
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+    defer {
+      defaults.removePersistentDomain(forName: root.lastPathComponent)
+      try? FileManager.default.removeItem(at: root)
+    }
+    let workshop = WorkshopStore(
+      downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
+      defaults: defaults)
+    let navigation = ControlPanelNavigation()
+    let controller = WebPanelController(
+      store: fixture.store, navigation: navigation, workshop: workshop)
+    let web = controller.makeWebView()
+    defer { controller.stop() }
+    web.setFrameSize(NSSize(width: 960, height: 640))
+    let deadline = Date().addingTimeInterval(15)
+    while !controller.isReady && Date() < deadline {
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    XCTAssertTrue(controller.isReady)
+    guard controller.isReady else { return }
+    let script = """
+      try {
+      window.__waitFor = async predicate => {
+        const deadline = Date.now() + 5000;
+        while (!predicate()) {
+          if (Date.now() > deadline) throw new Error('Page size request did not arrive');
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+      };
+      if (!window.__sent) {
+        window.__sent = [];
+        const original = window.webkit.messageHandlers.native.postMessage.bind(window.webkit.messageHandlers.native);
+        window.webkit.messageHandlers.native.postMessage = message => { window.__sent.push(message); return original(message); };
+        window.__snapshot = await original({action:'ready'});
+        window.__items = Array.from({ length: 240 }, (_, index) => ({ id: `item-${index}`, title: `Tile ${index}`, kind: 'Scene' }));
+      }
+      window.__show = workshop => window.wallpaperUI.receive(Object.assign({}, window.__snapshot, {
+        page: 'discover',
+        workshop: Object.assign({}, window.__snapshot.workshop, {
+          page: 1, totalPages: 8, totalCount: 240, reachable: 240, pageSize: 30,
+          loaded: true, loading: false, items: window.__items, error: null
+        }, workshop)
+      }));
+      // What fits: the resolved column count and the rows of square tiles the grid's height holds.
+      window.__fits = () => {
+        const grid = document.getElementById('wallpaper-grid');
+        const style = getComputedStyle(grid);
+        const columns = style.gridTemplateColumns.split(' ').length;
+        const tile = grid.querySelector('.tile-select').getBoundingClientRect().height;
+        const gap = parseFloat(style.rowGap);
+        const inner = grid.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+        return { columns, rows: Math.floor((inner + gap) / (tile + gap)) };
+      };
+      const before = window.__sent.filter(message => message.action === 'workshopPageSize').length;
+      window.__show({ pageSize: previous || 30, items: previous ? window.__items.slice(0, previous) : window.__items });
+      const fits = window.__fits();
+      await window.__waitFor(() => window.__sent.filter(message => message.action === 'workshopPageSize').length > before);
+      const request = window.__sent.filter(message => message.action === 'workshopPageSize').pop();
+      // The native reply re-renders its own (Installed) snapshot; show Discover again with exactly
+      // that many tiles at that size: they must fill the grid without a scrollbar.
+      await new Promise(resolve => setTimeout(resolve, 300));
+      window.__show({ pageSize: request.size, items: window.__items.slice(0, request.size) });
+      const grid = document.getElementById('wallpaper-grid');
+      const tile = grid.querySelector('.tile-select').getBoundingClientRect().height;
+      const count = window.__sent.filter(message => message.action === 'workshopPageSize').length;
+      return { size: request.size, expected: fits.columns * fits.rows, columns: fits.columns, rows: fits.rows,
+               overflow: grid.scrollHeight - grid.clientHeight, slack: grid.clientHeight - grid.scrollHeight, tile, extra: count - before - 1 };
+      } catch (error) { return { error: `${error && error.name}: ${error && error.message} | ${String(error)} | ${error && error.stack}` }; }
+      """
+    let smallResult = try await web.callAsyncJavaScript(
+      script, arguments: ["previous": 0], in: nil, contentWorld: .page)
+    let small = smallResult as? [String: Any] ?? [:]
+    let smallSize = small["size"] as? Int ?? -1
+    XCTAssertNil(small["error"], "Page script failed: \(small)")
+    XCTAssertEqual(smallSize, small["expected"] as? Int, "Page size must be columns × full rows: \(small)")
+    XCTAssertGreaterThan(smallSize, 1)
+    XCTAssertLessThanOrEqual(small["overflow"] as? Double ?? 1, 0, "A full page must not scroll: \(small)")
+    XCTAssertLessThan(
+      small["slack"] as? Double ?? .infinity, (small["tile"] as? Double ?? 0) + 12,
+      "Less than a row must stay empty beneath a full page: \(small)")
+    XCTAssertEqual(small["extra"] as? Int, 0, "A page of the reported size must not be re-measured")
+    let smallDeadline = Date().addingTimeInterval(3)
+    while workshop.pageSize != smallSize && Date() < smallDeadline {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    XCTAssertEqual(workshop.pageSize, smallSize)
+
+    web.setFrameSize(NSSize(width: 1400, height: 900))
+    let largeResult = try await web.callAsyncJavaScript(
+      script, arguments: ["previous": smallSize], in: nil, contentWorld: .page)
+    let large = largeResult as? [String: Any] ?? [:]
+    let largeSize = large["size"] as? Int ?? -1
+    XCTAssertNil(large["error"], "Page script failed: \(large)")
+    XCTAssertEqual(largeSize, large["expected"] as? Int, "Page size must follow the resize: \(large)")
+    XCTAssertGreaterThan(largeSize, smallSize)
+    XCTAssertLessThanOrEqual(large["overflow"] as? Double ?? 1, 0, "A full page must not scroll: \(large)")
+    let largeDeadline = Date().addingTimeInterval(3)
+    while workshop.pageSize != largeSize && Date() < largeDeadline {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    XCTAssertEqual(workshop.pageSize, largeSize)
+    XCTAssertNil(controller.actionError)
+    await workshop.steamCMDSetup.shutdown()
+  }
+
+
+  /// Square tiles sized by the grid's width rarely divide its height evenly, so a page of whole
+  /// rows could leave nearly a row blank (a 1px shortfall costs a whole row). Discover tiles may
+  /// stretch or squash by up to 15% so the rows fill the grid; with three or more rows one of the
+  /// two candidate row counts always lands inside that tolerance. The native side is stood in for
+  /// by a reply that cuts the page to the requested size, as the store does from its cache.
+  func testDiscoverPageRowsFillTheGridHeight() async throws {
+    let fixture = makeStore()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "page-fill-\(UUID().uuidString)")
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+    defer {
+      defaults.removePersistentDomain(forName: root.lastPathComponent)
+      try? FileManager.default.removeItem(at: root)
+    }
+    let workshop = WorkshopStore(
+      downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
+      defaults: defaults)
+    let navigation = ControlPanelNavigation()
+    let controller = WebPanelController(
+      store: fixture.store, navigation: navigation, workshop: workshop)
+    let web = controller.makeWebView()
+    defer { controller.stop() }
+    web.setFrameSize(NSSize(width: 960, height: 640))
+    let deadline = Date().addingTimeInterval(15)
+    while !controller.isReady && Date() < deadline {
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    XCTAssertTrue(controller.isReady)
+    guard controller.isReady else { return }
+    let setup = """
+      const original = window.webkit.messageHandlers.native.postMessage.bind(window.webkit.messageHandlers.native);
+      window.__snapshot = await original({action:'ready'});
+      window.__items = Array.from({ length: 240 }, (_, index) => ({ id: `item-${index}`, title: `Tile ${index}`, kind: 'Scene' }));
+      window.__size = 30;
+      window.__make = extra => Object.assign({}, window.__snapshot, { page: 'discover', workshop: Object.assign({}, window.__snapshot.workshop, {
+        page: 1, totalPages: 1000, totalCount: 1576662, reachable: 30000, pageSize: window.__size, loaded: true, loading: false,
+        items: window.__items.slice(0, window.__size), error: null }, extra) });
+      window.webkit.messageHandlers.native.postMessage = message => {
+        if (message.action !== 'workshopPageSize') return original(message);
+        return new Promise(resolve => setTimeout(() => {
+          window.__size = message.size;
+          resolve(window.__make({ loading: true, items: [] }));
+          setTimeout(() => window.wallpaperUI.receive(window.__make({})), 40);
+        }, 30));
+      };
+      window.wallpaperUI.receive(window.__make({ loading: true, items: [] }));
+      await new Promise(resolve => setTimeout(resolve, 200));
+      window.wallpaperUI.receive(window.__make({}));
+      return true;
+      """
+    _ = try await web.callAsyncJavaScript(setup, arguments: [:], in: nil, contentWorld: .page)
+    let probe = """
+      await new Promise(resolve => setTimeout(resolve, 700));
+      const grid = document.getElementById('wallpaper-grid');
+      const style = getComputedStyle(grid);
+      const columns = style.gridTemplateColumns.split(' ').length;
+      const box = grid.querySelector('.tile-select').getBoundingClientRect();
+      const gap = parseFloat(style.rowGap);
+      const inner = grid.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+      const rows = Math.floor((inner + gap) / (box.height + gap));
+      return { size: window.__size, expected: columns * rows, rows, overflow: grid.scrollHeight - grid.clientHeight,
+               slack: grid.clientHeight - grid.scrollHeight, stretch: Math.abs(box.height - box.width) / box.width };
+      """
+    // 1229×600 once toggled a scrollbar on and off every frame; 994×737 is the reported window,
+    // where four rows miss the grid by about a pixel.
+    for (width, height) in [(994, 737), (1229, 600), (1400, 900), (1088, 811), (1547, 1063)] {
+      web.setFrameSize(NSSize(width: width, height: height))
+      let result = try await web.callAsyncJavaScript(
+        probe, arguments: [:], in: nil, contentWorld: .page) as? [String: Any] ?? [:]
+      let context = "\(width)×\(height): \(result)"
+      XCTAssertEqual(result["size"] as? Int, result["expected"] as? Int, "Page size must match the rows shown: \(context)")
+      XCTAssertLessThanOrEqual(result["overflow"] as? Double ?? 1, 0, "A full page must not scroll: \(context)")
+      XCTAssertLessThanOrEqual(result["stretch"] as? Double ?? 1, 0.15, "Tiles stay within the stretch tolerance: \(context)")
+      if (result["rows"] as? Int ?? 0) >= 3 {
+        XCTAssertLessThan(
+          result["slack"] as? Double ?? .infinity, Double(result["rows"] as? Int ?? 0) + 1,
+          "Three or more rows must fill the grid: \(context)")
+      }
+    }
+    XCTAssertNil(controller.actionError)
+    await workshop.steamCMDSetup.shutdown()
+  }
+
   func testDownloadSetupCanBeDismissedAndResumedWithoutLosingIntent() async throws {
     let fixture = makeStore()
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -1064,6 +1259,134 @@ final class ControlPanelLayoutTests: XCTestCase {
     await panel.shutdown()
   }
 
+  func testDiscoverTilesCarryDownloadRingsAndOnlySteamRequestsOpenTheDialogWithoutWindow()
+    async throws
+  {
+    let fixture = makeStore()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "web-rings-\(UUID().uuidString)")
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+    defer {
+      defaults.removePersistentDomain(forName: root.lastPathComponent)
+      try? FileManager.default.removeItem(at: root)
+    }
+    let workshop = WorkshopStore(
+      downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
+      defaults: defaults)
+    let controller = WebPanelController(
+      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop)
+    let web = controller.makeWebView()
+    defer { controller.stop() }
+    web.setFrameSize(NSSize(width: 960, height: 640))
+    let deadline = Date().addingTimeInterval(15)
+    while !controller.isReady && Date() < deadline {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    XCTAssertTrue(controller.isReady)
+    guard controller.isReady else { return }
+    let base =
+      try await web.callAsyncJavaScript(
+        "return await window.webkit.messageHandlers.native.postMessage({action:'ready'})",
+        arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+    XCTAssertNotNil(base)
+    guard let base else { return }
+    controller.stop()
+
+    let result =
+      try await web.callAsyncJavaScript(
+        """
+        const waitFor = async predicate => {
+          const deadline = Date.now() + 5000;
+          while (!predicate()) {
+            if (Date.now() > deadline) throw new Error('Download ring did not settle');
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+        };
+        const item = { id: 'ring-fixture', title: 'Ring fixture', creator: 'Test', summary: '', preview: null,
+          thumbnail: null, tags: ['Video'], size: 2048, subscriptions: 0, kind: 'Video' };
+        const job = { id: 'ring-fixture', wallpaperID: 'ring-fixture', title: 'Ring fixture',
+          status: 'Downloading Workshop files…', preview: null, thumbnail: null, account: 'fixture',
+          progress: 0.42, pending: true, queued: false, bytesReceived: 860, bytesExpected: 2048,
+          bytesPerSecond: 600000, authenticating: false, cancelled: false, error: null, prompt: null,
+          securePrompt: false, challenge: null, warning: null };
+        const push = (downloads, extra = {}) => window.wallpaperUI.receive(Object.assign({}, base, {
+          page: 'discover', workshop: Object.assign({}, base.workshop, { items: [item], loaded: true, selectedID: 'ring-fixture' }),
+          downloads, downloadRequests: [], setup: Object.assign({}, base.setup, { ready: true }) }, extra));
+        const grid = document.getElementById('wallpaper-grid');
+        const dialog = document.getElementById('download-dialog');
+        const ring = () => grid.querySelector('.tile-download');
+        push([]);
+        await waitFor(() => grid.querySelector('.wallpaper-tile'));
+        const idle = { noRing: !ring(), noQueueButton: !document.querySelector('#top-actions [data-action="openDownloads"]') };
+        push([job]);
+        await waitFor(() => ring()?.classList.contains('progress'));
+        const progress = {
+          percent: ring().querySelector('.ring-label').textContent.trim(),
+          speed: ring().querySelector('.ring-speed')?.textContent.trim(),
+          cancel: ring().dataset.action === 'downloadCancel' && ring().dataset.id === 'ring-fixture',
+          drawn: Number(ring().querySelector('.ring-value').getAttribute('stroke-dashoffset')) > 0,
+          queueButton: !!document.querySelector('#top-actions [data-action="openDownloads"]'),
+          inspectorCancel: !!document.querySelector('#inspector [data-action="downloadCancel"]'),
+          dialogClosed: !dialog.open };
+        push([Object.assign({}, job, { progress: null, authenticating: true, status: 'Waiting for Steam authentication…' })]);
+        const authenticating = { busy: ring().classList.contains('busy'), speed: ring().querySelector('.ring-speed')?.textContent.trim(), dialogClosed: !dialog.open };
+        push([Object.assign({}, job, { progress: null, authenticating: true, prompt: 'Steam password', securePrompt: true, status: 'Enter your Steam password below' })]);
+        await waitFor(() => dialog.open);
+        const prompted = { attention: ring().classList.contains('attention'), passwordField: !!dialog.querySelector('input[type="password"]') };
+        dialog.querySelector('[data-action="dismissDialog"]').click();
+        await waitFor(() => !dialog.open);
+        push([Object.assign({}, job, { progress: null, authenticating: true, prompt: 'Steam password', securePrompt: true })]);
+        const dismissedStaysClosed = !dialog.open;
+        push([Object.assign({}, job, { progress: null, authenticating: true, prompt: null, challenge: 'mobileApproval', status: 'Approve the sign-in in the Steam mobile app' })]);
+        await waitFor(() => dialog.open);
+        push([Object.assign({}, job, { progress: null, authenticating: false, status: 'Downloading Workshop files…' })]);
+        await waitFor(() => !dialog.open);
+        const resumed = ring().classList.contains('busy');
+        push([Object.assign({}, job, { pending: false, progress: null, error: 'Steam denied this download.', status: 'Download could not finish' })]);
+        const failed = ring()?.dataset.action === 'downloadRetry' && ring().classList.contains('failed');
+        push([], { wallpapers: [{ id: 'ring-fixture', title: 'Ring fixture', kind: 'Video', preview: null, active: false, supported: true, tags: [] }] });
+        const installed = { check: !!grid.querySelector('.tile-installed'), noRing: !ring() };
+        return { idle, progress, authenticating, prompted, dismissedStaysClosed, resumed, failed, installed };
+        """, arguments: ["base": base], in: nil, contentWorld: .page) as? [String: Any]
+    let idle = result?["idle"] as? [String: Any]
+    XCTAssertEqual(idle?["noRing"] as? Bool, true, "An untouched tile carries no ring")
+    XCTAssertEqual(
+      idle?["noQueueButton"] as? Bool, true,
+      "The top-bar downloads button only appears once there is download activity")
+    let progress = result?["progress"] as? [String: Any]
+    XCTAssertEqual(progress?["percent"] as? String, "42%", "The ring shows the measured percentage")
+    XCTAssertEqual(progress?["speed"] as? String, "600 KB/s", "The ring shows the transfer speed under the percentage")
+    XCTAssertEqual(progress?["cancel"] as? Bool, true, "Clicking the ring cancels that download")
+    XCTAssertEqual(progress?["drawn"] as? Bool, true, "The ring stroke follows the progress value")
+    XCTAssertEqual(progress?["queueButton"] as? Bool, true)
+    XCTAssertEqual(
+      progress?["inspectorCancel"] as? Bool, true, "The inspector offers Cancel while downloading")
+    XCTAssertEqual(
+      progress?["dialogClosed"] as? Bool, true, "A running download opens no dialog by itself")
+    let authenticating = result?["authenticating"] as? [String: Any]
+    XCTAssertEqual(authenticating?["busy"] as? Bool, true, "Sign-in without a prompt spins the ring")
+    XCTAssertEqual(
+      authenticating?["speed"] as? String, "600 KB/s",
+      "Without a percentage the ring still carries the transfer speed")
+    XCTAssertEqual(
+      authenticating?["dialogClosed"] as? Bool, true,
+      "A saved sign-in handoff must not open the dialog")
+    let prompted = result?["prompted"] as? [String: Any]
+    XCTAssertEqual(prompted?["attention"] as? Bool, true, "A Steam request marks the tile")
+    XCTAssertEqual(
+      prompted?["passwordField"] as? Bool, true, "A password request opens the dialog by itself")
+    XCTAssertEqual(
+      result?["dismissedStaysClosed"] as? Bool, true,
+      "Not now silences the same request until Steam asks for something else")
+    XCTAssertEqual(
+      result?["resumed"] as? Bool, true,
+      "Once Steam is satisfied the dialog closes and the tile keeps reporting")
+    XCTAssertEqual(result?["failed"] as? Bool, true, "A failed download offers retry on its tile")
+    let installed = result?["installed"] as? [String: Any]
+    XCTAssertEqual(installed?["check"] as? Bool, true, "A wallpaper in the library shows a check")
+    XCTAssertEqual(installed?["noRing"] as? Bool, true)
+  }
+
   func testDownloadTelemetryShowsIndeterminateProgressAndNetworkUnitsWithoutWindow() async throws {
     let fixture = makeStore()
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -1148,7 +1471,7 @@ final class ControlPanelLayoutTests: XCTestCase {
       indeterminate?["rate"] as? Bool, true, "Both surfaces must show the measured network speed")
     XCTAssertEqual(
       indeterminate?["noPercentOrBytes"] as? Bool, true,
-      "Workshop downloads must not report percentage or byte totals")
+      "A Workshop download without measured bytes reports neither percentage nor byte totals")
     XCTAssertEqual(result?["zeroRate"] as? Bool, true, "A measured idle rate must render as 0 B/s")
     XCTAssertEqual(
       result?["noRate"] as? Bool, true, "An unavailable rate must be omitted, not shown as zero")

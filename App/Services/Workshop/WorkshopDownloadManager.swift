@@ -4,23 +4,49 @@ import Observation
 @MainActor
 @Observable
 final class WorkshopDownload: Identifiable {
+  /// Why a queued job has not started yet.
+  enum Hold {
+    /// Every download slot is taken.
+    case slot
+    /// A running job is still signing in; its outcome decides whether the saved sign-in works,
+    /// and prompts must not pile up.
+    case signIn
+    /// Sessions cannot share a sign-in (**Keep me signed in** is off, or Steam allows this
+    /// account one session), so jobs run one after another.
+    case previous
+  }
+
   let id: String
   let item: WorkshopItem?
   let account: String
   let worker: WorkshopDownloader
   fileprivate(set) var isQueued = true
+  fileprivate(set) var hold = Hold.slot
   fileprivate var occupiesSlot = false
   fileprivate var wasCancelled = false
+  /// Set once Steam ended this session for another sign-in and the manager put it back in line.
+  fileprivate(set) var retriesAfterSessionConflict = false
   fileprivate let rememberSession: Bool
   @ObservationIgnored fileprivate var begin: (() -> Void)?
 
   var isPending: Bool { isQueued || occupiesSlot }
   var isCancelled: Bool { wasCancelled || worker.wasCancelled }
   var status: String {
-    if isQueued { return "Waiting for the previous download" }
+    if isQueued {
+      if retriesAfterSessionConflict {
+        return "Steam allows one session at a time for this account; waiting to retry"
+      }
+      switch hold {
+      case .slot: return "Waiting for a free download slot"
+      case .signIn: return "Waiting for the current sign-in to finish"
+      case .previous: return "Waiting for the previous download"
+      }
+    }
     if wasCancelled { return "Download cancelled" }
     return worker.status
   }
+  /// A job back in line for an automatic retry carries no failure; the retry decides.
+  var errorMessage: String? { isQueued ? nil : worker.errorMessage }
   var progress: Double? { isQueued ? nil : worker.progress }
   var bytesReceived: Int64? { isQueued ? nil : worker.bytesReceived }
   var bytesExpected: Int64? { isQueued ? nil : worker.bytesExpected }
@@ -39,13 +65,26 @@ final class WorkshopDownload: Identifiable {
   }
 }
 
-/// Runs one private SteamCMD session at a time so queued jobs can reuse the latest saved sign-in.
+/// Runs several private SteamCMD sessions at once, each with its own copy of the saved sign-in.
+///
+/// Sign-in is the one thing sessions cannot do side by side: a batch signs in once, through
+/// whichever job is at the front, and the rest wait until Steam accepts it (the worker saves the
+/// session at that moment, not only at the end) and then start silently from the saved sign-in.
+/// Without a saved sign-in to share — **Keep me signed in** off — jobs run one after another,
+/// each with its own prompt. If Steam ends a session because the same account signed in from
+/// another of our sessions, the ended job goes back in line once and the queue stays serial for
+/// the rest of the app's run.
 @MainActor
 @Observable
 final class WorkshopDownloadManager: SteamCMDDownloadActivity {
+  static let defaultConcurrentDownloads = 3
+
   private(set) var downloads: [WorkshopDownload] = []
   private(set) var savedAccount: String?
   private(set) var errorMessage: String?
+  /// Steam refused to keep two of our sessions signed in at once, so the queue is serial.
+  private(set) var sessionConflictDetected = false
+  let maximumConcurrentDownloads: Int
   @ObservationIgnored private let sessionDirectory: URL
   @ObservationIgnored private let runtimeProvider: any SteamCMDRuntimeProviding
   @ObservationIgnored private var isShuttingDown = false
@@ -53,6 +92,8 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
   var activeCount: Int { downloads.lazy.filter { $0.occupiesSlot }.count }
   var queuedCount: Int { downloads.lazy.filter { $0.isQueued }.count }
   var isRunning: Bool { downloads.contains { $0.isPending } }
+  /// How many transfers may run side by side right now.
+  var slotLimit: Int { sessionConflictDetected ? 1 : maximumConcurrentDownloads }
   var suggestedAccount: String? { downloads.last(where: { $0.isPending })?.account ?? savedAccount }
   var rememberSessionWhileRunning: Bool? {
     downloads.first(where: { $0.isPending })?.rememberSession
@@ -61,10 +102,12 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
   init(
     sessionDirectory: URL = ClientPaths.supportURL.appendingPathComponent(
       "SteamSession", isDirectory: true),
-    runtimeProvider: any SteamCMDRuntimeProviding = SteamCMDRuntimeService()
+    runtimeProvider: any SteamCMDRuntimeProviding = SteamCMDRuntimeService(),
+    maximumConcurrentDownloads: Int = WorkshopDownloadManager.defaultConcurrentDownloads
   ) {
     self.sessionDirectory = sessionDirectory
     self.runtimeProvider = runtimeProvider
+    self.maximumConcurrentDownloads = max(1, maximumConcurrentDownloads)
     savedAccount = WorkshopDownloader.readSavedAccount(at: sessionDirectory)
   }
 
@@ -160,10 +203,18 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
       guard let job else { return }
       begin(job.worker, account)
     }
+    job.worker.onAuthenticated = { [weak self] in
+      guard let self else { return }
+      // The worker saved the accepted sign-in before calling; siblings can restore it now.
+      self.savedAccount = WorkshopDownloader.readSavedAccount(at: self.sessionDirectory)
+      self.startQueuedDownloads()
+    }
     job.worker.onFinished = { [weak self, weak job] in
       guard let self, let job else { return }
       job.occupiesSlot = false
       self.savedAccount = WorkshopDownloader.readSavedAccount(at: self.sessionDirectory)
+      self.settleSessionConflict(for: job)
+      if !job.isQueued { job.begin = nil }
       self.startQueuedDownloads()
     }
     downloads.removeAll { $0.id == job.id }
@@ -171,20 +222,72 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
     startQueuedDownloads()
   }
 
+  /// Steam ended this job's session for another sign-in with the same account. When that other
+  /// sign-in was one of our own sessions, the account cannot run two at once: the queue turns
+  /// serial and the ended job goes back in line once, behind whatever is still running.
+  private func settleSessionConflict(for job: WorkshopDownload) {
+    guard job.worker.endedBySessionConflict, !job.isCancelled, !isShuttingDown else { return }
+    let sibling = downloads.contains { $0 !== job && $0.occupiesSlot && $0.account == job.account }
+    guard sibling else {
+      AppLog.warn("Steam ended the download session for \(job.id): the account signed in elsewhere")
+      return
+    }
+    if !sessionConflictDetected {
+      AppLog.warn(
+        "Steam ended the session of download \(job.id) for another of our sessions; Workshop downloads now run one at a time")
+    }
+    sessionConflictDetected = true
+    guard !job.retriesAfterSessionConflict, job.begin != nil else { return }
+    job.retriesAfterSessionConflict = true
+    job.isQueued = true
+    job.hold = .previous
+  }
+
+  /// Fills free slots in queue order. The queue holds, in order, rather than skipping a job.
   private func startQueuedDownloads() {
-    guard !isShuttingDown, activeCount == 0 else { return }
+    guard !isShuttingDown else { return }
     for job in downloads where job.isQueued {
+      if let reason = activeCount < slotLimit ? holdBehindRunningJobs(job) : .slot {
+        hold(reason, from: job)
+        return
+      }
       job.isQueued = false
       job.occupiesSlot = true
-      let begin = job.begin
-      job.begin = nil
-      begin?()
-      if job.worker.isRunning {
-        return
-      } else {
+      AppLog.info("Starting Workshop download \(job.id) (\(activeCount) of \(slotLimit) slots in use)")
+      job.begin?()
+      if !job.worker.isRunning {
         // Invalid input can fail synchronously without starting a task.
         job.occupiesSlot = false
+        job.begin = nil
       }
+    }
+  }
+
+  /// Nothing holds a job while no slot is taken. Otherwise the running jobs decide: a prompt on
+  /// screen must be answered first (prompts never pile up), sessions that cannot share a sign-in
+  /// go one by one, and with a saved sign-in for the account on disk a job starts right away —
+  /// it restores that sign-in itself and does not wait for the first job to get through Steam's
+  /// login. Only a job that has no sign-in to restore waits for the running one to be accepted
+  /// and saved.
+  private func holdBehindRunningJobs(_ job: WorkshopDownload) -> WorkshopDownload.Hold? {
+    let running = downloads.filter { $0.occupiesSlot }
+    guard !running.isEmpty else { return nil }
+    if running.contains(where: { $0.worker.prompt != nil || $0.worker.steamGuardChallenge != nil }) {
+      return .signIn
+    }
+    if !job.rememberSession || sessionConflictDetected { return .previous }
+    if savedAccount == job.account { return nil }
+    return running.contains(where: { $0.worker.isAuthenticating }) ? .signIn : nil
+  }
+
+  /// The queue waits as a whole, so every job from the held one on shows the same reason.
+  private func hold(_ reason: WorkshopDownload.Hold, from first: WorkshopDownload) {
+    var reached = false
+    for job in downloads where job.isQueued {
+      reached = reached || job === first
+      guard reached, job.hold != reason else { continue }
+      job.hold = reason
+      if job === first { AppLog.debug("Workshop download \(job.id) waits: \(job.status)") }
     }
   }
 }

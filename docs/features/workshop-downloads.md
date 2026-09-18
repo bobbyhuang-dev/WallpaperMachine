@@ -11,9 +11,20 @@ Credentials for a download are entered only in the app's own local prompts.
 ## Discover
 
 The **Discover** tab searches the Workshop and pages through results with
-previous/next buttons or by typing a page number and pressing Return. Steam's
-public browse page clamps every query to 1,000 pages of 30 items, so at most
-30,000 results are reachable per query; when the result count is larger the
+previous/next buttons or by typing a page number and pressing Return. A page
+holds exactly as many tiles as the grid shows without scrolling: the panel
+measures its columns and rows and reports that size (`workshopPageSize`),
+and the store cuts each page from Steam's fixed pages of 30, fetching as many as
+the page spans and caching them per query, so paging back or resizing the window
+rarely touches the network. Square tiles sized by the grid's width rarely divide
+its height evenly, so Discover tiles may stretch or squash by up to 15% for the
+rows to fill the grid exactly (a 1px shortfall would otherwise leave a whole row
+blank); past that they stay square and the remainder stays empty. The width is
+measured outside any scrollbar so a briefly overflowing page cannot flip the fit
+back and forth. Resizing keeps the first visible tile in view by
+remapping the page number. Steam's public browse page clamps every query to
+1,000 pages of 30 items, so at most 30,000 results are reachable per query
+(the snapshot's `reachable` count); when the result count is larger the
 pagination row says so and suggests narrowing the search or filters. A left
 filter sidebar groups multi-select tags:
 
@@ -54,10 +65,53 @@ full-size preview for the selected item.
 
 ## One decision per download
 
-Choose **Download** once. If SteamCMD, a Steam sign-in, or shared scene
-resources are still needed, a focused dialog guides the next step and keeps the
-wallpaper request. **Not now** closes the dialog without removing the request;
-resume it from Downloads with **Continue setup**.
+Double-click a Discover tile, or choose **Download** in the inspector, once.
+With SteamCMD installed and a saved Steam sign-in, nothing else opens: the
+download starts and its tile reports it. A dialog appears only for what the
+download cannot do alone — installing SteamCMD, the first Steam account name,
+consent for shared scene resources, or a password / Steam Guard request that
+Steam actually sends — and it closes by itself once Steam is satisfied.
+**Not now** closes the dialog without removing the request; that exact request
+stays quiet until Steam asks for something else, and the tile's shield or
+**Continue setup** in the inspector or Downloads reopens it.
+
+### Download state on the tile
+
+A Discover tile wears its download state as a ring over its thumbnail, the
+way Wallpaper Engine's own library does:
+
+| Ring | Meaning | Click |
+| --- | --- | --- |
+| Percentage inside a filling ring | Transferring; the ring follows the measured bytes | Cancel the download |
+| Spinning arc | Signing in, requesting the item, or transferring before any bytes can be measured | Cancel |
+| Dimmed download arrow | Waiting for the download ahead of it to finish | Remove from the queue |
+| Pulsing shield | Steam or setup needs you | Open the dialog |
+| Retry mark | Failed or cancelled | Try again |
+| Small check in the corner | Already in your library | — |
+
+Double-clicking a tile that is already in the library applies it, as on the
+Installed tab.
+
+### Transfer progress
+
+SteamCMD prints byte counters for `app_update` (shared scene resources) but
+nothing while it fetches a Workshop item, so Workshop progress is measured
+outside its output and compared with the `file_size` Steam's Workshop listing
+gave for the item. While Steam reports the item as downloading, the app takes
+two measures twice a second and shows the smaller: the bytes that have landed
+under the private staging's `steamapps/workshop` tree (allocated blocks, so a
+sparse file does not count), and the bytes the SteamCMD process has received
+over the network since the transfer began, read from the same per-process
+`nettop` session that supplies the speed. Steam can allocate a file's full
+length before its chunks arrive, which the network total cannot overstate;
+compressed chunks make the network total run slightly behind, which the tree
+cannot overstate. `nettop`'s first row counts everything since the process
+launched (the sign-in), so it only anchors the timeline and neither the speed
+nor the total includes it. The ring and the inspector show that percentage
+together with received/total bytes and the measured network speed; the last
+percent is claimed only by Steam's own success line, then validation and
+import follow. An item Steam lists without a size keeps the spinning arc and
+the speed; if `nettop` is unavailable the tree alone is used.
 
 Downloads never subscribe on Steam and never apply automatically. Use **Show in
 library**, then Apply — see [Control panel](control-panel.md).
@@ -97,13 +151,38 @@ and repeat setup when a newer version is needed. This is implemented in
 
 ## The download queue
 
-Downloads appear in a compact popover from the toolbar or the bottom activity
-bar. Each transfer uses a private SteamCMD session and an account that owns
-Wallpaper Engine.
+Every download also appears in a compact popover from the bottom activity bar,
+and from the top-bar downloads button that is shown while there is download
+activity. Each transfer uses a private SteamCMD session and an account that
+owns Wallpaper Engine.
 
-- Transfers are serialized: only one job authenticates or downloads at a time,
-  so a queued job can reuse the sign-in the previous one saved. Additional
-  requests wait in order.
+- Up to three downloads run at once (`WorkshopDownloadManager`, default
+  `maximumConcurrentDownloads`), each in its own private SteamCMD session and
+  staging directory with its own copy of the saved sign-in; clicking several
+  tiles queues them and they fill the free slots in order without another
+  click. With a saved sign-in for the account on disk every job restores it
+  itself, so a batch starts together without waiting for the first job to get
+  through Steam's login. Without one, the batch signs in once through the job
+  at the front of the queue: the rest wait while that sign-in is in progress
+  (and whenever a password or Steam Guard prompt is on screen, so prompts
+  never pile up), and the worker saves the session the moment Steam accepts
+  it — not only at the end of the transfer — so the waiting jobs start
+  silently from it while the first transfer is still running. Every queued job
+  shows why it is waiting (a free slot, the current sign-in, or the previous
+  download). The app log records each start and hold reason, and for every
+  session the runtime preparation, whether a saved sign-in was restored, each
+  status change, the sign-in handoff and SteamCMD's exit status, so a stalled
+  batch can be diagnosed from **Show download logs**.
+- Sessions that cannot share a sign-in run one after another: with **Keep me
+  signed in** off each job prompts on its own, and if Steam ends a session
+  because the same account signed in from another of the app's sessions
+  ("logged in elsewhere"), the ended job goes back in line once behind the
+  running one and the queue stays serial for the rest of the app's run
+  (`sessionConflictDetected`). A session Steam ends while no sibling is running
+  is reported as an ordinary failure with a retry.
+- The activity bar carries the running job's status, percentage and speed, or
+  the batch's count, mean percentage and summed speed while several run. The
+  queue footer states the slot rule.
 - Passwords and Steam Guard codes belong to that exact job; the dialog seeds the
   account per request, so switching requests cannot submit another one's
   sign-in. A submitted secret is cleared from the field immediately and is not
@@ -112,9 +191,9 @@ Wallpaper Engine.
 - Steam Guard prompts explain the method Steam asked for — mobile approval,
   authenticator code or emailed code. Steam may still require another approval.
 - Closing the popover or the sign-in dialog does not cancel work. Removing a
-  waiting request prevents it from starting. Cancelling the active transfer
-  releases the next queued item after session cleanup. Quitting stops active and
-  queued work.
+  waiting request prevents it from starting. Cancelling a running transfer
+  lets the next queued job start after session cleanup. Quitting stops active
+  and queued work.
 - Failed and cancelled jobs stay visible with their recovery action; completed
   jobs collapse behind **Show completed** and can be cleared.
 

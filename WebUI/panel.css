@@ -15,6 +15,7 @@
   --media-shadow: 0 1px 3px #000;
   --media-chip: rgb(18 21 26 / 82%);
   --media-star: #f8d179;
+  --media-danger: #ff8f86;
   --media-badge: rgb(20 40 58 / 92%);
   --media-badge-ink: #d7edff;
 
@@ -281,15 +282,15 @@ small, .muted { color: var(--muted); }
    minimum tile size, which shrinks with the column so a narrower window shows smaller tiles
    and more of them instead of fewer, larger ones. */
 .wallpaper-grid { --tile-min: 154px; display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile-min), 1fr)); gap: 12px; padding: 2px 16px 16px; overflow: auto; align-content: start; flex: 1; min-height: 0; }
-@container (max-width: 560px) { .wallpaper-grid { --tile-min: 130px; gap: 9px; } }
-@container (max-width: 440px) { .wallpaper-grid { --tile-min: 116px; } }
+@container (max-width: 560px) { .wallpaper-grid { --tile-min: 130px; gap: 9px; } .tile-download { --ring: 64px; } }
+@container (max-width: 440px) { .wallpaper-grid { --tile-min: 116px; } .tile-download { --ring: 60px; } .ring-label { font-size: 13px; } .ring-speed { display: none; } }
 .wallpaper-tile { position: relative; min-width: 0; }
-.tile-select { display: block; position: relative; width: 100%; aspect-ratio: 1; padding: 0; border: 1px solid transparent; border-radius: 3px; overflow: hidden; text-align: left; background: var(--media-well); }
+.tile-select { display: block; position: relative; width: 100%; height: var(--tile-height, auto); aspect-ratio: 1; padding: 0; border: 1px solid transparent; border-radius: 3px; overflow: hidden; text-align: left; background: var(--media-well); }
 .tile-select:hover:not(:disabled) { background: var(--media-well); border-color: var(--line-strong); }
 .tile-select[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.tile-select img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.tile-select img { display: block; width: 100%; height: 100%; object-fit: cover; transition: filter .25s ease; }
 .tile-select img.failed { visibility: hidden; }
-.tile-select img.tile-live { position: absolute; inset: 0; opacity: 0; transition: opacity .2s ease; }
+.tile-select img.tile-live { position: absolute; inset: 0; opacity: 0; transition: opacity .2s ease, filter .25s ease; }
 .tile-select img.tile-live.loaded { opacity: 1; }
 .tile-placeholder { position: absolute; inset: 0; display: flex; justify-content: center; align-items: center; color: var(--faint); z-index: 0; }
 .tile-select:has(img:not(.loaded):not(.failed)) .tile-placeholder { animation: tile-pulse 1.6s ease-in-out infinite; }
@@ -312,6 +313,37 @@ small, .muted { color: var(--muted); }
 .wallpaper-tile.checked .tile-select { box-shadow: inset 0 0 0 2px var(--primary); border-color: var(--primary); }
 .wallpaper-tile.checked .active-badge, .wallpaper-grid.selecting .active-badge, .wallpaper-tile:hover .active-badge, .wallpaper-tile:focus-within .active-badge { left: 35px; }
 .active-badge { position: absolute; left: 6px; top: 6px; border-radius: 3px; background: var(--media-badge); color: var(--media-badge-ink); font-size: 10px; padding: 3px 5px; pointer-events: none; }
+/* Discover download ring, sized the way Wallpaper Engine's own library draws it: the still dims
+   behind it, the stroke carries progress, the middle carries the number and the transfer speed,
+   and one click cancels. Nothing here rotates: the busy sweep is a travelling dash so the arc
+   never shimmers around a sub-pixel centre. */
+.wallpaper-tile:has(> .tile-download) .tile-select img { filter: brightness(.48) saturate(.85); }
+.tile-download { --ring: 72px; position: absolute; inset: 0; margin: auto; width: var(--ring); height: var(--ring); padding: 0; min-height: 0; border: 0; border-radius: 50%; background: transparent; color: var(--media-ink); display: grid; place-items: center; z-index: 1; text-shadow: var(--media-shadow); transition: background .15s ease; }
+.tile-download > * { grid-area: 1 / 1; }
+.tile-download .ring { display: block; width: var(--ring); height: var(--ring); }
+.ring-track { fill: none; stroke: rgb(255 255 255 / 20%); stroke-width: 4; transition: stroke .15s ease; }
+.ring-value { fill: none; stroke: var(--accent); stroke-width: 4; stroke-linecap: round; transition: stroke-dashoffset .3s ease; }
+.tile-download.busy .ring-value { animation: ring-spin 1.1s linear infinite; }
+@keyframes ring-spin { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+.ring-copy { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: calc(var(--ring) - 16px); }
+.ring-label, .ring-hover { display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 600; line-height: 1; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.ring-label:empty { display: none; }
+.ring-speed { font-size: 9px; font-weight: 500; line-height: 1; color: var(--media-ink-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ring-label:empty + .ring-speed { font-size: 11px; font-weight: 600; color: var(--media-ink); }
+.ring-hover { display: none; }
+.tile-download:is(:hover:not(:disabled), :focus-visible) { background: var(--media-chip); }
+.tile-download:is(:hover:not(:disabled), :focus-visible) .ring-track { stroke: rgb(255 255 255 / 34%); }
+.tile-download:is(:hover:not(:disabled), :focus-visible) .ring-hover { display: flex; }
+.tile-download:is(:hover:not(:disabled), :focus-visible) > :has(+ .ring-hover) { display: none; }
+.tile-download:is(.queued, .attention, .failed) { background: var(--media-chip); }
+.tile-download.queued { color: var(--media-ink-dim); }
+.tile-download.attention { color: var(--media-star); animation: ring-pulse 1.6s ease-out infinite; }
+.tile-download.attention .ring-track { stroke: var(--media-star); }
+.tile-download.failed { color: var(--media-danger); }
+.tile-download.failed .ring-track { stroke: var(--media-danger); }
+@keyframes ring-pulse { from { box-shadow: 0 0 0 0 var(--media-star); } to { box-shadow: 0 0 0 8px transparent; } }
+.tile-installed { position: absolute; left: 6px; top: 6px; width: 20px; height: 20px; border-radius: 50%; background: var(--media-badge); color: var(--media-badge-ink); display: grid; place-items: center; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .tile-download.busy .ring-value, .tile-download.attention { animation: none; } }
 .workshop-filters { overflow: auto; padding: 16px 13px; border-right: 1px solid var(--line); }
 .workshop-filters.collapsed { padding: 10px 0; display: flex; flex-direction: column; align-items: center; gap: 8px; overflow: hidden; }
 .filter-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; gap: 6px; }

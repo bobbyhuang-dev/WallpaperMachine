@@ -47,8 +47,10 @@ extension WebPanelController {
     _ = downloader.savedAccount
     _ = downloader.rememberSessionWhileRunning
     _ = downloader.errorMessage
+    _ = downloader.sessionConflictDetected
     for job in downloader.downloads {
       _ = job.status
+      _ = job.errorMessage
       _ = job.progress
       _ = job.bytesReceived
       _ = job.bytesExpected
@@ -191,7 +193,7 @@ extension WebPanelController {
         // The sign-in handoff has no prompt yet; the dialog must stay open through it.
         "authenticating": job.isPending && !job.isQueued && worker.isAuthenticating,
         "cancelled": job.isCancelled,
-        "error": worker.errorMessage as Any? ?? null,
+        "error": job.errorMessage as Any? ?? null,
         "prompt": worker.prompt?.rawValue as Any? ?? null,
         "securePrompt": worker.prompt == .password, "challenge": challenge as Any? ?? null,
         "warning": worker.sessionWarning as Any? ?? null,
@@ -267,7 +269,7 @@ extension WebPanelController {
         "tags": workshop.tags, "items": workshop.items.map(Self.workshopItem),
         "selectedID": workshop.selectedItem?.id as Any? ?? null, "page": workshop.page,
         "totalPages": workshop.totalPages, "totalCount": workshop.totalCount,
-        "pageSize": WorkshopService.pageSize,
+        "reachable": workshop.reachableCount, "pageSize": workshop.pageSize,
         "loading": workshop.isLoading, "loaded": workshop.hasLoaded,
         "error": workshop.errorMessage as Any? ?? null,
       ],
@@ -279,6 +281,7 @@ extension WebPanelController {
         "progress": setupProgress as Any? ?? null,
       ],
       "downloads": downloads, "downloadRequests": downloadRequests,
+      "downloadSlots": workshop.downloader.slotLimit,
       "account": workshop.suggestedAccount,
       "savedAccount": workshop.downloader.savedAccount as Any? ?? null,
       "rememberSession": workshop.downloader.rememberSessionWhileRunning ?? remembersSession,

@@ -11,7 +11,7 @@ lock screen.
 | Feature | Summary |
 | --- | --- |
 | [Control panel](docs/features/control-panel.md) | Discover / Installed / Settings tabs, tile grid, inspector, explicit apply, per-wallpaper properties |
-| [Workshop browsing and downloads](docs/features/workshop-downloads.md) | Login-free browsing, tag filters, SteamCMD setup, serialized download queue |
+| [Workshop browsing and downloads](docs/features/workshop-downloads.md) | Login-free browsing, tag filters, SteamCMD setup, concurrent downloads that share a saved sign-in |
 | [Audio-responsive wallpapers](docs/features/audio-response.md) | Per-wallpaper audio response driven by system audio |
 | [Animated lock screen](docs/features/lock-screen.md) | Experimental, extension-based, off by default |
 | [Appearance](docs/features/appearance.md) | System/Light/Dark, accent color, surface tone |

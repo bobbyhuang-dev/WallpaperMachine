@@ -11,13 +11,15 @@ a system dialog and renderer content is never loaded into the web view.
 | Region | Contents |
 | --- | --- |
 | Top tabs | **Discover**, **Installed**, **Settings** |
-| Top bar | Sits in the window's title-bar strip beside the traffic lights: tabs on the left, product name, version and a GitHub button (opens the repository in the default browser) centered, target-display picker, downloads button and renderer-source link on the right. Its background drags the window and follows the system double-click action |
-| Browser column | Search field, sort menu, filters, tile grid, result summary, Workshop pagination with an editable page number |
+| Top bar | Sits in the window's title-bar strip beside the traffic lights: tabs on the left, product name, version and a GitHub button (opens the repository in the default browser) centered, target-display picker, a downloads button (only while there is download activity) and renderer-source link on the right. Its background drags the window and follows the system double-click action |
+| Browser column | Search field, sort menu, filters, tile grid, result summary, Workshop pagination with an editable page number. On Discover a page holds exactly the tiles that fill the grid at the current window size, so pages never scroll or end in a partial row |
 | Left sidebar | Workshop tag filters (Discover only). Fixed width; the arrow in its heading collapses it to a narrow rail whose arrow expands it again, and that choice is remembered across launches |
 | Inspector | Preview, title, kind, creator, tags, actions, and the selected wallpaper's options and properties. Grows from 280px to 340px with the window width by default; dragging its left edge sets a width (240px to 45% of the window) that is remembered, and double-clicking the edge restores the fluid width. The edge is keyboard-focusable: arrow keys resize, `Home` resets |
 | Activity bar | Pause/resume playback, import status, download progress |
 
-Wallpapers appear as square, image-first tiles with a transparent title overlay.
+Wallpapers appear as square, image-first tiles with a transparent title overlay
+(Discover tiles may deviate from square by up to 15% so a page's rows fill the
+grid; see [Workshop downloads](workshop-downloads.md#discover)).
 Discover tiles show cached still thumbnails rather than Steam's full previews
 (see [Workshop downloads](workshop-downloads.md#tile-thumbnails)).
 Both tabs fill the grid with as many columns as the browser column can hold at a
@@ -49,7 +51,9 @@ screen. Activation is explicit.
 - **Apply wallpaper** activates the selected wallpaper on the current target
   display; for the wallpaper already active there it reads **Reapply wallpaper**.
 - Double-clicking a tile on the Installed tab activates it as well. Double-click
-  does not close the window.
+  does not close the window. On Discover, double-click downloads the tile (or
+  applies it once it is in the library); see
+  [Workshop downloads](workshop-downloads.md#one-decision-per-download).
 - Apply is unavailable when the target display is disabled, is mirroring another
   display, or when the wallpaper kind cannot be rendered (Web, Application,
   Unknown).
@@ -127,8 +131,11 @@ Unsubmitted text stays with its wallpaper when navigating between pages.
 
 ## Downloads and import
 
-The downloads popover opens from the top-bar downloads button or from the
-activity bar, and from **Show in downloads** in the inspector. The import
+Discover tiles show their own download ring (progress, cancel, sign-in needed,
+retry). Several tiles download at once; the activity bar sums them. The
+downloads popover opens from the activity bar, from the top-bar
+downloads button while downloads exist, and from **Show in downloads** in the
+inspector. The import
 popover opens from **Import** in the Installed toolbar; imports copy source
 files into the library and leave the originals untouched, with a duplicate
 policy of **Skip duplicates** or **Keep both copies**. Closing a popover never

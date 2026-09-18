@@ -33,6 +33,13 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
     @ObservationIgnored private var terminal: FileHandle?
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored var onFinished: (@MainActor () -> Void)?
+    /// Called once per run when Steam accepts the sign-in, after the session was saved (when
+    /// remembered), so another session can restore it while this download is still running.
+    @ObservationIgnored var onAuthenticated: (@MainActor () -> Void)?
+    /// Steam ended this session because the same account signed in from somewhere else.
+    private(set) var endedBySessionConflict = false
+    @ObservationIgnored private var signInHandedOff = false
+    @ObservationIgnored private var loggedStatus = ""
     @ObservationIgnored private var recentOutput = ""
     @ObservationIgnored private var outputBuffer = [UInt8](repeating: 0, count: 8192)
     nonisolated static let stagingPrefix = ".mac-wallpaper-engine-workshop-"
@@ -41,6 +48,9 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
     @ObservationIgnored private var failure: String?
     @ObservationIgnored private var receivesNetwork = false
     @ObservationIgnored private var networkStarted = false
+    @ObservationIgnored private var expectedBytes: Int64?
+    @ObservationIgnored private var diskSampleTask: Task<Void, Never>?
+    @ObservationIgnored private var lastDiskSample = Date.distantPast
     private(set) var isAuthenticating = true
     private static let failurePattern = try! NSRegularExpression(pattern: #"(?:failed|error!?)\s*\(([^)\r\n]+)\)"#)
     private static let appProgressPattern = try! NSRegularExpression(pattern: #"progress:\s*(\d+(?:\.\d+)?)\s*\((\d+)\s*/\s*(\d+)\)"#)
@@ -73,7 +83,8 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             errorMessage = "Choose a valid Workshop wallpaper. Application wallpapers execute Windows programs and cannot be used on macOS."
             return
         }
-        download(itemID: item.id, username: username, executable: executable, root: library.deletingLastPathComponent(), rememberSession: rememberSession) { staging in
+        download(itemID: item.id, username: username, executable: executable, root: library.deletingLastPathComponent(),
+                 rememberSession: rememberSession, expectedBytes: item.size > 0 ? item.size : nil) { staging in
             self.status = "Validating and adding to your library…"
             try await WallpaperImportService().importDownloadedItem(item.id, from: staging, into: library)
             self.downloadedID = item.id
@@ -93,7 +104,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
     }
 
     private func download(itemID: String?, username: String, executable: URL, root: URL, rememberSession: Bool,
-                          onDownloaded: @escaping @MainActor (URL) async throws -> Void) {
+                          expectedBytes: Int64? = nil, onDownloaded: @escaping @MainActor (URL) async throws -> Void) {
         guard !isRunning else { return }
         guard let account = Self.normalizedAccount(username) else {
             errorMessage = "Enter your Steam account login name (not your display name). An account that owns Wallpaper Engine is required."
@@ -120,11 +131,17 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         bytesPerSecond = nil
         receivesNetwork = false
         networkStarted = false
+        self.expectedBytes = expectedBytes
+        lastDiskSample = .distantPast
+        endedBySessionConflict = false
+        signInHandedOff = false
         prompt = nil
         recentOutput = ""
         isRunning = true
         isInstallingAssets = itemID == nil
         status = "Preparing a private SteamCMD download…"
+        let label = itemID ?? "shared assets"
+        loggedStatus = ""
         task = Task {
             let staging = root.appendingPathComponent(Self.stagingPrefix + UUID().uuidString, isDirectory: true)
             var claim: Int32 = -1
@@ -155,6 +172,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                         try Self.restoreSession(from: directory, account: account, to: staging)
                     }.value
                 }
+                AppLog.info("SteamCMD \(label): runtime prepared; saved sign-in restored: \(restoredSessionRevision != nil)")
                 try Task.checkCancellation()
                 let started = Date()
                 var restarts = 0
@@ -166,12 +184,24 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                     while let process, process.isRunning {
                         try Task.checkCancellation()
                         try readTerminalOutput()
+                        if status != loggedStatus {
+                            loggedStatus = status
+                            AppLog.debug("SteamCMD \(label): \(status)")
+                        }
+                        if !isAuthenticating && !signInHandedOff && failure == nil {
+                            signInHandedOff = true
+                            var savedEarly = false
+                            if rememberSession { savedEarly = await saveAcceptedSession(from: staging, account: account) }
+                            AppLog.info("SteamCMD \(label): sign-in accepted; session saved for siblings: \(savedEarly)")
+                            onAuthenticated?()
+                        }
                         if receivesNetwork {
                             if !networkStarted {
                                 networkMonitor.start(processID: process.processIdentifier)
                                 networkStarted = true
                             }
                             bytesPerSecond = networkMonitor.rate(at: ProcessInfo.processInfo.systemUptime)
+                            sampleWorkshopDisk(in: staging)
                         } else {
                             bytesPerSecond = nil
                         }
@@ -193,6 +223,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                     terminal = nil
                     restarts += 1
                 } while process?.terminationStatus == 42 && restarts < 4 && failure == nil
+                AppLog.info("SteamCMD \(label): exited with status \(process.map { String($0.terminationStatus) } ?? "unknown")\(failure.map { "; failure: \($0)" } ?? "")")
                 try Task.checkCancellation()
                 if let failure { throw WorkshopFailure(message: failure) }
                 guard process?.terminationStatus == 0 else {
@@ -382,7 +413,11 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                 return
             }
         }
-        if output.contains("no subscription") || (output.contains("access denied") && !isAuthenticating) || output.contains("does not own") {
+        if output.contains("logged in elsewhere") || output.contains("logged in from another") || output.contains("loggedinelsewhere") {
+            endedBySessionConflict = true
+            authenticationFailed = isAuthenticating
+            failure = "Steam ended this session because the account signed in somewhere else. Retry once the other sign-in is done."
+        } else if output.contains("no subscription") || (output.contains("access denied") && !isAuthenticating) || output.contains("does not own") {
             failure = "Steam denied this download. Sign in with an account that owns Wallpaper Engine and has access to this Workshop item."
         } else if output.contains("error! download item") || output.contains("failed to download") || output.contains("error! failed to start downloading item") {
             failure = "Steam could not download this item. It may be private, removed, or unavailable to this account. Open its Workshop page and retry."
@@ -512,6 +547,50 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                     bytesExpected = total
                 }
             }
+        }
+    }
+
+    /// SteamCMD prints no counters while it fetches a Workshop item, so transfer progress is
+    /// measured against the size Steam's Workshop listing reports for the item: the content that
+    /// has landed under steamapps/workshop, capped by the bytes the process has received over the
+    /// network since the transfer began. Steam can allocate a file's full length before its chunks
+    /// arrive, which the network figure cannot overstate; compressed chunks make the network figure
+    /// run a little behind, which the tree cannot overstate. The tree is walked off the UI actor at
+    /// most twice a second; a sample is applied only while the transfer it measured is still on.
+    private func sampleWorkshopDisk(in staging: URL) {
+        guard !isInstallingAssets, let expected = expectedBytes, expected > 0, diskSampleTask == nil,
+              Date().timeIntervalSince(lastDiskSample) >= 0.5 else { return }
+        lastDiskSample = Date()
+        let root = staging.appendingPathComponent("steamapps/workshop", isDirectory: true)
+        diskSampleTask = Task {
+            let onDisk = await Task.detached(priority: .utility) { Self.bytesOnDisk(under: root) }.value
+            diskSampleTask = nil
+            guard isRunning, receivesNetwork, failure == nil else { return }
+            // Without a working network meter the tree alone is still better than nothing.
+            let arrived = networkMonitor.bytesReceived().map { min($0, onDisk) } ?? onDisk
+            let received = min(arrived, expected)
+            bytesReceived = received
+            bytesExpected = expected
+            // Only Steam's own success line claims completion; bytes alone stop at 99%.
+            progress = min(0.99, Double(received) / Double(expected))
+        }
+    }
+
+    /// Saves the sign-in Steam just accepted while the download goes on. Whatever Steam has not
+    /// written yet is picked up by the save at the end of the run; a sibling that restores an
+    /// incomplete copy falls back to Steam's own password prompt.
+    @discardableResult
+    private func saveAcceptedSession(from staging: URL, account: String) async -> Bool {
+        let directory = sessionDirectory
+        do {
+            let stored = try await Task.detached(priority: .utility) {
+                try Self.saveSession(from: staging, account: account, to: directory)
+            }.value
+            if stored { savedAccount = account }
+            return stored
+        } catch {
+            AppLog.warn("Could not save the accepted Steam sign-in early: \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -830,14 +909,22 @@ private final class SteamCMDTerminalProcess {
 protocol ProcessNetworkMonitoring: AnyObject {
     func start(processID: Int32)
     func rate(at time: TimeInterval) -> Double?
+    /// Bytes the process has received since monitoring began, or nil while no meter is running.
+    func bytesReceived() -> Int64?
     func stop() async
 }
 
+/// Reads nettop's per-process CSV deltas. nettop's first row for a process carries every byte it
+/// received since it launched, not since the sample began, so that row only anchors the timeline:
+/// the rate and the running total are built from the rows that follow.
 struct NetworkReceiveMeter {
     let processID: Int32
+    /// Bytes received since the first sample; the transfer's own traffic, not the sign-in before it.
+    private(set) var bytesReceived: Int64 = 0
     private var pending = ""
     private var byteColumn: Int?
     private var lastSample: TimeInterval?
+    private var anchored = false
     private var intervals: [(bytes: Double, duration: TimeInterval)] = []
     private var currentRate: Double?
 
@@ -849,7 +936,12 @@ struct NetworkReceiveMeter {
         guard time.isFinite else { return }
         pending += String(decoding: data, as: UTF8.self)
         guard pending.utf8.count <= 65_536 else {
+            // Runaway output loses the rate window, never the bytes already counted.
+            let total = bytesReceived
+            let anchored = anchored
             self = NetworkReceiveMeter(processID: processID)
+            bytesReceived = total
+            self.anchored = anchored
             return
         }
         while let newline = pending.firstIndex(where: { $0.isNewline }) {
@@ -868,6 +960,11 @@ struct NetworkReceiveMeter {
                   let bytes = Int64(fields[column]) else { continue }
             let previous = lastSample
             lastSample = time
+            guard anchored else {
+                anchored = true
+                continue
+            }
+            bytesReceived += bytes
             guard let previous, (0.5...2.5).contains(time - previous) else {
                 intervals = []
                 currentRate = nil
@@ -903,6 +1000,12 @@ private final class NetworkReceiveCapture: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return finished ? nil : meter.rate(at: time)
+    }
+
+    func bytesReceived() -> Int64? {
+        lock.lock()
+        defer { lock.unlock() }
+        return finished ? nil : meter.bytesReceived
     }
 
     func finish() {
@@ -986,6 +1089,8 @@ final class ProcessNetworkMonitor: ProcessNetworkMonitoring {
     }
 
     func rate(at time: TimeInterval) -> Double? { capture?.rate(at: time) }
+
+    func bytesReceived() -> Int64? { capture?.bytesReceived() }
 
     func stop() async {
         capture?.finish()

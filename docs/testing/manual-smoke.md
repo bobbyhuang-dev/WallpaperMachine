@@ -86,14 +86,27 @@ when no manual or explicitly requested desktop check was performed.
 
 ## Download queue
 
-- [ ] Queue at least four Workshop items: one active transfer, the rest waiting.
-- [ ] Cancel the active item and check that the oldest queued item starts after
+- [ ] Double-click a Discover tile with SteamCMD installed and a saved sign-in:
+      no dialog opens, the tile's ring fills with a percentage that matches the
+      inspector's received/total bytes, and clicking the ring cancels.
+- [ ] With a saved sign-in, queue at least four Workshop items: three transfer
+      at once (the activity bar reads "3 downloading" with a combined speed),
+      the fourth waits for a free slot, and the app log records each start.
+- [ ] With no saved sign-in, queue several items: only the first prompts, the
+      rest wait for the sign-in, then start silently as soon as Steam accepts
+      it and before the first transfer finishes.
+- [ ] Cancel an active item and check that the oldest queued item starts after
       cleanup.
+- [ ] If Steam ends a session with "logged in elsewhere", the ended item goes
+      back in line, the footer reads "Downloads run one at a time", and it
+      retries after the running item without a click.
 - [ ] Remove queued work and confirm it never starts.
 - [ ] Complete one sign-in and check that the next job attempts saved-session
       reuse. Steam may still ask again.
-- [ ] Close the Downloads popover, change search or page, and reopen the active
-      transfer's sign-in dialog.
+- [ ] With no saved sign-in, the password / Steam Guard dialog opens by itself;
+      Not now keeps it closed until Steam asks for something else, and the
+      tile's shield reopens it. Close the Downloads popover, change search or
+      page, and reopen the active transfer's sign-in dialog.
 - [ ] Verify independent retry, completion and scene-resource consent.
 - [ ] Saved sign-in settings stay locked until pending transfers finish;
       quitting stops all transfers.

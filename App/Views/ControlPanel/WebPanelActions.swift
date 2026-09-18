@@ -53,6 +53,11 @@ extension WebPanelController {
     case "workshopRetry":
       workshop.retrySearch()
       return
+    case "workshopPageSize":
+      let range = WorkshopStore.pageSizeRange
+      workshop.setPageSize(
+        Int(try request.number("size", range: Double(range.lowerBound)...Double(range.upperBound))))
+      return
     case "workshopFilters":
       guard let collapsed = body["collapsed"] as? Bool else { throw WebPanelRequest.invalid }
       workshopFiltersCollapsed = collapsed

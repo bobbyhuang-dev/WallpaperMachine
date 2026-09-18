@@ -93,23 +93,29 @@ Swift tests cover, without starting the app:
   cancellation, and rejection of linked, special, or incomplete content;
   deletion; scene-asset installation.
 - **Workshop** — search and pagination beneath the UI, committed-query
-  pagination, superseded requests, cancellation, and exact failed-request retry
-  through the real page parser. Two tests use live Steam responses and therefore
+  pagination, window-sized pages cut from cached Steam pages (including a size
+  change while a page loads), superseded requests, cancellation, and exact
+  failed-request retry through the real page parser. Two tests use live Steam responses and therefore
   require network access. Thumbnail cache: CDN scaling only for Steam image
   hosts, first-frame JPEG extraction from animated previews, one download per
   URL under concurrent requests, disk hits across instances, fallback when the
   CDN refuses scaling, no cache entry after a failed fetch, the concurrency cap
   and oldest-first pruning; the scheme handler refuses thumbnail ids it has not
   announced.
-- **Downloads** — serial private terminals, per-job secrets, saved-sign-in
-  handoff to the next job, cancellation, duplicate-click suppression, FIFO
-  handoff after failure/cancel, shutdown without launching queued work, staging
-  reclaim limited to directories nothing is writing to, protection against stale
-  credential rejections erasing a newer session, retained-intent setup/account
-  progression, explicit shared-resource consent including reinstall,
-  resource-job deduplication, account correction, removal preventing
-  resumption, and download-speed sampling (see [renderer.md](renderer.md) for
-  the `nettop` streaming detail).
+- **Downloads** — private terminals per job, transfers side by side up to the
+  slot limit once the first job's sign-in is accepted and saved (siblings start
+  silently while it still transfers), the queue waiting behind a job that is
+  still authenticating or renewing a stale sign-in, serial order without a
+  saved sign-in, a Steam "logged in elsewhere" kick re-queuing the ended job
+  and turning the queue serial, per-job secrets,
+  saved-sign-in handoff to the next job, cancellation, duplicate-click
+  suppression, FIFO handoff after failure/cancel, shutdown without launching
+  queued work, staging reclaim limited to directories nothing is writing to,
+  protection against stale credential rejections erasing a newer session,
+  retained-intent setup/account progression, explicit shared-resource consent
+  including reinstall, resource-job deduplication, account correction, removal
+  preventing resumption, and download-speed sampling (see
+  [renderer.md](renderer.md) for the `nettop` streaming detail).
 - **Steam runtime** — SteamCMD setup against isolated preferences/directories,
   `URLProtocol` archives, real system `tar`, and owned child processes:
   publication/replacement, invalid discovery, traversal/link/archive-size

@@ -1,6 +1,7 @@
 #include "WPShaderParser.hpp"
 
 #include "Fs/IBinaryStream.h"
+#include "Fs/PhysicalFs.h"
 #include "Fs/VFS.h"
 #include "Shader/RustShaderBridge.hpp"
 #include "Utils/Logging.h"
@@ -11,6 +12,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <unistd.h>
 #include <optional>
 #include <string>
 
@@ -340,9 +342,31 @@ bool CompileProgramRust(std::string_view scene_id, std::string_view shader_name,
 
     const auto cache_write_started = std::chrono::steady_clock::now();
     if (!hit && request.cache_enabled && env.vfs != nullptr && ! output.cache_key.empty()) {
-        if (auto file = env.vfs->OpenW(program_path); file != nullptr) {
+        // Written beside the entry and published over it, so a reader -- this
+        // process, another one, or the next launch -- sees either the previous
+        // complete entry or this one, never half of either. The temporary name
+        // carries the writer's identity because two processes may be compiling
+        // the same program at the same moment; the loser's rename simply
+        // replaces an identical file.
+        const auto staged_path =
+            program_path + ".tmp" + std::to_string(static_cast<long long>(::getpid()));
+        bool published = false;
+        if (auto file = env.vfs->OpenW(staged_path); file != nullptr) {
             const auto bytes = program.dump();
-            WriteBytes(*file, bytes.data(), bytes.size());
+            published = WriteBytes(*file, bytes.data(), bytes.size());
+            // Closed before the rename: the stream owns the descriptor, and a
+            // rename over a file still being written is not a publication.
+            file.reset();
+            published = published && env.vfs->Rename(staged_path, program_path);
+        }
+        if (! published) {
+            // A file system with no rename, or one that refused it. Writing in
+            // place is what this did before, and a torn entry is rejected when
+            // it is read.
+            if (auto file = env.vfs->OpenW(program_path); file != nullptr) {
+                const auto bytes = program.dump();
+                WriteBytes(*file, bytes.data(), bytes.size());
+            }
         }
         // The `spvs01` container stores SPIR-V words; the Metal payload lives
         // only in the program JSON above.
@@ -423,6 +447,7 @@ bool WPShaderParser::CompileToMslRust(std::string_view scene_id, std::string_vie
 }
 
 bool WPShaderParser::CompileMslVariant(const SceneMetalVariantInputs&             inputs,
+                                       std::string_view                           cache_root,
                                        std::vector<wallpaper::shader::RustShaderMetalStage>& stages,
                                        std::string* reflection_json, std::string* error) {
     // Copies of the caller's snapshot, never the snapshot itself: this compile
@@ -433,8 +458,26 @@ bool WPShaderParser::CompileMslVariant(const SceneMetalVariantInputs&           
     auto         units       = inputs.units;
     WPShaderInfo shader_info = inputs.shader_info;
 
+    // The same on-disk program cache the ordinary translation writes, reached
+    // without the parse's virtual file system because that is long gone by the
+    // time anything asks for a variant. Only `/cache` is mounted: the includes
+    // come from the snapshot, so nothing here can read the project, and the
+    // cache key is built from the request exactly as it is during a parse --
+    // which is why an entry written by one launch is found by the next.
+    //
+    // An absent or unusable cache root is not a failure. It compiles, and the
+    // result lives for as long as this process does.
+    fs::VFS cache_vfs;
+    if (! cache_root.empty()) {
+        if (! cache_vfs.Mount("/cache", fs::CreatePhysicalFs(cache_root, true), "cache")) {
+            LOG_INFO("metal variant cache folder unavailable: %s",
+                     std::string(cache_root).c_str());
+        }
+    }
+
     wallpaper::shader::RustShaderOutput output;
-    const RustCompileEnv env { .includes = &inputs.includes };
+    const RustCompileEnv env { .vfs      = cache_vfs.IsMounted("cache") ? &cache_vfs : nullptr,
+                               .includes = &inputs.includes };
     const auto           set_error = [error](std::string message) {
         if (error != nullptr) *error = std::move(message);
         return false;

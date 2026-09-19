@@ -492,6 +492,7 @@ const catalogs = {
     'bound text': '绑定的文本',
     'sound': '声音',
     'a bound node': '绑定的节点',
+    'text still being laid out': '仍在排版的文本',
     'an input the renderer could not account for': '渲染器无法识别的输入',
     'updating continuously': '持续更新中',
     'waiting for events': '等待事件',
@@ -619,7 +620,7 @@ const catalogs = {
     'Completed downloads': '已完成的下载',
     'Clear history': '清除历史',
     'What gets removed': '会删除哪些内容',
-    'Clearing the shader cache removes compiled shaders. They are rebuilt as wallpapers load, which may temporarily slow playback. Clearing logs removes diagnostic history, not wallpapers or settings. Clearing download history keeps downloaded files.': '清除着色器缓存会删除已编译的着色器，它们会在壁纸加载时重新生成，可能暂时拖慢播放。清除日志只删除诊断记录，不影响壁纸或设置。清除下载历史会保留已下载的文件。',
+    'Clearing the shader cache removes compiled shaders, including the compiled render pipelines kept alongside them. They are rebuilt as wallpapers load, which may temporarily slow playback. Clearing logs removes diagnostic history, not wallpapers or settings. Clearing download history keeps downloaded files.': '清除着色器缓存会删除已编译的着色器，以及与它们一并保存的已编译渲染管线，它们会在壁纸加载时重新生成，可能暂时拖慢播放。清除日志只删除诊断记录，不影响壁纸或设置。清除下载历史会保留已下载的文件。',
     'Files you chose for a wallpaper’s file or folder settings are copied into the managed folder above so they survive a cache clean and a wallpaper update. Nothing on this page deletes them; removing one means clearing that setting on the wallpaper itself.': '你为壁纸的文件或文件夹设置所选的文件会复制到上方的托管文件夹，以便在清理缓存和更新壁纸后仍然保留。此页面上的操作都不会删除它们；要移除某个文件，请在壁纸本身上清除对应设置。',
 
     // Settings: about

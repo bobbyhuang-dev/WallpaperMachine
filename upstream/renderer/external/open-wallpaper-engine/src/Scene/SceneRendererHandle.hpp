@@ -200,6 +200,12 @@ public:
     void SetWallpaperHorizontalFlip(bool value) {
         OWE_FORWARD_VOID(SetWallpaperHorizontalFlip(value));
     }
+    /// Native-only: the compatibility backend has no pipeline archive, and
+    /// giving it one would mean inventing an equivalent for a renderer that
+    /// does not create Metal pipelines.
+    void SetPipelineArchivePath(std::string_view path) {
+        if (m_metal != nullptr) m_metal->SetPipelineArchivePath(path);
+    }
     void SetVideoPlaybackPaused(bool value) { OWE_FORWARD_VOID(SetVideoPlaybackPaused(value)); }
     void SetVideoPlaybackRate(float value) { OWE_FORWARD_VOID(SetVideoPlaybackRate(value)); }
     double ShortestVideoFramePeriod() const {

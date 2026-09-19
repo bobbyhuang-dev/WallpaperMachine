@@ -37,8 +37,8 @@ enum class SceneDemandReason : uint32_t
     Puppet = 1u << 8,
     /// A pass reads a target it also writes.
     Feedback = 1u << 9,
-    /// A text layer's content is produced from a bound value, which may be a
-    /// clock or a date.
+    /// A text layer's content is produced from a bound value that re-evaluates
+    /// on its own -- a script, which may be a clock or a date.
     TextBinding = 1u << 10,
     /// A sound layer exists. Image stillness says nothing about audio, and this
     /// analysis cannot yet prove a sound is independent of the tick.
@@ -52,6 +52,9 @@ enum class SceneDemandReason : uint32_t
     /// No complete frame has been presented yet. Idling here would leave the
     /// surface showing whatever preceded the wallpaper.
     NoFrameYet = 1u << 14,
+    /// A text layer's new layout is still being produced, or has been produced
+    /// and not yet applied. Clears when the worker's result reaches a frame.
+    TextLayoutPending = 1u << 15,
 };
 
 constexpr uint32_t operator|(SceneDemandReason lhs, SceneDemandReason rhs)

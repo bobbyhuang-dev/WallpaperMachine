@@ -27,6 +27,7 @@
 #include "Runtime/VirtualAssetRegistry.hpp"
 #include "Scene/Scene.h"
 #include "Scene/SceneBackendSelection.hpp"
+#include "Scene/SceneUpdateDemand.hpp"
 #include "Scene/SceneNode.h"
 #include "Scene/SceneMesh.h"
 #include "Scene/SceneTexture.h"
@@ -38,6 +39,8 @@
 #include "VulkanRender/SceneToRenderGraph.hpp"
 #include "VulkanRender/StaticSubgraphCache.hpp"
 #include "Shader/SceneMetalVariants.hpp"
+#include "Scene/Parse/WPShaderParser.hpp"
+#include "Shader/RustShaderBridge.hpp"
 #include "WPSceneParser.hpp"
 #include "synthetic_video.hpp"
 
@@ -213,9 +216,10 @@ void AddCopy(rg::RenderGraph& graph, const std::string& source, const std::strin
 /// The wallpaper's own loop asks for exactly this at a frame boundary and never
 /// waits; a test that wants to compare the two paths has to know the second one
 /// exists before it starts drawing, which is what this waits for.
-bool SettleVariantTranslation(Scene& scene, std::string* reason)
+bool SettleVariantTranslation(Scene& scene, std::string* reason,
+                              std::string_view cache_root = {})
 {
-    RequestSceneMetalVariants(scene, true);
+    RequestSceneMetalVariants(scene, true, cache_root);
     for (const auto& program : scene.metal_variant_candidates) {
         if (program == nullptr) continue;
         for (int attempt = 0; attempt < 500; ++attempt) {
@@ -690,7 +694,7 @@ TEST_F(MetalSceneDraw, GeometryRebuiltEveryFrameIsUploadedAndDrawnFromItsOwnSlot
 
     // Same attribute names the author's shader declares, so the translated
     // pipeline binds this stream exactly as it binds the static one.
-    auto dynamic_mesh = std::make_shared<SceneMesh>(true);
+    auto dynamic_mesh = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
     std::vector<SceneVertexArray::SceneVertexAttribute> attributes {
         { std::string(WE_IN_POSITION), VertexType::FLOAT3 },
         { std::string(WE_IN_TEXCOORD), VertexType::FLOAT2 },
@@ -1502,8 +1506,13 @@ namespace
 /// text" writes: no model, no material, no author shader. Everything the layer
 /// draws with -- the card, its texture and the program that samples it -- is
 /// produced by the parser and the text system.
+///
+/// `text_json`, when given, replaces the quoted caption with the author's own
+/// JSON for that field: `{"user":...}` for a layer the user's property drives,
+/// `{"script":...}` for one that re-evaluates itself every tick.
 std::filesystem::path WriteTextFixture(const std::filesystem::path& root, std::string_view text,
-                                       bool with_effect = false)
+                                       bool with_effect = false,
+                                       std::string_view text_json = {})
 {
     const std::string effects =
         with_effect ? R"(,"effects":[{"file":"effects/probe.json","visible":true}])" : "";
@@ -1537,8 +1546,9 @@ std::filesystem::path WriteTextFixture(const std::filesystem::path& root, std::s
           R"({"camera":{"center":[0,0,0],"eye":[0,0,1],"up":[0,1,0]},)"
           R"("general":{"ambientcolor":[0,0,0],"skylightcolor":[0,0,0],"clearcolor":[0.0,0.0,0.0],)"
           R"("cameraparallax":false,"orthogonalprojection":{"width":384,"height":256}},)"
-          R"("objects":[{"id":1,"name":"caption","text":")" + std::string(text) +
-              R"(","font":"Arial","pointsize":48,"origin":[192,128,0],)"
+          R"("objects":[{"id":1,"name":"caption","text":)" +
+              (text_json.empty() ? "\"" + std::string(text) + "\"" : std::string(text_json)) +
+              R"(,"font":"Arial","pointsize":48,"origin":[192,128,0],)"
               R"("scale":[1,1,1],"angles":[0,0,0],"visible":true)" + effects + R"(}]})" },
     };
 
@@ -1562,6 +1572,16 @@ std::size_t LitPixels(const std::vector<uint8_t>& rgba)
         if (rgba[i] != 0 || rgba[i + 1] != 0 || rgba[i + 2] != 0) ++lit;
     }
     return lit;
+}
+
+/// Exactly what `SceneWallpaper::evaluateSceneUpdateDemand` ORs to decide
+/// whether a scene may stop its clock, assembled from the same two halves so
+/// this can be asked without a frame clock, a looper or a surface.
+uint32_t SceneDemand(MetalRender& render, Scene& scene)
+{
+    uint32_t reasons = SceneDemandReasonsFromShaderInputs(render.ShaderUpdateDemandReasons());
+    if (scene.runtime != nullptr) reasons |= scene.runtime->DescribeTimeAdvancingWork();
+    return reasons;
 }
 
 /// One production frame: the runtime tick and the text pump the wallpaper's own
@@ -1827,6 +1847,527 @@ TEST_F(MetalSceneDraw, ATextLayerWithAnEffectChainKeepsBothOfItsCards)
             if (changed != drawn) break;
         }
         EXPECT_NE(changed, drawn) << "a relayout never reached the effect chain's output";
+
+        render.destroy();
+    }
+}
+
+namespace
+{
+
+/// Draws until the scene reports it has nothing left to do, or gives up.
+///
+/// Bounded on purpose: "eventually quiet" is the claim, and a test that spun
+/// forever would turn a scene that never settles into a hang rather than a
+/// failure.
+bool SettleSceneDemand(MetalRender& render, Scene& scene, int max_frames = 120)
+{
+    for (int frame = 0; frame < max_frames; ++frame) {
+        AdvanceSceneFrame(render, scene);
+        if (SceneDemand(render, scene) == 0) return true;
+    }
+    return false;
+}
+
+} // namespace
+
+TEST_F(MetalSceneDraw, AStaticTextSceneRunsOutOfWorkToDo)
+{
+    // The round's point, stated as the scene's own answer: a text layer whose
+    // caption is fixed has nothing that advances on its own, so the wallpaper
+    // may stop its clock entirely rather than merely stop uploading.
+    const auto  project = WriteTextFixture(root_ / "static-text-idle", "HELLO");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "static-text-idle-cache", loaded, error)) << error;
+    ASSERT_NE(loaded.scene->runtime, nullptr);
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+
+        ASSERT_TRUE(SettleSceneDemand(render, *loaded.scene))
+            << "a fixed caption never stopped asking for frames";
+        EXPECT_GT(LitPixels(ReadOutput(render, *loaded.scene)), 0u)
+            << "the scene went quiet without ever drawing the text";
+
+        // Both facts that used to stop it are still reported, because both are
+        // still true and the pixel-reuse cache depends on them. What changed is
+        // that neither is read as a reason for the whole scene to keep drawing.
+        const auto shader = render.ShaderUpdateDemandReasons();
+        EXPECT_TRUE(shader & wallpaper::vulkan::DynamicReason::EventMesh)
+            << "the text card stopped being reported as geometry the runtime rewrites";
+        EXPECT_TRUE(shader & wallpaper::vulkan::DynamicReason::RuntimeImage)
+            << "the text texture stopped being reported as an image the runtime replaces";
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, AChangedCaptionWakesTheSceneAndThenLetsItGoQuietAgain)
+{
+    // The other half of idling, and the one that makes it safe: a scene that
+    // has gone quiet must not stay quiet through a change. The demand has to
+    // come back while the new layout is in flight, the new picture has to
+    // reach the output, and only then may the scene be still again.
+    const auto  project = WriteTextFixture(root_ / "text-wake", "HELLO");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "text-wake-cache", loaded, error)) << error;
+    ASSERT_NE(loaded.scene->runtime, nullptr);
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+
+        ASSERT_TRUE(SettleSceneDemand(render, *loaded.scene));
+        const auto quiet = ReadOutput(render, *loaded.scene);
+        ASSERT_FALSE(quiet.empty());
+
+        ASSERT_TRUE(loaded.scene->runtime->SetNodeText("caption", "WOVEN"));
+        EXPECT_NE(SceneDemand(render, *loaded.scene), 0u)
+            << "a caption that changed left the scene claiming it had nothing to do";
+
+        ASSERT_TRUE(SettleSceneDemand(render, *loaded.scene))
+            << "the scene never finished applying the new caption";
+        EXPECT_NE(ReadOutput(render, *loaded.scene), quiet)
+            << "the scene went quiet again without the new caption reaching the output";
+
+        // Setting the same string back is not a change, so it must not produce
+        // a scene that thinks it has work.
+        ASSERT_TRUE(loaded.scene->runtime->SetNodeText("caption", "WOVEN"));
+        EXPECT_EQ(SceneDemand(render, *loaded.scene), 0u)
+            << "writing the caption it already had woke the scene up";
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, TextProducedByAScriptIsNeverCalledStill)
+{
+    // The limit of the change above, and the one it must not cross. A caption
+    // whose value is computed every tick keeps the clock, whatever the script
+    // happens to return: nothing here reads the script's body, counts repeated
+    // results or infers when it will next differ.
+    const auto project = WriteTextFixture(
+        root_ / "scripted-text",
+        "HELLO",
+        false,
+        R"({"value":"HELLO","script":"export function update(value) { return '12:34'; }"})");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "scripted-text-cache", loaded, error)) << error;
+    ASSERT_NE(loaded.scene->runtime, nullptr);
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+
+        for (int frame = 0; frame < 30; ++frame) {
+            AdvanceSceneFrame(render, *loaded.scene);
+            ASSERT_TRUE(SceneDemand(render, *loaded.scene) &
+                        wallpaper::SceneDemandReason::Script)
+                << "a scripted caption was allowed to look like a still scene on frame " << frame;
+        }
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, TextBoundToAUserPropertyIsEventDrivenRatherThanContinuous)
+{
+    // A caption the user's own property supplies changes when they change it,
+    // which is an event and not a timeline. The binding exists for the whole
+    // life of the scene; that on its own must not keep the clock running.
+    const auto project = WriteTextFixture(root_ / "property-text",
+                                          "HELLO",
+                                          false,
+                                          R"({"value":"HELLO","user":"caption"})");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "property-text-cache", loaded, error)) << error;
+    ASSERT_NE(loaded.scene->runtime, nullptr);
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+
+        ASSERT_TRUE(SettleSceneDemand(render, *loaded.scene))
+            << "a caption bound to a user property never stopped asking for frames";
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, AStaticTextLayerUnderAnEffectChainAlsoRunsOutOfWork)
+{
+    // The effect chain adds two more cards the relayout rewrites and two more
+    // passes. None of them is driven by anything, so the scene is still still.
+    const auto  project = WriteTextFixture(root_ / "effect-text-idle", "HELLO", true);
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "effect-text-idle-cache", loaded, error)) << error;
+    ASSERT_NE(loaded.scene->runtime, nullptr);
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+
+        ASSERT_TRUE(SettleSceneDemand(render, *loaded.scene))
+            << "a text layer under an effect chain never stopped asking for frames";
+        EXPECT_GT(LitPixels(ReadOutput(render, *loaded.scene)), 0u)
+            << "the chain went quiet without drawing anything";
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, AnOptionalProgramTranslatedOnceIsRestoredFromDiskOnTheNextLaunch)
+{
+    // What "persisted" has to mean, and the only way to show it without a
+    // second process: the translation runs once, and a compile that starts from
+    // an empty in-memory cache -- which is what a new launch is -- produces the
+    // same Metal source, the same reflection and the same binding plan without
+    // the compiler running at all.
+    const auto project = WriteVideoFixture(root_ / "variant-cache-project", kVideoWidth,
+                                           kVideoHeight);
+    if (project.empty()) {
+        GTEST_SKIP() << "no hardware H.264 encoder here, so no decodable media to parse";
+    }
+    const auto  cache_root = root_ / "variant-cache";
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, cache_root, loaded, error)) << error;
+
+    auto* material = FirstMaterial(loaded.scene->sceneGraph.get());
+    ASSERT_NE(material, nullptr);
+    ASSERT_NE(material->customShader.shader, nullptr);
+    const auto* program = material->customShader.shader->metal_program.get();
+    ASSERT_NE(program, nullptr);
+    ASSERT_TRUE(program->hasVideoPlaneCandidate())
+        << "no plane variant was possible, so there is nothing to persist";
+    const auto& inputs = *program->video_plane_inputs;
+
+    const auto compile = [&inputs, &cache_root](
+                             std::vector<shader::RustShaderMetalStage>& stages,
+                             std::string& reflection) {
+        std::string failure;
+        const bool  ok = WPShaderParser::CompileMslVariant(
+            inputs, cache_root.string(), stages, &reflection, &failure);
+        EXPECT_TRUE(ok) << failure;
+        return ok;
+    };
+
+    // ---- first launch: nothing on disk for this program yet
+    WPShaderParser::ClearProgramCache();
+    WPShaderParser::ResetStartupMetrics();
+    std::vector<shader::RustShaderMetalStage> first;
+    std::string                               first_reflection;
+    ASSERT_TRUE(compile(first, first_reflection));
+    const auto cold = WPShaderParser::GetStartupMetrics();
+    ASSERT_EQ(cold.cache_hits, 0u) << "the first translation was already a hit";
+    ASSERT_EQ(cold.cache_misses, 1u);
+    ASSERT_FALSE(first.empty());
+    ASSERT_FALSE(first_reflection.empty());
+
+    // ---- next launch: the process remembers nothing, the disk does
+    WPShaderParser::ClearProgramCache();
+    WPShaderParser::ResetStartupMetrics();
+    std::vector<shader::RustShaderMetalStage> second;
+    std::string                               second_reflection;
+    ASSERT_TRUE(compile(second, second_reflection));
+    const auto warm = WPShaderParser::GetStartupMetrics();
+    EXPECT_EQ(warm.cache_misses, 0u)
+        << "the optional program was translated again from source on a later launch";
+    EXPECT_EQ(warm.cache_hits, 1u);
+
+    // Restoring the Metal source alone would not be enough: without the
+    // reflection and the per-stage binding plan the renderer cannot bind
+    // anything to it, and would have to compile it again to find out.
+    EXPECT_EQ(second_reflection, first_reflection);
+    ASSERT_EQ(second.size(), first.size());
+    for (std::size_t i = 0; i < first.size(); ++i) {
+        EXPECT_EQ(second[i].source, first[i].source);
+        EXPECT_EQ(second[i].entry_point, first[i].entry_point);
+        EXPECT_EQ(second[i].language_version, first[i].language_version);
+        ASSERT_EQ(second[i].bindings.size(), first[i].bindings.size())
+            << "stage " << i << " came back with a different binding plan";
+        for (std::size_t b = 0; b < first[i].bindings.size(); ++b) {
+            EXPECT_EQ(second[i].bindings[b].name, first[i].bindings[b].name);
+            EXPECT_EQ(second[i].bindings[b].slot, first[i].bindings[b].slot);
+            EXPECT_EQ(second[i].bindings[b].slot_kind, first[i].bindings[b].slot_kind);
+        }
+    }
+
+    // ---- a cache that is there but unreadable is not a failure
+    //
+    // Truncating every stored program is the worst case a partial write or a
+    // half-deleted folder can produce. The wallpaper must still get its
+    // variant; the cache is an optimisation and never a dependency.
+    std::size_t corrupted = 0;
+    for (const auto& entry :
+         std::filesystem::directory_iterator(cache_root / "metal-draw-smoke" / "programs01")) {
+        if (! entry.is_regular_file()) continue;
+        std::ofstream(entry.path(), std::ios::trunc) << "{\"request\": ";
+        ++corrupted;
+    }
+    ASSERT_GT(corrupted, 0u) << "nothing was written to disk, so nothing was persisted";
+
+    WPShaderParser::ClearProgramCache();
+    WPShaderParser::ResetStartupMetrics();
+    std::vector<shader::RustShaderMetalStage> recovered;
+    std::string                               recovered_reflection;
+    ASSERT_TRUE(compile(recovered, recovered_reflection))
+        << "a corrupted cache entry stopped the variant being produced";
+    EXPECT_EQ(WPShaderParser::GetStartupMetrics().cache_misses, 1u)
+        << "a corrupted entry was read as a hit";
+    ASSERT_EQ(recovered.size(), first.size());
+    EXPECT_EQ(recovered.front().source, first.front().source);
+    EXPECT_EQ(recovered_reflection, first_reflection);
+}
+
+TEST_F(MetalSceneDraw, PipelinesThisProcessBuildsAreArchivedAndServeTheProductionPath)
+{
+    // What the archive has to be able to say, and the only claim worth making
+    // about it: the file this process writes is handed to the real pipeline
+    // creation path -- the same `newRenderPipelineStateWithDescriptor:` a
+    // wallpaper goes through -- and Metal can satisfy those descriptors from it
+    // without compiling. The strict option is used only here, to tell an actual
+    // hit apart from a fast recompile; the renderer never asks that way,
+    // because a cold cache must never stop a wallpaper loading.
+    const auto archive_root = root_ / "pipeline-archive";
+    std::filesystem::create_directories(archive_root);
+
+    const auto  project = WriteFixture(root_ / "archive-project", "0.375");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "archive-cache", loaded, error)) << error;
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+        // Per surface, as the scene's own command sets it: another display
+        // showing a different wallpaper keeps its own store.
+        render.SetPipelineArchivePath(archive_root.string());
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        AdvanceSceneFrame(render, *loaded.scene);
+
+        // A first run has no file to read from, so nothing is attached to its
+        // descriptors and everything is compiled -- which is the honest state
+        // and not a failure. What it does is collect.
+        EXPECT_GT(MetalPipelineArchiveStatusForDiagnostics().collected, 0u)
+            << "the pipelines this scene needed were never offered to the archive";
+
+        // Published, reopened from disk and asked strictly: this is the next
+        // launch's question, answered without one.
+        EXPECT_TRUE(MetalRender::PipelineArchiveServesEverySeenPipelineForTests())
+            << "the archive could not supply a pipeline it had been given";
+
+        const auto status = MetalPipelineArchiveStatusForDiagnostics();
+        EXPECT_TRUE(status.available) << "the published archive could not be reopened";
+        EXPECT_GT(status.published, 0u) << "the archive was never written out";
+
+        render.destroy();
+    }
+
+    // Written to disk, under the regenerable cache and nowhere else.
+    std::size_t files = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(archive_root)) {
+        if (entry.is_regular_file() && entry.file_size() > 0) ++files;
+    }
+    EXPECT_GT(files, 0u) << "the archive was never published, so a later launch inherits nothing";
+
+    // An unwritable or absent store is not a failure: pipelines are created
+    // exactly as they were before any of this existed. This renderer is simply
+    // never given a path.
+    LoadedScene without;
+    ASSERT_TRUE(LoadScene(WriteFixture(root_ / "no-archive-project", "0.4375"),
+                          root_ / "no-archive-cache", without, error))
+        << error;
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+        auto graph = sceneToRenderGraph(*without.scene);
+        ASSERT_NE(graph, nullptr);
+        EXPECT_TRUE(render.compileRenderGraph(*without.scene, *graph)) << render.lastError();
+        AdvanceSceneFrame(render, *without.scene);
+        EXPECT_GT(LitPixels(ReadOutput(render, *without.scene)), 0u)
+            << "a wallpaper stopped drawing when there was no pipeline archive";
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, ACaptionChangedWhileHiddenIsNotWorkInFlight)
+{
+    // The trap in reporting "text is still being laid out" as a reason to keep
+    // drawing: the pump skips hidden layers, so a caption changed while its
+    // layer is hidden is pending and is not being worked on. Counting it would
+    // leave the wallpaper drawing forever for work nobody is doing. Showing the
+    // layer again is an event, and the layout happens then.
+    const auto  project = WriteTextFixture(root_ / "hidden-text", "HELLO");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "hidden-text-cache", loaded, error)) << error;
+    ASSERT_NE(loaded.scene->runtime, nullptr);
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+
+        ASSERT_TRUE(SettleSceneDemand(render, *loaded.scene));
+
+        ASSERT_TRUE(loaded.scene->runtime->SetNodeVisible("caption", false));
+        ASSERT_TRUE(loaded.scene->runtime->SetNodeText("caption", "WOVEN"));
+        ASSERT_TRUE(SettleSceneDemand(render, *loaded.scene, 60))
+            << "a caption changed behind a hidden layer kept the scene drawing for work the "
+               "text pump never starts";
+
+        // And the work is not lost: showing the layer again produces it.
+        ASSERT_TRUE(loaded.scene->runtime->SetNodeVisible("caption", true));
+        ASSERT_TRUE(SettleSceneDemand(render, *loaded.scene))
+            << "the deferred layout never finished after the layer came back";
+        EXPECT_GT(LitPixels(ReadOutput(render, *loaded.scene)), 0u)
+            << "the layer came back empty";
 
         render.destroy();
     }

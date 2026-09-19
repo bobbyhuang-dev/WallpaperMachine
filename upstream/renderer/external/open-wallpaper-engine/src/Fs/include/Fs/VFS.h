@@ -86,6 +86,20 @@ public:
 		LOG_ERROR("not found \"%s\" in vfs", path.data());
 		return nullptr;
 	}
+	/// Publishes `from` as `to`, both of which must resolve to the same mount.
+	///
+	/// Refuses rather than approximating when they do not: moving a file across
+	/// two file systems is a copy, and a copy is exactly what the callers of
+	/// this are avoiding.
+	bool Rename(std::string_view from, std::string_view to) {
+		auto owner = std::find_if(m_mountedFss.rbegin(), m_mountedFss.rend(), [&to](const auto& mfs) {
+			return MountedFs::InMountPoint(mfs.mountPoint, to);
+		});
+		if (owner == std::rend(m_mountedFss)) return false;
+		if (! MountedFs::InMountPoint(owner->mountPoint, from)) return false;
+		return owner->fs->Rename(MountedFs::GetPathInMount(owner->mountPoint, from),
+		                         MountedFs::GetPathInMount(owner->mountPoint, to));
+	}
 	bool Contains(std::string_view path) const {
 		for(auto iter = m_mountedFss.rbegin();iter < m_mountedFss.rend();iter++) {
 			auto& el = *iter;

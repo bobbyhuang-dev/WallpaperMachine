@@ -1,6 +1,7 @@
 #include "SceneWallpaper.hpp"
 #include "SceneRendererHandle.hpp"
 #include "MetalRender/MetalBackendRouter.hpp"
+#include "MetalRender/MetalRender.hpp"
 #include "MetalRender/MetalVideoSupport.hpp"
 #include "Shader/SceneMetalVariants.hpp"
 #include "SceneWallpaperSurface.hpp"
@@ -451,13 +452,23 @@ public:
         // same pointer when it is created, which is not here: no backend exists
         // until a scene has said which one it needs.
         frame_timer.SetCounters(&counters);
+        {
+            std::scoped_lock lock(m_content_wake->mutex);
+            m_content_wake->timer = &frame_timer;
+        }
         publishPauseReasons();
     }
     virtual ~RenderHandler() {
         // Before anything else: the host's poster hook can post to this
         // handler from a notification thread, and it must stop being able to
-        // while the members it would reach are still alive.
+        // while the members it would reach are still alive. A scene's text
+        // worker is the same kind of caller and is detached the same way; the
+        // scene may still hold the target, but it no longer reaches a timer.
         unbindPosterWake();
+        {
+            std::scoped_lock lock(m_content_wake->mutex);
+            m_content_wake->timer = nullptr;
+        }
         frame_timer.Stop();
         m_render->release();
         LOG_INFO("render handler deleted");
@@ -743,6 +754,32 @@ public:
     /// decided by that frame's own demand, not here.
     void requestFrame() { frame_timer.RequestFrame(); }
 
+    /// Lets a scene's own background work ask for a frame without knowing
+    /// anything about this handler's lifetime.
+    ///
+    /// A worker thread can be inside the handler while this handler is being
+    /// torn down, so the indirection is a shared target rather than a captured
+    /// `this`: the destructor clears the timer under the same mutex the handler
+    /// takes, and after that no wake reaches anything. The scene may still hold
+    /// the target, which is exactly why the target outlives the handler.
+    ///
+    /// A scene being replaced can leave one wake in flight for a wallpaper that
+    /// is already gone. The cost is a single redundant frame of the new one,
+    /// which is the same trade the per-command request makes.
+    struct ContentWakeTarget {
+        std::mutex   mutex;
+        FrameTimer*  timer { nullptr };
+    };
+
+    void installContentWake(Scene& scene) {
+        if (scene.runtime == nullptr) return;
+        auto target = m_content_wake;
+        scene.runtime->SetContentWakeHandler([target] {
+            std::scoped_lock lock(target->mutex);
+            if (target->timer != nullptr) target->timer->RequestFrame();
+        });
+    }
+
     /// Why this surface is not presenting, as independent bits. Recomputed on
     /// every transition that can change one of them, so a stopped surface can
     /// be told apart from a surface whose renderer was taken away.
@@ -988,7 +1025,8 @@ private:
                 RequestSceneMetalVariants(
                     *m_scene,
                     m_render->hasBackend() && m_render->backend() == SceneBackend::NativeMetal &&
-                        metal::MetalVideoPlaneSamplingEnabled());
+                        metal::MetalVideoPlaneSamplingEnabled(),
+                    m_shader_cache_path);
             }
 
             // At the frame boundary, before the frame is drawn: the setting is
@@ -1139,6 +1177,17 @@ private:
     MHANDLER_CMD(SET_SCENE) {
         std::shared_ptr<Scene> scene;
         if (msg->findObject("scene", &scene)) {
+            // Absent on the test entry point, which has no cache: the variant
+            // path then keeps its result in memory for this process only.
+            std::string cache_path;
+            m_shader_cache_path = msg->findString("cache_path", &cache_path) ? cache_path
+                                                                            : std::string {};
+            // Compiled pipelines live beside this scene's translated shaders,
+            // in the same regenerable store, so clearing one clears both and
+            // neither is ever mistaken for something the user imported. Set on
+            // this surface's renderer rather than process-wide: another display
+            // may be showing a different wallpaper with its own cache.
+            m_render->SetPipelineArchivePath(m_shader_cache_path);
             // Whatever optional work the wallpaper being replaced had queued is
             // dropped here. A compile already inside the shader compiler is not
             // interrupted -- nothing can interrupt it -- but its result belongs
@@ -1165,6 +1214,7 @@ private:
             m_render_blocked = false;
             if (m_scene != nullptr && m_scene->runtime != nullptr) {
                 m_scene->runtime->SetMediaIntegrationEnabled(m_media_integration_enabled);
+                installContentWake(*m_scene);
             }
             selectSceneBackend();
             if (m_pending_system_media_artwork.has_value() &&
@@ -1311,6 +1361,13 @@ private:
 public:
     FrameTimer       frame_timer;
     FpsCounter       fps_counter;
+    /// Handed to every scene's runtime so its text worker can ask for the frame
+    /// that shows what it produced. Declared here, after `frame_timer`, so it
+    /// is destroyed before the timer it points at.
+    std::shared_ptr<ContentWakeTarget> m_content_wake { std::make_shared<ContentWakeTarget>() };
+    /// The regenerable shader cache the current scene was loaded against.
+    /// Delivered with the scene and read only on this thread.
+    std::string m_shader_cache_path;
     /// Written by the frame clock, the render thread and the decode thread;
     /// read by whoever asks for a snapshot. The destructor stops the frame
     /// clock and destroys the renderer before any member is destroyed, so no
@@ -1978,6 +2035,10 @@ void MainHandler::loadScene() {
     {
         auto msg = CreateMsgWithCmd(m_render_handler, RenderHandler::CMD::CMD_SET_SCENE);
         msg->setObject("scene", scene);
+        // Travels with the scene rather than being read across threads later:
+        // the programs this scene holds were translated against this cache, and
+        // a later variant of one of them has to be looked up in the same place.
+        msg->setString("cache_path", m_cache_path);
         msg->post();
     }
 
@@ -2012,6 +2073,7 @@ bool MainHandler::loadNonSceneProject(const ProjectManifest&   manifest,
 
         auto msg = CreateMsgWithCmd(m_render_handler, RenderHandler::CMD::CMD_SET_SCENE);
         msg->setObject("scene", scene);
+        msg->setString("cache_path", m_cache_path);
         msg->post();
 
         auto draw_msg = CreateMsgWithCmd(m_render_handler, RenderHandler::CMD::CMD_DRAW);

@@ -584,7 +584,7 @@ protected:
                            const std::function<void(CustomShaderPass::Desc&)>& configure = {},
                            bool require_prepared = true) {
         if (output.empty()) output = Target();
-        auto mesh = std::make_shared<SceneMesh>(dyn);
+        auto mesh = std::make_shared<SceneMesh>(dyn ? MeshUpdate::PerFrame : MeshUpdate::Fixed);
         SceneVertexArray array({{"a_Position", VertexType::FLOAT2, false}}, dyn ? 4 : 3);
         if (dyn) {
             const std::array<float, 8> points {-1,-1, 1,-1, -1,1, 1,1};

@@ -119,7 +119,7 @@ bool SizeNearlyEqual(Eigen::Vector2f lhs, Eigen::Vector2f rhs, float tolerance) 
 void ResizeCardMesh(SceneMesh& mesh, TextLayerRenderBounds bounds) {
     if (bounds.right <= bounds.left || bounds.top <= bounds.bottom) return;
 
-    SceneMesh replacement(mesh.Dynamic());
+    SceneMesh replacement(mesh.UpdateDriver());
     constexpr float z  = 0.0f;
 
     const std::array pos {
@@ -147,7 +147,7 @@ void ResizeCardMesh(SceneMesh& mesh, TextLayerRenderBounds bounds) {
 void ResizeCardMesh(SceneMesh& mesh, TextLayerRenderBounds bounds, TextLayerTextureBounds texture) {
     if (bounds.right <= bounds.left || bounds.top <= bounds.bottom) return;
 
-    SceneMesh replacement(mesh.Dynamic());
+    SceneMesh replacement(mesh.UpdateDriver());
     constexpr float z = 0.0f;
 
     const std::array pos {
@@ -214,7 +214,7 @@ struct ClonedMaterialBinding {
 
 std::shared_ptr<SceneMesh> CloneMesh(SceneMesh&                          mesh,
                                      std::vector<ClonedMaterialBinding>* material_bindings) {
-    auto clone = std::make_shared<SceneMesh>(mesh.Dynamic());
+    auto clone = std::make_shared<SceneMesh>(mesh.UpdateDriver());
     clone->SetPrimitive(mesh.Primitive());
     clone->SetPointSize(mesh.PointSize());
     clone->SetID(mesh.ID());
@@ -647,6 +647,39 @@ void SceneRuntimeContext::EnqueueTextLayerPreparation(std::string name, const Te
     m_text_worker_cv.notify_one();
 }
 
+bool SceneRuntimeContext::TextLayoutInFlight() const {
+    // Asked once per frame by the demand analysis, so a scene with no text at
+    // all answers without touching the worker's lock.
+    if (m_text_layers.empty()) return false;
+    {
+        std::lock_guard lock { m_text_worker_mutex };
+        if (! m_pending_text_jobs.empty() || ! m_prepared_text_layers.empty()) return true;
+    }
+    // A layer whose layout is pending but whose job has not been queued yet --
+    // the text changed during this very tick, and `PumpTextLayerCache` runs
+    // after it. Reported as in flight so the frame that made the change does
+    // not also conclude the scene is still.
+    //
+    // Only layers the pump will actually act on. A hidden layer's pending
+    // layout is deferred, not in flight: `PumpTextLayerCache` skips it, so
+    // counting it would leave the scene drawing forever for work that is not
+    // being done. Becoming visible is an event, and the layout happens then.
+    return std::any_of(m_text_layers.begin(), m_text_layers.end(), [this](const auto& entry) {
+        return entry.second.layoutPending() && TextLayerIsBeingPrepared(entry.first);
+    });
+}
+
+bool SceneRuntimeContext::TextLayerIsBeingPrepared(const std::string& name) const {
+    const auto node = m_nodes.find(name);
+    if (node == m_nodes.end() || node->second == nullptr) return true;
+    return node->second->EffectiveVisible();
+}
+
+void SceneRuntimeContext::SetContentWakeHandler(std::function<void()> handler) {
+    std::lock_guard lock { m_text_worker_mutex };
+    m_content_wake_handler = std::move(handler);
+}
+
 void SceneRuntimeContext::TextWorkerLoop() {
     while (true) {
         RuntimePendingTextLayerJob job;
@@ -663,6 +696,7 @@ void SceneRuntimeContext::TextWorkerLoop() {
         auto prepared =
             PrepareTextLayerImage(std::move(job.name), job.revision, std::move(job.state));
 
+        std::function<void()> wake;
         {
             std::lock_guard lock { m_text_worker_mutex };
             if (m_stop_text_worker) return;
@@ -674,7 +708,17 @@ void SceneRuntimeContext::TextWorkerLoop() {
                                }),
                 m_prepared_text_layers.end());
             m_prepared_text_layers.push_back(std::move(prepared));
+            wake = m_content_wake_handler;
         }
+        // Outside the lock: the handler asks the frame clock for a frame, and
+        // that clock's own mutex must never be taken under this one. Copied
+        // rather than called by reference so a detach racing with this call
+        // cannot destroy the function while it runs.
+        //
+        // Without this a scene that went quiet while its text was being laid
+        // out would never draw the result: the image is ready, and nothing
+        // would ask for the frame that applies it.
+        if (wake) wake();
     }
 }
 
@@ -1286,13 +1330,54 @@ uint32_t SceneRuntimeContext::DescribeTimeAdvancingWork() const {
         reasons |= SceneDemandReason::Script;
     }
 
-    if (! m_node_visibility.empty() || ! m_node_translate.empty() || ! m_node_scale.empty() ||
-        ! m_node_rotation.empty() || ! m_node_effect_final.empty() ||
-        ! m_material_constants.empty()) {
+    // A binding existing is not a reason to keep ticking; a binding whose value
+    // moves by itself is. The parser registers a visibility binding for every
+    // layer it produces, so reading the registries' emptiness made every scene
+    // with a single image layer report `NodeBinding` forever -- and made this
+    // whole analysis unable to answer "still" about anything the parser built.
+    //
+    // What can move a value is a closed set. `ScriptedDynamicValue` is the only
+    // subclass of `DynamicValue` in this runtime, and it re-evaluates every
+    // tick. Anything else moves only when something calls `update()` on it: a
+    // user property write, a script propagating into it, or an animation
+    // sampling into it -- each of which is either an event that requests its
+    // own frame or is already represented by `Script` or `Animation` below.
+    const auto advances_on_its_own = [](const DynamicValue* value) {
+        return dynamic_cast<const ScriptedDynamicValue*>(value) != nullptr;
+    };
+    const auto any_binding_advances = [&advances_on_its_own](const auto& bindings) {
+        return std::any_of(bindings.begin(), bindings.end(), [&](const auto& entry) {
+            if constexpr (requires { entry.second.value; }) {
+                return advances_on_its_own(entry.second.value);
+            } else {
+                return advances_on_its_own(entry.value);
+            }
+        });
+    };
+
+    // `m_node_effect_final` holds no value at all: `SyncEffectFinalNode`
+    // mirrors a node onto its effect layer's final node, so it moves when the
+    // node it mirrors moves and never on its own.
+    if (any_binding_advances(m_node_visibility) || any_binding_advances(m_node_translate) ||
+        any_binding_advances(m_node_scale) || any_binding_advances(m_node_rotation) ||
+        std::any_of(m_material_constants.begin(),
+                    m_material_constants.end(),
+                    [&advances_on_its_own](const MaterialConstantBinding& binding) {
+                        // An animation writes the constant on a timeline of its
+                        // own, which is exactly the case the value pointer
+                        // cannot describe.
+                        return binding.animation != nullptr ||
+                               advances_on_its_own(binding.value);
+                    })) {
         reasons |= SceneDemandReason::NodeBinding;
     }
 
-    if (! m_text_values.empty()) reasons |= SceneDemandReason::TextBinding;
+    if (any_binding_advances(m_text_values)) reasons |= SceneDemandReason::TextBinding;
+
+    // Text whose layout is still being produced is work in flight, not a still
+    // scene. Bounded by the worker finishing: a completed job clears the flag,
+    // and the worker wakes the clock when the scene has already gone quiet.
+    if (TextLayoutInFlight()) reasons |= SceneDemandReason::TextLayoutPending;
 
     if (! m_puppet_layers.empty()) reasons |= SceneDemandReason::Puppet;
 
@@ -1678,11 +1763,9 @@ bool SceneRuntimeContext::ClearNodeTextDirty(std::string_view name) {
 void SceneRuntimeContext::PumpTextLayerCache() {
     CollectPreparedTextLayers();
     for (auto& [name, layer] : m_text_layers) {
-        if (const auto node_iterator = m_nodes.find(name);
-            node_iterator != m_nodes.end() && node_iterator->second != nullptr &&
-            ! node_iterator->second->EffectiveVisible()) {
-            continue;
-        }
+        // `TextLayoutInFlight` asks the same question, so that what the demand
+        // analysis calls work in flight is exactly what this loop will do.
+        if (! TextLayerIsBeingPrepared(name)) continue;
         if (layer.layoutPending()) {
             EnqueueTextLayerPreparation(name, layer);
             continue;

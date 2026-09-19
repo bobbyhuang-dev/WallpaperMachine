@@ -35,7 +35,7 @@ impl SceneDemandReasons {
     pub const PUPPET: Self = Self(1 << 8);
     /// A pass reads a target it also writes.
     pub const FEEDBACK: Self = Self(1 << 9);
-    /// A text layer's content comes from a bound value.
+    /// A text layer's content comes from a value that re-evaluates itself.
     pub const TEXT_BINDING: Self = Self(1 << 10);
     /// A sound layer exists.
     pub const SOUND: Self = Self(1 << 11);
@@ -45,6 +45,8 @@ impl SceneDemandReasons {
     pub const UNKNOWN_INPUT: Self = Self(1 << 13);
     /// No complete frame has been presented yet.
     pub const NO_FRAME_YET: Self = Self(1 << 14);
+    /// A text layer's new layout has not reached a frame yet.
+    pub const TEXT_LAYOUT_PENDING: Self = Self(1 << 15);
 }
 
 impl core::ops::BitOr for SceneDemandReasons {
@@ -97,7 +99,7 @@ impl SceneDemandReasons {
     /// a reason can never vanish between the renderer and the panel.
     #[must_use]
     pub fn names(self) -> Vec<&'static str> {
-        const NAMED: [(SceneDemandReasons, &str); 15] = [
+        const NAMED: [(SceneDemandReasons, &str); 16] = [
             (SceneDemandReasons::SCRIPT, "script"),
             (SceneDemandReasons::ANIMATION, "animation"),
             (SceneDemandReasons::PARTICLES, "particles"),
@@ -113,6 +115,7 @@ impl SceneDemandReasons {
             (SceneDemandReasons::NODE_BINDING, "node_binding"),
             (SceneDemandReasons::UNKNOWN_INPUT, "unknown_input"),
             (SceneDemandReasons::NO_FRAME_YET, "no_frame_yet"),
+            (SceneDemandReasons::TEXT_LAYOUT_PENDING, "text_layout_pending"),
         ];
 
         let mut names = Vec::new();
@@ -348,6 +351,16 @@ mod tests {
     fn a_raw_mode_outside_the_enumeration_is_not_invented() {
         assert_eq!(SceneUpdateMode::from_raw(99), None);
         assert_eq!(SceneBackend::from_raw(7), None);
+    }
+
+    #[test]
+    fn text_still_being_laid_out_is_its_own_reason_not_an_unknown_input() {
+        // A text layer whose new image has not reached a frame keeps the clock
+        // running. Reported under its own name so the panel does not tell the
+        // user the renderer failed to account for something.
+        let reasons = SceneDemandReasons::TEXT_LAYOUT_PENDING;
+        assert_eq!(reasons.names(), vec!["text_layout_pending"]);
+        assert!(!reasons.names().contains(&"unknown_input"));
     }
 
     #[test]

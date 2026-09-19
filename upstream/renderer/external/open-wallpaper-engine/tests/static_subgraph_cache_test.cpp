@@ -1,3 +1,4 @@
+#include "Scene/include/Scene/SceneUpdateDemand.hpp"
 #include "VulkanRender/CopyElision.hpp"
 #include "VulkanRender/StaticSubgraphCache.hpp"
 
@@ -418,5 +419,45 @@ TEST(StaticSubgraphCacheTest, AReaderOfAnAliasedDestinationInheritsItsSourcesDyn
         EXPECT_FALSE(resolved.TargetCacheable(i))
             << "a reader of an aliased destination was cached although its source is redrawn "
                "every frame";
+    }
+}
+
+/// The two questions a rewritten mesh answers, which are not the same answer.
+///
+/// `EventMesh` and `DynamicMesh` both cost a target its cacheability, because
+/// either one means the vertices behind it may differ from the ones the cached
+/// pixels were drawn from. Only one of them means the scene has to keep
+/// drawing. Asserting both halves here keeps a future simplification from
+/// collapsing them back into one bit.
+TEST(SceneDemandMapping, GeometryRewrittenOnAnEventIsNotAReasonToKeepDrawing)
+{
+    using wallpaper::SceneDemandReason;
+    using wallpaper::SceneDemandReasonsFromShaderInputs;
+
+    const auto per_frame =
+        SceneDemandReasonsFromShaderInputs(static_cast<uint32_t>(DynamicReason::DynamicMesh));
+    EXPECT_TRUE(per_frame & SceneDemandReason::DynamicMesh)
+        << "a mesh rewritten every frame stopped being a reason to keep the clock";
+
+    const auto on_event =
+        SceneDemandReasonsFromShaderInputs(static_cast<uint32_t>(DynamicReason::EventMesh));
+    EXPECT_EQ(on_event, 0u)
+        << "a mesh rewritten only when an event re-lays it out was read as continuous work";
+
+    // And the pixel cache, which asks the other question, refuses both.
+    StaticSubgraphCache cache;
+    cache.Compile(std::vector {
+        Pass("_rt_event", {}, static_cast<uint32_t>(DynamicReason::EventMesh)),
+        Pass("_rt_per_frame", {}, static_cast<uint32_t>(DynamicReason::DynamicMesh)),
+        Pass("_rt_still", {}),
+    });
+    for (std::size_t i = 0; i < cache.TargetCount(); ++i) {
+        const auto key = cache.TargetKey(i);
+        if (key == "_rt_still") {
+            EXPECT_TRUE(cache.TargetCacheable(i)) << "the control target stopped being cacheable";
+        } else {
+            EXPECT_FALSE(cache.TargetCacheable(i))
+                << "target " << key << " was cached although its geometry may have been rewritten";
+        }
     }
 }

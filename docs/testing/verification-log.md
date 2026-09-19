@@ -11,6 +11,85 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-19 — Round 12: scenes that genuinely stop, and compile results that survive a restart
+
+A static text scene now reports no reason to keep drawing and stops its frame
+clock through the mechanism round 7 built. The larger half of that was not
+text-specific: `DescribeTimeAdvancingWork` answered "is this binding registry
+non-empty" rather than "can any of these values move", and since the parser
+registers a visibility binding for every layer it produces, every parsed scene
+had reported `NodeBinding` forever — the on-demand feature could idle nothing it
+built. `SceneMesh` now distinguishes geometry rewritten every frame from
+geometry rewritten when an event re-lays it out, the renderer reports the two
+separately while the pixel-reuse cache still refuses both, and the text worker
+asks for the frame that shows what it produced. The optional NV12 program's
+translation now survives a restart through the existing on-disk program cache,
+and compiled render pipelines are kept in an `MTLBinaryArchive`, per surface and
+per cache directory, handed to the real pipeline-creation path. Native Metal is still a manual choice,
+Compatibility is still the default, direct plane sampling is still off, and
+scene idling still follows its own off-by-default setting.
+
+- `python3 scripts/check_renderer.py` — exit 0, re-run on the delivered tree.
+  All 10 golden cases `pixels_equal=True`, 0 diagnostics, 8 projects × 2 reload
+  cycles clean, every test binary exit 0. Evidence bundle under
+  `artifacts/renderer/` (disposable).
+- Inside that run, on a real Metal device with private textures and an offscreen
+  layer only: `metal_scene_draw_smoke` 25 passed (8 new: a static caption, and a
+  static caption under an effect chain, reach zero demand reasons having
+  actually drawn, while the renderer still reports `EventMesh` and
+  `RuntimeImage`; a changed caption brings the demand back, reaches the output
+  and goes quiet again, and rewriting the same string wakes nothing; a caption
+  changed behind a hidden layer is not counted as work in flight, and the
+  deferred layout still happens when the layer returns; a scripted caption keeps
+  the clock on all thirty frames; a caption bound to a user property idles; an
+  optional program translated once is restored from disk with identical source,
+  reflection and per-stage bindings without the compiler running, and a
+  truncated entry falls back to a normal compile; pipelines are offered to the
+  binary archive, published, reopened from disk and satisfied strictly, and a
+  scene with no archive path still draws). That last test failed first and
+  found a real defect: the debounced archive write captured a reference
+  parameter rather than a copy, so the identity it compared two seconds later
+  was already destroyed and no archive was ever written.
+  `static_subgraph_cache_test` 25
+  passed (1 new: `EventMesh` costs a target its cacheability exactly as
+  `DynamicMesh` does, and differs from it only at the scene level).
+  `text_object_runtime_test` 61 passed (1 new: the text worker's wake handler
+  fires for a real result and not for an unchanged caption). `metal_backend_test`
+  20, `metal_video_texture_test` 14, `metal_poster_capture_test` 7,
+  `playback_gpu_test` 39, `render_target_lifetime_test` 4, all unchanged.
+- `cargo test --workspace --release` — exit 0, 22 binaries, 1050 cases passing
+  (1 new: the `text_layout_pending` reason has its own name and is not folded
+  into `unknown_input`).
+- `python3 scripts/test.py` — exit 0 from the wrapper; 486 executed, 476 passed,
+  9 skipped, 1 failed. The failure is the recorded pre-existing
+  `ControlPanelLayoutTests/testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes`
+  (overflow 52), unrelated to this round and unchanged by it.
+- `python3 scripts/build.py --configuration Release` — BUILD SUCCEEDED, app and
+  extension, delivered at `build/Build/Products/Release/MacWallpaperEngine.app`.
+
+Measured rather than assumed, before any change was made, with the round's own
+fixtures: a scene with one static text layer reported `DynamicMesh` from the
+renderer and `NodeBinding` from the runtime; a scene with one static image layer
+reported `NodeBinding`. That second measurement is what identified the
+pre-existing gap, and it is why this round's change is not confined to text.
+
+Not verified, and not claimed:
+
+- Nothing was displayed. No wallpaper was shown on a desktop, no output was
+  looked at by a person, and no visual comparison was made between an idling
+  scene and a continuously drawing one.
+- No power, energy or thermal measurement was taken. A scene that stops drawing
+  does less work; how much less is not something anything here measured, and no
+  saving is claimed.
+- The cross-restart claims are shown within one process by clearing the
+  in-memory caches and reopening the published files, which is what a new launch
+  does to those two caches. No second process was started.
+- The binary archive was exercised on this machine's GPU only, with one display
+  and one wallpaper. That two surfaces with different caches keep separate
+  stores is implemented and reasoned about, not observed: no two-display
+  configuration was run. Whether an archive written on one Mac is usable on
+  another is Metal's decision; the failure mode either way is a normal compile.
+
 ## 2026-09-19 — Tile-mark test hung offscreen; whole tree committed
 
 `ControlPanelLayoutTests/testTilesWearApprovedAndFavoriteMarksWithoutWindow`
@@ -85,6 +164,7 @@ a fixed green (`--approved`, dark/light values) to match Workshop's mark.
   BUILD SUCCEEDED, delivered app rebuilt with the change.
 - Not verified: the rendered sidebar in the running app (no desktop run was
   requested).
+
 ## 2026-09-19 — Round 11: text and runtime images on Metal, optional programs off the load path
 
 Text layers and runtime-replaced images now reach the native Metal backend

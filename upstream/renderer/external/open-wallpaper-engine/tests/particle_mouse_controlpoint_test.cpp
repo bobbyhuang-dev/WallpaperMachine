@@ -73,7 +73,7 @@ Particle FirstSpawnedParticle(ParticleEmittOp&                      emitter,
 }
 
 std::shared_ptr<SceneMesh> MakeParticleMesh(std::size_t count) {
-    auto mesh = std::make_shared<SceneMesh>(true);
+    auto mesh = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
     mesh->AddVertexArray(SceneVertexArray(
         {
             { WE_IN_POSITION.data(), VertexType::FLOAT3 },
@@ -500,7 +500,7 @@ TEST(ParticleMouseControlpoint, MouseControlpointUpdatesEmitterOrigin) {
     scene.frameTime       = 1.0;
     scene.pointerPosition = { 0.75f, 0.25f };
 
-    auto              mesh = std::make_shared<SceneMesh>(true);
+    auto              mesh = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
     ParticleSystem    system(scene);
     ParticleSubSystem subsystem(system,
                                 mesh,
@@ -534,7 +534,7 @@ TEST(ParticleMouseControlpoint, MouseControlpointUsesOwnerNodeLocalSpace) {
     node->SetTranslate(Eigen::Vector3f(100.0f, 50.0f, 0.0f));
     node->SetScale(Eigen::Vector3f(2.0f, 1.0f, 1.0f));
 
-    auto              mesh = std::make_shared<SceneMesh>(true);
+    auto              mesh = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
     ParticleSystem    system(scene);
     ParticleSubSystem subsystem(system,
                                 mesh,
@@ -564,7 +564,7 @@ TEST(ParticleMouseControlpoint, UnlinkedControlpointsKeepEveryAuthoredOffset) {
     scene.ortho[1] = 100;
     scene.pointerPosition = { 0.75f, 0.25f };
     ParticleSystem system(scene);
-    auto subsystem = MakeTestSubsystem(system, std::make_shared<SceneMesh>(true));
+    auto subsystem = MakeTestSubsystem(system, std::make_shared<SceneMesh>(MeshUpdate::PerFrame));
     auto owner = std::make_shared<SceneNode>();
     owner->SetTranslate(Eigen::Vector3f(100.0f, 50.0f, 0.0f));
     subsystem->SetOwnerNode(owner);
@@ -590,7 +590,7 @@ TEST(ParticleMouseControlpoint, RuntimeLinksFollowAncestorChangesWithStationaryP
     scene.ortho[1] = 100;
     scene.pointerPosition = { 0.75f, 0.25f };
     ParticleSystem system(scene);
-    auto subsystem = MakeTestSubsystem(system, std::make_shared<SceneMesh>(true));
+    auto subsystem = MakeTestSubsystem(system, std::make_shared<SceneMesh>(MeshUpdate::PerFrame));
     auto parent = std::make_shared<SceneNode>();
     parent->SetTranslate(Eigen::Vector3f(100.0f, 20.0f, 0.0f));
     parent->SetScale(Eigen::Vector3f(2.0f, 1.0f, 1.0f));
@@ -629,7 +629,7 @@ TEST(ParticleMouseControlpoint, MissingAndExpiredOwnersUseWorldCoordinates) {
     scene.ortho[1] = 100;
     scene.pointerPosition = { 0.75f, 0.25f };
     ParticleSystem system(scene);
-    auto subsystem = MakeTestSubsystem(system, std::make_shared<SceneMesh>(true));
+    auto subsystem = MakeTestSubsystem(system, std::make_shared<SceneMesh>(MeshUpdate::PerFrame));
     auto& cp = subsystem->Controlpoints()[3];
     cp.link_mouse = true;
     cp.base_offset = Eigen::Vector3d(1.0, 2.0, 3.0);
@@ -766,7 +766,7 @@ TEST(ParticleMouseControlpoint, RawGeneratorReceivesIndependentOwnerScaleAxes) {
     owner->SetRotation(Eigen::Vector3f(0.0f, 0.0f, 0.5f));
 
     auto* rawGener = new CapturingParticleRawGener();
-    auto  mesh     = std::make_shared<SceneMesh>(true);
+    auto  mesh     = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
 
     ParticleSystem system(scene);
     system.gener.reset(rawGener);
@@ -787,7 +787,7 @@ TEST(ParticleMouseControlpoint, MovementIntegratesAfterControlpointAttractUpdate
     scene.frameTime = 1.0;
 
     auto* rawGener = new CapturingParticleRawGener();
-    auto  mesh     = std::make_shared<SceneMesh>(true);
+    auto  mesh     = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
 
     ParticleSystem system(scene);
     system.gener.reset(rawGener);
@@ -877,7 +877,7 @@ TEST(ParticleMouseControlpoint, SubsystemRateOverrideControlsInitialEmissionTimi
     scene.frameTime = 1.0;
 
     auto* rawGener = new CapturingParticleRawGener();
-    auto  mesh     = std::make_shared<SceneMesh>(true);
+    auto  mesh     = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
 
     ParticleSystem system(scene);
     system.gener.reset(rawGener);
@@ -913,7 +913,7 @@ TEST(ParticleMouseControlpoint, SubsystemRateOverrideControlsRuntimeEmissionTimi
     scene.frameTime = 1.0;
 
     auto* rawGener = new CapturingParticleRawGener();
-    auto  mesh     = std::make_shared<SceneMesh>(true);
+    auto  mesh     = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
 
     ParticleSystem system(scene);
     system.gener.reset(rawGener);
@@ -1007,7 +1007,7 @@ TEST(ParticleMouseControlpoint, ProjectPropertiesDriveInitialAndRuntimeRateAndCo
     scene.runtime = CreateSceneRuntimeContext(std::move(bootstrap));
 
     auto* rawGener = new CapturingParticleRawGener();
-    auto  mesh     = std::make_shared<SceneMesh>(true);
+    auto  mesh     = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
 
     ParticleSystem system(scene);
     system.gener.reset(rawGener);

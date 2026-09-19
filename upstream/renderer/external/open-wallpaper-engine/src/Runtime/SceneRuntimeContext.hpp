@@ -176,6 +176,22 @@ public:
     /// rather than from "still" and this only ever clears bits it can account
     /// for.
     [[nodiscard]] uint32_t DescribeTimeAdvancingWork() const;
+
+    /// Whether any text layer is between "its layout changed" and "the new
+    /// image has been applied".
+    ///
+    /// Covers both halves: a job this thread has queued but the worker has not
+    /// finished, and a result the worker has finished but no frame has applied.
+    [[nodiscard]] bool TextLayoutInFlight() const;
+
+    /// Called when work that finished off the render thread has produced
+    /// something a frame would show.
+    ///
+    /// Installed by whoever owns the frame clock. It is invoked from the text
+    /// worker's own thread, so the handler has to be safe to call from any
+    /// thread and must not touch scene state -- asking for one frame is all it
+    /// is for. Passing an empty function detaches it.
+    void SetContentWakeHandler(std::function<void()> handler);
     bool            HasNodeNamed(std::string_view name) const;
     bool            HasSoundLayer(std::string_view name) const;
     bool            PlaySoundLayer(std::string_view name);
@@ -382,6 +398,12 @@ private:
     bool CursorHitsScriptLayer(const SceneScriptProgram& script) const;
     void StartTextWorker();
     void StopTextWorker();
+    /// Whether this text layer's pending layout is being worked on at all.
+    ///
+    /// A hidden layer is not: its relayout waits until it is shown again, which
+    /// is an event. Shared with `PumpTextLayerCache` so "in flight" and "the
+    /// pump will do it" cannot drift apart.
+    [[nodiscard]] bool TextLayerIsBeingPrepared(const std::string& name) const;
     void EnqueueTextLayerPreparation(std::string name, const TextLayer& layer);
     void CollectPreparedTextLayers();
     bool ApplyPreparedTextLayer(const RuntimePreparedTextLayerImage& prepared);
@@ -429,12 +451,14 @@ private:
     std::unordered_map<ScriptedDynamicValue*, bool>                m_scripted_value_cursor_inside;
     std::vector<SceneScriptBinding>                                m_scene_scripts;
     std::vector<std::string>                                       m_script_errors;
-    std::mutex                                                     m_text_worker_mutex;
+    mutable std::mutex                                             m_text_worker_mutex;
     std::condition_variable                                        m_text_worker_cv;
     std::thread                                                    m_text_worker;
     std::vector<RuntimePendingTextLayerJob>                        m_pending_text_jobs;
     std::vector<RuntimePreparedTextLayerImage>                     m_prepared_text_layers;
     bool                                                           m_stop_text_worker { false };
+    /// Guarded by `m_text_worker_mutex`, alongside the queues it describes.
+    std::function<void()>                                          m_content_wake_handler;
     uint64_t                                                       m_next_generated_layer_id { 1 };
     bool m_scene_requires_audio_response { false };
     bool m_audio_response_enabled { false };

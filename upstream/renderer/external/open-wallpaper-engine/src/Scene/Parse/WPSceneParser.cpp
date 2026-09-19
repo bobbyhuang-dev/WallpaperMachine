@@ -1645,10 +1645,14 @@ void ParseTextObj(ParseContext& context, wpscene::WPTextObject& obj) {
     node->SetVisible(obj.visible);
     node->ID() = obj.id;
 
-    auto mesh = std::make_shared<SceneMesh>(true);
+    // Both cards are rewritten only by `ResizeCardMesh`, which the runtime
+    // calls when a relayout produced a different raster size. Between two
+    // relayouts the four corners are the same four corners, so the geometry is
+    // dynamic without the scene having anything to do.
+    auto mesh = std::make_shared<SceneMesh>(MeshUpdate::OnEvent);
     GenTextCardMesh(*mesh, render_frame.bounds);
     node->AddMesh(mesh);
-    SceneMesh effect_final_mesh(true);
+    SceneMesh effect_final_mesh(MeshUpdate::OnEvent);
     GenTextCardMesh(effect_final_mesh, effect_final_frame.bounds, effect_texture_bounds);
 
     if (context.scene->runtime != nullptr) {
@@ -2052,7 +2056,7 @@ void AttachEffectsToNode(ParseContext& context,
         effect_ppong_b);
     effect_layer->SetFinalBlend(final_blend);
     effect_layer->FinalMesh().ChangeMeshDataFrom(final_mesh);
-    effect_layer->SetFinalMeshDynamic(final_mesh.Dynamic());
+    effect_layer->SetFinalMeshDynamic(final_mesh.UpdateDriver());
     effect_layer->FinalNode().CopyTrans(node);
     node.SetRenderTransformOverride(Eigen::Matrix4d::Identity());
     if (! copy_background) node.SetSkipRenderPass(true);
@@ -3676,7 +3680,8 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
         return;
     }
     LoadConstvalue(material, particle_obj.material, shaderInfo);
-    auto  spMesh             = std::make_shared<SceneMesh>(true);
+    // The particle step rewrites every vertex of this mesh on every tick.
+    auto  spMesh             = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
     auto& mesh               = *spMesh;
     auto  animationmode      = ToAnimMode(particle_obj.animationmode);
     auto  sequencemultiplier = particle_obj.sequencemultiplier;

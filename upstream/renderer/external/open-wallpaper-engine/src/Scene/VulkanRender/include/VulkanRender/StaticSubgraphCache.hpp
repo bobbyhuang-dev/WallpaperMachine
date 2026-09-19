@@ -28,7 +28,8 @@ enum class DynamicReason : uint32_t
     BoneUniform = 1u << 3,
     /// A decoded video frame is bound as an input texture.
     VideoInput = 1u << 4,
-    /// Vertex or index data is re-uploaded per frame.
+    /// Vertex or index data is re-uploaded per frame by something that
+    /// advances on its own.
     DynamicMesh = 1u << 5,
     /// A sprite sheet with more than one frame.
     AnimatedSprite = 1u << 6,
@@ -38,6 +39,16 @@ enum class DynamicReason : uint32_t
     Feedback = 1u << 8,
     /// An input this analysis cannot account for.
     UnknownInput = 1u << 9,
+    /// Vertex data the runtime rewrites when an event re-lays the mesh out,
+    /// and leaves alone in between -- a text card.
+    ///
+    /// Reported separately from `DynamicMesh` because the two answer different
+    /// questions with the same fact. For pixel reuse they are identical: a
+    /// target drawn from either is never cacheable, because the upload happens
+    /// only for a pass that executes. For whole-scene idling they are
+    /// opposites, which is why the scene-level mapping carries one and not the
+    /// other.
+    EventMesh = 1u << 10,
 };
 
 constexpr uint32_t operator|(DynamicReason lhs, DynamicReason rhs)

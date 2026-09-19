@@ -14,6 +14,28 @@
 
 namespace wallpaper
 {
+
+/// What rewrites a mesh's vertices, which is not the same question as whether
+/// they can be rewritten at all.
+///
+/// `Dynamic()` -- the old single bit -- answers "may this geometry change after
+/// parsing", which every consumer of a vertex buffer needs. It does not answer
+/// "does this geometry change on its own", and the two were the same value for
+/// as long as a particle system was the only thing that rewrote a mesh. A text
+/// card is rewritten too, but only when something re-lays the text out, so a
+/// scene holding one is not a scene that has to keep drawing.
+enum class MeshUpdate : uint8_t {
+	/// Written once while parsing and never again.
+	Fixed = 0,
+	/// Rewritten every frame by something that advances on its own -- a
+	/// particle system. A scene holding one always has work to do.
+	PerFrame = 1,
+	/// Rewritten only when an event re-lays it out, and unchanged in between.
+	/// Still uploaded through the dynamic path, still never reusable by the
+	/// pixel cache; simply not a reason for the clock to keep running.
+	OnEvent = 2,
+};
+
 class SceneMesh {
 public:
 	struct DrawRange {
@@ -54,7 +76,7 @@ public:
 		std::vector<DrawRange> m_drawRanges;
 	};
 
-	SceneMesh(bool dynamic = false):m_dynamic(dynamic),m_dirty(false),
+	explicit SceneMesh(MeshUpdate update = MeshUpdate::Fixed):m_update(update),m_dirty(false),
 		m_data(std::make_shared<Data>()) {}
 
 	std::size_t VertexCount() const { return HasSubmeshZero() ? SubmeshZero().VertexCount() : 0; }
@@ -63,7 +85,13 @@ public:
 	MeshPrimitive Primitive() const { return m_primitive; }
 	uint32_t PointSize() const { return m_pointSize; }
 
-	bool Dynamic() const { return m_dynamic; }
+	/// Whether the vertices may be rewritten after parsing. Every upload,
+	/// buffer-allocation and pixel-reuse decision asks this and nothing else.
+	bool Dynamic() const { return m_update != MeshUpdate::Fixed; }
+	/// What rewrites them. Ask this only when the answer changes whether the
+	/// scene has to keep drawing; never to decide how to upload.
+	MeshUpdate UpdateDriver() const { return m_update; }
+	bool UpdatesOnEvent() const { return m_update == MeshUpdate::OnEvent; }
 	const auto& Dirty() const { return m_dirty; }
 	auto& Dirty() { return m_dirty; }
 	void SetDirty() {
@@ -144,7 +172,7 @@ private:
 	uint32_t m_id { std::numeric_limits<uint32_t>::max() };
 	MeshPrimitive m_primitive {MeshPrimitive::TRIANGLE};
 	uint32_t m_pointSize {1};
-	bool m_dynamic;
+	MeshUpdate m_update;
 	std::atomic<bool> m_dirty;
 	std::atomic<uint64_t> m_dirty_generation {0};
 

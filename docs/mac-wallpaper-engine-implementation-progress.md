@@ -80,6 +80,303 @@ recorded as blocked rather than failed:
 **No power number, watt figure or saving percentage is reported anywhere in this
 document.** Counters and unit tests bound what is claimed.
 
+## Round 12 — scenes that genuinely stop, and compile results that survive a restart
+
+Feature round, same discipline as rounds 5–11: implement, wire to production,
+keep it building, fix what this round broke. Native Metal stays a manual choice
+and Compatibility stays the default; direct plane sampling stays experimental
+and off, and nothing here turns either on. Visual output on real wallpapers,
+desktop behaviour and power are the user's to accept. **No power measurement of
+any kind was taken and no saving is claimed anywhere below.**
+
+| Feature | State | Default |
+|---|---|---|
+| A static text scene stops its frame clock | Implemented; it reports no reason to keep drawing and idles through the mechanism round 7 built | Follows **Update only when the scene changes** |
+| A changed caption wakes it, updates once, and lets it idle again | Implemented, including from the text worker's own thread | Same |
+| Scripted text, animation, video, sound and anything unrecognised keep running | Unchanged, and now the only things that do | Same |
+| The optional NV12 program's translation survives a restart | Implemented through the existing on-disk program cache | Follows the existing experimental switch |
+| Compiled render pipelines are archived and reused | Implemented with `MTLBinaryArchive`, on the real pipeline-creation path | Always on where a cache path exists |
+
+### What was actually stopping every scene
+
+The on-demand mechanism from round 7 was correct and had almost nothing to
+idle. Measured on this round's own fixtures, before any change:
+
+| Scene | Renderer's reasons | Runtime's reasons |
+|---|---|---|
+| One static text layer | `DynamicMesh`, `RuntimeImage` | `NodeBinding` |
+| One static image layer | none | `NodeBinding` |
+
+`RuntimeImage` was already dropped on the way to the scene level, correctly:
+an image the runtime may swap changes on an event. The other two were not.
+
+**`NodeBinding` was reported by every scene the parser has ever produced.**
+`ParseTextObj`, the image-layer path and the particle path all call
+`RegisterNodeVisibility` unconditionally, and `ResolveBoolSetting` always
+returns a value, so `m_node_visibility` is never empty. `DescribeTimeAdvancingWork`
+answered "is this registry non-empty", which is a question about whether a
+binding *exists*, not about whether it *moves*. A wallpaper with a single static
+image therefore reported that it had work to do, forever. This is a
+pre-existing gap the feature shipped with, found by measuring rather than by
+reading, and it is the larger half of what this round fixes.
+
+`DynamicMesh` was the text-specific half. `SceneMesh::Dynamic()` was one bit
+answering two questions, and it was the same answer for as long as a particle
+system was the only thing that rewrote a mesh.
+
+### Telling "can change" apart from "is changing"
+
+Three facts about a text layer are all true and none of them is a reason to
+keep drawing:
+
+- its card is a dynamic mesh, because `ResizeCardMesh` may rewrite it;
+- its texture is a runtime image, because a relayout may replace the pixels;
+- it has a visibility binding, because every layer does.
+
+`SceneMesh` now carries `MeshUpdate` — `Fixed`, `PerFrame` or `OnEvent` —
+instead of a bool. `Dynamic()` still answers the upload question and still
+returns true for both moving kinds, so nothing about how vertices reach the GPU
+changed. The constructor takes the enum, which is deliberate: every place that
+cloned a mesh with `SceneMesh(other.Dynamic())` would have silently turned an
+event-driven card into a per-frame one, and the compiler found all of them
+(`SceneRuntimeContext`, `SceneImageEffectLayer`, `SetFinalMeshDynamic`, and four
+test files) rather than leaving it to be noticed later.
+
+The renderer gained `DynamicReason::EventMesh` beside `DynamicMesh`, raised by
+both backends — `CustomShaderPass` for Compatibility and the two demand sites in
+`MetalRender.mm`. For pixel reuse the two are identical and
+`StaticSubgraphCache` treats them as such, because either one means the vertices
+may differ from those the cached pixels were drawn from. For idling they are
+opposites, and `SceneDemandReasonsFromShaderInputs` carries one and not the
+other. Each omission from that mapping is now named in the comment rather than
+implied by a missing line.
+
+On the runtime side, a binding contributes a reason only when its value can
+move on its own. That is a closed question here: `ScriptedDynamicValue` is the
+only subclass of `DynamicValue`, and it re-evaluates every tick. Every other
+value moves only when something calls `update()` on it — a user property write,
+a script propagating, or an animation sampling — and each of those is either an
+event that asks for its own frame or is already represented by `Script` or
+`Animation`. A material constant with an attached animation is treated as
+moving regardless of its value, because the animation is the thing that writes
+it. `m_node_effect_final` was dropped from the condition entirely: it holds no
+value, and `SyncEffectFinalNode` mirrors a node rather than driving one.
+
+### Waking, and not waking
+
+The event paths this round needed were almost all already there. Round 7's
+render handler asks for a frame after every command except the draw, so a user
+property change, a poster request, a render-scale change, a surface
+reconfigure, a media thumbnail arriving and a wallpaper switch all wake an idle
+scene by construction.
+
+The one that was not is the text worker. It runs on its own thread, and a scene
+that has gone quiet has no clock left to notice that a layout finished — the
+new image would sit in the queue until something unrelated happened to ask for
+a frame, which for a wallpaper that idles correctly is never. `SceneRuntimeContext`
+now takes a wake handler, called after a result is pushed and outside the
+worker's own lock, and `SceneWallpaper` installs one that asks its frame timer
+for a single frame. The handler reaches the timer through a small shared target
+whose pointer the render handler clears in its destructor, so a worker thread
+inside the call while the handler is torn down finds a null timer rather than a
+dangling one.
+
+Two things keep that from becoming a source of spurious frames. `SetNodeText`
+still returns early for an unchanged string, so a script returning the same
+caption forever queues nothing and wakes nothing. And a new demand reason,
+`TextLayoutPending`, covers the window between "the text changed" and "the new
+image has been applied", so the frame that made the change does not also
+conclude the scene is still — the scene stays awake on its own account until
+the work lands, and the wake handler is the belt to those braces.
+
+Nothing about script execution changed. `update()` runs every tick, no script
+source is read, no repeated return value is counted, and no `Date` or
+`getMinutes` is turned into a schedule.
+
+### What idling does not do
+
+The per-frame texture slots are not pre-warmed before idling, and they do not
+need to be: `refreshRuntimeImages` uploads into the slot *this* frame will use,
+comparing that slot's version rather than the ring's, so a frame taken minutes
+later after an event updates its own slot before drawing. The frame that idles
+has already drawn the current picture correctly into the slot it used. Holding
+the clock open to fill the other slot would be paying continuously for
+something that costs one upload when it is next needed.
+
+No drawable is retained while idle: a frame acquires and presents one, and an
+idle scene takes no frames. `userPaused`, `policySuspended` and `contentIdle`
+stay independent — `FrameTimer::RequestFrame` still drops the request while the
+clock is stopped, so no resource event can resume a wallpaper the user paused.
+
+Both backends get this. The runtime half is shared, and the renderer half was
+implemented in `CustomShaderPass` as well as in `MetalRender`, so a static text
+scene idles on Compatibility too.
+
+### The optional program's translation, kept
+
+Round 11 prepared the optional NV12 variant in the background and threw the
+result away when the process ended. It now goes through the same on-disk program
+cache the ordinary translation already uses — `/cache/<scene>/programs01/<key>.json`,
+which already stored the Metal source, the reflection and the binding metadata,
+not just a string of MSL. No second cache was built.
+
+`CompileMslVariant` mounts that cache, and only that cache: the includes still
+come from the snapshot captured during the parse, so the variant compile cannot
+read the project, cannot re-expand an include, and does not need a virtual file
+system. The cache key is constructed from the request exactly as it is during a
+parse, which is why an entry written by one launch is found by the next — and
+why the variant's key differs from the base program's, since the plane-sampling
+request is a different request.
+
+The cache root travels with the scene on the `SET_SCENE` message rather than
+being read across threads later, because the programs a scene holds were
+translated against that cache and a later variant of one of them has to be
+looked up in the same place.
+
+Program-cache entries are now published atomically: written beside the entry
+under a name carrying the writer's pid and moved over it, so a reader sees the
+previous complete entry or this one and never half of either. `Fs` gained a
+`Rename` that says no by default; `PhysicalFs` implements it and the VFS refuses
+a rename that would cross a mount. A file system that cannot do it falls back to
+writing in place, which is what happened before, and a torn entry is still
+rejected when it is read.
+
+### Compiled pipelines, archived
+
+`MetalProgramCache` now keeps an `MTLBinaryArchive` per device beside the
+shader cache and sets `binaryArchives` on the descriptors it passes to
+`newRenderPipelineStateWithDescriptor:` — the real production path, for base and
+optional pipelines alike, not a file that is written and never used.
+
+The details that make it safe:
+
+- **Two archive objects from one file.** The one attached to descriptors is
+  never written; the one written to is loaded from the same file, so
+  serialising republishes what earlier launches stored instead of replacing the
+  file with only this run's pipelines.
+- **Never on the render thread.** Adding to an archive compiles, and writing one
+  touches the disk. Both happen on a serial utility queue, scheduled only after
+  a pipeline was created and found nothing stored, and the write is debounced so
+  a wallpaper with twenty pipelines publishes once rather than twenty times.
+- **Published atomically**, temporary file then replace, with the pid in the
+  temporary name, so two processes sharing a directory replace the file whole
+  rather than interleaving.
+- **A miss is remembered, not retried.** The key stays in the collected set even
+  when the archive refuses it, so the same failure is not produced again.
+  Contributions are capped per device.
+- **The file name is not the registry ID.** `MTLDevice.registryID` is assigned
+  at boot, and using it would produce a different archive every restart — the
+  one thing a cache that exists to survive restarts must not do. The name is
+  built from the device's own name and a digest of the shader toolchain's
+  identity, so an incompatible store cannot collide with a usable one. Metal
+  rejects a file it cannot use in any case.
+- **Per renderer, not per process.** The path is set on the surface's own
+  `MetalRender` with its scene, and the store is keyed by device *and*
+  directory. A Mac with two displays showing two different wallpapers has one
+  device and two caches, and a process-wide root would have filed whichever
+  loaded second over the first — losing the other surface's contributions at
+  every switch. The library and pipeline caches stay shared by device, because a
+  compiled program is the same program whichever wallpaper wanted it.
+- **No strict option in production.** `MTLPipelineOptionFailOnBinaryArchiveMiss`
+  turns a cold cache into a wallpaper that does not load, so the renderer never
+  uses it. A miss compiles, exactly as before.
+
+The archive lives inside the scene's own shader-cache directory, so it is
+sharded per wallpaper, is purged with that scene's cache when the project
+changes, and is removed by the existing **Clear shader cache** entry, which
+deletes the whole shader-cache root. Nothing a user imported is stored there.
+One session keeps at most eight stores open; the ninth releases the
+least-recently-opened, whose file stays on disk and is reopened when that
+wallpaper next builds a pipeline.
+
+### What the cache layers are, named separately
+
+| Layer | What a hit means | State after this round |
+|---|---|---|
+| Translated MSL, reflection and binding plan on disk | No GLSL→MSL translation ran | Base programs since earlier rounds; **optional variants added this round** |
+| `MTLLibrary` in memory | No `newLibraryWithSource:` for that source in this process | Round 11 |
+| `MTLRenderPipelineState` in memory | No pipeline created for that key in this process | Round 11 |
+| `MTLBinaryArchive` on disk | Metal could supply part of the pipeline's compiled form rather than producing it | **Added this round** |
+
+Reading an MSL file is not "no GPU compilation happened": the first time a
+program is used in a process, Metal still compiles it. The binary archive is
+what addresses that, and it addresses the GPU back end's share of the work — it
+does not make the MSL→AIR stage disappear. A file that loads successfully also
+does not mean every pipeline hits; per-pipeline hit reporting is only obtainable
+with the strict option, which is used in one test and nowhere else, so the
+production diagnostic reports what it actually knows: whether an archive was
+opened, how many pipelines were offered to it, and how many times it was
+written.
+
+### Interface
+
+No new switches. Static-text idling follows the existing **Performance → Scene
+wallpapers → Update only when the scene changes**, which is off unless the user
+turns it on, and the "Updating now" line is still read back from each running
+scene rather than restated from the preference — a scene only says it is waiting
+for events when it actually is.
+
+One new reason name, `text_layout_pending`, shown as "text still being laid
+out". It is a bounded state, not a fault, and it exists so that a scene busy
+producing a new caption is not reported as an input the renderer could not
+account for.
+
+The **Clear shader cache** description now says it removes the compiled render
+pipelines kept alongside the compiled shaders. Nothing else on that page
+changed, and it still never touches imported material.
+
+### Tests added
+
+- `metal_scene_draw_smoke.mm`
+  - `AStaticTextSceneRunsOutOfWorkToDo` — a fixed caption reaches zero demand
+    reasons, having drawn its glyphs, while the renderer still reports both
+    `EventMesh` and `RuntimeImage` so the reuse cache is provably unaffected.
+  - `AChangedCaptionWakesTheSceneAndThenLetsItGoQuietAgain` — demand returns on
+    the change, the new picture reaches the output, demand goes back to zero,
+    and rewriting the same caption does not wake it.
+  - `TextProducedByAScriptIsNeverCalledStill` — thirty frames, `Script` set on
+    every one.
+  - `TextBoundToAUserPropertyIsEventDrivenRatherThanContinuous`.
+  - `AStaticTextLayerUnderAnEffectChainAlsoRunsOutOfWork`.
+  - `AnOptionalProgramTranslatedOnceIsRestoredFromDiskOnTheNextLaunch` — one
+    translation, then a compile from an empty in-memory cache that produces
+    identical source, reflection and per-stage bindings without the compiler
+    running; then every stored entry truncated, and the variant produced anyway.
+  - `PipelinesThisProcessBuildsAreArchivedAndServeTheProductionPath` — the
+    archive is collected, published, reopened from disk and asked strictly for
+    every descriptor; and a scene with no archive path still draws.
+- `static_subgraph_cache_test.cpp` —
+  `GeometryRewrittenOnAnEventIsNotAReasonToKeepDrawing`: both halves, the
+  mapping and the cacheability.
+- `text_object_runtime_test.cpp` —
+  `PreparedTextWakesWhoeverOwnsTheFrameClock`: the handler fires when the worker
+  produces a result and does not fire for an unchanged caption.
+- `scene_demand.rs` —
+  `text_still_being_laid_out_is_its_own_reason_not_an_unknown_input`.
+
+### Not verified
+
+- Nothing was displayed. No wallpaper was shown on a desktop, no output was
+  looked at by a person, and no visual comparison was made between an idling
+  scene and a continuously drawing one.
+- No power, energy or thermal measurement was taken. A scene that stops drawing
+  does less work; how much less, and whether it is visible on a battery, is not
+  something anything here measured.
+- The "next launch" claim is shown within one process by clearing the in-memory
+  caches and reopening the published files, which is what a new launch does to
+  those two caches. No second process was started.
+- The archive was exercised on this machine's GPU only. Whether an archive
+  written on one Mac is usable on another is Metal's decision, and the failure
+  mode either way is a normal compile.
+- Complex scripts, unusual fonts and non-Latin text behave exactly as they did
+  before; nothing in this round touches layout or the font system.
+- Two bounded losses are accepted rather than solved. A pipeline still inside
+  its two-second write debounce when its store is released — the ninth distinct
+  wallpaper of a session — is not written, costing that wallpaper one recompile
+  on a later launch. And a crash between a program cache entry's staged write
+  and its rename leaves a `.tmp<pid>` file in `programs01/`, which is never
+  read and is removed with the cache.
+
 ## Round 11 — text and runtime images on Metal, optional programs off the load path
 
 Feature round, same discipline as rounds 5–10: implement, wire to production,

@@ -26,6 +26,7 @@ const demandReasons = {
   animated_sprite: 'an animated sprite', dynamic_mesh: 'a dynamic mesh', puppet: 'a puppet',
   feedback: 'a feedback pass', text_binding: 'bound text', sound: 'sound',
   node_binding: 'a bound node', unknown_input: 'an input the renderer could not account for',
+  text_layout_pending: 'text still being laid out',
 };
 // Every mode the bridge can emit. `unknown` is a running scene that could not be
 // read, which is not the same as one that is ticking, so it gets its own words.
@@ -295,7 +296,7 @@ function draw(view) {
     + row('shader-cache', t('Shader cache'), button(t('Clear…'), 'clearCache', {}, busy || unavailable || !settings.shaderCacheBytes), bytes(settings.shaderCacheBytes))
     + row('logs', t('Logs'), button(t('Show in Finder'), 'showLogs', {}, busy || unavailable) + button(t('Clear…'), 'clearLogs', {}, busy || unavailable || !settings.logBytes), bytes(settings.logBytes))
     + row('download-history', t('Completed downloads'), button(t('Clear history'), 'clearDownloads', {}, busy || !downloads.some(download => !download.pending)))
-    + disclosure('storage-context', t('What gets removed'), paragraphs(t('Clearing the shader cache removes compiled shaders. They are rebuilt as wallpapers load, which may temporarily slow playback. Clearing logs removes diagnostic history, not wallpapers or settings. Clearing download history keeps downloaded files.'), t('Files you chose for a wallpaper’s file or folder settings are copied into the managed folder above so they survive a cache clean and a wallpaper update. Nothing on this page deletes them; removing one means clearing that setting on the wallpaper itself.')));
+    + disclosure('storage-context', t('What gets removed'), paragraphs(t('Clearing the shader cache removes compiled shaders, including the compiled render pipelines kept alongside them. They are rebuilt as wallpapers load, which may temporarily slow playback. Clearing logs removes diagnostic history, not wallpapers or settings. Clearing download history keeps downloaded files.'), t('Files you chose for a wallpaper’s file or folder settings are copied into the managed folder above so they survive a cache clean and a wallpaper update. Nothing on this page deletes them; removing one means clearing that setting on the wallpaper itself.')));
   const versionRow = (id, label, value) => row(id, label, `<span class="settings-version">${e(value || t('Unavailable'))}</span>`);
   const update = state.update || {};
   const updateBusy = Boolean(update.busy) || ['checkForUpdates', 'downloadUpdate', 'installUpdate', 'openReleases', 'revealDownloadedUpdate'].some(action => view.pending.has(action));

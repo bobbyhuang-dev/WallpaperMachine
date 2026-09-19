@@ -14,6 +14,7 @@
 #include "MetalRender/MetalProjection.hpp"
 #include "MetalRender/MetalShaderReflection.hpp"
 #include "MetalRender/SceneMetalProgram.hpp"
+#include "Shader/RustShaderBridge.hpp"
 #include "MetalRender/ScenePassDescription.hpp"
 
 #include "CopyPass.hpp"
@@ -35,6 +36,10 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
+#include <deque>
+#include <thread>
+#include <unordered_set>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -447,6 +452,30 @@ public:
         return cache;
     }
 
+#ifdef WESCENE_BUILD_TESTS
+    /// Drops the open archives without changing where they live, so the next
+    /// pipeline reads the published file exactly as a new launch would.
+    void reopenArchives()
+    {
+        waitForArchiveWrites();
+        const std::lock_guard lock { m_mutex };
+        forgetArchivesLocked();
+    }
+#endif
+
+    [[nodiscard]] MetalPipelineArchiveStatus archiveStatus() const
+    {
+        const std::lock_guard lock { m_mutex };
+        MetalPipelineArchiveStatus status;
+        for (const auto& [archive_id, entry] : m_archives) {
+            (void)archive_id;
+            if (entry.loaded != nil) status.available = true;
+        }
+        status.collected = m_archive_collected.load(std::memory_order_relaxed);
+        status.published = m_archive_published.load(std::memory_order_relaxed);
+        return status;
+    }
+
     /// How many times a Metal shader source has actually been handed to the
     /// compiler. Diagnostic: nothing schedules on it, and it is the only way a
     /// test can tell a cache hit from a second compile that produced an
@@ -501,9 +530,15 @@ public:
         return library;
     }
 
+    /// `archive_root` is the asking renderer's own regenerable cache directory,
+    /// not a process-wide setting. Two displays showing different wallpapers
+    /// have different ones, and each files its pipelines under its own scene;
+    /// the library and pipeline caches above stay shared by device, because a
+    /// compiled program is the same program whichever wallpaper wanted it.
     id<MTLRenderPipelineState> pipelineFor(id<MTLDevice> device, const MetalPipelineKey& key,
                                            const std::vector<SceneMetalStage>& stages,
                                            MTLVertexDescriptor* vertex_descriptor,
+                                           std::string_view     archive_root,
                                            std::string* error)
     {
         if (device == nil) return nil;
@@ -568,6 +603,15 @@ public:
                 static_cast<MTLBlendFactor>(key.blend.destination_alpha);
         }
 
+        // The archive is offered to Metal, never depended on. Whatever it can
+        // supply is reused; anything it cannot is compiled exactly as before,
+        // and a wallpaper is never refused a pipeline because a cache missed.
+        // That is also why the strict "fail on archive miss" option is not used
+        // here: it would turn a cold cache into a wallpaper that does not load.
+        if (id<MTLBinaryArchive> archive = loadedArchive(device, archive_root); archive != nil) {
+            descriptor.binaryArchives = @[ archive ];
+        }
+
         NSError*                   pipeline_error = nil;
         id<MTLRenderPipelineState> state =
             [device newRenderPipelineStateWithDescriptor:descriptor error:&pipeline_error];
@@ -580,6 +624,8 @@ public:
             return nil;
         }
 
+        collectIntoArchive(device, archive_root, key, descriptor);
+
         const std::lock_guard lock { m_mutex };
         auto& entry = m_devices[registry];
         if (auto found = entry.pipelines.find(key); found != entry.pipelines.end()) {
@@ -589,6 +635,56 @@ public:
         return state;
     }
 
+#ifdef WESCENE_BUILD_TESTS
+    /// Asks the archive, strictly, for every pipeline this process has built.
+    ///
+    /// The strict option belongs to a check and not to a wallpaper: it is the
+    /// only way to tell "the archive supplied this" from "Metal compiled it
+    /// again quickly", and it is exactly the answer a test needs. Returns false
+    /// when there is no archive, when nothing has been built, or when any
+    /// descriptor is not in the archive.
+    bool archiveServesEverySeenPipeline()
+    {
+        // Let the writes land and forget the open handles, so what answers
+        // below is the published file and not this run's in-memory collector.
+        reopenArchives();
+
+        struct Seen
+        {
+            id<MTLDevice>                device;
+            std::string                  root;
+            MTLRenderPipelineDescriptor* descriptor;
+        };
+        std::vector<Seen> seen;
+        {
+            const std::lock_guard lock { m_mutex };
+            for (auto& [archive_id, entry] : m_archives) {
+                if (entry.device == nil) continue;
+                for (const auto& descriptor : entry.descriptors) {
+                    seen.push_back(Seen { entry.device, archive_id.second, descriptor });
+                }
+            }
+        }
+        if (seen.empty()) return false;
+
+        for (const auto& [device, root, descriptor] : seen) {
+            // Opened the way a later launch opens it, from the published file.
+            id<MTLBinaryArchive> archive = loadedArchive(device, root);
+            if (archive == nil) return false;
+            MTLRenderPipelineDescriptor* probe = [descriptor copy];
+            probe.binaryArchives               = @[ archive ];
+            NSError* miss                      = nil;
+            id<MTLRenderPipelineState> state =
+                [device newRenderPipelineStateWithDescriptor:probe
+                                                     options:MTLPipelineOptionFailOnBinaryArchiveMiss
+                                                  reflection:nil
+                                                       error:&miss];
+            if (state == nil) return false;
+        }
+        return true;
+    }
+#endif
+
 private:
     struct DeviceEntry
     {
@@ -597,9 +693,333 @@ private:
             pipelines;
     };
 
-    std::mutex                                  m_mutex;
-    std::unordered_map<uint64_t, DeviceEntry>   m_devices;
-    std::atomic<uint64_t>                       m_compiles { 0 };
+    /// One store, identified by the device it was built for and the directory
+    /// it lives in. Keyed by both because a Mac showing two wallpapers has one
+    /// device and two caches, and filing either one's pipelines under the
+    /// other's directory would lose them on the next wallpaper change.
+    using ArchiveId = std::pair<uint64_t, std::string>;
+    struct ArchiveIdHash
+    {
+        std::size_t operator()(const ArchiveId& key) const
+        {
+            return std::hash<uint64_t> {}(key.first) ^ (std::hash<std::string> {}(key.second) << 1);
+        }
+    };
+    struct ArchiveEntry
+    {
+        /// Read-only, handed to descriptors. Never mutated after it is created,
+        /// so the render thread can attach it while the collector below is
+        /// being written on the archive queue.
+        id<MTLBinaryArchive>                   loaded { nil };
+        /// The one object `addRenderPipelineFunctions` is called on, touched
+        /// only from `m_archive_queue`.
+        id<MTLBinaryArchive>                   collector { nil };
+        NSURL*                                 url { nil };
+        id<MTLDevice>                          device { nil };
+        bool                                   attempted { false };
+        std::unordered_set<MetalPipelineKey, MetalPipelineKeyHash> keys;
+        std::vector<MTLRenderPipelineDescriptor*>                  descriptors;
+    };
+
+    /// Caller holds `m_mutex`. Keeps the number of stores one session holds
+    /// open bounded: each carries two archive objects and the descriptors that
+    /// went into them, and a user switching wallpapers all afternoon would
+    /// otherwise accumulate one per wallpaper.
+    ///
+    /// The oldest is released, not deleted: its file stays on disk, and the
+    /// next pipeline for that wallpaper opens it again. A write still waiting
+    /// out its debounce when its store is released is lost, which costs that
+    /// wallpaper one recompile on a later launch and nothing else.
+    void rememberStoreLocked(const ArchiveId& archive_id)
+    {
+        m_archive_order.push_back(archive_id);
+        while (m_archive_order.size() > kMaxArchiveStores) {
+            const auto oldest = m_archive_order.front();
+            m_archive_order.pop_front();
+            if (oldest == archive_id) continue;
+            m_archives.erase(oldest);
+            m_archive_write_generations.erase(oldest);
+        }
+    }
+
+    /// Caller holds `m_mutex`. The pipelines already built are objects and are
+    /// untouched; only the stores they would be filed in are let go.
+    void forgetArchivesLocked()
+    {
+        for (auto& [archive_id, entry] : m_archives) {
+            (void)archive_id;
+            entry.loaded    = nil;
+            entry.collector = nil;
+            entry.attempted = false;
+            entry.keys.clear();
+        }
+    }
+
+    MetalProgramCache()
+    {
+        m_archive_queue = dispatch_queue_create("owe.metal.pipeline-archive",
+                                                dispatch_queue_attr_make_with_qos_class(
+                                                    DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
+    }
+
+    /// One file per device and per compiler identity.
+    ///
+    /// The device's own registry id is not part of it: that number is assigned
+    /// at boot and would give a different file every restart, which is the one
+    /// thing a cache that exists to survive restarts must not do. What is in it
+    /// is what actually decides whether a stored pipeline is usable -- which
+    /// GPU, and which shader toolchain produced the source. Metal rejects a
+    /// file it cannot use anyway; this only stops two incompatible stores from
+    /// fighting over one name.
+    static std::string ArchiveFileName(id<MTLDevice> device)
+    {
+        std::string name = device.name != nil ? device.name.UTF8String : "device";
+        for (auto& character : name) {
+            if (! std::isalnum(static_cast<unsigned char>(character))) character = '-';
+        }
+        const auto identity = shader::RustShaderCacheIdentity();
+        uint64_t   digest   = 1469598103934665603ull;
+        for (const char character : identity) {
+            digest ^= static_cast<unsigned char>(character);
+            digest *= 1099511628211ull;
+        }
+        char suffix[17] {};
+        std::snprintf(suffix, sizeof(suffix), "%016llx",
+                      static_cast<unsigned long long>(digest));
+        return "pipelines-" + name + "-" + suffix + ".metallib-archive";
+    }
+
+    /// The archive to attach to descriptors, opening or creating it once.
+    id<MTLBinaryArchive> loadedArchive(id<MTLDevice> device, std::string_view archive_root)
+    {
+        if (device == nil || archive_root.empty()) return nil;
+        const ArchiveId archive_id { device.registryID, std::string(archive_root) };
+        {
+            const std::lock_guard lock { m_mutex };
+            auto& entry = m_archives[archive_id];
+            if (entry.attempted) return entry.loaded;
+        }
+
+        const std::string root { archive_root };
+        NSString* directory = [NSString stringWithUTF8String:root.c_str()];
+        NSURL*    url       = [[NSURL fileURLWithPath:directory isDirectory:YES]
+            URLByAppendingPathComponent:[NSString
+                                            stringWithUTF8String:ArchiveFileName(device).c_str()]];
+        [[NSFileManager defaultManager] createDirectoryAtURL:[url URLByDeletingLastPathComponent]
+                                 withIntermediateDirectories:YES
+                                                  attributes:nil
+                                                       error:nil];
+
+        // Two objects from the same file on purpose. The one handed to
+        // descriptors is never written, so no write can race a pipeline
+        // creation; the one written to is loaded from the same file, so
+        // serialising it republishes everything previous runs stored instead of
+        // replacing the file with only what this run happened to build.
+        const auto open = [&url](id<MTLDevice> owner, bool required) -> id<MTLBinaryArchive> {
+            MTLBinaryArchiveDescriptor* descriptor = [MTLBinaryArchiveDescriptor new];
+            descriptor.url                         = url;
+            NSError*             failure           = nil;
+            id<MTLBinaryArchive> archive = [owner newBinaryArchiveWithDescriptor:descriptor
+                                                                          error:&failure];
+            if (archive != nil || ! required) return archive;
+            // Missing, from another GPU, or damaged: all the same answer. Start
+            // an empty one so this run can still contribute, and let the next
+            // launch read what it writes.
+            descriptor.url = nil;
+            return [owner newBinaryArchiveWithDescriptor:descriptor error:&failure];
+        };
+
+        // `loaded` stays nil on a first run: there is no file, so there is
+        // nothing to offer a descriptor, and attaching the collector instead
+        // would put an object the archive queue mutates in the path of a thread
+        // that is drawing.
+        id<MTLBinaryArchive> loaded    = open(device, false);
+        id<MTLBinaryArchive> collector = open(device, true);
+
+        const std::lock_guard lock { m_mutex };
+        auto& entry = m_archives[archive_id];
+        // Another thread may have opened the same file meanwhile -- the render
+        // thread and the variant queue both create pipelines. Keeping the pair
+        // already published keeps one collector authoritative, so an addition
+        // dispatched against it is not lost when this one is discarded.
+        if (entry.attempted) return entry.loaded;
+        entry.attempted = true;
+        rememberStoreLocked(archive_id);
+        entry.device    = device;
+        entry.url       = url;
+        entry.loaded    = loaded;
+        entry.collector = collector;
+        return entry.loaded;
+    }
+
+    /// Remembers a pipeline the archive did not already hold.
+    ///
+    /// The work happens on a serial queue of its own: adding to an archive
+    /// compiles, and writing one touches the disk, neither of which belongs on
+    /// a thread that is trying to draw. Each addition schedules one write,
+    /// which coalesces with any other pending write -- a wallpaper with twenty
+    /// pipelines publishes the file once, not twenty times.
+    void collectIntoArchive(id<MTLDevice> device, std::string_view archive_root,
+                            const MetalPipelineKey&      key,
+                            MTLRenderPipelineDescriptor* descriptor)
+    {
+        if (device == nil || archive_root.empty()) return;
+        const ArchiveId      archive_id { device.registryID, std::string(archive_root) };
+        id<MTLBinaryArchive> collector = nil;
+        {
+            const std::lock_guard lock { m_mutex };
+            auto& entry = m_archives[archive_id];
+            if (entry.collector == nil) return;
+            if (entry.keys.size() >= kMaxArchivedPipelines) return;
+            if (! entry.keys.insert(key).second) return;
+            collector = entry.collector;
+        }
+
+        // Copied, and without the archives it was created against: what is
+        // stored is the pipeline, not a reference to the store it came from.
+        MTLRenderPipelineDescriptor* stored = [descriptor copy];
+        stored.binaryArchives                = nil;
+        m_archive_collected.fetch_add(1, std::memory_order_relaxed);
+        dispatch_async(m_archive_queue, ^{
+            NSError* failure = nil;
+            if (! [collector addRenderPipelineFunctionsWithDescriptor:stored error:&failure]) {
+                // Remembered by omission: the key stays in `keys`, so this
+                // descriptor is not offered again and the same failure is not
+                // produced for every frame that rebuilds the graph.
+                LOG_INFO("metal pipeline archive did not accept a pipeline: %s",
+                         failure != nil ? failure.localizedDescription.UTF8String : "unknown");
+                return;
+            }
+            {
+                const std::lock_guard lock { m_mutex };
+                auto& entry = m_archives[archive_id];
+                // Bounded on its own account: `keys` is emptied when the store
+                // is reopened, and this must not grow with every reopen.
+                if (entry.descriptors.size() < kMaxArchivedPipelines) {
+                    entry.descriptors.push_back(stored);
+                }
+            }
+            scheduleArchiveWrite(archive_id);
+        });
+    }
+
+    /// Publishes one store's collector, on the archive queue, at most once per
+    /// burst of additions to that store.
+    ///
+    /// The generation is per store, not global: a Mac with two GPUs, or two
+    /// wallpapers with their own caches, must not have one store's pending
+    /// write cancelled by an addition to another.
+    void scheduleArchiveWrite(const ArchiveId& requested)
+    {
+        // Copied into a local before the block is built. A block that names a
+        // reference parameter captures the reference, not the referent, and
+        // this one outlives the caller by two seconds.
+        const ArchiveId archive_id = requested;
+        uint64_t        generation = 0;
+        {
+            const std::lock_guard lock { m_mutex };
+            generation = ++m_archive_write_generations[archive_id];
+        }
+        m_archive_writes_pending.fetch_add(1, std::memory_order_relaxed);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(2 * NSEC_PER_SEC)),
+                       m_archive_queue,
+                       ^{
+                           bool current = false;
+                           {
+                               const std::lock_guard lock { m_mutex };
+                               current = m_archive_write_generations[archive_id] == generation;
+                           }
+                           if (current) writeArchive(archive_id);
+                           m_archive_writes_pending.fetch_sub(1, std::memory_order_relaxed);
+                       });
+    }
+
+    /// Runs only on `m_archive_queue`.
+    void writeArchive(const ArchiveId& archive_id)
+    {
+        id<MTLBinaryArchive> collector = nil;
+        NSURL*               url       = nil;
+        {
+            const std::lock_guard lock { m_mutex };
+            auto found = m_archives.find(archive_id);
+            if (found == m_archives.end()) return;
+            collector = found->second.collector;
+            url       = found->second.url;
+        }
+        if (collector == nil || url == nil) return;
+
+        // Written beside the real file and moved over it. Another process
+        // writing the same store at the same moment replaces it whole rather
+        // than interleaving with this one, and a reader never opens a file that
+        // is half written.
+        NSURL* staged = [NSURL
+            fileURLWithPath:[[url path] stringByAppendingFormat:@".tmp%d", getpid()]];
+        NSError* failure = nil;
+        if (! [collector serializeToURL:staged error:&failure]) {
+            LOG_INFO("metal pipeline archive could not be written: %s",
+                     failure != nil ? failure.localizedDescription.UTF8String : "unknown");
+            [[NSFileManager defaultManager] removeItemAtURL:staged error:nil];
+            return;
+        }
+        NSError* replace_error = nil;
+        if (! [[NSFileManager defaultManager] replaceItemAtURL:url
+                                                 withItemAtURL:staged
+                                                backupItemName:nil
+                                                       options:0
+                                              resultingItemURL:nil
+                                                         error:&replace_error]) {
+            // `replaceItemAtURL:` needs the destination to exist; the first
+            // publication of a new archive is an ordinary move.
+            NSError* move_error = nil;
+            if (! [[NSFileManager defaultManager] moveItemAtURL:staged toURL:url
+                                                          error:&move_error]) {
+                LOG_INFO("metal pipeline archive could not be published: %s",
+                         move_error != nil ? move_error.localizedDescription.UTF8String
+                                           : "unknown");
+                [[NSFileManager defaultManager] removeItemAtURL:staged error:nil];
+                return;
+            }
+        }
+        m_archive_published.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    /// Lets everything already queued finish. Only a test needs this; the
+    /// renderer never waits for the archive.
+    void waitForArchiveWrites()
+    {
+        // Drained first, not polled first. The additions are what schedule the
+        // writes, so a pending count read before they have run is a count of
+        // nothing and would let this return before any write existed.
+        dispatch_sync(m_archive_queue, ^{
+        });
+        for (int attempt = 0; attempt < 600; ++attempt) {
+            if (m_archive_writes_pending.load(std::memory_order_relaxed) == 0) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        dispatch_sync(m_archive_queue, ^{
+        });
+    }
+
+    /// A ceiling on what one process contributes. A user who never stops
+    /// switching wallpapers must not be able to grow this file without limit;
+    /// the ones that do not fit are compiled, which is what happened before any
+    /// of this existed.
+    static constexpr std::size_t kMaxArchivedPipelines = 256;
+
+    /// How many wallpapers' stores stay open at once. Two displays is the case
+    /// this exists for; the rest is headroom for switching between them.
+    static constexpr std::size_t kMaxArchiveStores = 8;
+
+    mutable std::mutex                        m_mutex;
+    std::unordered_map<uint64_t, DeviceEntry> m_devices;
+    std::unordered_map<ArchiveId, ArchiveEntry, ArchiveIdHash> m_archives;
+    std::unordered_map<ArchiveId, uint64_t, ArchiveIdHash>     m_archive_write_generations;
+    std::deque<ArchiveId>                                      m_archive_order;
+    std::atomic<uint64_t>                     m_compiles { 0 };
+    dispatch_queue_t                          m_archive_queue { nullptr };
+    std::atomic<uint64_t>                     m_archive_collected { 0 };
+    std::atomic<uint64_t>                     m_archive_published { 0 };
+    std::atomic<uint64_t>                     m_archive_writes_pending { 0 };
 };
 
 bool FoldsOnLeft(std::string_view name)
@@ -614,6 +1034,11 @@ bool FoldsOnRight(std::string_view name)
 }
 
 } // namespace
+
+MetalPipelineArchiveStatus MetalPipelineArchiveStatusForDiagnostics()
+{
+    return MetalProgramCache::shared().archiveStatus();
+}
 
 bool MetalDeviceAvailable()
 {
@@ -633,6 +1058,9 @@ struct MetalRender::Impl
     NSUInteger            frame_slot { 0 };
     bool                  inited { false };
     std::string           last_error;
+    /// This surface's regenerable compile cache, set with its scene. Empty
+    /// until a host supplies one, and empty means no archive at all.
+    std::string           pipeline_archive_root;
 
     // ---- presentation
     /// One full-target textured-quad pipeline per destination colour format.
@@ -1491,10 +1919,16 @@ id<MTLRenderPipelineState> MetalRender::Impl::pipelineFor(
     MTLVertexDescriptor* vertex_descriptor)
 {
     std::string error;
-    id<MTLRenderPipelineState> state =
-        MetalProgramCache::shared().pipelineFor(device, key, stages, vertex_descriptor, &error);
+    id<MTLRenderPipelineState> state = MetalProgramCache::shared().pipelineFor(
+        device, key, stages, vertex_descriptor, pipeline_archive_root, &error);
     if (state == nil && ! error.empty()) last_error = std::move(error);
     return state;
+}
+
+void MetalRender::SetPipelineArchivePath(std::string_view path)
+{
+    if (pImpl == nullptr) return;
+    pImpl->pipeline_archive_root = std::string(path);
 }
 
 /// Sizes every render target the way the compatibility backend does.
@@ -2069,10 +2503,11 @@ void MetalRender::Impl::pumpVideoPlaneVariants(Scene& scene, bool planes_enabled
         id<MTLDevice>        build_device      = device;
         MTLVertexDescriptor* build_descriptor  = pass.vertex_descriptor;
         auto                 stages            = variant->stages;
+        const std::string    archive_root      = pipeline_archive_root;
         dispatch_async(variant_queue, ^{
             std::string                error;
             id<MTLRenderPipelineState> pipeline = MetalProgramCache::shared().pipelineFor(
-                build_device, key, stages, build_descriptor, &error);
+                build_device, key, stages, build_descriptor, archive_root, &error);
             if (mailbox == nullptr) return;
             const std::lock_guard lock { mailbox->mutex };
             mailbox->ready.push_back(VariantPipelineMailbox::Entry {
@@ -2402,7 +2837,9 @@ void MetalRender::Impl::computeDemandReasons(Scene& scene, rg::RenderGraph& grap
             }
             if (desc.node != nullptr && desc.node->Mesh() != nullptr &&
                 desc.node->Mesh()->Dynamic()) {
-                reasons |= vulkan::DynamicReason::DynamicMesh;
+                reasons |= desc.node->Mesh()->UpdatesOnEvent()
+                               ? vulkan::DynamicReason::EventMesh
+                               : vulkan::DynamicReason::DynamicMesh;
             }
             break;
         }
@@ -2662,7 +3099,13 @@ void MetalRender::Impl::compileStaticCache(Scene& scene)
             // would draw last frame's vertices out of a buffer nobody filled.
             if (desc.node != nullptr && desc.node->Mesh() != nullptr &&
                 desc.node->Mesh()->Dynamic()) {
-                reasons |= vulkan::DynamicReason::DynamicMesh;
+                // Either bit costs this target its cacheability, which is the
+                // only thing the reuse cache asks. Telling them apart matters
+                // one level up, where the scene decides whether to keep the
+                // clock.
+                reasons |= desc.node->Mesh()->UpdatesOnEvent()
+                               ? vulkan::DynamicReason::EventMesh
+                               : vulkan::DynamicReason::DynamicMesh;
             }
             // Sprite sheets are deliberately absent: the frame this pass draws
             // is folded into its per-frame sample below, taken after the sprite
@@ -3642,6 +4085,11 @@ uint64_t MetalRender::RuntimeImageUploadsForTests() const
 }
 
 uint64_t MetalRender::ProgramCompilesForTests() { return MetalProgramCache::shared().compileCount(); }
+
+bool MetalRender::PipelineArchiveServesEverySeenPipelineForTests()
+{
+    return MetalProgramCache::shared().archiveServesEverySeenPipeline();
+}
 #endif
 
 } // namespace wallpaper::metal

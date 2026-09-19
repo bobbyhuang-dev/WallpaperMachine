@@ -68,6 +68,21 @@ enum class PosterServiceResult : uint8_t
 /// ran them.
 [[nodiscard]] bool MetalDeviceAvailable();
 
+/// What this process knows about its pipeline archives, for the settings
+/// surface and for tests.
+struct MetalPipelineArchiveStatus
+{
+    /// An archive file for this device was opened, or created to be written.
+    bool     available { false };
+    /// Pipelines this process has offered to the archive because creating them
+    /// found nothing stored. Not a failure count: the first run of a wallpaper
+    /// has nothing stored by definition.
+    uint64_t collected { 0 };
+    /// Times the archive was written back out.
+    uint64_t published { 0 };
+};
+[[nodiscard]] MetalPipelineArchiveStatus MetalPipelineArchiveStatusForDiagnostics();
+
 /// Native Metal scene renderer.
 ///
 /// Mirrors the entry points `vulkan::VulkanRender` exposes so the scene's
@@ -120,6 +135,20 @@ public:
     void SetWallpaperScalingMode(WallpaperScalingMode mode);
     void SetWallpaperScalingFactor(double factor);
     void SetWallpaperHorizontalFlip(bool enabled);
+
+    /// Where this surface keeps the compiled pipelines it can rebuild.
+    ///
+    /// Set with the scene, because that is where the path is known, and per
+    /// renderer rather than per process: two displays showing different
+    /// wallpapers have different caches, and one must not file its pipelines
+    /// under the other's. An empty path turns the archive off for this surface
+    /// -- pipelines are created exactly as they were before, and nothing is
+    /// read or written.
+    ///
+    /// The contents are regenerable. They live beside that scene's compiled
+    /// shaders and are removed with them; nothing a user imported is stored
+    /// there.
+    void SetPipelineArchivePath(std::string_view path);
     /// Forwarded to the video textures this scene binds, and remembered for
     /// textures prepared later, so the host's pause policy has one shape for
     /// both backends.
@@ -180,6 +209,16 @@ public:
     /// show is that a second surface, or the same wallpaper loaded again, does
     /// not compile a program that is already compiled.
     [[nodiscard]] static uint64_t ProgramCompilesForTests();
+
+    /// Whether the pipeline archive can supply every pipeline this process has
+    /// created so far, asked strictly.
+    ///
+    /// Test-only, and deliberately not on the production path: it asks Metal to
+    /// fail rather than compile when the archive has nothing, which is the only
+    /// way to tell a real archive hit from a fast compile. A wallpaper must
+    /// never be refused a pipeline because a cache missed, so the renderer
+    /// itself never asks this question.
+    [[nodiscard]] static bool PipelineArchiveServesEverySeenPipelineForTests();
 #endif
 
 private:

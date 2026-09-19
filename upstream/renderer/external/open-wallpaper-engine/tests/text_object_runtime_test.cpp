@@ -7,6 +7,7 @@
 #include "RenderGraph/RenderGraph.hpp"
 #include "Runtime/DynamicValue.hpp"
 #include "Runtime/VirtualAssetRegistry.hpp"
+#include <atomic>
 #include <chrono>
 #include "Runtime/SceneRuntimeContext.hpp"
 #include "VulkanRender/CustomShaderPass.hpp"
@@ -3175,7 +3176,7 @@ TEST(TextObjectRuntime, Workshop3409533530FullSceneKeepsClockRenderPassAndTextur
 }
 
 TEST(TextObjectRuntime, DynamicTextPassStartsWithPendingInitialZeroGenerationUpload) {
-    SceneMesh mesh(true);
+    SceneMesh mesh(MeshUpdate::OnEvent);
     ASSERT_TRUE(mesh.Dynamic());
     ASSERT_EQ(mesh.DirtyGeneration(), 0u);
 
@@ -3807,6 +3808,82 @@ TEST(TextObjectRuntime, FreeTypeRasterizationFallsBackForMissingPrimaryGlyph) {
     EXPECT_GT(max_y - min_y + 1, 20);
     EXPECT_NE(rgba, unsupported_rgba);
 #endif
+}
+
+
+TEST(TextObjectRuntime, PreparedTextWakesWhoeverOwnsTheFrameClock) {
+    // A scene that has gone quiet has no clock left to notice that the text
+    // worker finished. Without this the new image would sit in the queue until
+    // something unrelated happened to ask for a frame -- which, for a wallpaper
+    // that idles correctly, is never.
+    fs::VFS vfs;
+    MountAssets(vfs);
+    audio::SoundManager sound_manager;
+    WPSceneParser       parser;
+
+    ProjectProperties properties;
+    SceneParseRequest request {
+        .scene_id           = "text-wake-handler",
+        .project_properties = &properties,
+    };
+    auto scene = parser.Parse(request,
+                              MinimalSceneObjects(R"([
+          {
+            "id": 1,
+            "name": "caption",
+            "text": "hello",
+            "font": "Arial",
+            "pointsize": 20,
+            "visible": true
+          }
+        ])"),
+                              vfs,
+                              sound_manager);
+    ASSERT_NE(scene, nullptr);
+    ASSERT_NE(scene->runtime, nullptr);
+    auto& runtime = *scene->runtime;
+
+    std::atomic<int> wakes { 0 };
+    runtime.SetContentWakeHandler([&wakes] { wakes.fetch_add(1, std::memory_order_relaxed); });
+
+    // Settle whatever the parse left pending, so the counts below are about the
+    // change this test makes and not about loading.
+    for (int i = 0; i < 200 && runtime.TextLayoutInFlight(); ++i) {
+        runtime.PumpTextLayerCache();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    ASSERT_FALSE(runtime.TextLayoutInFlight()) << "the parse's own layout never finished";
+    wakes.store(0, std::memory_order_relaxed);
+
+    ASSERT_TRUE(runtime.SetNodeText("caption", "a different caption"));
+    EXPECT_TRUE(runtime.TextLayoutInFlight())
+        << "a changed caption did not register as work in flight";
+
+    for (int i = 0; i < 200 && runtime.TextLayoutInFlight(); ++i) {
+        runtime.PumpTextLayerCache();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    EXPECT_FALSE(runtime.TextLayoutInFlight()) << "the new caption was never applied";
+    EXPECT_GE(wakes.load(std::memory_order_relaxed), 1)
+        << "the worker produced an image without asking for the frame that shows it";
+
+    // Writing the caption it already has is not a change, so it must not queue
+    // work and must not ask for frames. A wallpaper whose script returns the
+    // same string forever has to stay asleep.
+    const int settled = wakes.load(std::memory_order_relaxed);
+    ASSERT_TRUE(runtime.SetNodeText("caption", "a different caption"));
+    EXPECT_FALSE(runtime.TextLayoutInFlight())
+        << "rewriting the same caption registered work that does not exist";
+    for (int i = 0; i < 20; ++i) {
+        runtime.PumpTextLayerCache();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_EQ(wakes.load(std::memory_order_relaxed), settled)
+        << "rewriting the same caption woke the scene up";
+
+    // Detaching has to take effect: nothing may call back into a frame clock
+    // that is being torn down.
+    runtime.SetContentWakeHandler({});
 }
 
 } // namespace wallpaper

@@ -43,6 +43,11 @@ SceneMetalSlotKind ToSceneMetalSlotKind(shader::RustShaderMetalSlotKind kind)
 struct VariantJob
 {
     std::shared_ptr<const SceneMetalProgram> program;
+    /// Where this process keeps regenerable compile results. Carried on the
+    /// job rather than on the program's inputs because it describes this
+    /// installation, not the program: the same shader compiled on another
+    /// machine is the same shader.
+    std::string                              cache_root;
     /// The submission epoch. A job queued before the last cancellation is not
     /// started; one already running cannot be taken back.
     uint64_t                                 epoch { 0 };
@@ -57,7 +62,7 @@ public:
         return compiler;
     }
 
-    void submit(std::shared_ptr<const SceneMetalProgram> program)
+    void submit(std::shared_ptr<const SceneMetalProgram> program, std::string cache_root)
     {
         if (program == nullptr) return;
         // The program itself decides whether it is free to be compiled, which
@@ -74,7 +79,9 @@ public:
                 program->releaseVideoPlaneClaim();
                 return;
             }
-            m_queue.push_back(VariantJob { .program = std::move(program), .epoch = m_epoch });
+            m_queue.push_back(VariantJob { .program    = std::move(program),
+                                           .cache_root = std::move(cache_root),
+                                           .epoch      = m_epoch });
             start();
         }
         m_wake.notify_one();
@@ -159,7 +166,8 @@ private:
         std::vector<shader::RustShaderMetalStage> stages;
         std::string                               reflection_json;
         std::string                               error;
-        if (! WPShaderParser::CompileMslVariant(inputs, stages, &reflection_json, &error)) {
+        if (! WPShaderParser::CompileMslVariant(
+                inputs, job.cache_root, stages, &reflection_json, &error)) {
             variant->error = error.empty() ? "the plane variant could not be compiled" : error;
         } else {
             variant->reflection_json = std::move(reflection_json);
@@ -209,13 +217,13 @@ private:
 
 } // namespace
 
-void RequestSceneMetalVariants(Scene& scene, bool wanted)
+void RequestSceneMetalVariants(Scene& scene, bool wanted, std::string_view cache_root)
 {
     if (! wanted) return;
     for (const auto& program : scene.metal_variant_candidates) {
         if (program == nullptr) continue;
         if (program->videoPlaneState() != SceneMetalVariantState::None) continue;
-        VariantCompiler::Instance().submit(program);
+        VariantCompiler::Instance().submit(program, std::string(cache_root));
     }
 }
 

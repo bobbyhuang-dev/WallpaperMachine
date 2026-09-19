@@ -368,7 +368,8 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
     std::vector<VkVertexInputBindingDescription>   bind_descriptions;
     std::vector<VkVertexInputAttributeDescription> attr_descriptions;
     {
-        m_desc.dyn_vertex = mesh.Dynamic();
+        m_desc.dyn_vertex   = mesh.Dynamic();
+        m_desc.event_vertex = mesh.UpdatesOnEvent();
         m_desc.vertex_bufs.resize(submesh.VertexCount());
 
         for (uint i = 0; i < submesh.VertexCount(); i++) {
@@ -795,7 +796,9 @@ StaticPassDesc CustomShaderPass::staticPassDesc(const Scene& scene) const {
     if (std::any_of(m_desc.video_textures.begin(), m_desc.video_textures.end(),
                     [](bool video) { return video; }))
         reasons |= DynamicReason::VideoInput;
-    if (m_desc.dyn_vertex) reasons |= DynamicReason::DynamicMesh;
+    if (m_desc.dyn_vertex)
+        reasons |=
+            m_desc.event_vertex ? DynamicReason::EventMesh : DynamicReason::DynamicMesh;
     for (const auto& [index, sprite] : m_desc.sprites_map) {
         (void)index;
         if (sprite.FrameCount() > 1) {

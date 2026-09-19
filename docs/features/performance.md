@@ -102,16 +102,33 @@ sound and timelines, so both analyses must agree before anything stops.
 
 A scene keeps its clock if any of these is present: a script or scripted
 property, an animation, a particle emitter, a playing video texture, an
-audio-reactive shader, a time uniform, an animated sprite, a dynamic mesh, a
-puppet, a feedback pass, a bound text layer, a sound layer, a node transform or
-material constant bound to a dynamic value, or any input the renderer could not
-account for. That last one is reported as **an input the renderer could not
-account for**, and it is the answer when a wallpaper does not go idle.
+audio-reactive shader, a time uniform, an animated sprite, geometry rebuilt
+every frame, a puppet, a feedback pass, a text layer whose content is computed
+every tick, a sound layer, a node transform or material constant driven by a
+script or an animation, text whose new layout has not reached a frame yet, or
+any input the renderer could not account for. That last one is reported as **an
+input the renderer could not account for**, and it is the answer when a
+wallpaper does not go idle.
+
+The distinction the list turns on is between something that *can* change and
+something that *is* changing. A text layer's card is rewritten when the text is
+re-laid out and its texture is replaced when the glyphs change, and a layer's
+visibility is a binding whether or not anything ever moves it — none of which
+means the scene has work to do. A static caption, a static caption over a static
+background, a caption the user's own property supplies, an image replaced only
+when a resource arrives, and any of those under a supported effect chain all
+stop their clocks; the same layer driven by a script does not.
 
 Pointer-reactive scenes do sleep, and pointer movement wakes them. Property
-changes, resizes, display reconfiguration, resource updates and visibility
-changes all wake the scene; a wallpaper the user paused is never woken by any
-of them.
+changes, resizes, display reconfiguration, resource updates, poster requests and
+visibility changes all wake the scene, as does a text layout finishing on its
+own thread; a wallpaper the user paused is never woken by any of them. Writing
+a caption the layer already has is not a change and wakes nothing, which is what
+keeps a script that returns the same string from defeating the whole feature.
+
+Both renderers implement this. The status line below reports what each scene is
+actually doing, so a backend that could not idle a particular scene is visible
+as such rather than described in general.
 
 The status line reports what each running scene is doing right now — updating
 continuously and why, waiting for events, paused by you, suspended by the
@@ -163,8 +180,27 @@ resetting a timeline. The row beneath the switch reports what each running scene
 is actually under, so a preference that has not reached a scene yet is visible
 as such rather than looking applied.
 
-No power comparison has been measured between the two. Choosing native Metal is
-not a documented saving.
+Compiled work is reused across launches where it can be. A scene's translated
+Metal shaders, their reflection and their binding plans are stored in that
+scene's shader cache and read back instead of being translated again — including
+the optional direct-plane program, which is prepared in the background and now
+survives a restart the same way. Alongside them, the render pipelines Metal
+built are kept in a binary archive in that same directory and handed back to
+Metal the next time the same pipeline is created, so each wallpaper has its own
+store even when two displays are showing different ones.
+
+Every one of those is a separate saving and none of them removes the others: a
+stored shader means no translation ran, a stored pipeline means Metal did not
+have to produce that pipeline's compiled form again, and the first use of a
+program in a process still costs some compilation whatever is cached. An archive
+that cannot be read, is from another machine, or is simply missing is not a
+failure — the pipeline is compiled exactly as it was before, and the wallpaper
+loads. All of it is regenerable and all of it is removed by **Clear shader
+cache** in Storage; nothing you imported is stored there.
+
+No power comparison has been measured between the two renderers, and none has
+been measured for any of the caching above. Choosing native Metal is not a
+documented saving, and neither is a cache hit.
 
 ## Advanced
 

@@ -63,6 +63,10 @@ public:
 
         // bufs
         bool                          dyn_vertex { false };
+        /// Set only for a `dyn_vertex` mesh the runtime rewrites on an event
+        /// rather than every frame. Changes nothing about how the vertices are
+        /// uploaded; read only when reporting why the scene must keep drawing.
+        bool                          event_vertex { false };
         std::vector<StagingBufferRef> vertex_bufs;
         StagingBufferRef              index_buf;
         StagingBufferRef              ubo_buf;

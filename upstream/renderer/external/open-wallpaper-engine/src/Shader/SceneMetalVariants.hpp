@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 
 namespace wallpaper
 {
@@ -22,7 +23,13 @@ class Scene;
 /// so the same condition is never retried frame after frame. The first call
 /// after the user turns the setting on is what starts the one bounded
 /// preparation the feature is allowed.
-void RequestSceneMetalVariants(Scene& scene, bool wanted);
+///
+/// `cache_root` is this installation's regenerable shader cache. A variant
+/// whose translation is already stored there is restored from it instead of
+/// being compiled again, on this launch and on every later one. It is only ever
+/// consulted for a program that was going to be prepared anyway: nothing is
+/// read, warmed or written while the setting is off.
+void RequestSceneMetalVariants(Scene& scene, bool wanted, std::string_view cache_root);
 
 /// Drops everything queued that has not started yet.
 ///

@@ -137,7 +137,15 @@ public:
     // file system, writes no shader cache file and mutates nothing the caller
     // owns. The compiler's own process-wide state is serialised internally, so
     // this may run while another scene is being parsed.
+    //
+    // `cache_root`, when given, is the same on-disk shader cache the ordinary
+    // translation uses. A hit returns the stored Metal source, reflection and
+    // binding metadata without running the compiler at all, including on a
+    // launch that has compiled nothing yet; a miss, a stale entry or a
+    // corrupted one compiles normally and republishes. Passing nothing keeps
+    // the result in memory for this process only.
     static bool CompileMslVariant(const SceneMetalVariantInputs&             inputs,
+                                  std::string_view                           cache_root,
                                   std::vector<shader::RustShaderMetalStage>& stages,
                                   std::string* reflection_json, std::string* error);
 };

@@ -16,8 +16,8 @@ SceneImageEffectLayer::SceneImageEffectLayer(SceneNode* node, float w, float h,
       m_final_mesh(std::make_unique<SceneMesh>()),
       m_final_node(std::make_unique<SceneNode>()) {};
 
-void SceneImageEffectLayer::SetFinalMeshDynamic(bool dynamic) {
-    auto replacement = std::make_unique<SceneMesh>(dynamic);
+void SceneImageEffectLayer::SetFinalMeshDynamic(MeshUpdate update) {
+    auto replacement = std::make_unique<SceneMesh>(update);
     replacement->ChangeMeshDataFrom(*m_final_mesh);
     if (m_final_mesh->Material() != nullptr) {
         replacement->AddMaterial(SceneMaterial(*m_final_mesh->Material()));
@@ -73,8 +73,8 @@ void SceneImageEffectLayer::ResolveEffect(const SceneMesh& default_mesh,
         last_output->output = SpecTex_Default;
         m_resolved_final_render_node = last_output->sceneNode.get();
         if (last_output->sceneNode->Mesh() != nullptr &&
-            last_output->sceneNode->Mesh()->Dynamic() != m_final_mesh->Dynamic()) {
-            auto replacement = std::make_shared<SceneMesh>(m_final_mesh->Dynamic());
+            last_output->sceneNode->Mesh()->UpdateDriver() != m_final_mesh->UpdateDriver()) {
+            auto replacement = std::make_shared<SceneMesh>(m_final_mesh->UpdateDriver());
             if (last_output->sceneNode->Mesh()->Material() != nullptr) {
                 replacement->AddMaterial(SceneMaterial(*last_output->sceneNode->Mesh()->Material()));
             }

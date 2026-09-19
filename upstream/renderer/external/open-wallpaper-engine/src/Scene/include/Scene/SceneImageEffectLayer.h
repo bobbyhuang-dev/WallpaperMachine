@@ -12,6 +12,9 @@ namespace wallpaper
 
 class SceneNode;
 class SceneMesh;
+/// Defined with `SceneMesh`; declared here so the header does not have to pull
+/// the mesh in for one parameter.
+enum class MeshUpdate : uint8_t;
 
 struct SceneImageEffectNode {
     std::string                output; // render target
@@ -45,7 +48,7 @@ public:
     SceneMesh&  FinalMesh() const { return *m_final_mesh; }
     SceneNode&  FinalNode() const { return *m_final_node; }
     SceneNode*  ResolvedFinalRenderNode() const { return m_resolved_final_render_node; }
-    void        SetFinalMeshDynamic(bool dynamic);
+    void        SetFinalMeshDynamic(MeshUpdate update);
     void        SetFinalBlend(BlendMode m) { m_final_blend = m; }
 
     void ResolveEffect(const SceneMesh& defualt_mesh, std::string_view effect_cam);

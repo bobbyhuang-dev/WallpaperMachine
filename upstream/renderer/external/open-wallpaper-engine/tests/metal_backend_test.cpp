@@ -164,7 +164,7 @@ std::string RejectionFor(ImageScene& fixture)
 /// first emission.
 std::shared_ptr<SceneMesh> ParticleMesh(std::string_view shader_name, std::size_t count = 64)
 {
-    auto mesh = std::make_shared<SceneMesh>(true);
+    auto mesh = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
     std::vector<SceneVertexArray::SceneVertexAttribute> attributes {
         { std::string(WE_IN_POSITION), VertexType::FLOAT3 },
         { std::string(WE_IN_TEXCOORDVEC4), VertexType::FLOAT4 },

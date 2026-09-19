@@ -80,7 +80,164 @@ recorded as blocked rather than failed:
 **No power number, watt figure or saving percentage is reported anywhere in this
 document.** Counters and unit tests bound what is claimed.
 
-## Round 7 — on-demand scene updating, managed user assets, native Metal
+## Round 8 — native Metal scene backend, second version
+
+Feature round, same discipline as rounds 5–7: implement, wire to production,
+keep it building, fix what this round broke. No audit round, no benchmark work.
+Native Metal stays a manual choice and Compatibility stays the default. Visual
+output on real wallpapers, desktop behaviour and power are the user's to accept;
+nothing below was seen on a display and nothing is a power claim.
+
+| Feature | State | Default |
+|---|---|---|
+| Desktop poster from the Metal backend | Implemented on the production poster path | Always on, no setting |
+| Backend created after the scene is parsed | Implemented; no Vulkan device is built for a scene that goes native | — |
+| Effect chains, post-processing, same-frame layer links on Metal | Implemented; synthetic GPU coverage is partial (below) | Follows Scene renderer |
+| Video textures inside Metal scenes | BGRA and 8-bit NV12 implemented; dual-plane fast path not implemented | Follows Scene renderer |
+| Settings status: preparing / in use / fell back | Implemented | — |
+
+### Poster
+
+`MetalRenderInitInfo` now carries `wants_poster` / `poster_ready`, filled by one
+conversion helper in `SceneRendererHandle`, so the Metal backend sits on the
+same `DesktopWallpaperSync` request/delivery path as Vulkan. No Swift-side
+capture was added.
+
+The presentation block of `MetalRender::drawFrame` became
+`Impl::encodeComposition(command, destination, scene)`. The drawable and the
+poster both go through it, so a poster carries the final composition — fit,
+fill or crop, user zoom, letterbox clear, horizontal flip — at the drawable's
+size and pixel format, not the internal `_rt_default`. `MetalPosterCapture`
+allocates a shared-storage texture only when `wants_poster()` answers true,
+reads it back in the command buffer's completion handler, hands the bytes over
+as stored with the BGRA flag, and releases the texture. The layer stays
+`framebufferOnly`; no drawable is read or held, and there is no
+`waitUntilCompleted`. One capture is in flight at a time; a second request
+reports `Busy` without consuming the host's request, which is what bounds and
+merges bursts. Surface release/reset, graph clear and destroy bump a
+generation, and a capture from an older generation is dropped in the handler.
+
+An idle or user-paused scene still answers. The host mailbox gained
+`bind_poster_wake`; the render handler binds it to a new `POSTER_REQUEST`
+command and unbinds before the info is replaced or the handler dies.
+`MetalRender::ServicePosterRequest` re-composes the retained output image in a
+command buffer of its own: no drawable, no scene passes, no `Tick`, no clock
+restart. Before the first frame of the current graph it reports `NoFrameYet`,
+and the first drawn frame polls the still-pending request. The mailbox is now
+mutex-guarded because Metal delivers from a completion thread, and it credits a
+delivery to the request id that was in flight when that capture started, so old
+pixels cannot satisfy a newer request. A retried capture records its id twice;
+already-answered ids are skipped at delivery so the leftover copy cannot swallow
+the next request's pixels (found and fixed at integration).
+
+Limits: on the compatibility backend a request made while the user has paused
+is still served only on the next drawn frame — Vulkan can only poll inside a
+frame and frame requests are dropped while paused. A `Submitted` poster also
+costs one redundant on-demand frame from the generic post-command frame request.
+
+### Backend creation
+
+`SceneRendererHandle` starts empty. `INIT_VULKAN` (name kept: it is host
+message vocabulary) only retains the surface description and dispatches scene
+loading; `selectSceneBackend()` is the single creation site: native →
+`createMetal` directly; prepare failure → failure recorded against the scene,
+`createVulkan`, legacy published with the concrete reason; legacy → reuse a
+working Vulkan renderer or create one. Offscreen and layer-less surfaces still
+create Vulkan at init, so probes and tests are unchanged. Every forwarder is
+safe on an empty handle, and an empty handle reports `UnknownInput` demand,
+never "static". Settings that arrive before a backend exists are recorded and
+applied by `reapplySurfaceState()` (which now also seeds `render_scale`);
+surface reconfigure in that window just replaces the info. "Backend created",
+`first_frame_ok` and the clock's running state remain three separate facts;
+`owe_scene_wallpaper_backend()` returns -1 until a backend exists
+(`SceneBackendSelection::created`), which the panel shows as preparing.
+
+Scene parsing had exactly one renderer dependency: `LOAD_SCENE` waited for
+`renderInited()`. It now waits for the surface description instead.
+
+Found at integration and fixed by the lead: a failed native `drawFrame` used to
+suspend the wallpaper. It now falls back to the compatibility backend as a
+whole scene, rebuilds the graph and redraws, with the failure remembered so it
+does not flip back.
+
+Limit: a backend switch still tears one renderer down and builds the other; the
+parsed scene is reused through `rebuildRenderGraph()`, GPU resources are not.
+What this saves is start-up and switch work. It is not a measured power result.
+
+### Effect chains and same-frame multi-pass
+
+The blanket rejections for `post_processes`, `HasImgEffect`, `_rt_link_*`
+textures and "samples the image it is drawing into" are gone. The one shared
+render graph is lowered; there is no second effects parser and no substitute
+filter. `MetalGraphRejection` walks passes in execution order and rejects only
+what the draw path cannot do: an unknown node type; a read of a target that no
+earlier pass wrote and a later one does ("the scene uses a history feedback
+effect", which is what `_rt_MipMappedFrameBuffer` scenes hit); an unbroken
+read-while-write in one pass; depth or MSAA targets.
+
+Now executed natively: sequential effect chains with their ping-pong targets,
+link textures, the graph's own read-while-write break copy, post-process
+passes, per-pass camera override, effect visibility, and multiple writers of
+one target with the graph's load/clear decisions. Target sizing mirrors
+`VulkanRender::setRenderTargetSize` — screen-bound, author-sized, `bind`
+fractions and mip levels — so an author's effect downscale and the user's
+renderScale compose rather than flatten. Unequal copies are a real resampling
+pass (pipelines built at compile time), and a copy that cannot be encoded fails
+the frame instead of being skipped. Mip levels are generated after the last
+writer before each reader. Every texture key keeps its own texture, so an
+intermediate outlives its last consumer trivially; nothing is pooled.
+
+Demand: effect and post-process passes are custom-shader passes, so the
+existing reflection walk covers them, and an animated effect keeps the scene
+ticking. The R03 static-subgraph cache remains compatibility-only and was not
+ported; the settings row says so while a scene runs natively.
+
+### Video textures
+
+`MetalVideoTextures` opens sources through `AcquireVideoTextureSource`, the
+same registry call the texture cache makes, so packaged sources, playback
+state, loop and resync behaviour are shared and each layer keeps independent
+playback (D01 sharing applies only where it already did). BGRA frames are
+imported zero-copy through a `CVMetalTextureCache` on the renderer's device.
+NV12 video- and full-range frames get one compute conversion per frame
+generation, encoded into the frame's own command buffer into a three-slot
+private destination ring; colour parameters come from the existing derivation
+via the new `AppleVideoFrameColorParams`. The older pool helpers were not
+reused because `CreateConvertedMetalTexture` blocks on `waitUntilCompleted`.
+Pixel buffers, Core Video wrappers and destinations are owned by a block the
+completion handler holds, never by the object. Pause keeps the last texture;
+there is no new clock, and content pacing stays off. A playing video reports
+`DynamicReason::VideoInput`, evaluated per call so pause changes it without a
+recompile.
+
+Anything else — 10-bit, P010, HDR, other chroma — fails `prepare` with the
+format named and the whole scene falls back; a decode or import failure
+mid-playback fails the frame and takes the fallback above. Plain video
+wallpapers (`single_video_source`) and sprite sheets still reject.
+
+### Still falls back as a whole scene
+
+Particle emitters, dynamic lighting, perspective cameras, per-frame mesh
+rebuilds, non-triangle primitives, puppets, sprite sheets, plain video
+wallpapers, history-feedback effects, depth/MSAA targets, unsupported video
+formats, shaders that do not translate, and scenes loaded before Native Metal
+was selected. The lock-screen extension stays on Compatibility.
+
+### Not done, and not verified
+
+- The direct dual-plane Y/UV sampling fast path is not implemented; NV12 always
+  takes the GPU pre-conversion.
+- No effect chain, post-process, video scene or Metal poster has been seen on a
+  display or compared with the compatibility backend on a real wallpaper.
+- GPU coverage of the effect work is partial: the smoke test proves
+  intermediate sizing, the equal-size blit, the resampling copy and same-frame
+  consumption by readback, but not an author shader sampling a link target,
+  mip generation, or a camera override.
+- Video texture tests use synthetic IOSurface-backed frames through an injected
+  source; no real decoder ran through the Metal path.
+- The lazy creation path, the poster wake and the draw-failure fallback are
+  compiled and reasoned; none has run in a desktop session.
+
 
 Three features. Whole-scene on-demand updating and the user-asset relocation
 are complete. The native Metal scene backend is the third and is reported

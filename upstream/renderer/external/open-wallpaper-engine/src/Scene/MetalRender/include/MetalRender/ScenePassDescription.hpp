@@ -64,6 +64,18 @@ struct ScenePassDescription
 
     // ---- Copy
     std::string source_key;
+    /// Size of the copy's source. Carried because a copy between two targets of
+    /// different size is a resample, not a blit, and the executor cannot tell
+    /// the two apart from the destination alone.
+    uint32_t    source_width { 0 };
+    uint32_t    source_height { 0 };
+
+    /// Set on the pass after which a mip-mapped target's smaller levels have to
+    /// be regenerated: the last writer before the first reader in the frame, or
+    /// the final writer. The pass that writes level 0 does not produce the rest,
+    /// so an effect that samples a coarse level would otherwise read whatever
+    /// the level held before.
+    bool generate_mipmaps { false };
 
     // ---- CustomShader
     SceneNode*               node { nullptr };
@@ -114,6 +126,13 @@ struct MetalPipelineKeyHash
 /// Returns false and fills `error` on anything it does not recognise, which is
 /// how an unsupported construct becomes a whole-scene fallback instead of a
 /// silently skipped draw.
+///
+/// `scene` is mutable because a copy's destination may be a graph-internal
+/// target the parser never declared -- the link textures and the copies that
+/// break a read-while-write are named by the graph builder. The compatibility
+/// backend registers those in `Scene::renderTargets` from their source when it
+/// prepares the copy; this does the same, so both backends allocate the same
+/// set of images at the same sizes.
 bool BuildScenePassDescriptions(Scene& scene, const rg::RenderGraph& graph,
                                 std::vector<ScenePassDescription>& out, std::string* error);
 

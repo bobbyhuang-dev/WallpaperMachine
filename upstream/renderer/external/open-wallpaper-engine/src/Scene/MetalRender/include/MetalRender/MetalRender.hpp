@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,29 @@ struct MetalRenderInitInfo
     uint16_t              render_height { 0 };
     double                display_scale_factor { 1.0 };
     std::function<void()> redraw_callback;
+
+    /// Asked on the render thread whether the host wants a still of the
+    /// wallpaper right now. Empty means posters are never captured, and the
+    /// capture path then costs nothing.
+    std::function<bool()> wants_poster;
+    /// Delivers one captured still: the pixel bytes, width, height, and whether
+    /// those bytes are BGRA rather than RGBA. Called from a Metal-owned thread
+    /// once the capture's command buffer completes.
+    std::function<void(std::span<const uint8_t>, uint32_t, uint32_t, bool)> poster_ready;
+};
+
+/// Outcome of one `ServicePosterRequest` call.
+///
+/// `NoFrameYet` is not a failure: it is the answer while the compiled graph has
+/// never been drawn, and composing then would publish an empty image as if it
+/// were the wallpaper.
+enum class PosterServiceResult : uint8_t
+{
+    NotRequested,
+    Submitted,
+    NoFrameYet,
+    Busy,
+    Failed,
 };
 
 /// Whether this machine has a Metal device at all. Tests that need one skip
@@ -82,17 +106,26 @@ public:
 
     bool drawFrame(Scene& scene);
 
+    /// Serves a pending poster request outside the frame loop. Render thread
+    /// only.
+    ///
+    /// Composes the output image the last drawn frame left, exactly as the
+    /// drawable composition does. It draws no scene pass, advances no clock,
+    /// runs no shader value update and takes no drawable, so an idle wallpaper
+    /// can be captured without being resumed.
+    PosterServiceResult ServicePosterRequest(Scene& scene);
+
     void UpdateCameraFillMode(Scene& scene, FillMode fillmode);
     void SetWallpaperScalingMode(WallpaperScalingMode mode);
     void SetWallpaperScalingFactor(double factor);
     void SetWallpaperHorizontalFlip(bool enabled);
-    /// Accepted and recorded so the host's pause policy has one shape for both
-    /// backends. A scene with a video texture never reaches this backend --
-    /// the capability gate rejects it -- so there is no decoder here to pause.
+    /// Forwarded to the video textures this scene binds, and remembered for
+    /// textures prepared later, so the host's pause policy has one shape for
+    /// both backends.
     void SetVideoPlaybackPaused(bool paused);
     void SetVideoPlaybackRate(float rate);
-    /// Always 0.0: a scene this backend accepts has no video source, so there
-    /// is no content period to report and the frame clock keeps its configured
+    /// The shortest frame period among the scene's video textures, or 0.0 when
+    /// it binds none -- in which case the frame clock keeps its configured
     /// cadence.
     [[nodiscard]] double ShortestVideoFramePeriod() const;
 
@@ -104,6 +137,9 @@ public:
     /// pass whose inputs this backend cannot account for. Reporting nothing
     /// would tell the on-demand path a still-animating scene is provably
     /// static and let it stop the clock.
+    ///
+    /// The video bit is evaluated on every call rather than latched at compile:
+    /// pausing playback changes the answer without rebuilding the graph.
     [[nodiscard]] uint32_t ShaderUpdateDemandReasons() const;
 
     void SetCounters(RendererCounters* counters);

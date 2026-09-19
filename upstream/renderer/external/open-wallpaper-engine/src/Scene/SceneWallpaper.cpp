@@ -437,20 +437,26 @@ public:
         CMD_DRAW,
         CMD_BEGIN_SURFACE_RECONFIGURE,
         CMD_FINISH_SURFACE_RECONFIGURE,
+        CMD_POSTER_REQUEST,
         CMD_NO
     };
     MainHandler& main_handler;
     RenderHandler(MainHandler& m)
         : main_handler(m), m_render(std::make_unique<SceneRendererHandle>()) {
-        // Installed before anything can tick: the frame clock and the renderer
-        // only ever read this pointer, and the counters outlive both.
+        // Installed before anything can tick: the frame clock only ever reads
+        // this pointer, and the counters outlive it. The renderer is given the
+        // same pointer when it is created, which is not here: no backend exists
+        // until a scene has said which one it needs.
         frame_timer.SetCounters(&counters);
-        m_render->SetCounters(&counters);
         publishPauseReasons();
     }
     virtual ~RenderHandler() {
+        // Before anything else: the host's poster hook can post to this
+        // handler from a notification thread, and it must stop being able to
+        // while the members it would reach are still alive.
+        unbindPosterWake();
         frame_timer.Stop();
-        m_render->destroy();
+        m_render->release();
         LOG_INFO("render handler deleted");
     }
 
@@ -474,6 +480,7 @@ public:
                 CASE_CMD(INIT_VULKAN);
                 CASE_CMD(BEGIN_SURFACE_RECONFIGURE);
                 CASE_CMD(FINISH_SURFACE_RECONFIGURE);
+                CASE_CMD(POSTER_REQUEST);
             default: break;
             }
             // Every command except the draw itself is an event that may have
@@ -503,6 +510,16 @@ public:
     }
 
     bool renderInited() const { return m_render->inited(); }
+
+    /// Whether a surface has been handed over, whether or not a backend has
+    /// been created on it yet.
+    ///
+    /// Scene loading is gated on this rather than on `renderInited()`: which
+    /// backend a scene needs is read off the parsed scene, so waiting for a
+    /// renderer before parsing would wait for something parsing has to produce.
+    [[nodiscard]] bool renderSurfaceReady() const {
+        return m_render_init_info != nullptr || m_render->inited();
+    }
 
     /// Tells the frame clock how often this scene's content can actually
     /// change. Only the engine's own plain-video scene can answer: it is one
@@ -617,57 +634,57 @@ public:
         return demand;
     }
 
-    /// Chooses which renderer draws this scene, and switches if it must.
+    /// Creates the renderer that draws this scene, and is the only place that
+    /// does so for a scene.
     ///
     /// Runs once per scene, after the scene is parsed and before its graph is
-    /// built, because the choice depends on what the scene contains. A surface
-    /// always starts on the compatibility backend, so a failure anywhere here
-    /// leaves a renderer that already works rather than none at all.
+    /// built, because the choice depends on what the scene contains — which is
+    /// also why nothing is created before this point. The selection is published
+    /// only once a backend exists, so the host never names a renderer that is
+    /// not drawing.
     void selectSceneBackend() {
         if (m_scene == nullptr || m_render_init_info == nullptr) return;
 
         const auto selection = metal::SelectSceneBackend(*m_scene);
-        setSceneBackendSelection(selection);
 
-        if (selection.backend == SceneBackend::LegacyVulkan) {
-            if (m_render->backend() == SceneBackend::NativeMetal) {
-                // Back to compatibility: rebuild the Vulkan renderer on the
-                // same layer it was created from.
-                m_render->releaseMetal();
-                if (! m_render->init(*m_render_init_info)) {
-                    suspendRendering();
-                    return;
-                }
-                reapplySurfaceState();
+        if (selection.backend == SceneBackend::NativeMetal) {
+            if (m_render->backend() == SceneBackend::NativeMetal && m_render->inited()) {
+                setSceneBackendSelection(selection);
+                return;
             }
-            return;
-        }
-        if (m_render->backend() == SceneBackend::NativeMetal) return;
-
-        metal::MetalRenderInitInfo info;
-        info.metal_layer         = m_render_init_info->metal_layer;
-        info.width               = m_render_init_info->width;
-        info.height              = m_render_init_info->height;
-        info.render_width        = m_render_init_info->render_width;
-        info.render_height       = m_render_init_info->render_height;
-        info.display_scale_factor = m_render_init_info->display_scale_factor;
-        info.redraw_callback     = m_render_init_info->redraw_callback;
-
-        std::string error;
-        if (m_render->adoptMetal(info, error)) {
+            std::string error;
+            if (m_render->createMetal(*m_render_init_info, error)) {
+                setSceneBackendSelection(selection);
+                reapplySurfaceState();
+                return;
+            }
+            // Prepare failed, and the handle is empty. Remember the failure
+            // against this scene so the next reconcile does not try again and
+            // produce a native/legacy flip-flop, then create the compatibility
+            // backend carrying the concrete reason.
+            if (error.empty()) error = "the native renderer could not be prepared";
+            metal::RecordMetalPrepareFailure(*m_scene, error);
+            if (! m_render->createVulkan(*m_render_init_info)) {
+                suspendRendering();
+                return;
+            }
+            setSceneBackendSelection(SceneBackendSelection { SceneBackend::LegacyVulkan, error });
             reapplySurfaceState();
             return;
         }
-        // Prepare failed. Remember it against this scene so the next reconcile
-        // does not try again and produce a native/legacy flip-flop, then
-        // re-establish the compatibility backend the handle rebuilt for us.
-        if (error.empty()) error = "the native renderer could not be prepared";
-        metal::RecordMetalPrepareFailure(*m_scene, error);
-        setSceneBackendSelection(SceneBackendSelection { SceneBackend::LegacyVulkan, error });
-        if (! m_render->init(*m_render_init_info)) {
+
+        // A Vulkan renderer already driving this surface is reused: a wallpaper
+        // switch invalidates the scene, not the device or the swapchain, and
+        // rebuilding one that works costs a visible gap for nothing.
+        if (m_render->backend() == SceneBackend::LegacyVulkan && m_render->inited()) {
+            setSceneBackendSelection(selection);
+            return;
+        }
+        if (! m_render->createVulkan(*m_render_init_info)) {
             suspendRendering();
             return;
         }
+        setSceneBackendSelection(selection);
         reapplySurfaceState();
     }
 
@@ -683,17 +700,20 @@ public:
         auto reason = m_render->lastError();
         if (reason.empty()) reason = "the native renderer could not draw this scene";
         if (m_scene != nullptr) metal::RecordMetalPrepareFailure(*m_scene, reason);
-        m_render->releaseMetal();
+        // `reason` is read off the native renderer above, before creating the
+        // compatibility one destroys it.
+        if (m_render_init_info == nullptr) return false;
+        if (! m_render->createVulkan(*m_render_init_info)) return false;
         setSceneBackendSelection(SceneBackendSelection { SceneBackend::LegacyVulkan, reason });
-        if (m_render_init_info == nullptr || ! m_render->init(*m_render_init_info)) return false;
         reapplySurfaceState();
         return true;
     }
 
     /// Re-applies the surface state a newly created renderer does not inherit.
     ///
-    /// A backend switch replaces the object that held scaling, flip, playback
-    /// rate and pause, so every one of them has to be pushed again. Pause in
+    /// Creating a backend produces an object that holds none of the scaling,
+    /// flip, playback rate, pause or counter state the settings commands have
+    /// already recorded, so every one of them has to be pushed again. Pause in
     /// particular: a wallpaper the user paused must not start playing because
     /// they changed a renderer preference.
     void reapplySurfaceState() {
@@ -703,6 +723,13 @@ public:
         m_render->SetWallpaperHorizontalFlip(m_horizontal_flip);
         m_render->SetVideoPlaybackRate(m_speed);
         m_render->SetVideoPlaybackPaused(! frame_timer.Running() || m_render_blocked);
+        // Seeds the scale the next compile allocates its render targets at, so
+        // a backend created after a render-scale change does not start at full
+        // size. The rest of the compiled-graph state — the fill mode, and the
+        // scale applied to targets that already exist — belongs to
+        // `rebuildRenderGraph`, which every creation path runs straight after
+        // this.
+        if (m_scene != nullptr) m_scene->render_scale = m_render_scale;
     }
 
     /// Asks for one frame because something outside the clock changed.
@@ -794,6 +821,29 @@ private:
         m_render_blocked = true;
         frame_timer.Stop();
         publishPauseReasons();
+    }
+
+    /// Retains a surface description and moves the host's poster wake hook onto
+    /// it.
+    ///
+    /// The previous info's hook is dropped first, so a notification raised
+    /// against a layer that is gone cannot post work about the new one. The
+    /// host holds its own lock across both halves, which is what keeps an
+    /// in-flight notification from poking a handler that has unbound.
+    void adoptRenderInitInfo(std::shared_ptr<RenderInitInfo> info) {
+        unbindPosterWake();
+        m_render_init_info = std::move(info);
+        if (! m_render_init_info->bind_poster_wake) return;
+        std::weak_ptr<looper::Handler> weak_self = weak_from_this();
+        m_render_init_info->bind_poster_wake([weak_self] {
+            auto self = weak_self.lock();
+            if (self == nullptr) return;
+            CreateMsgWithCmd(self, CMD::CMD_POSTER_REQUEST)->post();
+        });
+    }
+    void unbindPosterWake() {
+        if (m_render_init_info == nullptr || ! m_render_init_info->bind_poster_wake) return;
+        m_render_init_info->bind_poster_wake({});
     }
 
     bool rebuildRenderGraph() {
@@ -924,7 +974,19 @@ private:
                 }
             }
 
-            if (frame_ok) frame_ok = m_render->drawFrame(*m_scene);
+            if (frame_ok) {
+                frame_ok = m_render->drawFrame(*m_scene);
+                // A native frame can fail after the graph compiled -- a video
+                // texture that stops decoding, a copy that cannot be encoded.
+                // Suspending would leave that wallpaper black; the scene is
+                // handed to the compatibility backend as a whole instead, and
+                // the failure is remembered so it does not flip back.
+                if (! frame_ok && m_render->hasBackend() &&
+                    m_render->backend() == SceneBackend::NativeMetal) {
+                    frame_ok = fallBackToCompatibility() && rebuildRenderGraph() &&
+                               m_render->drawFrame(*m_scene);
+                }
+            }
             if (frame_ok) {
                 m_scene->PassFrameTime(frame_time);
                 counters.Add(OWE_RC_SIMULATION_TICKS);
@@ -1074,28 +1136,64 @@ private:
             refreshFrameDemand();
         }
     }
+    /// Takes over a surface description. No GPU backend is created here.
+    ///
+    /// Which backend this surface needs is decided from the parsed scene, so
+    /// building a Vulkan device and swapchain now would mean tearing them down
+    /// again the moment the scene turns out to want the native one. The name is
+    /// kept because it is part of the host-facing message vocabulary.
     MHANDLER_CMD(INIT_VULKAN) {
         std::shared_ptr<RenderInitInfo> info;
-        if (msg->findObject("info", &info) && info != nullptr) {
-            if (! m_render->init(*info)) {
+        if (! msg->findObject("info", &info) || info == nullptr) return;
+
+        adoptRenderInitInfo(std::move(info));
+        m_render_blocked = false;
+
+        // Offscreen surfaces and surfaces with no layer have no native option
+        // at all, so there is nothing to wait for: the probe and test paths
+        // keep behaving exactly as they did.
+        if (m_render_init_info->offscreen || m_render_init_info->metal_layer == nullptr) {
+            if (! m_render->createVulkan(*m_render_init_info)) {
                 suspendRendering();
                 return;
             }
-            // Retained because choosing a backend needs the parsed scene, which
-            // does not exist yet: the switch happens after the scene arrives,
-            // and either direction has to be able to re-create a renderer on
-            // this same surface.
-            m_render_init_info = info;
-            m_render_blocked   = false;
-            m_render->SetWallpaperScalingMode(m_scalingmode);
-            m_render->SetWallpaperScalingFactor(m_scalingfactor);
-            m_render->SetWallpaperHorizontalFlip(m_horizontal_flip);
-            m_render->SetVideoPlaybackRate(m_speed);
-            m_render->SetVideoPlaybackPaused(! frame_timer.Running());
+            setSceneBackendSelection(SceneBackendSelection { SceneBackend::LegacyVulkan, {} });
+            reapplySurfaceState();
+        }
 
-            // Initialization succeeded; dispatch scene loading.
-            main_handler.sendCmdLoadScene();
-            publishPauseReasons();
+        main_handler.sendCmdLoadScene();
+        publishPauseReasons();
+    }
+    /// Completes a desktop poster request that arrived from outside the clock.
+    ///
+    /// Deliberately does not touch the clock or scene time: a wallpaper the
+    /// user paused stays paused, and an idle one is sampled rather than
+    /// re-simulated. The single frame this may need is the one the generic
+    /// post-command `requestFrame()` already asks for, and that request is
+    /// dropped while the clock is stopped.
+    MHANDLER_CMD(POSTER_REQUEST) {
+        // Nothing to service yet, or nothing valid to read back: the request
+        // stays pending in the host's mailbox and the first drawn frame polls
+        // it. `m_render_blocked` covers a surface mid-reconfigure; a wallpaper
+        // the user merely paused is not blocked and is still sampled.
+        if (! m_render->hasBackend() || m_scene == nullptr || m_render_blocked) return;
+        // The Vulkan path can only answer from inside a frame, so the frame
+        // already requested for this command is how it answers. While the user
+        // has paused the wallpaper that request is dropped, and no poster is
+        // exported — drawing behind the user's back would be worse.
+        if (m_render->backend() != SceneBackend::NativeMetal) return;
+
+        switch (m_render->ServicePosterRequest(*m_scene)) {
+        case metal::PosterServiceResult::Failed:
+            // Not a fallback: the scene still draws, only this export failed,
+            // and the mailbox's own backoff decides when to try again.
+            LOG_ERROR("desktop poster export failed: %s", m_render->lastError().c_str());
+            break;
+        case metal::PosterServiceResult::NoFrameYet:
+        case metal::PosterServiceResult::NotRequested:
+        case metal::PosterServiceResult::Submitted:
+        case metal::PosterServiceResult::Busy:
+            break;
         }
     }
     MHANDLER_CMD(BEGIN_SURFACE_RECONFIGURE) {
@@ -1128,13 +1226,25 @@ private:
         }
         try {
             // A display change replaces the CAMetalLayer, so the retained info
-            // has to be replaced with it: a later fallback re-inits from this,
-            // and the old layer is gone.
-            m_render_init_info = info;
+            // has to be replaced with it: a later creation or fallback works
+            // from this, and the old layer is gone.
+            adoptRenderInitInfo(std::move(info));
+            if (! m_render->hasBackend()) {
+                // The scene has not chosen a backend yet, so there is no
+                // surface to reset and no graph to compile. Replacing the info
+                // is the whole job; the backend is created from it when the
+                // scene lands.
+                m_render_blocked = false;
+                frame_timer.Run();
+                refreshFrameDemand();
+                publishPauseReasons();
+                promise->set_value(true);
+                return;
+            }
             // A Metal surface that cannot take the new layer falls back here
             // rather than inside the holder, so the backend change is recorded
             // and published exactly once, by the routine that owns it.
-            bool surface_ok = m_render->resetSurface(*info);
+            bool surface_ok = m_render->resetSurface(*m_render_init_info);
             if (! surface_ok) surface_ok = fallBackToCompatibility();
             const bool ok = surface_ok && rebuildRenderGraph();
             if (ok) {
@@ -1173,12 +1283,18 @@ public:
         return m_scene_demand_reasons.load(std::memory_order_relaxed);
     }
 
-    /// Which renderer drew this scene. Set once, when the renderer is created.
+    /// Which renderer drew this scene. Published when the renderer is created,
+    /// never before: until then `created` is false and the host reports that it
+    /// is still preparing rather than naming a backend.
     [[nodiscard]] SceneBackendSelection sceneBackendSelection() const {
         std::scoped_lock lock(m_backend_selection_mutex);
         return m_backend_selection;
     }
     void setSceneBackendSelection(SceneBackendSelection selection) {
+        // Every caller publishes a backend that exists, so the flag is set here
+        // rather than at each site, where forgetting it would silently report
+        // "preparing" for the rest of the wallpaper's life.
+        selection.created = true;
         std::scoped_lock lock(m_backend_selection_mutex);
         m_backend_selection = std::move(selection);
     }
@@ -1188,8 +1304,8 @@ private:
     float                  m_speed { 1.0f };
 
     std::unique_ptr<SceneRendererHandle> m_render;
-    /// Retained from `INIT_VULKAN` so either backend can be re-created on the
-    /// same surface when the choice changes.
+    /// Retained from `INIT_VULKAN` so either backend can be created, or
+    /// re-created, on the same surface once the choice is known.
     std::shared_ptr<RenderInitInfo>      m_render_init_info;
     std::unique_ptr<rg::RenderGraph>      m_rg { nullptr };
     bool                                m_render_blocked { false };
@@ -1436,7 +1552,7 @@ std::size_t SceneWallpaper::counters(uint64_t* out, std::size_t len) const {
 }
 
 MHANDLER_CMD_IMPL(MainHandler, LOAD_SCENE) {
-    if (m_render_handler->renderInited()) {
+    if (m_render_handler->renderSurfaceReady()) {
         loadScene();
     }
 }

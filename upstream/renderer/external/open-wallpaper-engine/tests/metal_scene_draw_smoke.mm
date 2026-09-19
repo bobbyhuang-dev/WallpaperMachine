@@ -29,6 +29,8 @@
 #include "Scene/SceneNode.h"
 #include "SpecTexs.hpp"
 #include "RenderGraph/RenderGraph.hpp"
+#include "VulkanRender/CopyPass.hpp"
+#include "VulkanRender/CustomShaderPass.hpp"
 #include "VulkanRender/SceneToRenderGraph.hpp"
 #include "VulkanRender/StaticSubgraphCache.hpp"
 #include "WPSceneParser.hpp"
@@ -133,6 +135,63 @@ bool LoadScene(const std::filesystem::path& project, const std::filesystem::path
         return false;
     }
     return true;
+}
+
+SceneNode* FirstDrawableNode(SceneNode* node)
+{
+    if (node == nullptr) return nullptr;
+    if (auto* mesh = node->Mesh(); mesh != nullptr && mesh->MaterialForSlot(0) != nullptr) {
+        return node;
+    }
+    for (const auto& child : node->GetChildren()) {
+        if (auto* found = FirstDrawableNode(child.get()); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
+rg::TexNode::Desc TexDesc(const std::string& key)
+{
+    return rg::TexNode::Desc {
+        .name = key,
+        .key  = key,
+        .type = IsSpecTex(key) ? rg::TexNode::TexType::Temp : rg::TexNode::TexType::Imported,
+    };
+}
+
+void AddDraw(rg::RenderGraph& graph, SceneNode* node, const std::string& output,
+             const std::vector<std::string>& inputs)
+{
+    graph.addPass<vulkan::CustomShaderPass>(
+        "draw", rg::PassNode::Type::CustomShader,
+        [node, &output, &inputs](rg::RenderGraphBuilder&          builder,
+                                 vulkan::CustomShaderPass::Desc& desc) {
+            desc.node             = node;
+            desc.visibility_node  = node;
+            desc.output           = output;
+            desc.write_alpha      = output != SpecTex_Default;
+            desc.clear_on_first_use = true;
+            for (const auto& input : inputs) {
+                auto* tex = builder.createTexNode(TexDesc(input));
+                if (IsSpecTex(input)) builder.markVirtualWrite(tex);
+                builder.read(tex);
+                desc.textures.push_back(std::string(tex->key()));
+            }
+            builder.write(builder.createTexNode(TexDesc(output), true));
+        });
+}
+
+void AddCopy(rg::RenderGraph& graph, const std::string& source, const std::string& destination)
+{
+    graph.addPass<vulkan::CopyPass>(
+        "copy", rg::PassNode::Type::Copy,
+        [&source, &destination](rg::RenderGraphBuilder& builder, vulkan::CopyPass::Desc& desc) {
+            auto* in  = builder.createTexNode(TexDesc(source));
+            auto* out = builder.createTexNode(TexDesc(destination), true);
+            builder.read(in);
+            builder.write(out);
+            desc.src = std::string(in->key());
+            desc.dst = std::string(out->key());
+        });
 }
 
 SceneMaterial* FirstMaterial(SceneNode* node)
@@ -287,6 +346,98 @@ TEST_F(MetalSceneDraw, TranslatedAuthorShaderCompilesAndDrawsTheScene)
         }
         EXPECT_GT(shader_pixels, 1000u)
             << "the target holds no pixels the author's fragment shader could have produced";
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, AnIntermediateTargetIsDrawnCopiedAndResampledInOneFrame)
+{
+    // The shape an effect chain lowers to: the author's layer drawn into an
+    // intermediate at the author's own smaller size, that intermediate copied
+    // into a link texture, and the link texture resampled onto the scene's
+    // output. Every step reads what an earlier step in the SAME frame produced.
+    const auto  project = WriteFixture(root_ / "project");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "cache", loaded, error)) << error;
+
+    auto* node = FirstDrawableNode(loaded.scene->sceneGraph.get());
+    ASSERT_NE(node, nullptr);
+
+    // An author-sized effect buffer: half the canvas in each axis. Its size must
+    // survive as its own, not be flattened to the output's.
+    loaded.scene->renderTargets["_rt_effect_pingpong_a_0"] = SceneRenderTarget {
+        .width  = 192,
+        .height = 128,
+    };
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+
+        rg::RenderGraph graph;
+        AddDraw(graph, node, "_rt_effect_pingpong_a_0", {});
+        AddCopy(graph, "_rt_effect_pingpong_a_0", "_rt_link_1");
+        AddCopy(graph, "_rt_link_1", std::string(SpecTex_Default));
+
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+        ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+
+        const auto shader_pixels = [](const std::vector<uint8_t>& pixels) {
+            std::size_t count = 0;
+            for (std::size_t i = 0; i < pixels.size(); i += 4) {
+                const auto r = pixels[i];
+                const auto g = pixels[i + 1];
+                const auto b = pixels[i + 2];
+                if (b >= 55 && b <= 73 && (r > 8 || g > 8)) ++count;
+            }
+            return count;
+        };
+
+        std::vector<uint8_t> intermediate;
+        uint32_t             width  = 0;
+        uint32_t             height = 0;
+        ASSERT_TRUE(
+            render.ReadRenderTargetForTests("_rt_effect_pingpong_a_0", intermediate, width, height));
+        // The author's own size, not the output's: flattening the two would
+        // make this 384x256 and change every texel step the effect samples at.
+        EXPECT_EQ(width, 192u);
+        EXPECT_EQ(height, 128u);
+        EXPECT_GT(shader_pixels(intermediate), 200u)
+            << "the intermediate holds nothing the author's shader could have written";
+
+        std::vector<uint8_t> linked;
+        ASSERT_TRUE(render.ReadRenderTargetForTests("_rt_link_1", linked, width, height));
+        EXPECT_EQ(width, 192u);
+        EXPECT_EQ(height, 128u);
+        EXPECT_EQ(linked, intermediate) << "the equal-sized copy is not a faithful copy";
+
+        std::vector<uint8_t> output;
+        ASSERT_TRUE(render.ReadRenderTargetForTests(
+            loaded.scene->ResolveRenderTargetName(SpecTex_Default), output, width, height));
+        EXPECT_EQ(width, 384u);
+        EXPECT_EQ(height, 256u);
+        // The resample used to be skipped silently, which left this target
+        // holding whatever it was cleared to.
+        EXPECT_GT(shader_pixels(output), 800u)
+            << "the scaled copy did not carry the intermediate onto the output";
 
         render.destroy();
     }

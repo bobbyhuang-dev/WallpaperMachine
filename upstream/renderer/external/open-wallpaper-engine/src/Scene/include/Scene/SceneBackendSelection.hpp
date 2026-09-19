@@ -37,6 +37,12 @@ struct SceneBackendSelection
     SceneBackend backend { SceneBackend::LegacyVulkan };
     std::string  fallback_reason;
 
+    /// False while this is still only a decision, true once a renderer has
+    /// actually been created for it. A surface whose scene has not been parsed
+    /// yet has no backend at all, and reporting the default as if it were the
+    /// answer would name a renderer that is not drawing.
+    bool created { false };
+
     [[nodiscard]] bool fell_back() const { return ! fallback_reason.empty(); }
 };
 

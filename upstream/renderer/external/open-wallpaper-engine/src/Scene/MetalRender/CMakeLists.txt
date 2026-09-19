@@ -10,10 +10,14 @@ set(METAL_RENDER_SOURCES
     MetalCapability.cpp
     MetalProjection.cpp
     MetalShaderReflection.cpp
+    MetalVideoSupport.cpp
     ScenePassDescription.cpp)
 
 if(APPLE)
-  list(APPEND METAL_RENDER_SOURCES MetalRender.mm)
+  list(APPEND METAL_RENDER_SOURCES
+    MetalRender.mm
+    MetalPosterCapture.mm
+    MetalVideoTextures.mm)
 endif()
 
 add_library(${LIB_NAME} STATIC ${METAL_RENDER_SOURCES})
@@ -58,6 +62,7 @@ if(APPLE)
   target_link_libraries(${LIB_NAME} PUBLIC
     ${METAL_FRAMEWORK}
     ${QUARTZ_CORE_FRAMEWORK}
+    ${CORE_VIDEO_FRAMEWORK}
     ${FOUNDATION_FRAMEWORK})
 endif()
 

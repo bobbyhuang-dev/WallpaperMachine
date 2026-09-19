@@ -279,7 +279,9 @@ void owe_set_scene_renderer_preference(int preference);
 int  owe_current_scene_renderer_preference(void);
 
 /*
- * Which backend actually drew this scene, or -1 when nothing has been observed.
+ * Which backend actually drew this scene, or -1 when nothing has been observed
+ * yet -- no scene, or a surface whose backend has not been created because the
+ * scene it depends on is still being parsed.
  *
  * `owe_scene_wallpaper_backend_fallback_reason` writes a NUL-terminated reason
  * into `out` and returns the length excluding the terminator; passing a null

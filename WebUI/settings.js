@@ -22,7 +22,9 @@ const sceneModes = {
   policy_suspended: 'suspended by the app', not_applicable: 'not applicable to this wallpaper',
   unknown: 'running — state could not be read',
 };
-const sceneBackends = { legacy_vulkan: 'Compatibility', native_metal: 'Native Metal', unknown: 'not reported yet' };
+// Only backends that actually drew something are named here. A scene with no
+// backend yet is a phase of its own and is worded separately below.
+const sceneBackends = { legacy_vulkan: 'Compatibility', native_metal: 'Native Metal' };
 
 // Reports the scale the engine actually published. Quantizing here would let a
 // value the control cannot offer be shown as one that it can.
@@ -129,13 +131,26 @@ function draw(view) {
     const mode = sceneModes[report.mode] || `state reported as ${report.mode}`;
     return `${where}: ${mode}${named.length ? ` (${named.join(', ')})` : ''}`;
   };
+  // Three separate facts, none of them the saved preference. No backend has been
+  // reported yet means the scene is still being read and no backend has been
+  // chosen — not that one was chosen and could not be named. A scene drawn by
+  // Compatibility while Native Metal was preferred fell back, and the renderer's
+  // own reason is shown when it supplied one; an absent reason is left absent
+  // rather than filled in with a guess.
   const sceneRendererLine = report => {
     const where = `${report.display || `Display ${report.displayId}`} — ${report.wallpaperTitle || report.wallpaperId || 'wallpaper'}`;
+    if (!report.backend || report.backend === 'unknown') return `${where}: preparing — no backend chosen yet`;
+    // A name this build does not know is still a backend that drew the scene,
+    // so it is reported verbatim instead of being folded into preparing.
     const backend = sceneBackends[report.backend] || report.backend;
-    return `${where}: ${backend}${report.fallbackReason ? ` (fell back: ${report.fallbackReason})` : ''}`;
+    const fellBack = report.backend === 'legacy_vulkan' && settings.sceneRenderer === 'native_metal_preferred';
+    return `${where}: ${backend}${fellBack && report.fallbackReason ? ` (fell back: ${report.fallbackReason})` : ''}`;
   };
   const sceneModeReport = (settings.sceneUpdateModes || []).map(report => `<li>${e(sceneModeLine(report))}</li>`).join('');
   const sceneBackendReport = (settings.sceneRenderers || []).map(report => `<li>${e(sceneRendererLine(report))}</li>`).join('');
+  // Read from what actually drew a scene, not from the preference: the note it
+  // gates is only true of a surface that really is on the native backend.
+  const nativeSceneRunning = (settings.sceneRenderers || []).some(report => report.backend === 'native_metal');
   const performance = `<h3>Video backend</h3>`
     + row('video-backend', 'Video playback', select('videoBackend', 'Video playback backend', draft('videoBackend', settings.videoBackend), videoBackends, 'data-setting="videoBackend"', busy || unavailable), 'Native uses the system video path where a wallpaper qualifies, and returns to Compatibility on its own where it does not.')
     + row('video-backend-report', 'In use now', backendReport ? `<ul class="settings-list">${backendReport}</ul>` : '<span class="settings-status" role="status">No video wallpaper is running.</span>')
@@ -148,10 +163,10 @@ function draw(view) {
       + row('battery-fps', 'Frame rate on battery', `<input class="settings-number" data-key="batteryTargetFps" type="number" inputmode="numeric" aria-label="Frame rate on battery" min="1" max="240" step="1" value="${e(draft('batteryTargetFps', settings.batteryTargetFps))}" data-setting="batteryTargetFps"${disabled(busy || unavailable)}><span class="settings-unit">fps</span>`)
       + row('battery-state', 'Power source', `<span class="settings-status" role="status">${e(batteryActive ? `On battery — the battery profile is supplying the effective quality shown above.` : settings.onBatteryPower ? 'On battery' : 'Plugged in — your saved quality is in use.')}</span>`) : '')
     + `<div class="settings-group-gap"></div><h3>Scene wallpapers</h3>`
-    + settingToggle('sceneOptimization', 'Scene render optimisation', false, 'On by default. Reuses the result of scene subgraphs whose inputs have not changed and removes render passes proven redundant. It applies to legacy scene wallpapers only and changes neither resolution, frame rate nor animation speed. Turn it off to compare.')
+    + settingToggle('sceneOptimization', 'Scene render optimisation', false, `On by default. Reuses the result of scene subgraphs whose inputs have not changed and removes render passes proven redundant. It applies to legacy scene wallpapers only and changes neither resolution, frame rate nor animation speed. Turn it off to compare.${nativeSceneRunning ? ' The reuse cache exists in the Compatibility renderer only, so it does not apply to the scenes listed below as drawn by Native Metal.' : ''}`)
     + settingToggle('sceneOnDemand', 'Update only when the scene changes', false, 'Off unless you turn it on. A scene the renderer can prove has nothing left to update stops its repeating frame timer and wakes on events instead; anything it cannot prove keeps running normally. It is not a frame-rate limit, and scripts, sound and input keep working. No power saving is measured or promised.')
     + row('scene-update-report', 'Updating now', sceneModeReport ? `<ul class="settings-list">${sceneModeReport}</ul>` : '<span class="settings-status" role="status">No scene wallpaper is running.</span>')
-    + row('scene-renderer', 'Scene renderer', select('sceneRenderer', 'Scene renderer', draft('sceneRenderer', settings.sceneRenderer), sceneRenderers, 'data-setting="sceneRenderer"', busy || unavailable), 'Native Metal draws only scenes it can draw in full; any other scene falls back to Compatibility as a whole. Desktop wallpapers only — the lock screen stays on Compatibility.')
+    + row('scene-renderer', 'Scene renderer', select('sceneRenderer', 'Scene renderer', draft('sceneRenderer', settings.sceneRenderer), sceneRenderers, 'data-setting="sceneRenderer"', busy || unavailable), 'Native Metal draws only scenes it can draw in full: image layers, ordinary effect chains and post-processing, same-frame layer links, and BGRA or 8-bit NV12 video textures. Anything else — particles, puppets, 3D, history-feedback effects, HDR video and the rest — falls back to Compatibility as a whole scene, and this applies to desktop wallpapers only, the lock screen staying on Compatibility.')
     + row('scene-renderer-report', 'Drawn by', sceneBackendReport ? `<ul class="settings-list">${sceneBackendReport}</ul>` : '<span class="settings-status" role="status">No scene wallpaper is running.</span>')
     + `<div class="settings-group-gap"></div><h3>Advanced</h3>`
     + settingToggle('contentPacing', 'Content pacing', false, 'Experimental, off by default. Drives presentation from the content’s own frame cadence instead of the display refresh.')

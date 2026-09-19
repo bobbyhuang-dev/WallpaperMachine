@@ -11,6 +11,56 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-19 — Round 9: scene optimisation on Metal, sprites, 2D particles
+
+Scene optimisation (target reuse + copy elision) now runs on the Native Metal
+backend, sprite-sheet animation and standard two-dimensional sprite particles
+draw natively, and two defects in the shared reuse analysis were fixed in both
+backends. Default stays Compatibility. The NV12 dual-plane fast path was not
+built; the blocker is recorded in the progress document.
+
+- `python3 scripts/check_renderer.py` — exit 0. All 10 golden cases
+  `pixels_equal=True`, 0 diagnostics, 8 projects × 2 reload cycles clean, every
+  test binary exit 0. Evidence bundle
+  `artifacts/renderer/adaptive-20260919-120841` (disposable).
+- Inside that run, on a real Metal device with private textures only:
+  `metal_backend_test` 20 passed (7 new capability cases: rope, trail and other
+  dynamic meshes each with their own reason, video sheet refused, plain sheet
+  accepted, sprite-particle layer accepted, empty particle layer accepted,
+  zero-capacity mesh refused); `metal_scene_draw_smoke` 8 passed (5 new:
+  unchanged second frame skips passes and reads back byte-identical pixels, a
+  moved layer re-executes and changes the picture, the setting switched off
+  skips nothing, post-compile geometry uploads reach the target across more
+  frames than in-flight slots, a sheet is reused between steps and redrawn on a
+  step, and re-enabling the setting after frames drawn with it off redraws and
+  restores the right picture — that last one was run against the unfixed code
+  first and fails there on the pixel comparison); `static_subgraph_cache_test` 24 passed (3 new: alias chain
+  resolution, cycle termination, a reader of an aliased destination inheriting
+  its source's dynamism); `metal_poster_capture_test` 7, `metal_video_texture_test`
+  8, `playback_gpu_test`, `timer_tests`, `render_scale_test` and the rest all
+  exit 0.
+- `python3 scripts/test.py` — 483 XCTest cases, 473 passed, 9 skipped, 1 failed:
+  `ControlPanelLayoutTests/testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes`,
+  the same overflow-52 failure recorded in earlier rounds. The Discover grid was
+  not touched this round; recorded as pre-existing, not fixed and not
+  investigated.
+- `python3 scripts/build.py --configuration Release` — **BUILD SUCCEEDED**, no
+  CodeSign xattr rejection this round. App and extension binaries at 12:10
+  contain this round's strings (`PRENDER_SPRITE`, "the scene draws particle
+  trails"), and the bundled `WebUI/settings.js` contains the rewritten Scene
+  optimisation and Scene renderer copy. Delivered at
+  `build/Build/Products/Release/MacWallpaperEngine.app`.
+- All three gates above were re-run after the last source change (limiting
+  multi-slot image import to sprite sheets), so they describe the delivered
+  tree rather than an earlier one.
+- Not run, not authorized: any desktop session, wallpaper apply, screenshot,
+  lock screen, `scripts/test.py --ui`, power sampling. No sprite-sheet or
+  particle wallpaper has been seen on a display, no comparison against the
+  compatibility backend on real content, and no sheet was sampled by an author
+  shader on the GPU — the smoke fixture's shader binds no texture slot, so that
+  test covers pick-up, advance, invalidation and demand reporting only. No
+  power number is reported; reduced work is stated as passes not run.
+
 ## 2026-09-19 — Round 8: native Metal backend, second version
 
 Metal desktop poster, backend creation deferred until the scene is parsed,

@@ -57,3 +57,16 @@ std::vector<CopyElision> wallpaper::vulkan::PlanCopyElision(std::span<const Elis
 
     return plan;
 }
+
+std::string wallpaper::vulkan::ResolveCopyAliasKey(
+    const std::unordered_map<std::string, std::string>& aliases, const std::string& key)
+{
+    if (aliases.empty() || key.empty()) return key;
+    std::string resolved = key;
+    for (std::size_t step = 0; step <= aliases.size(); ++step) {
+        const auto found = aliases.find(resolved);
+        if (found == aliases.end()) return resolved;
+        resolved = found->second;
+    }
+    return resolved;
+}

@@ -1201,12 +1201,17 @@ bool VulkanRender::Impl::applySceneOptimization(Scene& scene, rg::RenderGraph& r
     const auto plan = PlanCopyElision(elision);
     uint64_t   elided = 0;
     bool       changed = false;
+    std::unordered_map<std::string, std::string> aliases;
     for (std::size_t i = 0; i < m_passes.size(); ++i) {
         auto* copy = dynamic_cast<CopyPass*>(m_passes[i]);
         if (copy == nullptr || plan[i] == CopyElision::None) continue;
         copy->desc().elision = plan[i];
         changed              = true;
         ++elided;
+        if (plan[i] == CopyElision::Alias) {
+            aliases[scene.ResolveRenderTargetName(copy->desc().dst)] =
+                scene.ResolveRenderTargetName(copy->desc().src);
+        }
     }
     if (changed) {
         // The copies decided above change what each pass queries, so their
@@ -1231,13 +1236,21 @@ bool VulkanRender::Impl::applySceneOptimization(Scene& scene, rg::RenderGraph& r
         if (auto* custom = dynamic_cast<CustomShaderPass*>(m_passes[i])) {
             desc = custom->staticPassDesc(scene);
             desc.target = scene.ResolveRenderTargetName(desc.target);
-            for (auto& input : desc.inputs) input = scene.ResolveRenderTargetName(input);
+            // Through the alias, never the bare name. An aliased destination
+            // has no writer of its own after elision, so a read of it that is
+            // not resolved looks like a read of something no pass produces --
+            // and a reader whose real source is redrawn every frame would then
+            // be called reusable.
+            for (auto& input : desc.inputs) {
+                input = ResolveCopyAliasKey(aliases, scene.ResolveRenderTargetName(input));
+            }
         } else if (auto* copy = dynamic_cast<CopyPass*>(m_passes[i])) {
             // An elided copy produces nothing at execution time, so it neither
             // writes a target nor forces one to re-render.
             if (copy->desc().elision == CopyElision::None) {
                 desc.target = scene.ResolveRenderTargetName(copy->desc().dst);
-                desc.inputs = { scene.ResolveRenderTargetName(copy->desc().src) };
+                desc.inputs = { ResolveCopyAliasKey(
+                    aliases, scene.ResolveRenderTargetName(copy->desc().src)) };
             }
         } else if (auto* pre = dynamic_cast<PrePass*>(m_passes[i])) {
             // A clear is a writer like any other: reusing a target while still
@@ -1300,6 +1313,13 @@ void VulkanRender::Impl::planStaticSkips(Scene& scene) {
     (void)scene;
     if (m_static_skip.size() != m_passes.size()) m_static_skip.assign(m_passes.size(), uint8_t { 0 });
     if (! SceneOptimizationEnabled() || m_static_cache.TargetCount() == 0) {
+        // Dropped, not merely unused. While reuse is off every target is
+        // redrawn from whatever this frame's inputs are, and the table still
+        // holds the signature that was current when it was switched off. If a
+        // later frame's inputs happen to match that one, switching reuse back
+        // on would call the target unchanged although the pixels behind it came
+        // from a frame with different inputs.
+        m_static_cache.InvalidateAll();
         for (auto* pass : m_passes) {
             if (auto* custom = dynamic_cast<CustomShaderPass*>(pass)) custom->setFrameSkipped(false);
         }

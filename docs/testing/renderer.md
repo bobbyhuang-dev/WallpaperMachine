@@ -138,6 +138,10 @@ executable directly from the renderer check build directory.
 | Timeline events | `ScriptRuntimeCompat.*Timeline*Event*`, `*Marker*`, `GlobalAnimationListenersRunOncePerMarkerWhateverIsBound`, `GlobalOnlyAnimationListenerSeesTheCurrentTickTime` and `SceneGetAnimationFindsATimelineOnAnotherLayer` in `script_runtime_compat_test`: crossing, `event.frame`, reverse travel and exact loop wraps, delivery after `init`, one global listener run per marker with zero and two bound scene scripts, a fresh host context for a global-only listener, and scene-wide `getAnimation` (see below) |
 | Clock/text corruption | `render_target_lifetime_test`, `text_object_runtime_test`, `shader_cache_metadata_test` |
 | Continuous-playback resource reuse | `playback_gpu_test` |
+| Render-target reuse correctness | `static_subgraph_cache_test` (reuse verdicts, copy elision, alias resolution) and, on the native backend, `MetalSceneDraw.AnUnchangedTargetIsReusedAndProducesTheSamePixels` / `.TurningTheOptimisationOffDrawsEveryPassAgain` in `metal_scene_draw_smoke`. Reuse must be provable by readback, not by a counter alone: a skipped pass has to leave byte-identical pixels, and a changed input has to redraw. |
+| Sprite-sheet stepping and reuse | `MetalSceneDraw.ASpriteSheetAdvancesOnItsOwnClockAndRedrawsOnlyWhenTheFrameChanges`. A sheet between frame changes may be reused, but its clock must keep running or the animation never reaches the next frame. |
+| Per-frame geometry upload | `MetalSceneDraw.GeometryRebuiltEveryFrameIsUploadedAndDrawnFromItsOwnSlot`, across more frames than there are in-flight slots. Zero live particles must draw nothing rather than fail. |
+| Native backend admission | `metal_backend_test`: every refused construct keeps its own distinct reason, and rope particles, particle trails and other per-frame geometry stay refused while plain sheets and standard sprite particles are accepted. |
 | Download-speed sampling | `DownloaderTests` in `Tests/Unit/Workshop/`: real `nettop` streaming over a private PTY with local-socket traffic; CRLF and split line endings. LF-only fixtures do not verify live delivery. |
 
 ### Property bindings and alignment anchors
@@ -585,11 +589,12 @@ diagnostics. `scripts/check_renderer.py` builds and runs
 `playback_gpu_test`; a non-zero exit from any of them fails the check. The
 native Metal backend adds `metal_backend_test` (capability and graph gate, no
 device needed), `metal_scene_draw_smoke` (author shaders and same-frame
-intermediates drawn and read back), `metal_poster_capture_test` (on-request
-poster readback, busy coalescing, invalidation) and `metal_video_texture_test`
-(BGRA import and NV12 conversion against the CPU colour reference, from
-synthetic frames); all four run in the check, draw only into private textures
-and skip visibly without a Metal device.
+intermediates drawn and read back, plus target reuse, dynamic-geometry upload
+and sprite-sheet stepping), `metal_poster_capture_test` (on-request poster
+readback, busy coalescing, invalidation) and `metal_video_texture_test` (BGRA
+import and NV12 conversion against the CPU colour reference, from synthetic
+frames); all four run in the check, draw only into private textures and skip
+visibly without a Metal device.
 
 Useful filters:
 

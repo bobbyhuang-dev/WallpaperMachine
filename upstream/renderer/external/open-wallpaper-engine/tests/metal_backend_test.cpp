@@ -17,6 +17,7 @@
 #include "RenderGraph/PassNode.hpp"
 #include "RenderGraph/RenderGraph.hpp"
 #include "Scene/Scene.h"
+#include "SpriteAnimation.hpp"
 #include "SpecTexs.hpp"
 #include "Utils/Eigen.h"
 #include "VulkanRender/CopyPass.hpp"
@@ -158,6 +159,45 @@ std::string RejectionFor(ImageScene& fixture)
     return EvaluateMetalSupport(fixture.scene).fallback_reason;
 }
 
+/// The mesh shape the particle generator writes into: one dynamic vertex
+/// stream sized for `count` quads and one index stream, both empty until the
+/// first emission.
+std::shared_ptr<SceneMesh> ParticleMesh(std::string_view shader_name, std::size_t count = 64)
+{
+    auto mesh = std::make_shared<SceneMesh>(true);
+    std::vector<SceneVertexArray::SceneVertexAttribute> attributes {
+        { std::string(WE_IN_POSITION), VertexType::FLOAT3 },
+        { std::string(WE_IN_TEXCOORDVEC4), VertexType::FLOAT4 },
+        { std::string(WE_IN_COLOR), VertexType::FLOAT4 },
+    };
+    mesh->AddVertexArray(SceneVertexArray(attributes, count * 4));
+    mesh->AddIndexArray(SceneIndexArray(count));
+    // What `SetParticleMesh` marks: the sprite-particle generator owns this
+    // vertex stream. Rope and text meshes never carry it.
+    if (shader_name != "text") mesh->GetVertexArray(0).SetOption(WE_PRENDER_SPRITE, true);
+
+    SceneMaterial material;
+    material.name     = std::string(shader_name);
+    material.textures = { "materials/card.tex" };
+    material.blenmode = BlendMode::Additive;
+    material.customShader.shader                = std::make_shared<SceneShader>();
+    material.customShader.shader->name          = std::string(shader_name);
+    material.customShader.shader->metal_program = TranslatedProgram();
+    mesh->AddMaterial(std::move(material));
+    return mesh;
+}
+
+/// Attaches a particle layer to the scene the way the parser does: a node in
+/// the graph carrying the dynamic mesh, plus an emitter entry in the particle
+/// system, which on its own no longer decides anything.
+void AttachParticleLayer(ImageScene& fixture, std::shared_ptr<SceneMesh> mesh)
+{
+    auto node = std::make_shared<SceneNode>();
+    node->AddMesh(std::move(mesh));
+    fixture.scene.sceneGraph->AppendChild(node);
+    fixture.scene.paritileSys->subsystems.push_back(nullptr);
+}
+
 rg::TexNode::Desc TexDesc(const std::string& key)
 {
     return rg::TexNode::Desc {
@@ -220,9 +260,27 @@ TEST(MetalCapability, EveryUnsupportedConstructHasItsOwnReason)
     std::vector<std::pair<std::string, std::string>> reasons;
 
     {
+        // A rope renderer's vertex contract is not the sprite particle's, and
+        // the generator that would fill it is not the one this runtime runs.
         ImageScene fixture;
-        fixture.scene.paritileSys->subsystems.push_back(nullptr);
-        reasons.emplace_back("particles", RejectionFor(fixture));
+        AttachParticleLayer(fixture, ParticleMesh("genericropeparticle"));
+        reasons.emplace_back("rope particles", RejectionFor(fixture));
+    }
+    {
+        ImageScene fixture;
+        auto       mesh = ParticleMesh("genericparticle");
+        mesh->GetVertexArray(0).SetOption(WE_PRENDER_TRAIL, true);
+        AttachParticleLayer(fixture, std::move(mesh));
+        reasons.emplace_back("particle trails", RejectionFor(fixture));
+    }
+    {
+        // Every other mesh the runtime rewrites per frame -- a text layer's
+        // card, most obviously -- is still refused: nothing has checked the
+        // shape of its upload.
+        ImageScene fixture;
+        auto       mesh = ParticleMesh("text");
+        AttachParticleLayer(fixture, std::move(mesh));
+        reasons.emplace_back("other dynamic mesh", RejectionFor(fixture));
     }
     {
         ImageScene fixture;
@@ -238,10 +296,13 @@ TEST(MetalCapability, EveryUnsupportedConstructHasItsOwnReason)
         reasons.emplace_back("video wallpaper", RejectionFor(fixture));
     }
     {
+        // A sheet that is also a video would need both the uploaded-image and
+        // the decoded-frame path at once.
         ImageScene fixture;
-        fixture.scene.textures["sheet.tex"] = SceneTexture { .url    = "sheet.tex",
-                                                             .isSprite = true };
-        reasons.emplace_back("sprite", RejectionFor(fixture));
+        fixture.scene.textures["sheet.tex"] = SceneTexture {
+            .url = "sheet.tex", .isVideo = true, .isSprite = true
+        };
+        reasons.emplace_back("video sprite sheet", RejectionFor(fixture));
     }
     {
         ImageScene fixture;
@@ -288,6 +349,56 @@ TEST(MetalCapability, EveryUnsupportedConstructHasItsOwnReason)
     ASSERT_NE(untranslatable, reasons.end());
     ASSERT_NE(never_attempted, reasons.end());
     EXPECT_NE(untranslatable->second, never_attempted->second);
+}
+
+TEST(MetalCapability, AcceptsAPlainSpriteSheetTexture)
+{
+    // A sheet is one uploaded image whose frame rectangle reaches the shader as
+    // a uniform, so there is nothing about it the draw path cannot do.
+    ImageScene fixture;
+    SpriteFrame first { .imageId = 0, .frametime = 0.1f, .width = 0.5f, .height = 0.5f };
+    SpriteFrame second { .imageId = 0, .frametime = 0.1f, .x = 0.5f, .width = 0.5f,
+                         .height = 0.5f };
+    SceneTexture sheet { .url = "materials/card.tex", .isSprite = true };
+    sheet.spriteAnim.AppendFrame(first);
+    sheet.spriteAnim.AppendFrame(second);
+    fixture.scene.textures["materials/card.tex"] = std::move(sheet);
+
+    const auto selection = EvaluateMetalSupport(fixture.scene);
+    EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+}
+
+TEST(MetalCapability, AcceptsAStandardTwoDimensionalSpriteParticleLayer)
+{
+    // Presence of an emitter is no longer the question. The simulation belongs
+    // to the shared runtime either way; what is decided here is whether the
+    // geometry it produces is a shape the draw path can feed.
+    ImageScene fixture;
+    AttachParticleLayer(fixture, ParticleMesh("genericparticle"));
+
+    const auto selection = EvaluateMetalSupport(fixture.scene);
+    EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+}
+
+TEST(MetalCapability, AParticleLayerWithNoLiveParticlesIsStillAccepted)
+{
+    // Emptiness is a moment in a simulation, not a property of the scene: the
+    // mesh carries the capacity its emitter will use, and refusing it here
+    // would make the backend depend on when the question was asked.
+    ImageScene fixture;
+    auto       mesh = ParticleMesh("genericparticle");
+    EXPECT_EQ(mesh->GetVertexArray(0).DataSizeOf(), 0u);
+    AttachParticleLayer(fixture, std::move(mesh));
+
+    EXPECT_EQ(EvaluateMetalSupport(fixture.scene).backend, SceneBackend::NativeMetal);
+}
+
+TEST(MetalCapability, AZeroCapacityDynamicMeshIsRefusedRatherThanDrawnEmpty)
+{
+    ImageScene fixture;
+    AttachParticleLayer(fixture, ParticleMesh("genericparticle", 0));
+
+    EXPECT_NE(EvaluateMetalSupport(fixture.scene).backend, SceneBackend::NativeMetal);
 }
 
 TEST(MetalCapability, AnImageEffectChainIsNoLongerRejectedBeforeTheGraphExists)

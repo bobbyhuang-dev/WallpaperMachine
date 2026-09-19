@@ -50,7 +50,18 @@ constexpr std::string_view WE_IN_TEXCOORDC2 { "a_TexCoordC2" };
 constexpr std::string_view WE_IN_TEXCOORDC3 { "a_TexCoordC3" };
 constexpr std::string_view WE_IN_TEXCOORDC4 { "a_TexCoordC4" };
 constexpr std::string_view WE_CB_THICK_FORMAT { "THICKFORMAT" };
+/// Set on a mesh the sprite-particle generator owns: its vertex stream is
+/// rewritten every frame from the simulation, in the billboard-quad layout
+/// `GenParticleData` writes. A renderer needs a positive statement of that,
+/// because "the mesh is dynamic" is shared with every other per-frame
+/// geometry in the engine and says nothing about the layout.
+constexpr std::string_view WE_PRENDER_SPRITE { "PRENDER_SPRITE" };
 constexpr std::string_view WE_PRENDER_ROPE { "PRENDER_ROPE" };
+/// Set on a particle mesh drawn by a trail renderer. The vertex data a trail
+/// shader reads is produced by a generator this runtime does not run, so the
+/// flag exists to name the case rather than to let a backend guess it from the
+/// attribute list, which a plain sprite sheet shares.
+constexpr std::string_view WE_PRENDER_TRAIL { "PRENDER_TRAIL" };
 
 constexpr std::string_view G_M { "g_ModelMatrix" };
 constexpr std::string_view G_VP { "g_ViewProjectionMatrix" };

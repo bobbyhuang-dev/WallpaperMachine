@@ -799,6 +799,7 @@ void SetParticleMesh(SceneMesh& mesh, const wpscene::Particle& particle, uint32_
     attrs.push_back({ WE_IN_TEXCOORDC2.data(), VertexType::FLOAT2 });
     mesh.AddVertexArray(SceneVertexArray(attrs, count * 4));
     mesh.AddIndexArray(SceneIndexArray(count));
+    mesh.GetVertexArray(0).SetOption(WE_PRENDER_SPRITE, true);
     mesh.GetVertexArray(0).SetOption(WE_CB_THICK_FORMAT, thick_format);
 }
 
@@ -3609,6 +3610,12 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
             SetRopeParticleMesh(mesh, particle_obj, mesh_maxcount, thick_format);
         else
             SetParticleMesh(mesh, particle_obj, mesh_maxcount, thick_format);
+        // Recorded next to the mesh it describes, so a renderer can tell a
+        // trail renderer's vertex contract from a plain sprite particle's
+        // without re-deriving it from the combos, which are gone by then.
+        if (hastrail && mesh.VertexCount() > 0) {
+            mesh.GetVertexArray(0).SetOption(WE_PRENDER_TRAIL, true);
+        }
     }
 
     auto particleSub = std::make_unique<ParticleSubSystem>(

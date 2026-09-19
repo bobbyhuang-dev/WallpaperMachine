@@ -80,6 +80,330 @@ recorded as blocked rather than failed:
 **No power number, watt figure or saving percentage is reported anywhere in this
 document.** Counters and unit tests bound what is claimed.
 
+## Round 9 — scene optimisation on Metal, sprite sheets, 2D sprite particles
+
+Feature round, same discipline as rounds 5–8: implement, wire to production,
+keep it building, fix what this round broke. Native Metal stays a manual choice
+and Compatibility stays the default; video content pacing stays opt-in. Visual
+output on real wallpapers, desktop behaviour and power are the user's to accept.
+Nothing below was seen on a display, and **no power saving is claimed anywhere**
+— the counters say passes were not run, which is not a watt.
+
+| Feature | State | Default |
+|---|---|---|
+| Scene optimisation (reuse + copy elision) on Native Metal | Implemented on the production draw path | Follows the existing Scene optimisation switch, on |
+| Sprite-sheet animation on Metal | Implemented for sheets the existing parser produces | Follows Scene renderer |
+| Standard 2D sprite particles on Metal | Implemented; simulation still the shared runtime's | Follows Scene renderer |
+| NV12 dual-plane direct sampling | **Not done** — blocker below | — |
+
+### Scene optimisation: one analysis, now two backends
+
+`vulkan::StaticSubgraphCache` and `PlanCopyElision` are used directly from
+`MetalRender.mm`. They were already backend-neutral — strings, spans and hashes,
+no GPU handle — so nothing was moved, no second copy was made and the render
+graph was not rewritten. The `vulkan::` namespace is now a misnomer and was left
+alone rather than churned through `provenance.json`.
+
+What is shared: target-to-writer association, the input graph, dynamic-reason
+propagation, cycle handling, the reuse verdict and the equivalent-copy rules.
+What is not: every Metal resource, and every Vulkan lifetime assumption. Metal
+pins nothing in a pool because it pools nothing — `Impl::targets` holds one
+`MTLTexture` per key for the life of the graph — so "pinned" here is only the
+budget decision, using the same 192 MiB ceiling and the same four-bytes-per-texel
+estimate as the compatibility backend, so one `pinned_bytes` number in the
+settings panel keeps meaning one thing. Over budget, the target simply
+re-renders; the frame is never blocked and nothing grows unbounded.
+
+Per target, not per pass, as before: all writers of a target are skipped together
+or not at all, so a clear cannot be skipped while the draws that composite onto
+it still run. A skipped pass creates **no encoder at all** — creating one would
+apply its load action, and a `Clear` load action is exactly how the reused pixels
+would be lost — and its mip levels are left as they are, because they already
+belong to those pixels. Store actions were already `MTLStoreActionStore`
+everywhere and nothing is memoryless, so the "results that are read later must
+survive" requirement was already met and was not re-engineered.
+
+Ordering inside `drawFrame` is the correctness lever, and it is:
+`nextDrawable` → `video.beginFrame` → the uniform loop → **then** sampling and
+`Plan()` → encoding. The uniform loop is where the shared value updater advances
+sprite clocks and refreshes node transforms, so a sample taken before it would
+describe the previous frame. Nothing above the plan is conditional on it: a
+reused target still costs its scripts, its sprite step and its uniform write, and
+only the drawing is removed. Whether the whole scene may idle is still the
+existing demand mechanism's question, untouched.
+
+Invalidation. Reuse requires a per-frame sample to be unchanged, and the sample
+folds: the node's model transform, the mesh's dirty generation, the material's
+constant values, **the pass camera's and the active camera's view-projection
+matrices** (neither is covered by the node transform, and both move on a
+fill-mode change, a user zoom or a script), the sprite frame's rectangle, axes
+and `imageId` as they will actually be sampled, and the target extent — which is
+where output size and `renderScale` enter. Time, audio, pointer, bones, video
+frame generation, runtime-swappable images and per-frame meshes are *dynamic
+reasons* instead: those targets are never reusable at all, and the reason
+propagates along real dependencies, so an independent still subgraph in a scene
+that also contains a video is still reused. There is no "this scene has a video,
+therefore everything is dynamic" flag. Anything unaccounted for keeps
+`UnknownInput` and redraws.
+
+Sprite sheets are deliberately *not* a dynamic reason on this backend. Because
+the sample is taken after the sprite clock has advanced and folds the frame
+rectangle itself, a sheet resting between frame changes is reused and a sheet
+that stepped is redrawn — while the clock keeps running, so the animation still
+reaches its next frame. The compatibility backend still treats a sheet as always
+dynamic; that difference is a deliberate consequence of the ordering above and is
+not a behaviour difference in the pixels.
+
+Failure and lifetime. `Plan()` records this frame's signatures as it runs, so any
+frame that fails *after* the plan — the resampling-copy failure, a dynamic-mesh
+upload failure — calls `InvalidateAll()` before failing, or the next frame would
+reuse a target the GPU never wrote. The same invalidation runs on surface release
+and surface reset; graph release, recompile and `ApplyRenderScale` drop the table
+entirely. Frames in flight are bounded by the existing `kFramesInFlight`
+semaphore, and nothing evicts a texture: the target keeps its `MTLTexture` for the
+life of the graph, so cache bookkeeping can never release something the GPU is
+still reading.
+
+Poster. `ServicePosterRequest` re-composes from the scene's output target, which
+holds the last complete composition whether or not its writers ran this frame —
+skipping happens exactly when the pixels would be identical. No blank image and
+no stale generation results from a skipped pass.
+
+### Redundant passes and copies on Metal
+
+`PlanCopyElision` now runs over the Metal pass list, before the targets are
+allocated, because what it decides changes which images exist. A copy with no
+consumer is not encoded. A copy that qualifies as an alias is not encoded and its
+destination gets **no texture of its own** — it shares the source's, resolved
+through the chain — so the saving is an allocation as well as a blit. Everything
+else runs.
+
+Round 8's unequal copies are real resampling passes, and they stay: the rule's
+`copy_compatible` requires equal extent and equal mip level count (one colour
+format is used for every scene target), and a copy that also builds the
+destination's mip chain is kept. A name is never what decides. The composition
+draw and the poster, which both read the scene's output, are entered into the
+analysis as a reader, so a scene whose last step is a copy into the output is not
+mistaken for a copy nobody wants.
+
+Encoder structure is unchanged: no attempt to merge everything into one encoder,
+no splitting small passes into their own command buffers, one bounded submission
+per frame as before. No shader, pipeline or sampler is built inside a frame;
+dynamic values use the existing per-frame uniform ring.
+
+Counting reuses the existing interface — `RecordSceneOptimizationFrame`,
+`RecordElidedCopies`, `AdjustSceneOptimizationPinnedBytes` and the one
+`owe_scene_optimization_stats` ABI — so Metal's contribution lands in the same
+totals. No new polling and no new setting were added.
+
+### Two defects found while porting, fixed in both backends
+
+Both were in the shared analysis, so leaving either in the compatibility path
+while relying on it from a second backend was not an option.
+
+1. **An aliased copy destination looked like a name nothing produces.** After an
+   alias, the destination has no writer, so a later read of it resolved to no
+   target at all and the reader appeared to carry no dependency — while the
+   pixels behind that name are the source's, redrawn every frame. A still effect
+   sampling a link texture whose source is time-varying would have been declared
+   reusable and frozen. `CopyElision` gains `ResolveCopyAliasKey`, and both
+   `VulkanRender::applySceneOptimization` and the Metal equivalent resolve inputs
+   through it. Covered by three new cases in `static_subgraph_cache_test`,
+   including the chain and a cycle that must terminate rather than hang.
+2. **Turning the setting off and on again could reuse stale pixels.** With reuse
+   off, `Plan()` never runs, so the recorded signatures stay frozen at the moment
+   it was switched off while every frame redraws from whatever inputs it has. If a
+   later frame's inputs happened to match that frozen signature — a layer moved
+   away and back, a script rewriting a value — re-enabling would call the target
+   unchanged although its pixels came from a different frame. Both backends now
+   drop the cached verdicts while the setting is off, so the first frame after
+   re-enabling redraws and re-records. Covered by
+   `MetalSceneDraw.TurningTheOptimisationBackOnDoesNotReuseAFrameDrawnWhileItWasOff`,
+   which was run against the unfixed code first and fails there on the pixel
+   comparison, not only on the counter — the defect was visible, not theoretical.
+
+### Sprite sheets
+
+Sprite animation is entirely uniform-driven in this engine: the sheet is one
+uploaded image and the current frame reaches the shader as
+`g_Texture{i}Rotation` / `g_Texture{i}Translation`. So no private format parsing
+and no second animation clock were added. `prepareDraw` copies the scene's own
+`SpriteAnimation` into the pass, exactly as `SceneToRenderGraph`'s
+`CheckAndSetSprite` does, which keeps two layers sharing one sheet on independent
+playback; the existing shared value updater advances it and writes the uniforms.
+Pause, rate, loop, user properties and a `TextureFrame` override all come from
+that updater and are not reset to the first frame.
+
+`resolveTexture` now imports **every slot** of an image, not only the first, and
+the current frame's `imageId` selects one at bind time. A sheet spread over
+several images would otherwise have played its whole animation out of the first
+sheet. A sheet whose frames name an image that was not imported fails prepare
+with that reason rather than silently falling back to slot zero.
+
+Sampler state, filtering, mip levels and the author's UVs are the ones the
+texture and the frame rectangle already specify. Nothing here modifies an
+author's UV to hide neighbour-frame bleed.
+
+Inter-frame blending: for image layers this engine hard-switches frames — there
+is no blend-weight uniform on that path, so there is none to invalidate on. The
+`SPRITESHEETBLEND` combo is set only for particle materials, where the weight is
+derived in-shader from per-particle lifetime in a vertex stream that is rewritten
+every frame and is therefore never reusable anyway. Stated rather than invented.
+
+The capability gate no longer refuses `isSprite` textures. A texture that is both
+a sprite sheet and a video is still refused, with its own reason.
+
+### Standard two-dimensional sprite particles
+
+Simulation and drawing stay separate. Emitters, initializers, operators, random
+state, lifetimes and sub-systems are untouched; `ParticleSystem::Emitt()` is
+still driven by `SceneWallpaper`'s frame loop, and the Metal backend never emits,
+ages or kills a particle. There is no GPU simulation and no second advance: this
+backend consumes the CPU simulation's existing dynamic geometry, which is also
+why particle birth, death, velocity, colour, size, rotation, the sequence /
+random-frame animation mode and user properties are unchanged — the animation
+mode is baked into the per-particle lifetime the generator writes, so a random
+frame is drawn once per particle and not re-rolled per draw.
+
+Dynamic buffers. `prepareDraw` allocates, per vertex array, one buffer per
+in-flight frame at the mesh's **declared capacity** — the particle maximum is
+fixed when the scene is parsed, so there is no growth path to get wrong — plus
+the same ring for indices. Per frame the pass writes only the live byte range
+into the slot that frame owns, which is bounded by the existing
+`kFramesInFlight` semaphore, so the CPU never overwrites storage the GPU is
+reading. The uploaded mesh revision is tracked per slot, so an unchanged
+simulation re-uploads nothing. Stride, attribute list and submesh topology are
+re-checked on every upload; a mesh that changed shape after preparation fails the
+frame rather than being reinterpreted against the old pipeline. Zero live
+particles draws nothing and is not a failure. Nothing was rebuilt into an
+instanced data model.
+
+Author semantics kept: layer order, particle order within the batch, blend mode
+and opacity, transform and camera, material and texture, combination with this
+round's sprite sheets, the supported effect chain, `renderScale` and the final
+composition. No reordering by material to reduce draws, and no silent reduction
+of particle count, lifetime or update rate.
+
+Capability. The blanket `HasEmitters()` refusal is gone; the decision is per mesh
+and rests on a **positive** marker rather than the absence of others. The parser
+now records `PRENDER_SPRITE` on the mesh the sprite-particle generator owns and
+`PRENDER_TRAIL` on a trail renderer's, next to the existing `PRENDER_ROPE`.
+Accepted: one submesh, one vertex stream, one index stream, non-zero capacity,
+triangles, carrying `PRENDER_SPRITE`. Refused, whole-scene, each with its own
+reason: rope particles, particle trails, and every other per-frame geometry in
+the engine — a text layer's card most obviously — because nothing has checked
+the shape of its upload. Perspective particles and lit particles were already
+refused by the camera and lighting rules.
+
+### Still falls back as a whole scene
+
+Rope particles, particle trails, puppets, perspective 3D, dynamic lighting,
+non-triangle primitives, any other per-frame geometry (text layers), history
+feedback effects, depth or MSAA targets, unsupported video formats, sheets that
+are also videos, plain video wallpapers, shaders that do not translate, and
+scenes loaded before Native Metal was selected. The lock-screen extension stays
+on Compatibility.
+
+### NV12 dual-plane direct sampling — not done, and why
+
+The pre-conversion path from round 8 (NV12 → BGRA intermediate → author shader)
+is unchanged and remains the only Metal video path.
+
+The blocker is an ordering one, not an appetite one. Direct dual-plane sampling
+requires the author's shader to contain two texture reads and the colour
+transform, so the shader has to be *translated differently*. The only structural
+injection point is the shader pipeline itself — `crates/shader`'s
+`texture_sampling` codegen strategy, which already rewrites sampling calls
+against the parsed declaration, plus a per-slot flag through
+`RustShaderTextureInfo` and a second plane in the reflection. Editing MSL text
+afterwards is exactly the fragile substitution this round was told not to do, and
+substituting a generic copy for the author's shader is not equivalence.
+
+But the decoded pixel format is not known when translation happens.
+`CvPixelFormatForSoftwareFrame` converts software-decoded frames to BGRA while
+VideoToolbox hands back NV12, so the same file is one or the other depending on
+whether hardware decode succeeded — decided when the decoder opens, long after
+`WPSceneParser` has consumed the combos, units and texture info that a
+translation needs. Two designs resolve it, and which one is right is a decision
+worth making deliberately rather than inside a feature round: **(a)** compile both
+variants eagerly at parse for every shader that samples a video, doubling
+translation work for those shaders but needing no deferred compile; or **(b)**
+retain each such shader's translation inputs past parse and re-translate once the
+first frame's format is known, paying a one-time compile at first frame and
+needing a variant-aware pipeline cache. Both then need reflection to carry the
+second plane, Metal to bind plane views from the existing `CVMetalTexture` /
+`FrameLease` objects, and the round-8 SDR colour contract restated for
+"filter-then-convert" versus "convert-then-filter", which are not
+unconditionally equivalent once clamping, quantisation and differing chroma
+resolution are involved.
+
+Nothing was added that has no caller. There is no unused dual-plane shader in the
+tree.
+
+### Interface
+
+No new experimental switches. The three existing rows carry it:
+
+- **Scene renderer** — picks the backend; its description now names sprite-sheet
+  animation and standard 2D sprite particles as drawn natively, and rope and
+  trail particles as falling back.
+- **Scene optimisation** — now says it applies to scene wallpapers on **both**
+  renderers instead of "Compatibility only", and the note shown while a scene is
+  running natively no longer claims the cache does not apply to it. It still
+  reports the saved preference, not a reading from the renderer, and the
+  explainer says both renderers implement it and neither reports a power saving.
+
+  One asymmetry in when the switch bites, pre-existing and shared by both
+  backends, is worth stating rather than discovering: the bridge deliberately
+  does not rebuild or reparse a running scene when the setting changes, and the
+  reuse table is only built while compiling a graph with the setting on. So
+  turning it **off** takes effect on the very next frame, while turning it back
+  **on** takes effect when that scene's graph is next compiled — a wallpaper
+  change, a render-scale change or a restart. This round did not change that
+  behaviour; the Metal implementation matches the compatibility one exactly.
+- **Update only when the scene changes** — unchanged.
+
+The per-wallpaper "Drawn by" list still reports the backend each running
+wallpaper actually got, with the renderer's own fallback reason when it supplied
+one.
+
+### Tests added
+
+- `metal_backend_test`: rope particles, particle trails and other dynamic meshes
+  each refused with their own distinct reason; a video sprite sheet refused; a
+  plain sprite sheet accepted; a standard sprite particle layer accepted; a
+  particle layer with nothing alive yet accepted; a zero-capacity dynamic mesh
+  refused. 20 cases, all green.
+- `metal_scene_draw_smoke` (real Metal device, private textures, offscreen
+  layer): an unchanged scene's second frame skips passes **and** reads back
+  byte-identical pixels; moving the layer re-executes and changes the picture;
+  the setting switched off skips nothing; geometry uploaded after the graph was
+  compiled reaches the target, with empty frames before it neither failing nor
+  drawing, across more frames than there are in-flight slots; a sheet steps on
+  its own clock, is reused between steps and redrawn on a step, and is reported
+  as advancing on its own.
+  Also: re-enabling the setting after frames were drawn with it off redraws
+  instead of reusing, and restores the picture its inputs describe. 8 cases, all
+  green.
+- `static_subgraph_cache_test`: alias chain resolution, cycle termination, and a
+  reader of an aliased destination inheriting its source's dynamism. 24 cases,
+  all green.
+
+### Not verified
+
+- No real wallpaper with sprite animation or particles has been drawn on a
+  display, and nothing has been compared with the compatibility backend on real
+  content. The sprite test's fixture shader binds no texture slot, so **no sheet
+  was sampled by an author shader on the GPU** — what is proved there is the
+  pick-up, the advance, the invalidation and the demand reporting.
+- No real particle project ran through the Metal path; the dynamic-buffer test
+  drives the upload path with a hand-filled mesh of the same shape.
+- No power measurement of any kind. Reduced work is reported as passes not run
+  and copies not encoded, never as a saving.
+- The aliased-destination defect is fixed and unit-covered, but no scene in the
+  local corpus is known to produce that exact shape, so the fix has not been
+  observed changing a picture.
+
 ## Round 8 — native Metal scene backend, second version
 
 Feature round, same discipline as rounds 5–7: implement, wire to production,

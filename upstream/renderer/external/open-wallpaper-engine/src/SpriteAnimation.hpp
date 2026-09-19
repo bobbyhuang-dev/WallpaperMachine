@@ -42,6 +42,12 @@ public:
         return m_frames.at((usize)m_curFrame);
     }
     const auto& GetCurFrame() const { return m_frames.at((usize)m_curFrame); }
+    /// One frame by index, for callers that must know every image a sheet can
+    /// reach before the animation reaches it -- a renderer that uploads the
+    /// sheets up front cannot wait to be surprised mid-playback.
+    const SpriteFrame& FrameAt(usize index) const { return m_frames.at(index); }
+    /// Index of the frame `GetCurFrame` returns.
+    idx CurFrameIndex() const { return m_curFrame; }
     /// A single-frame sprite never advances, so it does not make its pass
     /// time-varying.
     usize FrameCount() const { return m_frames.size(); }

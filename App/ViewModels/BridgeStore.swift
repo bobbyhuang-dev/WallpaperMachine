@@ -38,6 +38,10 @@ final class BridgeStore {
     private var wallpaperAppliesNeedingSave = Set<String>()
     private(set) var activationNeedsRefresh = false
     private(set) var libraryLoadState: LibraryLoadState = .loading
+    /// Counts library rescans (imports, downloads, the Refresh button). Unlike
+    /// `snapshotRevision` it does not move with playback, so anything derived from the
+    /// library's files (folder sizes, dates) can re-check only when a rescan happened.
+    private(set) var libraryRefreshRevision: UInt64 = 0
 
     convenience init() throws {
         self.init(bridge: try WallpaperBridge())
@@ -88,6 +92,7 @@ final class BridgeStore {
             let bundle = try await bridge.refreshLibrary()
             apply(bundle)
             libraryLoadState = .loaded
+            libraryRefreshRevision &+= 1
         } catch {
             libraryLoadState = .failed(error.localizedDescription)
             throw error

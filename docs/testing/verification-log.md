@@ -11,6 +11,80 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-19 — Tile-mark test hung offscreen; whole tree committed
+
+`ControlPanelLayoutTests/testTilesWearApprovedAndFavoriteMarksWithoutWindow`
+timed out (2-minute allowance) on the tree that was about to be committed. Two
+offscreen-WebKit artefacts in the test, neither in `WebUI/`: it waited on
+`requestAnimationFrame`, which a web view with no window never services, so the
+promise passed to `callAsyncJavaScript` never settled; and it then measured
+`.tile-marks` mid-`transition: left`, which for the same reason never advances
+(the untransitioned Active badge already read its final 59). The wait is now a
+`setTimeout` and the test finishes the in-flight transitions
+(`document.getAnimations().forEach(animation => animation.finish())`) before
+measuring. Injecting `<style>* { transition: none }</style>` does not work: the
+panel's CSP drops it (`document.querySelectorAll('style').length === 0`).
+
+- `python3 scripts/test.py` — passed: Python suite, XcodeGen, native tests
+  491 passed / 9 skipped / 0 failed.
+- Before the fix, the same gate on the same tree: 490 passed / 1 failed
+  (that test exceeded its time allowance); the failure reproduced on its own.
+- No Release build was made for this commit: the change is test-only, and the
+  features it covers were built and logged by the entries below.
+- Not verified: the panel in a running app; no desktop run was requested.
+
+## 2026-09-19 — Discover previews: one download per tile, warmed ahead of the panel
+
+Discover tiles were slow because the still pass asked Steam's CDN for a scaled
+(`?imw=512…`) variant, which re-encodes the whole GIF on a cold path, four at a
+time, and the animation then downloaded the original again uncached.
+`WorkshopThumbnailCache` now fetches the original once (eight at a time), keeps
+the still JPEG and the animation bytes on disk together (512 MB cap), serves
+`mwe-ui://animated/<id>` from disk, and is warmed by `WorkshopStore` as each
+Steam page arrives; the store also prefetches the following page. The panel
+admits six animations at a time instead of two.
+
+- Measured against Steam with `curl`, same cold 29-tile page (trend, page 7):
+  scaled variants at 4 parallel 14.0 s; originals at 8 parallel 1.1 s. Per
+  tile: original 0.15–0.37 s, scaled GIF up to 4.6 s for ~25% fewer bytes.
+- `python3 scripts/test.py` — not a clean run: another session was running
+  `xcodebuild test` in the shared `build/` directory throughout (one run died
+  with "Interrupted system call … build/Build/Products/Debug"). The Python
+  suite and XcodeGen passed.
+- Same native suite via `xcodebuild … -derivedDataPath <scratch>
+  -only-testing:MacWallpaperEngineTests test` — 482 passed / 9 skipped /
+  9 failed. `WorkshopThumbnailCacheTests`, `WorkshopStoreTests`,
+  `WebPanelAssetsTests` and
+  `testDiscoverTilesRevealTheAnimatedPreviewOnlyWhileItIsBrightWithoutWindow`
+  pass. Eight failures are `ControlPanelLayoutTests` cases touching the other
+  session's uncommitted panel-language work (`WebUI/i18n.js`, `language:`),
+  failing on temp-folder removal, `InvalidTransition` and one timeout; none
+  exercises preview code, but they were not re-run on a tree without this
+  change (the shared tree could not be stashed under the other session). The ninth,
+  `SteamCMDSetupTests/testShutdownDuringBootstrapReapsChildrenBeforeCleaningStaging`,
+  passed when re-run alone (two xcodebuilds were competing).
+- `node --check WebUI/panel.js` — clean.
+- `python3 scripts/build.py --swift-only --configuration Release` —
+  BUILD SUCCEEDED; the delivered `panel.js` carries the change.
+- Not verified: the rendered Discover page in the running app and in-app
+  timings (no desktop run was requested); behaviour on a slow link, where
+  JPEG/PNG previews now cost their original size instead of a scaled one.
+
+## 2026-09-19 — Workshop filter: icons on the Show only options
+
+The three Show only checkboxes (Approved, Audio responsive, Customizable) carry
+a 14px glyph between the box and the label, muted while unticked and primary
+once ticked. Audio responsive and Customizable use Lucide `audio-lines` and
+`sliders-vertical` added to `WebUI/icons.js`; Approved uses Lucide `trophy` in
+a fixed green (`--approved`, dark/light values) to match Workshop's mark.
+
+- `python3 scripts/test.py` — passed: Python suite, XcodeGen, native tests
+  486 passed / 9 skipped / 0 failed.
+- `node --check` on `WebUI/panel.js` and `WebUI/icons.js` — clean.
+- `python3 scripts/build.py --swift-only --configuration Release` —
+  BUILD SUCCEEDED, delivered app rebuilt with the change.
+- Not verified: the rendered sidebar in the running app (no desktop run was
+  requested).
 ## 2026-09-19 — Round 11: text and runtime images on Metal, optional programs off the load path
 
 Text layers and runtime-replaced images now reach the native Metal backend
@@ -326,6 +400,250 @@ temporary directory, asserts that redirection before calling `main()`, and
 asserts in teardown that the repository's own `build/` and `artifacts/` are
 untouched. No guard was added to `clean.py` itself: the tool is supposed to
 delete those directories, and it was the test that was aimed at the wrong root.
+
+## 2026-09-19 — Workshop filters mirror Wallpaper Engine's sidebar; opens on Most popular this year
+
+The Discover sidebar now lists Wallpaper Engine's own filters (Show only; Type;
+Age rating; Resolution in Widescreen / Ultrawide / Dual / Triple / Portrait
+sub-groups plus Other and Dynamic; Tags) as tick boxes. Show only boxes are
+`requiredtags[]`; every other box starts ticked and unticking it sends the tag
+as `excludedtags[]` (`WorkshopQuery.excludedTags`, `WorkshopService.browseURL`
+`excludedTags:`). Defaults follow Wallpaper Engine: Everyone only, Unspecified
+genre off, Application and Asset never offered (`WorkshopStore.defaultExcludedTags`).
+The type menu, the old resolution/genre subset and the Asset box are gone;
+`kind` in the `workshopSearch` action is now optional (defaults to all types)
+and the store opens on `.all` / `.trendingYear`.
+
+- Live `curl` probes of `steamcommunity.com/workshop/browse` (app 431960,
+  trend/365, Scene): `total_count` 1,577,597 with no exclusions; 1,456,141
+  excluding Questionable+Mature; 1,175,495 excluding Anime; all types
+  excluding Application+Asset+Questionable+Mature+Unspecified: 1,938,366 of
+  3,208,185; the same plus `requiredtags[]=Approved`: 16,553. Mature alone
+  2,759,535 and Questionable alone 2,781,050, so exclusion is any-of and
+  combines with required tags. The tag catalog (names above) was read from
+  the page's `readytouse_tags` payload.
+- `node --check WebUI/panel.js`: OK.
+- `python3 scripts/test.py`: passed, 470 tests, 0 failures, 9 skipped
+  (pre-existing `NativeVideoPlayerMediaTests` hardware skips). New
+  `testExcludedTagsAreSentOnceAndNeverContradictRequiredTags` (dedupe; a tag
+  that is also required is not sent as excluded; no tags → no tag params) and
+  `testDefaultsMatchWallpaperEngineSidebarAndExclusionsReachSteam` (store
+  defaults; exclusions reach the fixture request; the committed query keeps
+  its own list while the draft changes). Store fixture `request`/`reply` and
+  `assertBrowseURL` gained an optional `excludedTags` check; tests that relied
+  on the old `.scene`/`.trending` defaults now expect `.all`/`.trendingYear`.
+  `testFilterSidebarTogglesFromTheToolbarPerPageAndInspectorFollowsWindowWidth`
+  now also asserts Discover's sort value `trend-year`, 61 boxes, exactly
+  Approved / Audio responsive / Customizable / Questionable / Mature /
+  Unspecified unticked, no `<select>` in the sidebar and no filter count pill.
+  A first run timed out twice because two expected `WorkshopQuery` values
+  lacked the new default `excludedTags`; the inequality surfaced as a silent
+  test-timeout rather than an assertion message, fixed by completing them.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD SUCCEEDED.
+- Not verified: the sidebar in the running app (no desktop run). Wallpaper
+  Engine's "mobile compatible" box has no Steam tag and is not offered.
+
+## 2026-09-19 — Discover: whole page of stills before any animation
+
+`queueLivePreviews` now returns until every `img.tile-still` in the grid is
+`complete` (loaded or failed); a still's `error` also re-queues. Discover
+stills drop `loading="lazy"` so the page's pictures arrive together instead
+of as the user scrolls (Installed keeps lazy local previews).
+
+- `node --check WebUI/panel.js`: OK.
+- The offscreen WebKit regression delays `c`'s still by 400 ms and records, at
+  each animation-layer insertion, whether all three stills had loaded; it also
+  checks `loading !== 'lazy'`. With the gate removed on purpose the test
+  failed (animations for `a`/`b` inserted before `c`'s still); restored, it
+  passed three times in isolation.
+- `python3 scripts/test.py`: passed, 486 tests, 0 failures, 9 skipped
+  (pre-existing hardware skips).
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD SUCCEEDED.
+- Not verified: perceived ordering on a throttled link in the running app.
+
+## 2026-09-19 — Discover tiles: animation beneath the still, revealed only while bright
+
+Follow-up to the entry below: animated previews return, but still-first and
+without the black-tile failure. `WebPanelAssets` gained `mwe-ui://animated/<id>`
+(`WorkshopThumbnailCache.animatedPreview`, own two-slot lane, refuses sources
+the still pass marked single-frame via an empty `.still` file, MIME from
+ImageIO). `WebPanelSnapshot.workshopItem` carries `animated`. `panel.js`
+queues the relay for on-screen tiles whose still is complete (two at a time,
+grid order; pending requests dropped when tiles leave), inserts the animation
+beneath the still, and samples each on a 16px canvas every 250 ms (both
+images `crossorigin="anonymous"`, served with `Access-Control-Allow-Origin`);
+the tile takes `playing` (still fades out) at >= 60% of the still's luminance
+and loses it below 40%. `WebPanelController` accepts injected assets for tests.
+
+- `node --check WebUI/panel.js`: OK.
+- `python3 scripts/test.py`: passed, 486 tests, 0 failures, 9 skipped
+  (pre-existing `NativeVideoPlayerMediaTests` hardware skips). New:
+  `testAnimatedPreviewRelaysSteamBytesButRefusesSingleFrameSources`,
+  `testAnimatedPreviewsQueueOnTheirOwnLaneBesideStills`, animated routes in
+  `WebPanelAssetsTests`, and the offscreen WebKit regression
+  `testDiscoverTilesRevealTheAnimatedPreviewOnlyWhileItIsBrightWithoutWindow`
+  (stills load first, bright animation takes `playing`, black animation under
+  a bright still never does, single-frame preview gets no layer and no second
+  download). The regression was run three more times in isolation: passed each
+  time. An earlier form polled for "no animation complete before the stills"
+  and raced the in-memory fetcher; it now records still readiness at the
+  moment each animation layer is inserted.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD SUCCEEDED.
+- Not verified: real Steam GIFs in the running app (CPU of 30 concurrent GIF
+  decodes, actual fade timing, throttled-link behaviour); no desktop run.
+
+## 2026-09-19 — Discover tiles: no hover animation, stills skip black fade-ins
+
+The on-demand animated overlay (`tile-live` `<img>` under the pointer after a
+180 ms dwell or under keyboard focus) is removed from `WebUI/panel.js` and
+`panel.css`: Steam GIFs frequently open on black frames, so the overlay read
+as a black tile. The same frames made the cached stills black, because
+`WorkshopThumbnailCache.encodeThumbnail` always took frame 0. It now calls
+`representativeFrameIndex`, which measures the mean luminance of up to eight
+evenly spaced frames on a 32px grayscale decode and keeps the earliest frame
+that reaches 60% of the brightest sample (and at least 0.08); bright-first,
+uniformly dark and single-frame sources still yield frame 0. Tiles keep
+loading the cached 512px JPEG stills, so slow links are unaffected.
+
+- `node --check WebUI/panel.js`: OK; no `animatedID`/`tile-live` references remain.
+- `python3 scripts/test.py`: passed, 459 tests, 0 failures, 9 skipped
+  (pre-existing `NativeVideoPlayerMediaTests` hardware skips). New
+  `testEncodeThumbnailSkipsTheBlackFadeInOfAnAnimatedPreview` (24-frame GIF
+  with six black frames then a fade: still luminance > 0.35; dark-throughout,
+  bright-first and PNG sources choose index 0); the synthetic image helper
+  gained a per-frame brightness parameter.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD SUCCEEDED.
+- Cache key gained a version prefix (`2:`) so stills cached by the old
+  first-frame choice regenerate on next view; orphans go with oldest-first
+  pruning. `python3 scripts/test.py` and the Release build re-run after this:
+  459 passed, 0 failed, 9 skipped; BUILD SUCCEEDED.
+- Not verified: real Steam previews in the running app (no desktop run).
+
+## 2026-09-19 — Workshop sort menu: Highest rated and popularity windows
+
+`WorkshopSort` gained `topRated` (`browsesort=toprated`) and `trendingToday` /
+`trendingMonth` / `trendingYear` (`browsesort=trend` with `days=1/30/365`);
+the raw value stays the panel-facing key and `browseSort`/`days` feed the URL.
+`WebUI/panel.js` lists the eight options in a `workshopSorts` table. Steam's
+public browse page was probed with `curl` for `mostvoted`, `totalvotes`,
+`votesup`, `mostupvotes`, `mostvotes`, `votes`, `upvotes`: every one returned
+the trending page (same heading, same first item), so no "most voted" sort was
+added. `toprated` and `trend` with `days=1/30/365` returned distinct headings
+("Top Rated All Time", "Most Popular (Today/Thirty Days/One Year)").
+
+- `python3 scripts/test.py`: passed, 458 tests, 0 failures, 9 skipped
+  (pre-existing `NativeVideoPlayerMediaTests` hardware skips). New
+  `testSortOrdersMapToSteamBrowseSortAndTrendWindow`; store/fixture URL
+  assertions now check `browsesort` and `days` per sort.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD SUCCEEDED.
+- Not checked: live result lists per new sort inside the app (no desktop run).
+
+## 2026-09-19 — Filter-sidebar and pagination subtext removed
+
+`WebUI/panel.js` no longer renders the Installed sidebar note ("Filters only
+narrow the list; nothing is applied."), the Discover sidebar note ("Match all
+selected tags. Filters search the entire Workshop.") or the Steam cap note
+under the pagination row; the `.pagination-note` rule left `panel.css`. The
+page jump still clamps to Steam's 1,000-page limit and the snapshot still
+carries `reachable`. `testWorkshopPageJumpClampsToSteamsPageLimit` (renamed)
+now asserts only the clamp and the single-page disabled state.
+
+- `python3 scripts/test.py`: passed, 457 tests, 0 failures.
+- `python3 scripts/build.py --swift-only --configuration Release`: BUILD SUCCEEDED.
+- Not checked: visual result in a live panel (no desktop run requested).
+
+## 2026-09-19 — Discover pages are Steam pages; three-column floor; no page-size negotiation
+
+A Discover page is now exactly one Steam page of 30 tiles and the panel never
+offers more than 1,000 pages (`WorkshopService.maxPages`, mirrored as
+`WorkshopStore.maxPages` and the snapshot's `maxPages`). The grid-measured page
+size (`measureWorkshopPageSize`, its `ResizeObserver`, the `workshopPageSize`
+action, `WorkshopStore.setPageSize`/`pageSizeRange` and the span/cut/compose
+machinery) is gone, so a resize only reflows tiles and can no longer trigger a
+re-fetch/re-render loop. `WebUI/panel.css`: the grid's track minimum is
+`min(--tile-min, (100% - 2 gaps) / 3)`, guaranteeing three square columns at
+the 760px window minimum and more as the width grows; a ≤360px container
+breakpoint tightens the caption and ring.
+
+- `python3 scripts/test.py` — 455 passed, 2 failed, 9 skipped of 466. The two
+  failures (`testFilterSidebarTogglesFromTheToolbarPerPageAndInspectorFollowsWindowWidth`:
+  temp directory already removed; `LibraryMetricsTests/testReloadRemeasuresOnlyFoldersWhoseContentsMoved`)
+  belong to a concurrent, uncommitted sidebar/library-metrics change in the same
+  tree and do not touch the grid or pagination. New tests pass:
+  `WorkshopStoreTests.testPagesAreSteamPagesServedFromCacheAndCappedAtSteamsLimit`
+  (page 1 served from cache without a request, page 4 of 3 refused, 4,000
+  reported pages clamped to 1,000, page 1,001 refused) and
+  `ControlPanelLayoutTests.testDiscoverGridKeepsSquareTilesInAtLeastThreeStableColumns`
+  (Discover and Installed at 760×560, Discover at 960×640, 1400×900, 1900×1000:
+  ≥3/≥3/≥3/≥5/≥6 columns, square and uniform tiles, all 30 tiles, column count
+  identical across eight samples after each resize, zero `workshopPageSize`
+  messages). The two former page-size tests were removed with the feature.
+- `python3 scripts/build.py --swift-only --configuration Release` — BUILD
+  SUCCEEDED; bundled `panel.js`/`panel.css` byte-identical to `WebUI/`.
+- Not run: desktop/visual check of the grid at any width.
+
+## 2026-09-19 — Shared left filter sidebar with a toolbar Filter button; Installed sort keys
+
+Discover and Installed now share one left filter sidebar (`#filter-sidebar`)
+whose only switch is a filled **Filter** button (funnel glyph, active count
+pill) leading the toolbar; the collapse control inside the sidebar, the 36px
+rail and Installed's Filters popover are gone. Each page stores its own choice
+(`filters` action, `filtersCollapsed` snapshot map, `WebPanelController.
+filtersCollapsedKeys`). Installed's sort menu grew to Name, Type, Favorites,
+File size and Date added with a direction button; `LibraryMetricsService`
+measures folder size and date added off the main thread and re-checks only
+after a library reload (`BridgeStore.libraryRefreshRevision`).
+
+- `python3 scripts/test.py` — Passed, 457 passed, 0 failed, 9 skipped of 466.
+  `testFilterSidebarTogglesFromTheToolbarPerPageAndInspectorFollowsWindowWidth`
+  covers the button (label, glyph, filled, first in the toolbar, beside the
+  sidebar), the sidebar at the left edge with no toggle of its own, no popover
+  on Installed, per-page persistence across a relaunch and the inspector
+  widths. `testInstalledSortsByEveryKeyInBothDirectionsWithoutWindow` checks
+  every key in both directions, natural starting direction, name tie-breaks and
+  unmeasured wallpapers last. `LibraryMetricsTests` (2) cover the walk, the
+  single change callback, dropped ids and reload-only re-measuring.
+- `python3 scripts/build.py --swift-only --configuration Release` — BUILD
+  SUCCEEDED; bundled `panel.js`, `panel.css`, `index.html`, `icons.js`
+  byte-identical to `WebUI/`.
+- Not run: desktop/visual check of the sidebar, Filter button or sort menu.
+
+## 2026-09-19 — Inspector width follows the window only; drag handle removed
+
+The inspector's left edge is no longer a drag handle and no width is stored or
+published. `WebUI/panel.css` sizes it with a single window-driven curve,
+`clamp(260px, 15vw + 146px, 420px)`, on both pages (the ≤1040px overrides are
+gone); the inspector is an inline-size container whose insets and display
+fields adapt past 360px. `#inspector-resizer`, the `inspectorWidth` action, the
+snapshot field and `WebPanelController.inspectorWidth` were removed; the old
+`UserDefaults` key is cleared on launch.
+
+- `python3 scripts/test.py` — Passed, 455 passed, 0 failed, 9 skipped of 464.
+  `testWorkshopFilterSidebarCollapsesPersistsAndInspectorFollowsWindowWidth`
+  replaces the drag scenario: no separator/resizer element, no snapshot field,
+  a legacy stored width cleared, and the inspector measured at 760/960/1040/
+  1600/2000px on both pages (260/290/302/386/420) with columns summing to the
+  window width.
+- `python3 scripts/build.py --swift-only --configuration Release` — BUILD
+  SUCCEEDED; bundled `panel.css` byte-identical to `WebUI/panel.css`.
+- Not run: desktop/visual check of the inspector at any width.
+
+## 2026-09-19 — Square tiles on both grids; Discover pages scroll
+
+`WebUI/panel.js`/`panel.css`: the Discover row stretch (`TILE_STRETCH`,
+`fitRows`, `--tile-height`) is gone, so tiles are always square on Installed and
+Discover. Both use the same width-filling auto-fill grid with a reserved
+scrollbar gutter; a Discover page is cut to whole rows that cover the grid's
+height and scrolls to reach the last one.
+
+- `python3 scripts/test.py` — Passed, 455 passed, 0 failed, 9 skipped of 464.
+  `ControlPanelLayoutTests` now asserts square tiles, whole-row page sizes,
+  less than a row of scroll and no more than a sliver empty beneath a page. An
+  intermediate no-scroll fit (choosing columns to minimise blank space) failed
+  its blank bound at 994×737 and was dropped once scrolling was allowed.
+- `python3 scripts/build.py --swift-only --configuration Release` — BUILD
+  SUCCEEDED; bundled `panel.js` byte-identical to `WebUI/panel.js`.
+- Not run: desktop/visual check of either grid.
 
 ## 2026-09-18 — Remove the password guide card from the Steam sign-in dialog
 

@@ -14,7 +14,13 @@ struct WebControlPanel: NSViewRepresentable {
   let updater: AppUpdateStore
 
   func makeCoordinator() -> WebPanelController {
-    WebPanelController(store: store, navigation: navigation, workshop: workshop, updater: updater)
+    let controller = WebPanelController(
+      store: store, navigation: navigation, workshop: workshop, updater: updater)
+    // Discover previews start caching the moment Steam's page arrives, and the following page
+    // is fetched behind the one on show, so neither waits for the web view to ask.
+    workshop.prefetchesNextPage = true
+    workshop.onPreviewsAvailable = { [cache = controller.assets.thumbnailCache] in cache.warm($0) }
+    return controller
   }
 
   func makeNSView(context: Context) -> WKWebView { context.coordinator.makeWebView() }
@@ -45,7 +51,10 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
   let theme: AppThemeStore
   let displayTitles: DisplayTitleResolver
   weak var webView: WKWebView?
-  let assets = WebPanelAssets()
+  let assets: WebPanelAssets
+  /// BCP 47 tag of the localization the page renders in, normally the bundle's preferred
+  /// one so the panel and the native strings agree.
+  let language: String
   var subscriptions = Set<AnyCancellable>()
   var isReady = false
   var stopped = false
@@ -61,10 +70,11 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
   var importReport: WallpaperImportService.Report?
   var remembersSession = true
   var favoriteIDs: Set<String>
-  /// Discover hides its filter sidebar when the user collapses it; the choice outlives the page.
-  var workshopFiltersCollapsed: Bool
-  /// User-dragged inspector width in CSS pixels; nil means the stylesheet's fluid width.
-  var inspectorWidth: Double?
+  /// Each library page (`discover`, `installed`) hides its filter sidebar when the user
+  /// closes it with the toolbar's Filter button; the choice outlives the page.
+  var filtersCollapsed: [String: Bool]
+  /// Folder sizes and dates for Installed's sort menu, measured off the main thread.
+  let libraryMetrics: LibraryMetricsService
   let defaults: UserDefaults
   var displayOptions: [String: BridgeWallpaperOptionsSnapshot] = [:]
   var displayOptionsRevision: UInt64?
@@ -84,9 +94,14 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
   var dismissedLibraryError: String?
   var dismissedDownloadError: String?
   static let favoriteKey = "MacWallpaperEngine.favoriteWallpaperIDs"
-  static let workshopFiltersCollapsedKey = "MacWallpaperEngine.workshopFiltersCollapsed"
-  static let inspectorWidthKey = "MacWallpaperEngine.inspectorWidth"
-  static let inspectorWidthRange: ClosedRange<Double> = 200...1200
+  /// Where each page's sidebar choice is stored; Discover keeps the key earlier builds used.
+  static let filtersCollapsedKeys = [
+    "discover": "MacWallpaperEngine.workshopFiltersCollapsed",
+    "installed": "MacWallpaperEngine.installedFiltersCollapsed",
+  ]
+  /// Earlier builds stored a dragged inspector width here; the width now follows the
+  /// window alone, so the key is cleared rather than read.
+  static let legacyInspectorWidthKey = "MacWallpaperEngine.inspectorWidth"
 
   init(
     store: BridgeStore, navigation: ControlPanelNavigation, workshop: WorkshopStore,
@@ -94,9 +109,14 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
     isPresentationVisible: (@MainActor () -> Bool)? = nil,
     theme: AppThemeStore? = nil,
     displayTitles: DisplayTitleResolver = .system,
-    defaults: UserDefaults = .standard
+    defaults: UserDefaults = .standard,
+    libraryMetrics: LibraryMetricsService? = nil,
+    assets: WebPanelAssets? = nil,
+    language: String? = nil
   ) {
     self.store = store
+    self.assets = assets ?? WebPanelAssets()
+    self.language = Self.pageLanguage(language ?? Bundle.main.preferredLocalizations.first)
     self.navigation = navigation
     self.workshop = workshop
     self.updater =
@@ -105,16 +125,14 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
     self.isPresentationVisible = isPresentationVisible
     self.theme = theme ?? .shared
     self.defaults = defaults
-    workshopFiltersCollapsed = defaults.bool(forKey: Self.workshopFiltersCollapsedKey)
-    if let width = defaults.object(forKey: Self.inspectorWidthKey) as? Double,
-      Self.inspectorWidthRange.contains(width)
-    {
-      inspectorWidth = width
-    }
+    filtersCollapsed = Self.filtersCollapsedKeys.mapValues { defaults.bool(forKey: $0) }
+    self.libraryMetrics = libraryMetrics ?? LibraryMetricsService()
+    defaults.removeObject(forKey: Self.legacyInspectorWidthKey)
     favoriteIDs = Set(
       (try? JSONDecoder().decode(
         [String].self, from: UserDefaults.standard.data(forKey: Self.favoriteKey) ?? Data())) ?? [])
     super.init()
+    self.libraryMetrics.onChange = { [weak self] in self?.scheduleUpdate() }
   }
 
   func makeWebView() -> WKWebView {
@@ -167,11 +185,12 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
     // WebContent recovery, starts with the latest saved theme before first paint.
     let content = view.configuration.userContentController
     content.removeAllUserScripts()
-    // Mode/tone are closed enums and accent is validated as six hexadecimal digits.
+    // Mode/tone are closed enums, accent is validated as six hexadecimal digits and the
+    // language tag is reduced to letters, digits and hyphens by pageLanguage.
     content.addUserScript(
       WKUserScript(
         source:
-          "window.__appTheme = {mode:'\(preferences.mode.rawValue)',accent:'\(preferences.accent)',tone:'\(preferences.tone.rawValue)'};",
+          "window.__appTheme = {mode:'\(preferences.mode.rawValue)',accent:'\(preferences.accent)',tone:'\(preferences.tone.rawValue)'};window.__appLanguage='\(language)';",
         injectionTime: .atDocumentStart, forMainFrameOnly: true))
     guard isReady, !stopped else { return }
     Task { @MainActor [weak self, weak view] in
@@ -181,10 +200,19 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
           "window.appTheme?.apply(theme)", arguments: ["theme": self.theme.preferences.snapshot],
           in: nil, contentWorld: .page)
       } catch {
-        self.actionError = "The appearance could not update: \(error.localizedDescription)"
+        self.actionError = String(
+          localized: "The appearance could not update: \(error.localizedDescription)")
       }
       self.scheduleUpdate()
     }
+  }
+
+  /// A tag safe to splice into the user script; anything else falls back to English.
+  static func pageLanguage(_ tag: String?) -> String {
+    guard let tag, !tag.isEmpty,
+      tag.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) || $0 == "-" })
+    else { return "en" }
+    return tag
   }
 
   func stop() {
@@ -264,7 +292,8 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
             contentWorld: .page)
         } catch {
           guard !Task.isCancelled, self.pageGeneration == generation else { return }
-          self.actionError = "The interface could not update: \(error.localizedDescription)"
+          self.actionError = String(
+            localized: "The interface could not update: \(error.localizedDescription)")
           self.updatePending = true
           return
         }
@@ -331,7 +360,7 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
       message.webView === webView,
       let body = message.body as? [String: Any], let action = body["action"] as? String
     else {
-      reply(nil, "This page is not allowed to control the application.")
+      reply(nil, String(localized: "This page is not allowed to control the application."))
       return
     }
     // Title-bar gestures reply immediately: a drag must start on the mouse event that
@@ -398,7 +427,9 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
     cancelDisplayOptions()
     guard !recoveryAttempted else {
       showLoadFailure(
-        "The interface stopped unexpectedly. Close and reopen the control panel to retry.")
+        String(
+          localized:
+            "The interface stopped unexpectedly. Close and reopen the control panel to retry."))
       return
     }
     recoveryAttempted = true
@@ -420,10 +451,10 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
     guard let view = webView else { return }
     // Native recovery remains available even when JavaScript cannot start.
     let alert = NSAlert()
-    alert.messageText = "Couldn’t load the interface"
+    alert.messageText = String(localized: "Couldn’t load the interface")
     alert.informativeText = message
-    alert.addButton(withTitle: "Reload")
-    alert.addButton(withTitle: "Cancel")
+    alert.addButton(withTitle: String(localized: "Reload"))
+    alert.addButton(withTitle: String(localized: "Cancel"))
     guard let window = view.window else {
       actionError = message
       return
@@ -446,7 +477,7 @@ private final class WebPanelMessageProxy: NSObject, WKScriptMessageHandlerWithRe
     replyHandler: @escaping (Any?, String?) -> Void
   ) {
     guard let owner else {
-      replyHandler(nil, "The control panel has closed.")
+      replyHandler(nil, String(localized: "The control panel has closed."))
       return
     }
     owner.receive(message, reply: replyHandler)
@@ -458,17 +489,20 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
   static let indexURL = URL(string: "mwe-ui://app/index.html")!
   /// Library preview files by wallpaper id, served as `mwe-ui://preview/<id>`.
   var previews: [String: URL] = [:]
-  /// Workshop preview URLs by item id, served as still thumbnails at `mwe-ui://thumbnail/<id>`.
+  /// Workshop preview URLs by item id, served as still thumbnails at `mwe-ui://thumbnail/<id>`
+  /// and relayed with their animation at `mwe-ui://animated/<id>`.
   var thumbnails: [String: URL] = [:]
   let thumbnailCache: WorkshopThumbnailCache
   private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
   private static let files: Set<String> = [
     "index.html", "panel.js", "panel.css", "settings.js", "settings.css", "theme.js", "icons.js",
+    "i18n.js",
   ]
 
   enum Route: Equatable {
     case file(URL)
     case thumbnail(URL)
+    case animated(URL)
   }
 
   init(thumbnailCache: WorkshopThumbnailCache = WorkshopThumbnailCache()) {
@@ -502,6 +536,10 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
           // The disk cache is the source of truth; this only lets WebKit skip re-asking for
           // tiles that scroll in and out of view within one session.
           headers["Cache-Control"] = "max-age=86400"
+        case .animated(let preview):
+          data = try await thumbnailCache.animatedPreview(for: preview)
+          headers["Content-Type"] = WorkshopThumbnailCache.mimeType(of: data)
+          headers["Cache-Control"] = "max-age=86400"
         }
         guard tasks.removeValue(forKey: key) != nil, !Task.isCancelled else { return }
         headers["Content-Length"] = String(data.count)
@@ -530,11 +568,15 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
 
   func route(_ url: URL) -> Route? {
     if let file = resourceURL(url) { return .file(file) }
-    guard url.scheme == "mwe-ui", url.host == "thumbnail", url.user == nil, url.password == nil,
+    guard url.scheme == "mwe-ui", let host = url.host, url.user == nil, url.password == nil,
       url.port == nil, let preview = thumbnails[String(url.path.dropFirst())],
       preview.scheme == "https"
     else { return nil }
-    return .thumbnail(preview)
+    switch host {
+    case "thumbnail": return .thumbnail(preview)
+    case "animated": return .animated(preview)
+    default: return nil
+    }
   }
 
   func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {

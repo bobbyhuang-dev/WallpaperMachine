@@ -5,7 +5,10 @@ struct WorkshopQuery: Equatable, Sendable {
   let text: String
   let kind: WorkshopKind
   let sort: WorkshopSort
+  /// Steam `requiredtags[]`: every one must be on an item.
   var tags: [String] = []
+  /// Steam `excludedtags[]`: an item carrying any of them is dropped.
+  var excludedTags: [String] = []
 }
 
 struct WorkshopRequest: Equatable, Sendable {
@@ -37,9 +40,14 @@ struct WorkshopDownloadRequest: Identifiable, Sendable {
 @Observable
 final class WorkshopStore {
   var searchText = ""
-  var kind: WorkshopKind = .scene
-  var sort: WorkshopSort = .trending
+  var kind: WorkshopKind = .all
+  var sort: WorkshopSort = .trendingYear
   var tags: [String] = []
+  var excludedTags: [String] = WorkshopStore.defaultExcludedTags
+  /// Wallpaper Engine's own defaults: the sidebar lists every Type, Age rating, Resolution and
+  /// Genre tag as a checkbox and unchecking one excludes it. Out of the box only Everyone is
+  /// rated in, genre-less items are hidden, and Application / Asset are never offered.
+  static let defaultExcludedTags = ["Application", "Asset", "Questionable", "Mature", "Unspecified"]
   var selectedItem: WorkshopItem?
   private(set) var sceneAssetsReady: Bool
   @ObservationIgnored private let sceneAssetsAvailable: @MainActor () -> Bool
@@ -52,12 +60,13 @@ final class WorkshopStore {
   private(set) var totalPages = 1
   private(set) var totalCount = 0
   /// Results Steam can actually serve for the committed query: its result count capped by
-  /// its 1,000 pages of 30, so the last panel page never asks for an unreachable item.
+  /// its 1,000 pages of 30, so the last page never asks for an unreachable item.
   private(set) var reachableCount = 0
-  /// The panel reports how many tiles its grid shows without scrolling; each panel page is
-  /// composed from as many Steam pages as that takes, so every page fills the window.
-  private(set) var pageSize = WorkshopService.pageSize
-  static let pageSizeRange = 1...240
+  /// A panel page is exactly one Steam page: 30 tiles, and never more than 1,000 pages. The
+  /// grid lays those tiles out in as many columns as its width holds and scrolls the rest,
+  /// so a window resize only reflows the tiles and never changes what a page holds.
+  static let pageSize = WorkshopService.pageSize
+  static let maxPages = WorkshopService.maxPages
   private(set) var isLoading = false
   private(set) var hasLoaded = false
   var errorMessage: String?
@@ -301,29 +310,32 @@ final class WorkshopStore {
   @ObservationIgnored private var generation = UUID()
   private(set) var committedQuery: WorkshopQuery?
   private(set) var failedRequest: WorkshopRequest?
-  /// The request currently loading, so a page-size change can re-target it.
-  @ObservationIgnored private var activeRequest: WorkshopRequest?
-  /// Steam pages fetched for `cacheQuery`, keyed by Steam page number, plus fetches still in
-  /// flight. Panel pages are cut from this cache, so resizing the grid or paging back rarely
-  /// touches the network. A search always starts a fresh cache, even for the same query.
+  /// Steam pages fetched for `cacheQuery`, keyed by page number, plus fetches still in
+  /// flight, so paging back never touches the network. A search always starts a fresh
+  /// cache, even for the same query.
   @ObservationIgnored private var cacheQuery: WorkshopQuery?
   @ObservationIgnored private var cacheID = UUID()
   @ObservationIgnored private var steamPages: [Int: WorkshopPage] = [:]
   @ObservationIgnored private var steamFetches: [Int: Task<WorkshopPage, Error>] = [:]
-  @ObservationIgnored private var steamTotalPages: Int?
+  /// Fetches the page after the one on show in the background, so paging forward is served
+  /// from the cache like paging back. Off unless the owner opts in.
+  @ObservationIgnored var prefetchesNextPage = false
+  /// Told the preview URLs of every Steam page as it arrives, shown or prefetched, so the
+  /// owner of the preview cache can start on them before the panel asks.
+  @ObservationIgnored var onPreviewsAvailable: (@MainActor ([URL]) -> Void)?
 
   private var draftQuery: WorkshopQuery {
     WorkshopQuery(
       text: searchText.trimmingCharacters(in: .whitespacesAndNewlines), kind: kind, sort: sort,
-      tags: tags)
+      tags: tags, excludedTags: excludedTags)
   }
 
-  /// The Steam page holding the first tile of the current panel page.
+  /// The Steam page showing the current page's tiles.
   var browseURL: URL {
     let query = committedQuery ?? draftQuery
     return WorkshopService.browseURL(
-      search: query.text, kind: query.kind, sort: query.sort,
-      page: Self.steamPage(offset: (page - 1) * pageSize), tags: query.tags)
+      search: query.text, kind: query.kind, sort: query.sort, page: page, tags: query.tags,
+      excludedTags: query.excludedTags)
   }
 
   func search() {
@@ -341,35 +353,6 @@ final class WorkshopStore {
     load(failedRequest)
   }
 
-  /// Re-cuts the displayed page at the new size, keeping its first tile in view: page numbers
-  /// are remapped from that tile's offset, and a page still loading restarts at the new size.
-  func setPageSize(_ size: Int) {
-    let size = min(max(size, Self.pageSizeRange.lowerBound), Self.pageSizeRange.upperBound)
-    guard size != pageSize else { return }
-    let previous = pageSize
-    pageSize = size
-    func remap(_ page: Int) -> Int { (page - 1) * previous / size + 1 }
-    totalPages = Self.panelPages(reachable: reachableCount, size: size)
-    page = min(totalPages, remap(page))
-    if let failedRequest {
-      self.failedRequest = WorkshopRequest(
-        query: failedRequest.query, page: remap(failedRequest.page))
-    }
-    if let activeRequest {
-      load(WorkshopRequest(query: activeRequest.query, page: remap(activeRequest.page)))
-    } else if let committedQuery {
-      load(WorkshopRequest(query: committedQuery, page: page))
-    }
-  }
-
-  private static func steamPage(offset: Int) -> Int {
-    offset / WorkshopService.pageSize + 1
-  }
-
-  private static func panelPages(reachable: Int, size: Int) -> Int {
-    max(1, (reachable + size - 1) / size)
-  }
-
   /// Drops every in-flight fetch. Cached pages survive unless the query changed or the caller
   /// asked for fresh results; the new cache id keeps late completions of old fetches out.
   private func resetCache(for query: WorkshopQuery?) {
@@ -378,7 +361,6 @@ final class WorkshopStore {
     cacheID = UUID()
     if let query {
       steamPages = [:]
-      steamTotalPages = nil
       cacheQuery = query
     }
   }
@@ -391,12 +373,13 @@ final class WorkshopStore {
     let task = Task { [weak self] in
       defer { if let self, self.cacheID == cacheID { self.steamFetches[number] = nil } }
       let result = try await service.browse(
-        search: query.text, kind: query.kind, sort: query.sort, page: number, tags: query.tags)
+        search: query.text, kind: query.kind, sort: query.sort, page: number, tags: query.tags,
+        excludedTags: query.excludedTags)
       try Task.checkCancellation()
       // Only the cache that asked keeps the page; a superseded fetch is simply dropped.
       if let self, self.cacheID == cacheID {
         self.steamPages[number] = result
-        self.steamTotalPages = result.totalPages
+        self.onPreviewsAvailable?(result.items.compactMap(\.previewURL))
       }
       return result
     }
@@ -404,80 +387,22 @@ final class WorkshopStore {
     return task
   }
 
-  private struct Composed {
-    let items: [WorkshopItem]
-    let reachable: Int
-    let total: Int
-  }
-
-  /// The Steam pages a panel page spans, clamped to Steam's page count once it is known.
-  private func span(_ request: WorkshopRequest, steamPages total: Int) -> ClosedRange<Int> {
-    let offset = (request.page - 1) * pageSize
-    let first = Self.steamPage(offset: offset)
-    return first...max(first, min(total, Self.steamPage(offset: offset + pageSize - 1)))
-  }
-
-  /// Cuts a panel page from the fetched Steam pages of its span. Every Steam page nominally
-  /// holds 30 items; cutting at nominal offsets keeps a panel page stable however the cache
-  /// was filled.
-  private func cut(
-    _ request: WorkshopRequest, span: ClosedRange<Int>, from pages: [Int: WorkshopPage]
-  ) -> Composed {
-    let head = pages[span.lowerBound]!
-    let start = (request.page - 1) * pageSize - (span.lowerBound - 1) * WorkshopService.pageSize
+  /// Steam's own `total_pages` is already clamped to 1,000; clamping again keeps the panel's
+  /// page count within that limit whatever a page says, so no page beyond it is ever offered.
+  private func publish(_ result: WorkshopPage, for request: WorkshopRequest) {
     var seen = Set<String>()
-    let items = span.flatMap { pages[$0]?.items ?? [] }
-      .dropFirst(start).prefix(pageSize).filter { seen.insert($0.id).inserted }
-    return Composed(
-      items: Array(items),
-      reachable: min(head.totalCount, head.totalPages * WorkshopService.pageSize),
-      total: head.totalCount)
-  }
-
-  /// The page cut from the cache alone, when every Steam page it spans is already there.
-  private func cached(_ request: WorkshopRequest) -> Composed? {
-    guard cacheQuery == request.query, let steamTotalPages else { return nil }
-    let span = span(request, steamPages: steamTotalPages)
-    guard span.allSatisfy({ steamPages[$0] != nil }) else { return nil }
-    return cut(request, span: span, from: steamPages)
-  }
-
-  /// Fetches the Steam pages a panel page spans, then cuts the page. The first page goes
-  /// alone while Steam's page count is unknown, so the rest of the span can be clamped to it.
-  private func compose(_ request: WorkshopRequest) async throws -> Composed {
-    let query = request.query
-    let first = span(request, steamPages: .max).lowerBound
-    let head: WorkshopPage
-    if let cached = steamPages[first] {
-      head = cached
-    } else {
-      head = try await fetchSteamPage(first, query: query).value
-    }
-    let span = span(request, steamPages: head.totalPages)
-    var pages = [first: head]
-    var fetches: [Int: Task<WorkshopPage, Error>] = [:]
-    for number in span.dropFirst() where steamPages[number] == nil {
-      fetches[number] = fetchSteamPage(number, query: query)
-    }
-    for number in span.dropFirst() {
-      if let cached = steamPages[number] {
-        pages[number] = cached
-      } else if let fetch = fetches[number] {
-        pages[number] = try await fetch.value
-      }
-    }
-    return cut(request, span: span, from: pages)
-  }
-
-  private func publish(_ result: Composed, for request: WorkshopRequest) {
-    items = result.items
-    reachableCount = result.reachable
-    totalCount = result.total
-    totalPages = Self.panelPages(reachable: result.reachable, size: pageSize)
+    items = result.items.filter { seen.insert($0.id).inserted }
+    totalCount = result.totalCount
+    totalPages = min(Self.maxPages, max(1, result.totalPages))
+    reachableCount = min(result.totalCount, totalPages * Self.pageSize)
     page = min(totalPages, request.page)
     hasLoaded = true
     committedQuery = request.query
     failedRequest = nil
+    // A failed prefetch is simply retried as an ordinary load when the user gets there.
+    if prefetchesNextPage, page < totalPages, steamPages[page + 1] == nil {
+      _ = fetchSteamPage(page + 1, query: request.query)
+    }
   }
 
   private func load(_ request: WorkshopRequest) {
@@ -485,19 +410,17 @@ final class WorkshopStore {
     if cacheQuery != request.query { resetCache(for: request.query) }
     generation = UUID()
     errorMessage = nil
-    // A page already in the cache (resizing the grid, paging back) never shows as loading.
-    if let cached = cached(request) {
+    // A page already in the cache (paging back) never shows as loading.
+    if let cached = steamPages[request.page] {
       isLoading = false
-      activeRequest = nil
       publish(cached, for: request)
       return
     }
     let requestID = generation
     isLoading = true
-    activeRequest = request
     searchTask = Task {
       do {
-        let result = try await compose(request)
+        let result = try await fetchSteamPage(request.page, query: request.query).value
         guard generation == requestID, !Task.isCancelled else { return }
         publish(result, for: request)
       } catch {
@@ -507,7 +430,6 @@ final class WorkshopStore {
       }
       if generation == requestID {
         isLoading = false
-        activeRequest = nil
       }
     }
   }
@@ -517,7 +439,6 @@ final class WorkshopStore {
     resetCache(for: nil)
     generation = UUID()
     isLoading = false
-    activeRequest = nil
   }
 
 }

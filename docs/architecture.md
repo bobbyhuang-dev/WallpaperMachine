@@ -86,7 +86,7 @@ Services are grouped by domain under `App/Services/`.
 | `Library/` | `ClientPaths`, `WallpaperImportService`, `WallpaperDeletionService` | App-support layout, non-destructive import, guarded deletion |
 | `LockScreen/` | `LockScreenWallpaperSelection`, `LockScreenWallpaperService` | System lock-screen selection overrides and configuration publishing |
 | `Steam/` | `SteamCMDRuntime`, `SteamCMDSetupStore` | SteamCMD discovery, download, validation, security approval |
-| `Workshop/` | `WorkshopService`, `WorkshopStore`, `WorkshopDownloader`, `WorkshopDownloadManager`, `WorkshopThumbnailCache` | Workshop query model, browse state, SteamCMD-driven downloads, concurrent download queue sharing one saved sign-in, on-disk still thumbnails for Discover tiles |
+| `Workshop/` | `WorkshopService`, `WorkshopStore`, `WorkshopDownloader`, `WorkshopDownloadManager`, `WorkshopThumbnailCache` | Workshop query model, browse state, SteamCMD-driven downloads, concurrent download queue sharing one saved sign-in, one-download on-disk previews (still + animation) for Discover tiles, warmed ahead of the panel |
 | `WebWallpaper/` | `WebWallpaperHost`, `WebWallpaperWindow`, `WebWallpaperPage` | Desktop-level `WKWebView` windows for `type: "web"` projects, driven by the bridge's `webWallpapers()`; see [features/web-wallpapers.md](features/web-wallpapers.md) |
 
 `ClientPaths` fixes the on-disk contract: everything lives under

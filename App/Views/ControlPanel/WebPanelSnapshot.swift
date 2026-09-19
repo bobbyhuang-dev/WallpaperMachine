@@ -6,6 +6,7 @@ extension WebPanelController {
   func trackSnapshotDependencies() {
     _ = store.appSnapshot
     _ = store.librarySnapshot
+    _ = store.libraryRefreshRevision
     _ = store.wallpaperOptionsSnapshot
     _ = store.monitorInformationSnapshot
     _ = store.settingsSnapshot
@@ -24,6 +25,7 @@ extension WebPanelController {
     _ = workshop.kind
     _ = workshop.sort
     _ = workshop.tags
+    _ = workshop.excludedTags
     _ = workshop.items
     _ = workshop.selectedItem
     _ = workshop.page
@@ -166,6 +168,8 @@ extension WebPanelController {
     let lock = store.lockScreenWallpaper
     let null = NSNull()
     var previews: [String: URL] = [:]
+    let metrics = libraryMetrics.metrics(
+      for: store.librarySnapshot.wallpapers.map(\.id), revision: store.libraryRefreshRevision)
     let wallpapers: [[String: Any]] = store.librarySnapshot.wallpapers.map { entry in
       var preview: Any = null
       if let path = entry.previewPath {
@@ -180,6 +184,10 @@ extension WebPanelController {
         "id": entry.id, "title": entry.title, "kind": Self.kind(entry.kind), "preview": preview,
         "active": store.isWallpaperActive(id: entry.id, displayId: navigation.targetDisplayID),
         "supported": entry.supported, "tags": [],
+        // Folder size, date added and staff approval arrive once measured; null sorts last on the page.
+        "approved": metrics[entry.id]?.approved ?? false,
+        "size": metrics[entry.id]?.size as Any? ?? null,
+        "addedAt": metrics[entry.id]?.addedAt.map { $0.timeIntervalSince1970 * 1000 } as Any? ?? null,
       ]
     }
     assets.previews = previews
@@ -337,8 +345,7 @@ extension WebPanelController {
         ?? (store.latestBridgeErrorRevision > dismissedErrorRevision
         ? store.latestBridgeErrorMessage : nil) as Any? ?? null,
       "libraryLoading": loading, "favorites": favoriteIDs.sorted(), "wallpapers": wallpapers,
-      "workshopFiltersCollapsed": workshopFiltersCollapsed,
-      "inspectorWidth": inspectorWidth as Any? ?? null,
+      "filtersCollapsed": filtersCollapsed,
       "displays": displays,
       "options": store.wallpaperOptionsSnapshot.map {
         Self.options(
@@ -383,10 +390,12 @@ extension WebPanelController {
       ],
       "workshop": [
         "text": workshop.searchText, "kind": workshop.kind.rawValue, "sort": workshop.sort.rawValue,
-        "tags": workshop.tags, "items": workshop.items.map(Self.workshopItem),
+        "tags": workshop.tags, "excludedTags": workshop.excludedTags,
+        "items": workshop.items.map(Self.workshopItem),
         "selectedID": workshop.selectedItem?.id as Any? ?? null, "page": workshop.page,
         "totalPages": workshop.totalPages, "totalCount": workshop.totalCount,
-        "reachable": workshop.reachableCount, "pageSize": workshop.pageSize,
+        "reachable": workshop.reachableCount, "pageSize": WorkshopStore.pageSize,
+        "maxPages": WorkshopStore.maxPages,
         "loading": workshop.isLoading, "loaded": workshop.hasLoaded,
         "error": workshop.errorMessage as Any? ?? null,
       ],
@@ -661,17 +670,26 @@ extension WebPanelController {
     [
       "id": value.id, "title": value.title, "creator": value.creator, "summary": value.summary,
       "preview": value.previewURL?.absoluteString as Any? ?? NSNull(),
-      "thumbnail": thumbnailAddress(for: value) as Any? ?? NSNull(), "tags": value.tags,
+      "thumbnail": thumbnailAddress(for: value) as Any? ?? NSNull(),
+      "animated": panelAddress(host: "animated", for: value) as Any? ?? NSNull(), "tags": value.tags,
+      // Steam lists staff-approved wallpapers under the `Approved` tag; the tile marks them.
+      "approved": value.tags.contains { $0.caseInsensitiveCompare("Approved") == .orderedSame },
       "size": value.size, "subscriptions": value.subscriptions, "kind": value.kind.rawValue,
     ]
   }
 
   /// The panel-local address of the item's cached still thumbnail; nil when Steam gave no preview.
   static func thumbnailAddress(for value: WorkshopItem) -> String? {
+    panelAddress(host: "thumbnail", for: value)
+  }
+
+  /// `mwe-ui://<host>/<id>`, the panel-local address `WebPanelAssets` serves for the item's
+  /// preview (`thumbnail` for the still, `animated` for the relayed animation).
+  static func panelAddress(host: String, for value: WorkshopItem) -> String? {
     guard value.previewURL?.scheme == "https" else { return nil }
     var components = URLComponents()
     components.scheme = "mwe-ui"
-    components.host = "thumbnail"
+    components.host = host
     components.path = "/" + value.id
     return components.url?.absoluteString
   }

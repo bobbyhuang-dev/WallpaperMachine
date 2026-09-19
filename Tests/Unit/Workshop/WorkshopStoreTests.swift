@@ -48,6 +48,37 @@ final class WorkshopStoreTests: XCTestCase {
     XCTAssertEqual(store.items.first?.kind, .video)
   }
 
+  func testDefaultsMatchWallpaperEngineSidebarAndExclusionsReachSteam() async throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    let store = fixture.store
+    // Wallpaper Engine opens on this year's most popular items of every type, rated Everyone,
+    // with genre-less items hidden; Application and Asset are never offered.
+    XCTAssertEqual(store.kind, .all)
+    XCTAssertEqual(store.sort, .trendingYear)
+    XCTAssertEqual(store.tags, [])
+    XCTAssertEqual(
+      Set(store.excludedTags), ["Application", "Asset", "Questionable", "Mature", "Unspecified"])
+    assertBrowseURL(
+      store, text: "", kind: .all, sort: .trendingYear, page: 1, excludedTags: store.excludedTags)
+
+    // Unticking a genre and a resolution excludes them; the committed query keeps its own list.
+    store.excludedTags = store.excludedTags + ["Anime", "Portrait 1080 x 1920"]
+    store.tags = ["Approved"]
+    store.search()
+    try await fixture.reply(
+      text: "", kind: .all, sort: .trendingYear, page: 1,
+      body: pageHTML(id: "301", page: 1, pages: 1, count: 1), tags: ["Approved"],
+      excludedTags: store.excludedTags)
+    try await finished(store)
+    assertPage(store, id: "301", page: 1, pages: 1, count: 1)
+    let committed = store.excludedTags
+    store.excludedTags = []
+    assertBrowseURL(
+      store, text: "", kind: .all, sort: .trendingYear, page: 1, tags: ["Approved"],
+      excludedTags: committed)
+  }
+
   func testFailedPageAndFailedSubmissionRetryTheirOwnQueryWithoutChangingDraft() async throws {
     let fixture = try Fixture()
     defer { fixture.remove() }
@@ -74,7 +105,7 @@ final class WorkshopStoreTests: XCTestCase {
       WorkshopRequest(
         query: .init(
           text: "forest", kind: .scene, sort: .popular,
-          tags: ["Nature", "1920 x 1080"]), page: 2))
+          tags: ["Nature", "1920 x 1080"], excludedTags: WorkshopStore.defaultExcludedTags), page: 2))
     assertBrowseURL(
       store, text: "forest", kind: .scene, sort: .popular, page: 1, tags: ["Nature", "1920 x 1080"])
 
@@ -131,11 +162,11 @@ final class WorkshopStoreTests: XCTestCase {
     let store = fixture.store
     store.searchText = "forest"
     store.search()
-    let old = try await fixture.request(text: "forest", kind: .scene, sort: .trending, page: 1)
+    let old = try await fixture.request(text: "forest", kind: .all, sort: .trendingYear, page: 1)
     store.searchText = "rain"
     store.search()
     try await fixture.reply(
-      text: "rain", kind: .scene, sort: .trending, page: 1,
+      text: "rain", kind: .all, sort: .trendingYear, page: 1,
       body: pageHTML(id: "201", page: 1, pages: 2, count: 33))
     try await finished(store)
     try await waitUntil { old.isStopped }
@@ -143,7 +174,7 @@ final class WorkshopStoreTests: XCTestCase {
     old.succeed(try pageHTML(id: "101", page: 1, pages: 9, count: 270))
     await fixture.drain()
     assertPage(store, id: "201", page: 1, pages: 2, count: 33)
-    assertBrowseURL(store, text: "rain", kind: .scene, sort: .trending, page: 1)
+    assertBrowseURL(store, text: "rain", kind: .all, sort: .trendingYear, page: 1)
     XCTAssertNil(store.errorMessage)
     XCTAssertNil(store.failedRequest)
   }
@@ -154,16 +185,16 @@ final class WorkshopStoreTests: XCTestCase {
     let store = fixture.store
     store.searchText = "forest"
     store.search()
-    let old = try await fixture.request(text: "forest", kind: .scene, sort: .trending, page: 1)
+    let old = try await fixture.request(text: "forest", kind: .all, sort: .trendingYear, page: 1)
     store.searchText = "rain"
     store.search()
     try await fixture.reply(
-      text: "rain", kind: .scene, sort: .trending, page: 1,
+      text: "rain", kind: .all, sort: .trendingYear, page: 1,
       body: pageHTML(id: "201", page: 1, pages: 2, count: 33))
     try await finished(store)
     store.loadPage(2)
     try await fixture.reply(
-      text: "rain", kind: .scene, sort: .trending, page: 2,
+      text: "rain", kind: .all, sort: .trendingYear, page: 2,
       body: Data(), status: 500)
     try await finished(store)
     try await waitUntil { old.isStopped }
@@ -173,8 +204,11 @@ final class WorkshopStoreTests: XCTestCase {
     XCTAssertNotNil(store.errorMessage)
     XCTAssertEqual(
       store.failedRequest,
-      WorkshopRequest(query: .init(text: "rain", kind: .scene, sort: .trending), page: 2))
-    assertBrowseURL(store, text: "rain", kind: .scene, sort: .trending, page: 1)
+      WorkshopRequest(
+        query: .init(
+          text: "rain", kind: .all, sort: .trendingYear,
+          excludedTags: WorkshopStore.defaultExcludedTags), page: 2))
+    assertBrowseURL(store, text: "rain", kind: .all, sort: .trendingYear, page: 1)
   }
 
   func testCompletionRacingReplacementCannotPublishOldSuccessOrError() async throws {
@@ -185,13 +219,13 @@ final class WorkshopStoreTests: XCTestCase {
       let store = fixture.store
       store.searchText = "forest"
       store.search()
-      let old = try await fixture.request(text: "forest", kind: .scene, sort: .trending, page: 1)
+      let old = try await fixture.request(text: "forest", kind: .all, sort: .trendingYear, page: 1)
       let oldBody = try pageHTML(id: "101", page: 1, pages: 9, count: 270)
       if succeeds { old.succeed(oldBody) } else { old.fail(URLError(.timedOut)) }
       // No actor suspension between completing the old request and superseding it.
       store.searchText = "rain"
       store.search()
-      let current = try await fixture.request(text: "rain", kind: .scene, sort: .trending, page: 1)
+      let current = try await fixture.request(text: "rain", kind: .all, sort: .trendingYear, page: 1)
       XCTAssertTrue(store.isLoading)
       XCTAssertFalse(store.hasLoaded)
       XCTAssertTrue(store.items.isEmpty)
@@ -201,7 +235,7 @@ final class WorkshopStoreTests: XCTestCase {
       try await finished(store)
       await fixture.drain()
       assertPage(store, id: "201", page: 1, pages: 1, count: 1)
-      assertBrowseURL(store, text: "rain", kind: .scene, sort: .trending, page: 1)
+      assertBrowseURL(store, text: "rain", kind: .all, sort: .trendingYear, page: 1)
       XCTAssertNil(store.errorMessage)
       XCTAssertNil(store.failedRequest)
     }
@@ -213,7 +247,7 @@ final class WorkshopStoreTests: XCTestCase {
     let store = fixture.store
     store.searchText = "forest"
     store.search()
-    let initial = try await fixture.request(text: "forest", kind: .scene, sort: .trending, page: 1)
+    let initial = try await fixture.request(text: "forest", kind: .all, sort: .trendingYear, page: 1)
     store.cancelSearch()
     try await waitUntil { initial.isStopped }
     initial.succeed(try pageHTML(id: "999", page: 1, pages: 1, count: 1))
@@ -226,93 +260,113 @@ final class WorkshopStoreTests: XCTestCase {
 
     store.search()
     try await fixture.reply(
-      text: "forest", kind: .scene, sort: .trending, page: 1,
+      text: "forest", kind: .all, sort: .trendingYear, page: 1,
       body: pageHTML(id: "101", page: 1, pages: 3, count: 65))
     try await finished(store)
     store.loadPage(2)
-    let next = try await fixture.request(text: "forest", kind: .scene, sort: .trending, page: 2)
+    let next = try await fixture.request(text: "forest", kind: .all, sort: .trendingYear, page: 2)
     store.cancelSearch()
     try await waitUntil { next.isStopped }
     next.succeed(try pageHTML(id: "102", page: 2, pages: 3, count: 65))
     await fixture.drain()
     XCTAssertFalse(store.isLoading)
     assertPage(store, id: "101", page: 1, pages: 3, count: 65)
-    assertBrowseURL(store, text: "forest", kind: .scene, sort: .trending, page: 1)
+    assertBrowseURL(store, text: "forest", kind: .all, sort: .trendingYear, page: 1)
     XCTAssertNil(store.failedRequest)
     XCTAssertNil(store.errorMessage)
   }
 
-  /// The panel reports how many tiles fill its grid; pages of that size are cut from Steam's
-  /// pages of 30, fetched on demand and reused from the cache when the size changes again.
-  func testPanelPageSizeComposesPagesFromCachedSteamPages() async throws {
+  /// A panel page is one Steam page of 30: paging fetches each page once and serves it from
+  /// the cache afterwards, and the page count never exceeds Steam's 1,000-page limit however
+  /// many results a query has.
+  func testPagesAreSteamPagesServedFromCacheAndCappedAtSteamsLimit() async throws {
     let fixture = try Fixture()
     defer { fixture.remove() }
     let store = fixture.store
     // Steam ids are numeric: 1001…1030 fill page 1, 2001…2030 page 2, and so on.
     let steamIDs = { (page: Int, count: Int) in (1...count).map { String(page * 1000 + $0) } }
     store.searchText = "forest"
-    store.setPageSize(40)
-    XCTAssertEqual(store.pageSize, 40)
     store.search()
-    // Steam's page count is unknown, so the first page goes alone before the span is clamped.
     try await fixture.reply(
-      text: "forest", kind: .scene, sort: .trending, page: 1,
+      text: "forest", kind: .all, sort: .trendingYear, page: 1,
       body: pageHTML(ids: steamIDs(1, 30), page: 1, pages: 3, count: 65))
-    try await fixture.reply(
-      text: "forest", kind: .scene, sort: .trending, page: 2,
-      body: pageHTML(ids: steamIDs(2, 30), page: 2, pages: 3, count: 65))
     try await finished(store)
-    XCTAssertEqual(store.items.map(\.id), steamIDs(1, 30) + Array(steamIDs(2, 30).prefix(10)))
+    XCTAssertEqual(store.items.map(\.id), steamIDs(1, 30))
     XCTAssertEqual(store.page, 1)
-    XCTAssertEqual(store.totalPages, 2, "65 reachable results make two pages of 40")
+    XCTAssertEqual(store.totalPages, 3)
     XCTAssertEqual(store.totalCount, 65)
     XCTAssertEqual(store.reachableCount, 65)
-    assertBrowseURL(store, text: "forest", kind: .scene, sort: .trending, page: 1)
+    assertBrowseURL(store, text: "forest", kind: .all, sort: .trendingYear, page: 1)
 
-    // The second panel page starts inside cached Steam page 2 and only fetches page 3.
     store.loadPage(2)
     try await fixture.reply(
-      text: "forest", kind: .scene, sort: .trending, page: 3,
-      body: pageHTML(ids: steamIDs(3, 5), page: 3, pages: 3, count: 65))
+      text: "forest", kind: .all, sort: .trendingYear, page: 2,
+      body: pageHTML(ids: steamIDs(2, 30), page: 2, pages: 3, count: 65))
     try await finished(store)
-    XCTAssertEqual(store.items.map(\.id), Array(steamIDs(2, 30).dropFirst(10)) + steamIDs(3, 5))
-    XCTAssertEqual(store.page, 2)
-    assertBrowseURL(store, text: "forest", kind: .scene, sort: .trending, page: 2)
-
-    // Shrinking the grid keeps the first visible tile: offset 40 lands on page 2 of 30, which
-    // is entirely cached, so nothing is requested and the store never reports loading.
-    store.setPageSize(30)
-    XCTAssertFalse(store.isLoading)
-    XCTAssertEqual(store.page, 2)
-    XCTAssertEqual(store.totalPages, 3)
     XCTAssertEqual(store.items.map(\.id), steamIDs(2, 30))
+    XCTAssertEqual(store.page, 2)
+    assertBrowseURL(store, text: "forest", kind: .all, sort: .trendingYear, page: 2)
+
+    // Paging back is served from the cache: nothing is requested and nothing shows as loading.
+    store.loadPage(1)
+    XCTAssertFalse(store.isLoading)
+    XCTAssertEqual(store.page, 1)
+    XCTAssertEqual(store.items.map(\.id), steamIDs(1, 30))
     XCTAssertFalse(fixture.inbox.hasRequest, "A cached page must not hit Steam again")
 
-    // A fresh search discards the cache even for the same query.
+    // Pages past the count are refused; a fresh search discards the cache, even for the same
+    // query, and the page count is clamped to Steam's limit whatever the page claims.
+    store.loadPage(4)
+    XCTAssertFalse(store.isLoading)
+    XCTAssertFalse(fixture.inbox.hasRequest)
     store.search()
     try await fixture.reply(
-      text: "forest", kind: .scene, sort: .trending, page: 1,
-      body: pageHTML(ids: steamIDs(1, 30), page: 1, pages: 3, count: 65))
+      text: "forest", kind: .all, sort: .trendingYear, page: 1,
+      body: pageHTML(ids: steamIDs(1, 30), page: 1, pages: 4000, count: 120_000))
     try await finished(store)
     XCTAssertEqual(store.items.count, 30)
     XCTAssertEqual(store.page, 1)
-
-    // Growing the grid while a page is loading restarts that page at the new size, joining the
-    // fetch already in flight instead of repeating it.
-    store.loadPage(3)
-    let pending = try await fixture.request(text: "forest", kind: .scene, sort: .trending, page: 3)
-    store.setPageSize(35)
-    XCTAssertTrue(store.isLoading)
-    // Page 2 of 35 starts on Steam page 2, which the fresh cache lacks; page 3 is joined.
+    XCTAssertEqual(store.totalPages, WorkshopStore.maxPages)
+    XCTAssertEqual(store.reachableCount, WorkshopStore.maxPages * WorkshopStore.pageSize)
+    XCTAssertEqual(store.totalCount, 120_000)
+    store.loadPage(WorkshopStore.maxPages + 1)
+    XCTAssertFalse(store.isLoading)
+    XCTAssertFalse(fixture.inbox.hasRequest, "No page beyond Steam's limit may be requested")
+    store.loadPage(WorkshopStore.maxPages)
     try await fixture.reply(
-      text: "forest", kind: .scene, sort: .trending, page: 2,
-      body: pageHTML(ids: steamIDs(2, 30), page: 2, pages: 3, count: 65))
-    pending.succeed(try pageHTML(ids: steamIDs(3, 5), page: 3, pages: 3, count: 65))
+      text: "forest", kind: .all, sort: .trendingYear, page: WorkshopStore.maxPages,
+      body: pageHTML(ids: steamIDs(999, 30), page: WorkshopStore.maxPages, pages: 4000, count: 120_000))
     try await finished(store)
-    XCTAssertEqual(store.page, 2, "offset 60 falls on the second page of 35")
-    XCTAssertEqual(store.items.map(\.id), Array(steamIDs(2, 30).dropFirst(5)) + steamIDs(3, 5))
-    XCTAssertFalse(fixture.inbox.hasRequest)
+    XCTAssertEqual(store.page, WorkshopStore.maxPages)
+    assertBrowseURL(store, text: "forest", kind: .all, sort: .trendingYear, page: WorkshopStore.maxPages)
     XCTAssertNil(store.errorMessage)
+  }
+
+  func testNextPageIsPrefetchedSoPagingForwardNeverWaits() async throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    let store = fixture.store
+    store.prefetchesNextPage = true
+    var announced: [[URL]] = []
+    store.onPreviewsAvailable = { announced.append($0) }
+    let steamIDs = { (page: Int) in (1...30).map { String(page * 1000 + $0) } }
+    store.searchText = "forest"
+    store.search()
+    try await fixture.reply(
+      text: "forest", kind: .all, sort: .trendingYear, page: 1,
+      body: pageHTML(ids: steamIDs(1), page: 1, pages: 2, count: 60))
+    try await finished(store)
+    XCTAssertEqual(store.page, 1)
+
+    // Page 2 is asked for without any navigation, and showing it then needs no request.
+    try await fixture.reply(
+      text: "forest", kind: .all, sort: .trendingYear, page: 2,
+      body: pageHTML(ids: steamIDs(2), page: 2, pages: 2, count: 60))
+    try await waitUntil { announced.count == 2 }
+    store.loadPage(2)
+    XCTAssertFalse(store.isLoading)
+    XCTAssertEqual(store.items.map(\.id), steamIDs(2))
+    XCTAssertFalse(fixture.inbox.hasRequest, "The last page has nothing after it to prefetch")
   }
 
   private func assertPage(
@@ -328,7 +382,8 @@ final class WorkshopStoreTests: XCTestCase {
 
   private func assertBrowseURL(
     _ store: WorkshopStore, text: String, kind: WorkshopKind, sort: WorkshopSort, page: Int,
-    tags: [String] = [], file: StaticString = #filePath, line: UInt = #line
+    tags: [String] = [], excludedTags: [String]? = nil, file: StaticString = #filePath,
+    line: UInt = #line
   ) {
     let values =
       URLComponents(url: store.browseURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
@@ -336,8 +391,15 @@ final class WorkshopStoreTests: XCTestCase {
     XCTAssertEqual(
       values.filter { $0.name == "requiredtags[]" }.compactMap(\.value),
       (kind == .all ? [] : [kind.rawValue]) + tags, file: file, line: line)
+    if let excludedTags {
+      XCTAssertEqual(
+        values.filter { $0.name == "excludedtags[]" }.compactMap(\.value), excludedTags,
+        file: file, line: line)
+    }
     XCTAssertEqual(
-      values.first { $0.name == "browsesort" }?.value, sort.rawValue, file: file, line: line)
+      values.first { $0.name == "browsesort" }?.value, sort.browseSort, file: file, line: line)
+    XCTAssertEqual(
+      values.first { $0.name == "days" }?.value, String(sort.days), file: file, line: line)
     XCTAssertEqual(values.first { $0.name == "p" }?.value, String(page), file: file, line: line)
   }
 
@@ -439,7 +501,8 @@ final class WorkshopStoreTests: XCTestCase {
     }
 
     func request(
-      text: String, kind: WorkshopKind, sort: WorkshopSort, page: Int, tags: [String] = []
+      text: String, kind: WorkshopKind, sort: WorkshopSort, page: Int, tags: [String] = [],
+      excludedTags: [String]? = nil
     ) async throws -> WorkshopFixtureProtocol {
       try await WorkshopStoreTests.waitUntil { self.inbox.hasRequest }
       let pending = inbox.take()
@@ -448,7 +511,10 @@ final class WorkshopStoreTests: XCTestCase {
       guard values.first(where: { $0.name == "searchtext" })?.value == text,
         values.filter({ $0.name == "requiredtags[]" }).compactMap(\.value)
           == (kind == .all ? [] : [kind.rawValue]) + tags,
-        values.first(where: { $0.name == "browsesort" })?.value == sort.rawValue,
+        excludedTags.map({ values.filter({ $0.name == "excludedtags[]" }).compactMap(\.value) == $0 })
+          ?? true,
+        values.first(where: { $0.name == "browsesort" })?.value == sort.browseSort,
+        values.first(where: { $0.name == "days" })?.value == String(sort.days),
         values.first(where: { $0.name == "p" })?.value == String(page)
       else {
         pending.fail(URLError(.badURL))
@@ -460,9 +526,10 @@ final class WorkshopStoreTests: XCTestCase {
     func reply(
       text: String, kind: WorkshopKind, sort: WorkshopSort, page: Int, body: Data,
       status: Int = 200,
-      tags: [String] = []
+      tags: [String] = [], excludedTags: [String]? = nil
     ) async throws {
-      let pending = try await request(text: text, kind: kind, sort: sort, page: page, tags: tags)
+      let pending = try await request(
+        text: text, kind: kind, sort: sort, page: page, tags: tags, excludedTags: excludedTags)
       pending.succeed(body, status: status)
     }
 

@@ -1,5 +1,7 @@
 import AppKit
+import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
 import XCTest
 
@@ -98,6 +100,69 @@ final class ControlPanelLayoutTests: XCTestCase {
         """, arguments: [:], in: nil, contentWorld: .page) as? Bool
     XCTAssertEqual(denied, true)
     XCTAssertNil(web.window, "This regression must not open a desktop window")
+    await workshop.steamCMDSetup.shutdown()
+  }
+
+  func testPanelRendersInTheControllerLanguage() async throws {
+    XCTAssertEqual(WebPanelController.pageLanguage("zh-Hans"), "zh-Hans")
+    XCTAssertEqual(WebPanelController.pageLanguage(nil), "en")
+    XCTAssertEqual(
+      WebPanelController.pageLanguage("en';alert(1);//"), "en",
+      "Only a plain language tag may be spliced into the user script")
+    let fixture = makeStore()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "web-panel-language-\(UUID().uuidString)")
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+    defer {
+      defaults.removePersistentDomain(forName: root.lastPathComponent)
+      try? FileManager.default.removeItem(at: root)
+    }
+    let workshop = WorkshopStore(
+      downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
+      defaults: defaults)
+    var rendered: [String: [String: Any]] = [:]
+    for language in ["en", "zh-Hans"] {
+      let controller = WebPanelController(
+        store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
+        language: language)
+      let web = controller.makeWebView()
+      defer { controller.stop() }
+      web.setFrameSize(NSSize(width: 960, height: 640))
+      let deadline = Date().addingTimeInterval(15)
+      while !controller.isReady && Date() < deadline {
+        try await Task.sleep(for: .milliseconds(100))
+      }
+      guard controller.isReady else { return XCTFail("\(language): panel did not become ready") }
+      rendered[language] =
+        try await web.callAsyncJavaScript(
+          """
+          const bridge = window.webkit.messageHandlers.native;
+          window.wallpaperUI.receive(await bridge.postMessage({action:'navigate',page:'installed'}));
+          const summary = document.getElementById('browser-summary').textContent;
+          window.wallpaperUI.receive(await bridge.postMessage({action:'navigate',page:'settings'}));
+          return {
+            lang: document.documentElement.lang,
+            tab: document.querySelector('.tabs [data-page="discover"]').textContent,
+            navLabel: document.querySelector('.tabs').getAttribute('aria-label'),
+            section: document.querySelector('#settings-tab-general').textContent,
+            summary,
+          };
+          """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+      XCTAssertNil(web.window, "This regression must not open a desktop window")
+    }
+    let english = try XCTUnwrap(rendered["en"])
+    let chinese = try XCTUnwrap(rendered["zh-Hans"])
+    XCTAssertEqual(english["lang"] as? String, "en")
+    XCTAssertEqual(chinese["lang"] as? String, "zh-Hans")
+    for key in ["tab", "navLabel", "section", "summary"] {
+      let en = try XCTUnwrap(english[key] as? String, key)
+      let zh = try XCTUnwrap(chinese[key] as? String, key)
+      XCTAssertFalse(en.isEmpty, key)
+      XCTAssertNotEqual(en, zh, "\(key): the page must render the controller's language, not English")
+      XCTAssertTrue(
+        zh.unicodeScalars.contains { $0.properties.isIdeographic },
+        "\(key): expected Han text, got \(zh)")
+    }
     await workshop.steamCMDSetup.shutdown()
   }
 
@@ -433,10 +498,13 @@ final class ControlPanelLayoutTests: XCTestCase {
     await workshop.steamCMDSetup.shutdown()
   }
 
-  /// Discover's filter sidebar collapses to a labelled rail to give the grid its column
-  /// back, and the inspector grows with wide windows or follows a dragged edge. Both
-  /// choices are stored natively because the page's website data store is not persistent.
-  func testWorkshopFilterSidebarCollapsesPersistsAndInspectorGrowsWithWidth() async throws {
+  /// Both library pages share one right-hand filter sidebar whose only switch is the
+  /// toolbar's Filter button: no rail, no collapse control inside the sidebar, and no
+  /// popover on Installed. Each page remembers its own choice natively because the
+  /// page's website data store is not persistent. The inspector's width is a function of
+  /// the window width alone: there is no drag handle, nothing is stored, and a width
+  /// left behind by an earlier build is discarded rather than applied.
+  func testFilterSidebarTogglesFromTheToolbarPerPageAndInspectorFollowsWindowWidth() async throws {
     let fixture = makeStore()
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
       "web-filters-\(UUID().uuidString)")
@@ -449,9 +517,14 @@ final class ControlPanelLayoutTests: XCTestCase {
       downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
       defaults: defaults)
     let navigation = ControlPanelNavigation()
+    // A width dragged in an earlier build must neither be applied nor kept.
+    defaults.set(320.0, forKey: WebPanelController.legacyInspectorWidthKey)
     let controller = WebPanelController(
       store: fixture.store, navigation: navigation, workshop: workshop, defaults: defaults)
-    XCTAssertFalse(controller.workshopFiltersCollapsed)
+    XCTAssertEqual(controller.filtersCollapsed, ["discover": false, "installed": false])
+    XCTAssertNil(
+      defaults.object(forKey: WebPanelController.legacyInspectorWidthKey),
+      "A stored inspector width from an earlier build is cleared on launch")
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 960, height: 640))
@@ -480,47 +553,58 @@ final class ControlPanelLayoutTests: XCTestCase {
         })
       }));
       const columns = () => getComputedStyle(document.getElementById('library-page')).gridTemplateColumns.split(' ').map(v => Math.round(parseFloat(v)));
+      const toggle = () => document.querySelector('.browser-toolbar [data-action="toggleFilters"]');
       const measure = () => {
-        const page = document.getElementById('library-page');
-        const toggle = document.querySelector('[data-action="toggleWorkshopFilters"]');
+        const sidebar = document.getElementById('filter-sidebar');
+        const bar = document.querySelector('.browser-toolbar').getBoundingClientRect();
+        const button = toggle();
+        const rect = button.getBoundingClientRect();
         return {
-          hidden: document.getElementById('workshop-filters').hidden,
-          collapsed: page.classList.contains('filters-collapsed'),
-          expanded: toggle ? toggle.getAttribute('aria-expanded') : null,
+          hidden: sidebar.hidden,
+          expanded: button.getAttribute('aria-expanded'),
+          label: button.querySelector('.button-label')?.textContent,
+          glyph: !!button.querySelector('svg'),
+          filled: getComputedStyle(button).backgroundColor,
+          // The button leads the toolbar and sits beside the sidebar it opens.
+          first: Math.round(rect.left - bar.left) <= 17,
+          besideSidebar: sidebar.hidden ? null : Math.round(sidebar.getBoundingClientRect().right) <= Math.round(rect.left),
+          sidebarLeftOfGrid: sidebar.hidden ? null : sidebar.getBoundingClientRect().right <= document.querySelector('.browser-column').getBoundingClientRect().left + 1,
+          sidebarAtLeftEdge: sidebar.hidden ? null : Math.round(sidebar.getBoundingClientRect().left) === 0,
+          insideToggles: sidebar.querySelectorAll('[data-action="toggleFilters"], .filter-rail, .filter-toggle').length,
+          popover: document.querySelectorAll('.installed-filter, .filter-popover').length,
+          sortOptions: [...document.querySelectorAll('#browser-sort option')].map(option => option.textContent),
+          sortValue: document.getElementById('browser-sort')?.value,
+          direction: !!document.querySelector('.browser-toolbar [data-action="toggleSortDirection"]'),
+          // Discover's boxes: which start unticked, and that no type menu remains.
+          unchecked: [...sidebar.querySelectorAll('input[type="checkbox"]:not(:checked)')].map(input => input.value),
+          boxes: sidebar.querySelectorAll('input[type="checkbox"]').length,
+          selects: sidebar.querySelectorAll('select').length,
+          filterCount: document.querySelector('.browser-toolbar .filter-count')?.textContent ?? null,
           columns: columns()
         };
       };
       showDiscover(await native.postMessage({action:'ready'}));
       const before = measure();
-      document.querySelector('[data-action="toggleWorkshopFilters"]').click();
-      // The native reply re-renders on its own page (Installed), which hides the sidebar
-      // without re-rendering it; either outcome means the round trip completed.
-      await waitFor(() => document.getElementById('workshop-filters').hidden
-        || document.querySelector('[data-action="toggleWorkshopFilters"]')?.getAttribute('aria-expanded') === 'false');
-      const reply = await native.postMessage({action:'ready'});
+      toggle().click();
+      // The native reply re-renders on its own page (Installed, whose sidebar is still
+      // open), so the round trip is complete once native reports Discover's choice.
+      let reply;
+      const settle = Date.now() + 5000;
+      while (!(reply = await native.postMessage({action:'ready'})).filtersCollapsed?.discover) {
+        if (Date.now() > settle) throw new Error('Filter choice did not reach native');
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
       showDiscover(reply);
       const after = measure();
       window.wallpaperUI.receive(Object.assign({}, reply, {page: 'installed'}));
       const installed = measure();
       showDiscover(reply);
-      // Drag the inspector edge 60px to the left, then double-click it back to the fluid width.
-      const resizer = document.getElementById('inspector-resizer');
-      const pointer = (type, clientX) => resizer.dispatchEvent(new PointerEvent(type, {bubbles: true, pointerId: 7, button: 0, clientX, clientY: 300}));
-      const edge = resizer.getBoundingClientRect().left + 4;
-      const dragStart = columns().at(-1);
-      pointer('pointerdown', edge);
-      pointer('pointermove', edge - 60);
-      const duringDrag = columns().at(-1);
-      pointer('pointerup', edge - 60);
-      const dragged = await native.postMessage({action:'ready'});
-      showDiscover(dragged);
-      const afterDrag = columns().at(-1);
-      resizer.dispatchEvent(new MouseEvent('dblclick', {bubbles: true}));
-      const reset = await native.postMessage({action:'ready'});
-      showDiscover(reset);
-      return {before, after, installed, flag: reply.workshopFiltersCollapsed,
-              dragStart, duringDrag, afterDrag, draggedWidth: dragged.inspectorWidth,
-              resetWidth: reset.inspectorWidth, afterReset: columns().at(-1)};
+      const inspector = document.getElementById('inspector');
+      return {before, after, installed, flags: reply.filtersCollapsed,
+              separators: document.querySelectorAll('[role="separator"], [class*="resizer"]').length,
+              snapshotWidth: 'inspectorWidth' in reply,
+              inspectorWidth: Math.round(inspector.getBoundingClientRect().width),
+              inspectorCursor: getComputedStyle(inspector).cursor};
       """
     let result =
       try await web.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page)
@@ -528,59 +612,207 @@ final class ControlPanelLayoutTests: XCTestCase {
     let before = result?["before"] as? [String: Any]
     XCTAssertEqual(before?["hidden"] as? Bool, false)
     XCTAssertEqual(before?["expanded"] as? String, "true")
+    XCTAssertEqual(before?["label"] as? String, "Filter", "The switch is a button that says Filter")
+    XCTAssertEqual(before?["glyph"] as? Bool, true, "…with a filter glyph beside the label")
+    XCTAssertEqual(before?["first"] as? Bool, true, "…leading the toolbar, beside the sidebar")
+    XCTAssertEqual(before?["besideSidebar"] as? Bool, true)
+    XCTAssertEqual(before?["sidebarLeftOfGrid"] as? Bool, true, "The sidebar is on the left of the grid")
+    XCTAssertEqual(before?["sidebarAtLeftEdge"] as? Bool, true, "…at the window's left edge; the inspector keeps the right")
+    XCTAssertEqual(before?["insideToggles"] as? Int, 0, "The sidebar carries no collapse control of its own")
+    XCTAssertNotEqual(before?["filled"] as? String, "rgba(0, 0, 0, 0)", "The Filter button is filled, not a quiet control")
     XCTAssertEqual((before?["columns"] as? [Int])?.count, 3, "Discover starts with the sidebar column")
-    XCTAssertEqual((before?["columns"] as? [Int])?.last, 260, "Windows under 1040px use the compact 260px inspector")
+    XCTAssertEqual((before?["columns"] as? [Int])?.first, 160, "The sidebar is the first column (160px below 1040px)")
+    XCTAssertEqual((before?["columns"] as? [Int])?.last, 290, "A 960px window gets a 290px inspector (15vw + 146px)")
     let after = result?["after"] as? [String: Any]
-    XCTAssertEqual(after?["hidden"] as? Bool, false, "The collapsed sidebar stays as a clickable rail")
-    XCTAssertEqual(after?["collapsed"] as? Bool, true)
+    XCTAssertEqual(after?["hidden"] as? Bool, true, "Closing removes the sidebar entirely; no rail remains")
     XCTAssertEqual(after?["expanded"] as? String, "false")
-    XCTAssertEqual((after?["columns"] as? [Int])?.count, 3)
-    XCTAssertEqual((after?["columns"] as? [Int])?.first, 36, "Collapsing shrinks the sidebar to its rail")
-    XCTAssertEqual(result?["dragStart"] as? Int, 260)
-    XCTAssertEqual(result?["duringDrag"] as? Int, 320, "The inspector follows the pointer while dragging")
-    XCTAssertEqual(result?["afterDrag"] as? Int, 320, "The dragged width survives a native snapshot")
-    XCTAssertEqual(result?["draggedWidth"] as? Double, 320)
-    XCTAssertTrue(result?["resetWidth"] is NSNull, "Double-click clears the stored width")
-    XCTAssertEqual(result?["afterReset"] as? Int, 260, "Reset returns to the fluid stylesheet width")
+    XCTAssertEqual(after?["first"] as? Bool, true, "The Filter button stays where it was so it can reopen the sidebar")
+    XCTAssertEqual((after?["columns"] as? [Int])?.count, 2, "Closed, the grid takes the sidebar's column")
+    XCTAssertEqual(result?["separators"] as? Int, 0, "The inspector edge is not a drag handle")
+    XCTAssertEqual(result?["snapshotWidth"] as? Bool, false, "The snapshot carries no inspector width")
+    XCTAssertEqual(result?["inspectorWidth"] as? Int, 290, "The grid column and the rendered inspector agree")
+    XCTAssertEqual(result?["inspectorCursor"] as? String, "auto", "Nothing invites resizing")
     let installed = result?["installed"] as? [String: Any]
-    XCTAssertEqual(installed?["collapsed"] as? Bool, false, "Installed never carries the Discover-only class")
-    XCTAssertEqual(result?["flag"] as? Bool, true)
+    XCTAssertEqual(installed?["hidden"] as? Bool, false, "Installed has its own sidebar, still open after Discover's was closed")
+    XCTAssertEqual(installed?["expanded"] as? String, "true")
+    XCTAssertEqual(installed?["label"] as? String, "Filter", "Installed uses the same Filter button")
+    XCTAssertEqual(installed?["first"] as? Bool, true)
+    XCTAssertEqual(installed?["popover"] as? Int, 0, "The old Filters popover is gone")
+    XCTAssertEqual(installed?["insideToggles"] as? Int, 0)
+    XCTAssertEqual((installed?["columns"] as? [Int])?.count, 3)
+    XCTAssertEqual(
+      installed?["sortOptions"] as? [String], ["Name", "Type", "Favorites", "File size", "Date added"],
+      "Installed keeps its sort menu, with the new keys")
+    XCTAssertEqual(installed?["direction"] as? Bool, true, "…and a direction switch beside it")
+    XCTAssertEqual(before?["direction"] as? Bool, false, "Discover's Steam sorts have no direction")
+    XCTAssertEqual(before?["sortValue"] as? String, "trend-year", "Discover opens on this year's most popular")
+    XCTAssertEqual(
+      before?["unchecked"] as? [String],
+      ["Approved", "Audio responsive", "Customizable", "Questionable", "Mature", "Unspecified"],
+      "Wallpaper Engine's defaults: nothing in Show only, Everyone-only, genre-less hidden; every other box ticked")
+    XCTAssertEqual(before?["boxes"] as? Int, 3 + 5 + 3 + 25 + 25, "Show only, Type, Age rating, Resolution and Tags")
+    XCTAssertEqual(before?["selects"] as? Int, 0, "No type menu: types are boxes like Wallpaper Engine's")
+    XCTAssertNil(before?["filterCount"] as? String, "Defaults count as no active filter")
+    XCTAssertEqual(result?["flags"] as? [String: Bool], ["discover": true, "installed": false])
     XCTAssertNil(controller.actionError)
-    XCTAssertTrue(controller.workshopFiltersCollapsed)
-    XCTAssertTrue(defaults.bool(forKey: WebPanelController.workshopFiltersCollapsedKey))
-    XCTAssertNil(defaults.object(forKey: WebPanelController.inspectorWidthKey))
-    XCTAssertNil(controller.inspectorWidth)
-    defaults.set(300.0, forKey: WebPanelController.inspectorWidthKey)
+    XCTAssertEqual(controller.filtersCollapsed, ["discover": true, "installed": false])
+    XCTAssertTrue(defaults.bool(forKey: WebPanelController.filtersCollapsedKeys["discover"]!))
+    XCTAssertFalse(defaults.bool(forKey: WebPanelController.filtersCollapsedKeys["installed"]!))
+    XCTAssertNil(defaults.object(forKey: WebPanelController.legacyInspectorWidthKey))
     let relaunched = WebPanelController(
       store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
       defaults: defaults)
-    XCTAssertTrue(relaunched.workshopFiltersCollapsed, "The choice must survive a relaunch")
-    XCTAssertEqual(relaunched.snapshot()["workshopFiltersCollapsed"] as? Bool, true)
-    XCTAssertEqual(relaunched.inspectorWidth, 300, "A stored width must survive a relaunch")
-    XCTAssertEqual(relaunched.snapshot()["inspectorWidth"] as? Double, 300)
-    defaults.removeObject(forKey: WebPanelController.inspectorWidthKey)
+    XCTAssertEqual(
+      relaunched.filtersCollapsed, ["discover": true, "installed": false],
+      "The choice must survive a relaunch, page by page")
+    XCTAssertEqual(relaunched.snapshot()["filtersCollapsed"] as? [String: Bool], ["discover": true, "installed": false])
+    XCTAssertNil(relaunched.snapshot()["inspectorWidth"], "No inspector width is published")
 
-    web.setFrameSize(NSSize(width: 1600, height: 900))
-    let wide =
-      try await web.callAsyncJavaScript(
-        """
-        const deadline = Date.now() + 5000;
-        const last = () => Math.round(parseFloat(getComputedStyle(document.getElementById('library-page')).gridTemplateColumns.split(' ').pop()));
-        while (last() === 280) {
-          if (Date.now() > deadline) throw new Error('Inspector did not grow with the window');
-          await new Promise(resolve => setTimeout(resolve, 20));
-        }
-        return last();
-        """, arguments: [:], in: nil, contentWorld: .page) as? Int
-    XCTAssertEqual(wide, 340, "At 1600px the inspector reaches its 340px cap")
+    // The width is the same function of the window on both pages: 260px at the 760px
+    // minimum, 15vw + 146px in between, 420px from about 1830px on. The window is
+    // widened and narrowed in turn so the value cannot be an artefact of the order.
+    let expectations: [(width: Double, page: String, inspector: Int)] = [
+      (1600, "discover", 386), (760, "discover", 260), (760, "installed", 260),
+      (2000, "installed", 420), (1040, "installed", 302), (1040, "discover", 302),
+    ]
+    for expectation in expectations {
+      web.setFrameSize(NSSize(width: expectation.width, height: 900))
+      let measured =
+        try await web.callAsyncJavaScript(
+          """
+          const snapshot = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+          window.wallpaperUI.receive(Object.assign({}, snapshot, {
+            page, workshop: Object.assign({}, snapshot.workshop, {page: 1, totalPages: 1, loaded: true, loading: false, items: [], error: null})
+          }));
+          const deadline = Date.now() + 5000;
+          while (Math.round(document.documentElement.clientWidth) !== expected) {
+            if (Date.now() > deadline) throw new Error(`Viewport did not reach ${expected}px`);
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+          const columns = getComputedStyle(document.getElementById('library-page')).gridTemplateColumns.split(' ').map(v => Math.round(parseFloat(v)));
+          return {inspector: Math.round(document.getElementById('inspector').getBoundingClientRect().width),
+                  last: columns.at(-1), sum: columns.reduce((a, b) => a + b, 0)};
+          """, arguments: ["page": expectation.page, "expected": expectation.width], in: nil,
+          contentWorld: .page) as? [String: Any]
+      XCTAssertEqual(
+        measured?["inspector"] as? Int, expectation.inspector,
+        "At \(Int(expectation.width))px on \(expectation.page) the inspector is \(expectation.inspector)px wide")
+      XCTAssertEqual(measured?["last"] as? Int, expectation.inspector, "The grid column matches the inspector")
+      XCTAssertEqual(
+        measured?["sum"] as? Int, Int(expectation.width),
+        "The columns fill the window exactly at \(Int(expectation.width))px on \(expectation.page)")
+    }
     XCTAssertNil(web.window)
     await workshop.steamCMDSetup.shutdown()
   }
 
+  /// Installed sorts by name, type, favorites, folder size or date added, in either
+  /// direction: picking a key starts in the direction people ask for it (names A→Z,
+  /// the rest largest / newest / starred first), the direction button flips it, names
+  /// break ties, and wallpapers whose folder has not been measured yet sort last.
+  func testInstalledSortsByEveryKeyInBothDirectionsWithoutWindow() async throws {
+    try await withPanel { panel in
+      panel.show()
+      try await panel.waitJS("powerProbe.received.length >= 1")
+      let order = try await panel.js("""
+        const base = window.powerProbe.received.at(-1);
+        const wallpaper = (id, title, kind, size, addedAt) => ({ id, title, kind, size, addedAt, preview: null, active: false, supported: true, tags: [] });
+        const wallpapers = [
+          wallpaper('b', 'Beta', 'Video', 300, 3000), wallpaper('a', 'alpha', 'Scene', 100, null),
+          wallpaper('c', 'Gamma', 'Scene', null, 1000), wallpaper('d', 'Delta', 'Web', 200, 2000),
+        ];
+        window.wallpaperUI.receive(Object.assign({}, base, { page: 'installed', wallpapers, favorites: ['c', 'a'] }));
+        const titles = () => [...document.querySelectorAll('.tile-title')].map(node => node.textContent);
+        const sort = document.getElementById('browser-sort');
+        const pick = value => { sort.value = value; sort.dispatchEvent(new Event('change', { bubbles: true })); };
+        const flip = () => document.querySelector('[data-action="toggleSortDirection"]').click();
+        const result = { initial: titles() };
+        for (const key of ['type', 'favorites', 'size', 'added', 'title']) {
+          pick(key);
+          result[key] = titles();
+          flip();
+          result[`${key}Flipped`] = titles();
+        }
+        result.direction = document.querySelector('[data-action="toggleSortDirection"]').getAttribute('title');
+        return result;
+        """) as? [String: Any]
+      XCTAssertEqual(order?["initial"] as? [String], ["alpha", "Beta", "Delta", "Gamma"], "Names A→Z by default, case-insensitively")
+      XCTAssertEqual(order?["type"] as? [String], ["alpha", "Gamma", "Beta", "Delta"], "Type, names breaking ties")
+      XCTAssertEqual(order?["typeFlipped"] as? [String], ["Delta", "Beta", "alpha", "Gamma"])
+      XCTAssertEqual(order?["favorites"] as? [String], ["alpha", "Gamma", "Beta", "Delta"], "Favorites first")
+      XCTAssertEqual(order?["favoritesFlipped"] as? [String], ["Beta", "Delta", "alpha", "Gamma"])
+      XCTAssertEqual(order?["size"] as? [String], ["Beta", "Delta", "alpha", "Gamma"], "Largest first; an unmeasured folder sorts last")
+      XCTAssertEqual(order?["sizeFlipped"] as? [String], ["alpha", "Delta", "Beta", "Gamma"], "…in both directions")
+      XCTAssertEqual(order?["added"] as? [String], ["Beta", "Delta", "Gamma", "alpha"], "Newest first; no date sorts last")
+      XCTAssertEqual(order?["addedFlipped"] as? [String], ["Gamma", "Delta", "Beta", "alpha"])
+      XCTAssertEqual(order?["title"] as? [String], ["alpha", "Beta", "Delta", "Gamma"], "Choosing a key resets to its natural direction")
+      XCTAssertEqual(order?["titleFlipped"] as? [String], ["Gamma", "Delta", "Beta", "alpha"])
+      XCTAssertEqual(order?["direction"] as? String, "Name, descending. Click to sort ascending")
+    }
+  }
+
+  /// Tiles wear Wallpaper Engine's corner marks: a green trophy for a staff-approved
+  /// wallpaper and a heart for a favorite, on Installed and Discover alike, plus the
+  /// library check on Discover. The marks step aside with the Active badge while the
+  /// select check is showing, and the favorite toggle itself no longer stays lit.
+  func testTilesWearApprovedAndFavoriteMarksWithoutWindow() async throws {
+    try await withPanel { panel in
+      panel.show()
+      try await panel.waitJS("powerProbe.received.length >= 1")
+      let result = try await panel.js("""
+        const base = window.powerProbe.received.at(-1);
+        const wallpaper = (id, title, approved) => ({ id, title, kind: 'Scene', approved, preview: null, active: false, supported: true, tags: [], size: 1, addedAt: 1 });
+        const wallpapers = [wallpaper('a', 'Approved', true), wallpaper('b', 'Loved', false), wallpaper('c', 'Both', true), wallpaper('d', 'Plain', false)];
+        const display = Object.assign({}, base.displays[0], { wallpaperID: 'c' });
+        window.wallpaperUI.receive(Object.assign({}, base, { page: 'installed', wallpapers, favorites: ['b', 'c'], displays: [display], targetDisplayID: display.id }));
+        const tile = id => document.querySelector(`.wallpaper-tile [data-id="${id}"]`).closest('.wallpaper-tile');
+        const marks = id => [...tile(id).querySelectorAll('.tile-mark')].map(node => node.className.replace('tile-mark', '').trim());
+        const left = node => Math.round(node.getBoundingClientRect().left - node.closest('.wallpaper-tile').getBoundingClientRect().left);
+        const installed = {
+          a: marks('a'), b: marks('b'), c: marks('c'), d: marks('d'),
+          announced: tile('c').querySelector('.tile-select').getAttribute('aria-label').split(', ').length - tile('d').querySelector('.tile-select').getAttribute('aria-label').split(', ').length,
+          toggleHidden: getComputedStyle(tile('b').querySelector('.tile-favorite')).opacity === '0',
+          trophyGreen: getComputedStyle(tile('a').querySelector('.tile-mark.approved')).color !== getComputedStyle(tile('a').querySelector('.tile-mark')).backgroundColor,
+          badgeAfterMarks: left(tile('c').querySelector('.active-badge')) > left(tile('c').querySelector('.tile-marks')) + 20,
+          marksAtCorner: left(tile('c').querySelector('.tile-marks')),
+        };
+        tile('c').querySelector('.tile-check').click();
+        await new Promise(resolve => setTimeout(resolve, 50));
+        // The marks slide into place (`transition: left`), and an offscreen web view never
+        // services a transition, so the measured position would stay at its start value.
+        document.getAnimations().forEach(animation => animation.finish());
+        const checked = { marksMoved: left(tile('c').querySelector('.tile-marks')), badgeMoved: left(tile('c').querySelector('.active-badge')) };
+        const item = (id, tags) => ({ id, title: id, creator: 'Test', summary: '', preview: null, thumbnail: null, tags, size: 1, subscriptions: 0, kind: 'Scene', approved: tags.includes('Approved') });
+        window.wallpaperUI.receive(Object.assign({}, base, { page: 'discover', wallpapers, favorites: ['b', 'c'], downloads: [], downloadRequests: [],
+          workshop: Object.assign({}, base.workshop, { items: [item('c', ['Approved', 'Scene']), item('x', ['Approved']), item('y', ['Scene'])], loaded: true }) }));
+        const discover = { c: marks('c'), x: marks('x'), y: marks('y'), noCheck: !tile('x').querySelector('.tile-check') };
+        return { installed, checked, discover };
+        """) as? [String: Any]
+      let installed = result?["installed"] as? [String: Any]
+      XCTAssertEqual(installed?["a"] as? [String], ["approved"], "An approved wallpaper wears the trophy")
+      XCTAssertEqual(installed?["b"] as? [String], ["favorite"], "A favorite wears the heart")
+      XCTAssertEqual(installed?["c"] as? [String], ["approved", "favorite"], "Both stack, trophy first")
+      XCTAssertEqual(installed?["d"] as? [String], [], "A plain wallpaper wears nothing")
+      XCTAssertEqual(installed?["announced"] as? Int, 2, "Screen readers hear both marks on the tile's own label")
+      XCTAssertEqual(installed?["toggleHidden"] as? Bool, true, "The favorite toggle waits for hover; the heart mark carries the state")
+      XCTAssertEqual(installed?["trophyGreen"] as? Bool, true)
+      XCTAssertEqual(installed?["marksAtCorner"] as? Int, 6, "Marks sit in the corner while the select check is hidden")
+      XCTAssertEqual(installed?["badgeAfterMarks"] as? Bool, true, "The Active badge sits after the marks")
+      let checked = result?["checked"] as? [String: Any]
+      XCTAssertEqual(checked?["marksMoved"] as? Int, 35, "Ticking the tile moves the marks past the select check")
+      XCTAssertEqual(checked?["badgeMoved"] as? Int, 59, "…and the Active badge past the marks")
+      let discover = result?["discover"] as? [String: Any]
+      XCTAssertEqual(discover?["c"] as? [String], ["installed", "approved", "favorite"], "Discover adds the library check ahead of the marks")
+      XCTAssertEqual(discover?["x"] as? [String], ["approved"], "Steam's Approved tag marks a Discover tile")
+      XCTAssertEqual(discover?["y"] as? [String], [])
+      XCTAssertEqual(discover?["noCheck"] as? Bool, true, "Discover tiles have no select check to step past")
+    }
+  }
+
   /// Steam clamps every public query to 1,000 pages of 30, so the panel must let people
-  /// jump straight to a page, clamp typed numbers to that range, and explain the cap
-  /// instead of pretending millions of results are reachable.
-  func testWorkshopPageJumpClampsToSteamsPageLimitAndExplainsTheCap() async throws {
+  /// jump straight to a page and clamp typed numbers to that range instead of pretending
+  /// millions of results are reachable.
+  func testWorkshopPageJumpClampsToSteamsPageLimit() async throws {
     let fixture = makeStore()
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
       "web-page-jump-\(UUID().uuidString)")
@@ -622,148 +854,30 @@ final class ControlPanelLayoutTests: XCTestCase {
         const form = document.querySelector('form[data-form="workshopPage"]');
         if (!form) throw new Error('Page jump form missing');
         const input = form.elements.page;
-        const note = document.querySelector('.pagination-note')?.textContent || '';
         const max = input.getAttribute('max');
         input.value = '5000';
         form.requestSubmit();
         await new Promise(resolve => setTimeout(resolve, 50));
         const request = sent.find(message => message.action === 'workshopPage');
         show({ totalPages: 1, totalCount: 12 });
-        const smallNote = document.querySelector('.pagination-note');
         const single = document.querySelector('form[data-form="workshopPage"] input[name="page"]');
-        return { note, requestedPage: request ? request.page : null, max, smallNote: Boolean(smallNote), disabled: Boolean(single && single.disabled) };
+        return { requestedPage: request ? request.page : null, max, disabled: Boolean(single && single.disabled) };
         """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
     XCTAssertEqual(result?["max"] as? String, "1000")
     XCTAssertEqual(result?["requestedPage"] as? Int, 1000, "Typed pages must clamp to Steam's last page")
-    let note = try XCTUnwrap(result?["note"] as? String)
-    XCTAssertTrue(note.contains("30,000") && note.contains("2,891,159"), "Cap note was: \(note)")
-    XCTAssertEqual(result?["smallNote"] as? Bool, false, "A fully reachable result set needs no cap note")
     XCTAssertEqual(result?["disabled"] as? Bool, true, "A single page leaves nothing to jump to")
     XCTAssertNil(controller.actionError)
     await workshop.steamCMDSetup.shutdown()
   }
 
-  /// A Discover page holds exactly the tiles that fit the grid without scrolling: the page
-  /// measures its columns and full rows, reports that size, and re-measures after a resize.
-  func testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes() async throws {
+  /// Discover tiles are exactly square, never fewer than three to a row (even at the 760px
+  /// window minimum with the filter sidebar open), and gain columns as the window widens.
+  /// A page is a fixed 30 tiles that scroll, so the panel never reports a page size, and the
+  /// column count settles at once after a resize instead of flapping.
+  func testDiscoverGridKeepsSquareTilesInAtLeastThreeStableColumns() async throws {
     let fixture = makeStore()
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "page-size-\(UUID().uuidString)")
-    let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
-    defer {
-      defaults.removePersistentDomain(forName: root.lastPathComponent)
-      try? FileManager.default.removeItem(at: root)
-    }
-    let workshop = WorkshopStore(
-      downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
-      defaults: defaults)
-    let navigation = ControlPanelNavigation()
-    let controller = WebPanelController(
-      store: fixture.store, navigation: navigation, workshop: workshop)
-    let web = controller.makeWebView()
-    defer { controller.stop() }
-    web.setFrameSize(NSSize(width: 960, height: 640))
-    let deadline = Date().addingTimeInterval(15)
-    while !controller.isReady && Date() < deadline {
-      try await Task.sleep(for: .milliseconds(100))
-    }
-    XCTAssertTrue(controller.isReady)
-    guard controller.isReady else { return }
-    let script = """
-      try {
-      window.__waitFor = async predicate => {
-        const deadline = Date.now() + 5000;
-        while (!predicate()) {
-          if (Date.now() > deadline) throw new Error('Page size request did not arrive');
-          await new Promise(resolve => setTimeout(resolve, 20));
-        }
-      };
-      if (!window.__sent) {
-        window.__sent = [];
-        const original = window.webkit.messageHandlers.native.postMessage.bind(window.webkit.messageHandlers.native);
-        window.webkit.messageHandlers.native.postMessage = message => { window.__sent.push(message); return original(message); };
-        window.__snapshot = await original({action:'ready'});
-        window.__items = Array.from({ length: 240 }, (_, index) => ({ id: `item-${index}`, title: `Tile ${index}`, kind: 'Scene' }));
-      }
-      window.__show = workshop => window.wallpaperUI.receive(Object.assign({}, window.__snapshot, {
-        page: 'discover',
-        workshop: Object.assign({}, window.__snapshot.workshop, {
-          page: 1, totalPages: 8, totalCount: 240, reachable: 240, pageSize: 30,
-          loaded: true, loading: false, items: window.__items, error: null
-        }, workshop)
-      }));
-      // What fits: the resolved column count and the rows of square tiles the grid's height holds.
-      window.__fits = () => {
-        const grid = document.getElementById('wallpaper-grid');
-        const style = getComputedStyle(grid);
-        const columns = style.gridTemplateColumns.split(' ').length;
-        const tile = grid.querySelector('.tile-select').getBoundingClientRect().height;
-        const gap = parseFloat(style.rowGap);
-        const inner = grid.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-        return { columns, rows: Math.floor((inner + gap) / (tile + gap)) };
-      };
-      const before = window.__sent.filter(message => message.action === 'workshopPageSize').length;
-      window.__show({ pageSize: previous || 30, items: previous ? window.__items.slice(0, previous) : window.__items });
-      const fits = window.__fits();
-      await window.__waitFor(() => window.__sent.filter(message => message.action === 'workshopPageSize').length > before);
-      const request = window.__sent.filter(message => message.action === 'workshopPageSize').pop();
-      // The native reply re-renders its own (Installed) snapshot; show Discover again with exactly
-      // that many tiles at that size: they must fill the grid without a scrollbar.
-      await new Promise(resolve => setTimeout(resolve, 300));
-      window.__show({ pageSize: request.size, items: window.__items.slice(0, request.size) });
-      const grid = document.getElementById('wallpaper-grid');
-      const tile = grid.querySelector('.tile-select').getBoundingClientRect().height;
-      const count = window.__sent.filter(message => message.action === 'workshopPageSize').length;
-      return { size: request.size, expected: fits.columns * fits.rows, columns: fits.columns, rows: fits.rows,
-               overflow: grid.scrollHeight - grid.clientHeight, slack: grid.clientHeight - grid.scrollHeight, tile, extra: count - before - 1 };
-      } catch (error) { return { error: `${error && error.name}: ${error && error.message} | ${String(error)} | ${error && error.stack}` }; }
-      """
-    let smallResult = try await web.callAsyncJavaScript(
-      script, arguments: ["previous": 0], in: nil, contentWorld: .page)
-    let small = smallResult as? [String: Any] ?? [:]
-    let smallSize = small["size"] as? Int ?? -1
-    XCTAssertNil(small["error"], "Page script failed: \(small)")
-    XCTAssertEqual(smallSize, small["expected"] as? Int, "Page size must be columns × full rows: \(small)")
-    XCTAssertGreaterThan(smallSize, 1)
-    XCTAssertLessThanOrEqual(small["overflow"] as? Double ?? 1, 0, "A full page must not scroll: \(small)")
-    XCTAssertLessThan(
-      small["slack"] as? Double ?? .infinity, (small["tile"] as? Double ?? 0) + 12,
-      "Less than a row must stay empty beneath a full page: \(small)")
-    XCTAssertEqual(small["extra"] as? Int, 0, "A page of the reported size must not be re-measured")
-    let smallDeadline = Date().addingTimeInterval(3)
-    while workshop.pageSize != smallSize && Date() < smallDeadline {
-      try await Task.sleep(for: .milliseconds(50))
-    }
-    XCTAssertEqual(workshop.pageSize, smallSize)
-
-    web.setFrameSize(NSSize(width: 1400, height: 900))
-    let largeResult = try await web.callAsyncJavaScript(
-      script, arguments: ["previous": smallSize], in: nil, contentWorld: .page)
-    let large = largeResult as? [String: Any] ?? [:]
-    let largeSize = large["size"] as? Int ?? -1
-    XCTAssertNil(large["error"], "Page script failed: \(large)")
-    XCTAssertEqual(largeSize, large["expected"] as? Int, "Page size must follow the resize: \(large)")
-    XCTAssertGreaterThan(largeSize, smallSize)
-    XCTAssertLessThanOrEqual(large["overflow"] as? Double ?? 1, 0, "A full page must not scroll: \(large)")
-    let largeDeadline = Date().addingTimeInterval(3)
-    while workshop.pageSize != largeSize && Date() < largeDeadline {
-      try await Task.sleep(for: .milliseconds(50))
-    }
-    XCTAssertEqual(workshop.pageSize, largeSize)
-    XCTAssertNil(controller.actionError)
-    await workshop.steamCMDSetup.shutdown()
-  }
-
-
-  /// Square tiles sized by the grid's width rarely divide its height evenly, so a page of whole
-  /// rows could leave nearly a row blank (a 1px shortfall costs a whole row). Discover tiles may
-  /// stretch or squash by up to 15% so the rows fill the grid; with three or more rows one of the
-  /// two candidate row counts always lands inside that tolerance. The native side is stood in for
-  /// by a reply that cuts the page to the requested size, as the store does from its cache.
-  func testDiscoverPageRowsFillTheGridHeight() async throws {
-    let fixture = makeStore()
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "page-fill-\(UUID().uuidString)")
+      "grid-columns-\(UUID().uuidString)")
     let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
     defer {
       defaults.removePersistentDomain(forName: root.lastPathComponent)
@@ -786,52 +900,64 @@ final class ControlPanelLayoutTests: XCTestCase {
     guard controller.isReady else { return }
     let setup = """
       const original = window.webkit.messageHandlers.native.postMessage.bind(window.webkit.messageHandlers.native);
+      window.__sent = [];
+      window.webkit.messageHandlers.native.postMessage = message => { window.__sent.push(message); return original(message); };
       window.__snapshot = await original({action:'ready'});
-      window.__items = Array.from({ length: 240 }, (_, index) => ({ id: `item-${index}`, title: `Tile ${index}`, kind: 'Scene' }));
-      window.__size = 30;
-      window.__make = extra => Object.assign({}, window.__snapshot, { page: 'discover', workshop: Object.assign({}, window.__snapshot.workshop, {
-        page: 1, totalPages: 1000, totalCount: 1576662, reachable: 30000, pageSize: window.__size, loaded: true, loading: false,
-        items: window.__items.slice(0, window.__size), error: null }, extra) });
-      window.webkit.messageHandlers.native.postMessage = message => {
-        if (message.action !== 'workshopPageSize') return original(message);
-        return new Promise(resolve => setTimeout(() => {
-          window.__size = message.size;
-          resolve(window.__make({ loading: true, items: [] }));
-          setTimeout(() => window.wallpaperUI.receive(window.__make({})), 40);
-        }, 30));
-      };
-      window.wallpaperUI.receive(window.__make({ loading: true, items: [] }));
-      await new Promise(resolve => setTimeout(resolve, 200));
-      window.wallpaperUI.receive(window.__make({}));
-      return true;
+      window.__items = Array.from({ length: 30 }, (_, index) => ({ id: `item-${index}`, title: `Tile ${index}`, kind: 'Scene' }));
+      window.__show = page => window.wallpaperUI.receive(Object.assign({}, window.__snapshot, { page,
+        wallpapers: window.__items.map(item => Object.assign({ preview: null, active: false, supported: true, tags: [] }, item)),
+        workshop: Object.assign({}, window.__snapshot.workshop, {
+        page: 1, totalPages: 1000, totalCount: 1576662, reachable: 30000, pageSize: 30, maxPages: 1000,
+        loaded: true, loading: false, items: window.__items, error: null }) }));
+      window.__show('discover');
+      return window.__snapshot.workshop.pageSize;
       """
-    _ = try await web.callAsyncJavaScript(setup, arguments: [:], in: nil, contentWorld: .page)
+    let pageSize = try await web.callAsyncJavaScript(
+      setup, arguments: [:], in: nil, contentWorld: .page) as? Int
+    XCTAssertEqual(pageSize, WorkshopStore.pageSize, "A page is one Steam page of 30")
     let probe = """
-      await new Promise(resolve => setTimeout(resolve, 700));
+      const deadline = Date.now() + 5000;
+      while (Math.round(document.documentElement.clientWidth) !== expected) {
+        if (Date.now() > deadline) throw new Error(`Viewport did not reach ${expected}px`);
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      window.__show(page);
       const grid = document.getElementById('wallpaper-grid');
-      const style = getComputedStyle(grid);
-      const columns = style.gridTemplateColumns.split(' ').length;
-      const box = grid.querySelector('.tile-select').getBoundingClientRect();
-      const gap = parseFloat(style.rowGap);
-      const inner = grid.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-      const rows = Math.floor((inner + gap) / (box.height + gap));
-      return { size: window.__size, expected: columns * rows, rows, overflow: grid.scrollHeight - grid.clientHeight,
-               slack: grid.clientHeight - grid.scrollHeight, stretch: Math.abs(box.height - box.width) / box.width };
+      const columnsNow = () => getComputedStyle(grid).gridTemplateColumns.split(' ').length;
+      // Sample the column count over a few hundred milliseconds: it must not flap after a resize.
+      const samples = [];
+      for (let index = 0; index < 8; index += 1) {
+        samples.push(columnsNow());
+        await new Promise(resolve => setTimeout(resolve, 40));
+      }
+      const tiles = [...grid.querySelectorAll('.tile-select')].map(tile => tile.getBoundingClientRect());
+      const first = tiles[0];
+      const widths = new Set(tiles.map(tile => Math.round(tile.width)));
+      return { columns: samples[0], stable: samples.every(count => count === samples[0]), tiles: tiles.length,
+               square: Math.abs(first.height - first.width), uniform: widths.size === 1,
+               pageSizeRequests: window.__sent.filter(message => message.action === 'workshopPageSize').length,
+               scrolls: grid.scrollHeight > grid.clientHeight, gridWidth: grid.clientWidth };
       """
-    // 1229×600 once toggled a scrollbar on and off every frame; 994×737 is the reported window,
-    // where four rows miss the grid by about a pixel.
-    for (width, height) in [(994, 737), (1229, 600), (1400, 900), (1088, 811), (1547, 1063)] {
+    var previous = 0
+    for (page, width, height, minimum) in [
+      ("discover", 760, 560, 3), ("installed", 760, 560, 3), ("discover", 960, 640, 3),
+      ("discover", 1400, 900, 5), ("discover", 1900, 1000, 6),
+    ] {
       web.setFrameSize(NSSize(width: width, height: height))
       let result = try await web.callAsyncJavaScript(
-        probe, arguments: [:], in: nil, contentWorld: .page) as? [String: Any] ?? [:]
-      let context = "\(width)×\(height): \(result)"
-      XCTAssertEqual(result["size"] as? Int, result["expected"] as? Int, "Page size must match the rows shown: \(context)")
-      XCTAssertLessThanOrEqual(result["overflow"] as? Double ?? 1, 0, "A full page must not scroll: \(context)")
-      XCTAssertLessThanOrEqual(result["stretch"] as? Double ?? 1, 0.15, "Tiles stay within the stretch tolerance: \(context)")
-      if (result["rows"] as? Int ?? 0) >= 3 {
-        XCTAssertLessThan(
-          result["slack"] as? Double ?? .infinity, Double(result["rows"] as? Int ?? 0) + 1,
-          "Three or more rows must fill the grid: \(context)")
+        probe, arguments: ["page": page, "expected": width], in: nil, contentWorld: .page)
+        as? [String: Any] ?? [:]
+      let context = "\(page) at \(width)×\(height): \(result)"
+      let columns = result["columns"] as? Int ?? 0
+      XCTAssertGreaterThanOrEqual(columns, minimum, "At least \(minimum) columns: \(context)")
+      XCTAssertEqual(result["stable"] as? Bool, true, "Columns must not flap: \(context)")
+      XCTAssertLessThanOrEqual(result["square"] as? Double ?? 1, 0.5, "Tiles must be square: \(context)")
+      XCTAssertEqual(result["uniform"] as? Bool, true, "Every tile shares one width: \(context)")
+      XCTAssertEqual(result["pageSizeRequests"] as? Int, 0, "The grid never negotiates a page size: \(context)")
+      if page == "discover" {
+        XCTAssertEqual(result["tiles"] as? Int, 30, "A page shows all 30 tiles: \(context)")
+        XCTAssertGreaterThanOrEqual(columns, previous, "Columns never drop as the window widens: \(context)")
+        previous = columns
       }
     }
     XCTAssertNil(controller.actionError)
@@ -1405,7 +1531,7 @@ final class ControlPanelLayoutTests: XCTestCase {
         push([Object.assign({}, job, { pending: false, progress: null, error: 'Steam denied this download.', status: 'Download could not finish' })]);
         const failed = ring()?.dataset.action === 'downloadRetry' && ring().classList.contains('failed');
         push([], { wallpapers: [{ id: 'ring-fixture', title: 'Ring fixture', kind: 'Video', preview: null, active: false, supported: true, tags: [] }] });
-        const installed = { check: !!grid.querySelector('.tile-installed'), noRing: !ring() };
+        const installed = { check: !!grid.querySelector('.tile-mark.installed'), noRing: !ring() };
         return { idle, progress, authenticating, prompted, dismissedStaysClosed, guided, handoff, handoffStays, resumed, failed, installed };
         """, arguments: ["base": base], in: nil, contentWorld: .page) as? [String: Any]
     let idle = result?["idle"] as? [String: Any]
@@ -1563,6 +1689,138 @@ final class ControlPanelLayoutTests: XCTestCase {
       "Explicit app-update bytes may still drive determinate progress")
     XCTAssertNil(web.window, "This regression must not open a desktop window")
     await workshop.steamCMDSetup.shutdown()
+  }
+
+  func testDiscoverTilesRevealTheAnimatedPreviewOnlyWhileItIsBrightWithoutWindow() async throws {
+    let fixture = makeStore()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "web-live-\(UUID().uuidString)")
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+    defer {
+      defaults.removePersistentDomain(forName: root.lastPathComponent)
+      try? FileManager.default.removeItem(at: root)
+    }
+    let bright = try Self.gif(frames: 3, brightness: 0.9)
+    let black = try Self.gif(frames: 9, brightness: 0, closing: 0.9)
+    let still = try Self.gif(frames: 1, brightness: 0.9)
+    // One download yields both the still and the animation. `b` is black but for one brief
+    // closing frame, which the still pass picks: a bright still over an animation that reads black. `c`'s still arrives last; no animation may start before it.
+    let fetcher = PreviewFetcher(delay: { $0.path.contains("/c/") ? .milliseconds(400) : .zero }) { url in
+      if url.path.contains("/c/") { return still }
+      if url.path.contains("/b/") { return black }
+      return bright
+    }
+    let assets = WebPanelAssets(
+      thumbnailCache: WorkshopThumbnailCache(
+        directory: root.appendingPathComponent("thumbs"), fetcher: fetcher))
+    let workshop = WorkshopStore(
+      downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
+      defaults: defaults)
+    let controller = WebPanelController(
+      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
+      assets: assets)
+    let web = controller.makeWebView()
+    defer { controller.stop() }
+    web.setFrameSize(NSSize(width: 960, height: 640))
+    let deadline = Date().addingTimeInterval(15)
+    while !controller.isReady && Date() < deadline {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    XCTAssertTrue(controller.isReady)
+    guard controller.isReady else { return }
+    let base =
+      try await web.callAsyncJavaScript(
+        "return await window.webkit.messageHandlers.native.postMessage({action:'ready'})",
+        arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+    XCTAssertNotNil(base)
+    guard let base else { return }
+    controller.stop()
+    assets.thumbnails = [
+      "a": try XCTUnwrap(URL(string: "https://images.steamusercontent.com/ugc/a/preview/")),
+      "b": try XCTUnwrap(URL(string: "https://images.steamusercontent.com/ugc/b/preview/")),
+      "c": try XCTUnwrap(URL(string: "https://images.steamusercontent.com/ugc/c/preview/")),
+    ]
+
+    let result =
+      try await web.callAsyncJavaScript(
+        """
+        const waitFor = async (predicate, what) => {
+          const deadline = Date.now() + 10000;
+          while (!predicate()) {
+            if (Date.now() > deadline) throw new Error(`Timed out: ${what}`);
+            await new Promise(resolve => setTimeout(resolve, 25));
+          }
+        };
+        const item = id => ({ id, title: `Tile ${id}`, creator: 'Test', summary: '', preview: `https://images.steamusercontent.com/ugc/${id}/preview/`,
+          thumbnail: `mwe-ui://thumbnail/${id}`, animated: `mwe-ui://animated/${id}`, tags: ['Scene'], size: 1, subscriptions: 0, kind: 'Scene' });
+        const grid = document.getElementById('wallpaper-grid');
+        // Records, for every animation layer the moment it is inserted, whether every still on the page had settled.
+        const insertions = [];
+        new MutationObserver(records => { for (const record of records) for (const node of record.addedNodes) {
+          for (const live of node.nodeType === 1 ? [...(node.matches('img.tile-live') ? [node] : node.querySelectorAll('img.tile-live'))] : []) {
+            const stills = [...grid.querySelectorAll('img.tile-still')];
+            insertions.push(stills.length === 3 && stills.every(still => still.complete && still.naturalWidth > 0));
+          } } }).observe(grid, { childList: true, subtree: true });
+        window.wallpaperUI.receive(Object.assign({}, base, { page: 'discover',
+          workshop: Object.assign({}, base.workshop, { items: [item('a'), item('b'), item('c')], loaded: true }), downloads: [], downloadRequests: [] }));
+        const tile = id => grid.querySelector(`.wallpaper-tile[data-key="${id}"]`);
+        const stillOf = id => tile(id)?.querySelector('img.tile-still');
+        const liveOf = id => tile(id)?.querySelector('img.tile-live');
+        const diagnose = () => ['a', 'b', 'c'].map(id => `${id}: still=${stillOf(id)?.complete}/${stillOf(id)?.naturalWidth} live=${!!liveOf(id)}/${liveOf(id)?.complete}/${liveOf(id)?.naturalWidth} playing=${tile(id)?.classList.contains('playing')}`).join('; ');
+        try {
+          await waitFor(() => ['a', 'b', 'c'].every(id => stillOf(id)?.complete && stillOf(id).naturalWidth > 0), 'stills to load');
+          await waitFor(() => tile('a')?.classList.contains('playing'), 'the bright animation to play');
+          await waitFor(() => liveOf('b')?.complete && liveOf('b').naturalWidth > 0, 'the black animation to arrive');
+        } catch (error) { return { error: `${error.message} — ${diagnose()}` }; }
+        await new Promise(resolve => setTimeout(resolve, 700));
+        return {
+          stillsFirst: insertions.length >= 2 && insertions.every(Boolean),
+          eagerStills: ['a', 'b', 'c'].every(id => stillOf(id).loading !== 'lazy'),
+          aPlaying: tile('a').classList.contains('playing'), aStillKept: !!stillOf('a'),
+          bLoaded: !!liveOf('b'), bPlaying: tile('b').classList.contains('playing'),
+          cLive: !!liveOf('c'), cStill: !!stillOf('c'),
+        };
+        """, arguments: ["base": base], in: nil, contentWorld: .page) as? [String: Any]
+    XCTAssertNil(result?["error"], (result?["error"] as? String) ?? "")
+    XCTAssertEqual(
+      result?["stillsFirst"] as? Bool, true,
+      "No animation starts before every still on the page has arrived")
+    XCTAssertEqual(result?["eagerStills"] as? Bool, true, "Discover stills are not lazy-loaded")
+    XCTAssertEqual(result?["aPlaying"] as? Bool, true, "A bright animation replaces its still")
+    XCTAssertEqual(result?["aStillKept"] as? Bool, true, "The still stays underneath for the dark loops")
+    XCTAssertEqual(result?["bLoaded"] as? Bool, true, "The black animation loads beneath its still")
+    XCTAssertEqual(
+      result?["bPlaying"] as? Bool, false, "A black animation never replaces a bright still")
+    XCTAssertEqual(result?["cLive"] as? Bool, false, "A single-frame preview gets no animation layer")
+    XCTAssertEqual(result?["cStill"] as? Bool, true)
+    XCTAssertEqual(
+      Set(fetcher.requests).count, fetcher.requests.count,
+      "Each preview is downloaded once: its still and its animation share the bytes")
+    XCTAssertEqual(fetcher.requests.count, 3)
+    XCTAssertNil(web.window, "This regression must not open a desktop window")
+    await workshop.steamCMDSetup.shutdown()
+  }
+
+  /// `closing`, when given, is the brightness of a last frame shown for a fiftieth of a second
+  /// between seconds-long frames of `brightness`.
+  private static func gif(frames: Int, brightness: Double, closing: Double? = nil) throws -> Data {
+    let output = NSMutableData()
+    let destination = try XCTUnwrap(
+      CGImageDestinationCreateWithData(output, UTType.gif.identifier as CFString, frames, nil))
+    for frame in 0..<frames {
+      let context = try XCTUnwrap(
+        CGContext(
+          data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
+          space: CGColorSpaceCreateDeviceRGB(),
+          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+      context.setFillColor(gray: frame == frames - 1 ? closing ?? brightness : brightness, alpha: 1)
+      context.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+      let delay = closing == nil ? 0.1 : frame == frames - 1 ? 0.02 : 1.0
+      let properties = [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: delay]]
+      CGImageDestinationAddImage(destination, try XCTUnwrap(context.makeImage()), properties as CFDictionary)
+    }
+    XCTAssertTrue(CGImageDestinationFinalize(destination))
+    return output as Data
   }
 
   private func makeStore() -> (store: BridgeStore, bridge: LayoutSnapshotBridge) {
@@ -1817,6 +2075,29 @@ private final class PanelFixture {
     if let previousHome { setenv("MAC_WALLPAPER_ENGINE_HOME", previousHome, 1) }
     else { unsetenv("MAC_WALLPAPER_ENGINE_HOME") }
     try? FileManager.default.removeItem(at: root)
+  }
+}
+
+private final class PreviewFetcher: WorkshopThumbnailFetching, @unchecked Sendable {
+  private let lock = NSLock()
+  private let respond: @Sendable (URL) throws -> Data
+  private let delay: @Sendable (URL) -> Duration
+  private var recorded: [URL] = []
+  var requests: [URL] { lock.withLock { recorded } }
+
+  init(
+    delay: @escaping @Sendable (URL) -> Duration = { _ in .zero },
+    respond: @escaping @Sendable (URL) throws -> Data
+  ) {
+    self.delay = delay
+    self.respond = respond
+  }
+
+  func fetch(_ url: URL) async throws -> Data {
+    lock.withLock { recorded.append(url) }
+    let wait = delay(url)
+    if wait > .zero { try await Task.sleep(for: wait) }
+    return try respond(url)
   }
 }
 

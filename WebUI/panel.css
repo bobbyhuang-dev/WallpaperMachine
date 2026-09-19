@@ -15,6 +15,8 @@
   --media-shadow: 0 1px 3px #000;
   --media-chip: rgb(18 21 26 / 82%);
   --media-star: #f8d179;
+  --media-heart: #ff7aa2;
+  --media-approved: #a6e26a;
   --media-danger: #ff8f86;
   --media-badge: rgb(20 40 58 / 92%);
   --media-badge-ink: #d7edff;
@@ -59,6 +61,8 @@
   --danger-surface: #392b2c;
   --danger-line: #684345;
   --warning: #efd49b;
+  --approved: #a6e26a;
+  --heart: #ff7aa2;
   --shadow-menu: 0 10px 28px rgb(0 0 0 / 30%);
   --shadow-popover: 0 14px 34px rgb(0 0 0 / 42%);
   --shadow-dialog: 0 22px 58px rgb(0 0 0 / 52%);
@@ -145,6 +149,8 @@
   --danger-surface: #fdeceb;
   --danger-line: #f0c5c1;
   --warning: #8a5300;
+  --approved: #3f8f1f;
+  --heart: #d6336c;
   --shadow-menu: 0 10px 24px rgb(15 20 28 / 14%);
   --shadow-popover: 0 14px 30px rgb(15 20 28 / 16%);
   --shadow-dialog: 0 22px 52px rgb(15 20 28 / 22%);
@@ -255,18 +261,15 @@ small, .muted { color: var(--muted); }
 .error-banner { display: flex; align-items: center; gap: 10px; padding: 9px 18px; color: var(--danger); background: var(--danger-surface); border-bottom: 1px solid var(--danger-line); flex: none; }
 .error-banner p { flex: 1; }
 #main { flex: 1; min-height: 0; overflow: hidden; }
-/* The inspector grows with wide windows instead of leaving a fixed 280px strip; the
-   filter sidebar keeps its fixed width because its controls gain nothing from more. */
-.library-page { --inspector-width: clamp(280px, 22vw, 340px); --filters-width: 174px; position: relative; height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) var(--inspector-width); }
-.library-page.discover { grid-template-columns: var(--filters-width) minmax(0, 1fr) var(--inspector-width); }
-.library-page.discover.filters-collapsed { --filters-width: 36px; }
-/* Dragging the inspector edge overrides the fluid width; it stays clamped so the grid
-   keeps room at the 760px window minimum. */
-.inspector-resizer { position: absolute; top: 0; bottom: 0; right: calc(var(--inspector-width) - 4px); width: 9px; cursor: col-resize; z-index: 2; touch-action: none; }
-.inspector-resizer::after { content: ""; position: absolute; inset: 0 3px; border-radius: 2px; background: var(--accent); opacity: 0; transition: opacity 120ms ease-out; }
-.inspector-resizer:hover::after, .inspector-resizer:focus-visible::after, .library-page.inspector-resizing .inspector-resizer::after { opacity: 1; }
-.inspector-resizer:focus-visible { outline: none; }
-.library-page.inspector-resizing, .library-page.inspector-resizing * { cursor: col-resize !important; user-select: none; -webkit-user-select: none; }
+/* The inspector's width is a function of the window width alone: 260px at the 760px
+   window minimum, one extra pixel for roughly every 6.7px of window, and a 420px cap
+   from about 1830px on. There is no drag handle and nothing is stored; every window
+   size therefore always produces the same layout. The filter sidebar sits on the left
+   of the grid, beside the toolbar's Filter button that opens it, and keeps a fixed
+   width because its controls gain nothing from more; closed, it leaves the layout
+   entirely. */
+.library-page { --inspector-width: clamp(260px, calc(15vw + 146px), 420px); --filters-width: 184px; position: relative; height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) var(--inspector-width); }
+.library-page.filters-open { grid-template-columns: var(--filters-width) minmax(0, 1fr) var(--inspector-width); }
 .browser-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; }
 .browser-toolbar { padding: 16px 16px 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .search-form { flex: 1 1 150px; display: flex; align-items: center; position: relative; }
@@ -279,20 +282,32 @@ small, .muted { color: var(--muted); }
 .selection-bar .selection-count { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .selection-bar button { font-size: 12px; min-height: 24px; padding: 2px 8px; }
 .selection-bar button.link { padding: 2px 0; }
-/* Tiles fill as many columns as the browser column (the size container) can hold at the
-   minimum tile size, which shrinks with the column so a narrower window shows smaller tiles
-   and more of them instead of fewer, larger ones. */
-.wallpaper-grid { --tile-min: 154px; display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile-min), 1fr)); gap: 12px; padding: 2px 16px 16px; overflow: auto; align-content: start; flex: 1; min-height: 0; }
-@container (max-width: 560px) { .wallpaper-grid { --tile-min: 130px; gap: 9px; } .tile-download { --ring: 64px; } }
+/* Tiles are always square. The grid fills its width with as many columns as the preferred
+   tile size allows and never fewer than three: the track minimum is the smaller of the
+   preferred size and a third of the width, so the narrowest window still shows three
+   per row and a wider one adds columns as they fit. The row count is whatever the page
+   needs; the grid scrolls. Column count is a pure function of the grid's width (the
+   reserved scrollbar gutter keeps that width still whether or not a page scrolls), so
+   nothing is measured, reported or re-fetched on a resize and the layout cannot flap. */
+.wallpaper-grid { --tile-min: 154px; --tile-gap: 12px; --min-columns: 3; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(var(--tile-min), calc((100% - (var(--min-columns) - 1) * var(--tile-gap)) / var(--min-columns))), 1fr)); gap: var(--tile-gap); padding: 2px 16px 16px; overflow: auto; scrollbar-gutter: stable; align-content: start; flex: 1; min-height: 0; }
+@container (max-width: 560px) { .wallpaper-grid { --tile-min: 130px; --tile-gap: 9px; } .tile-download { --ring: 64px; } }
 @container (max-width: 440px) { .wallpaper-grid { --tile-min: 116px; } .tile-download { --ring: 60px; } .ring-label { font-size: 13px; } .ring-speed { display: none; } }
-.wallpaper-tile { position: relative; min-width: 0; }
-.tile-select { display: block; position: relative; width: 100%; height: var(--tile-height, auto); aspect-ratio: 1; padding: 0; border: 1px solid transparent; border-radius: 3px; overflow: hidden; text-align: left; background: var(--media-well); }
+@container (max-width: 360px) { .wallpaper-grid { --tile-gap: 8px; } .tile-download { --ring: 52px; } .tile-caption { padding: 18px 6px 6px; } .tile-title { font-size: 11px; -webkit-line-clamp: 1; } .tile-kind { display: none; } }
+/* --corner is where the tile's top-left content starts: 6px normally, past the select check
+   whenever that check is showing on an Installed tile. --marks is the width the corner marks
+   take so the Active badge sits after them. */
+.wallpaper-tile { position: relative; min-width: 0; --corner: 6px; --marks: 0px; }
+.wallpaper-tile:has(> .tile-check):is(.checked, :hover, :focus-within), .wallpaper-grid.selecting .wallpaper-tile:has(> .tile-check) { --corner: 35px; }
+.wallpaper-tile:has(> .tile-marks) { --marks: 24px; }
+.tile-select { display: block; position: relative; width: 100%; aspect-ratio: 1; padding: 0; border: 1px solid transparent; border-radius: 3px; overflow: hidden; text-align: left; background: var(--media-well); }
 .tile-select:hover:not(:disabled) { background: var(--media-well); border-color: var(--line-strong); }
 .tile-select[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .tile-select img { display: block; width: 100%; height: 100%; object-fit: cover; transition: filter .25s ease; }
 .tile-select img.failed { visibility: hidden; }
-.tile-select img.tile-live { position: absolute; inset: 0; opacity: 0; transition: opacity .2s ease, filter .25s ease; }
-.tile-select img.tile-live.loaded { opacity: 1; }
+/* The animation plays beneath the still; the still fades away only while the animation is bright. */
+.tile-select img.tile-live { position: absolute; inset: 0; z-index: 0; }
+.tile-select img.tile-still { transition: opacity .35s ease, filter .25s ease; }
+.wallpaper-tile.playing img.tile-still { opacity: 0; }
 .tile-placeholder { position: absolute; inset: 0; display: flex; justify-content: center; align-items: center; color: var(--faint); z-index: 0; }
 .tile-select:has(img:not(.loaded):not(.failed)) .tile-placeholder { animation: tile-pulse 1.6s ease-in-out infinite; }
 @keyframes tile-pulse { 50% { opacity: .35; } }
@@ -300,20 +315,42 @@ small, .muted { color: var(--muted); }
 .tile-caption { position: absolute; left: 0; right: 0; bottom: 0; padding: 25px 9px 8px; background: var(--media-scrim); text-shadow: var(--media-shadow); pointer-events: none; }
 .tile-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--media-ink); font-size: 12px; font-weight: 500; line-height: 1.3; }
 .tile-kind { font-size: 10px; color: var(--media-ink-dim); display: block; margin-top: 3px; }
+/* The favorite toggle only shows on hover: the heart mark in the corner carries the state. */
 .tile-favorite, .tile-check { position: absolute; top: 5px; min-height: 25px; min-width: 25px; padding: 4px; background: var(--media-chip); color: var(--media-ink); border: 0; opacity: 0; }
 .tile-favorite { right: 5px; }
 .tile-check { left: 5px; z-index: 1; }
-.wallpaper-tile:hover :is(.tile-favorite, .tile-check), .wallpaper-tile:focus-within :is(.tile-favorite, .tile-check), .tile-favorite[aria-pressed="true"], .tile-check[aria-pressed="true"], .wallpaper-grid.selecting .tile-check { opacity: 1; }
+.wallpaper-tile:hover :is(.tile-favorite, .tile-check), .wallpaper-tile:focus-within :is(.tile-favorite, .tile-check), .tile-check[aria-pressed="true"], .wallpaper-grid.selecting .tile-check { opacity: 1; }
+/* Corner marks, the way Wallpaper Engine flags its tiles: a check for a Discover wallpaper already
+   in the library, the green trophy for a staff-approved wallpaper, a heart for a favorite. They
+   stack in a column on the dark badge colour so they read on any artwork in either appearance,
+   and step aside with the Active badge while the select check is showing. */
+.tile-marks { position: absolute; left: var(--corner); top: 6px; display: grid; gap: 4px; pointer-events: none; transition: left 120ms ease-out; }
+.tile-mark { width: 20px; height: 20px; border-radius: 50%; background: var(--media-badge); color: var(--media-badge-ink); display: grid; place-items: center; }
+.tile-mark.approved { color: var(--media-approved); }
+.tile-mark.favorite { color: var(--media-heart); }
+.tile-mark.favorite svg { fill: currentColor; }
 .wallpaper-grid.selecting .tile-check:not([aria-pressed="true"]) { color: transparent; box-shadow: inset 0 0 0 1.5px var(--media-ink); }
 .wallpaper-grid.selecting .tile-check:not([aria-pressed="true"]):hover { color: var(--media-ink); }
 .browser-toolbar button[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
 .browser-toolbar button.selecting { background: var(--primary); border-color: var(--primary-line); color: var(--on-primary); }
+/* The Filter button is the only way in and out of the sidebar, so it is the toolbar's
+   one filled control: accent fill, funnel glyph, bold label, active count in a pill.
+   It leads the toolbar so it sits beside the sidebar it controls; open, it reads as
+   pressed (darker fill, inset shadow). */
+.browser-toolbar .filter-button { background: var(--primary); border-color: var(--primary-line); color: var(--on-primary); font-weight: 600; padding: 6px 12px 6px 10px; box-shadow: 0 1px 2px rgb(0 0 0 / 16%); }
+.browser-toolbar .filter-button:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-line); color: var(--on-primary); }
+.browser-toolbar .filter-button:active:not(:disabled), .browser-toolbar .filter-button[aria-expanded="true"] { background: var(--primary-active); border-color: var(--primary-line); color: var(--on-primary); box-shadow: inset 0 2px 3px rgb(0 0 0 / 28%); }
+.filter-count { display: inline-block; min-width: 18px; height: 18px; line-height: 18px; padding: 0 5px; border-radius: 9px; text-align: center; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; background: var(--badge); color: var(--badge-ink); }
+.filter-button .filter-count { background: var(--on-primary); color: var(--primary); }
+.sort-direction { color: var(--muted); }
+.sort-direction:hover:not(:disabled) { color: var(--text); }
 .tile-favorite:hover:not(:disabled), .tile-check:hover:not(:disabled) { background: var(--media-chip); color: var(--media-ink); }
-.tile-favorite[aria-pressed="true"] { color: var(--media-star); }
+.tile-favorite[aria-pressed="true"] { color: var(--media-heart); }
+.actions .favorite-selected { color: var(--heart); }
+.tile-favorite[aria-pressed="true"] svg, .actions .favorite-selected svg { fill: currentColor; }
 .tile-check[aria-pressed="true"], .tile-check[aria-pressed="true"]:hover:not(:disabled) { background: var(--primary); color: var(--on-primary); }
 .wallpaper-tile.checked .tile-select { box-shadow: inset 0 0 0 2px var(--primary); border-color: var(--primary); }
-.wallpaper-tile.checked .active-badge, .wallpaper-grid.selecting .active-badge, .wallpaper-tile:hover .active-badge, .wallpaper-tile:focus-within .active-badge { left: 35px; }
-.active-badge { position: absolute; left: 6px; top: 6px; border-radius: 3px; background: var(--media-badge); color: var(--media-badge-ink); font-size: 10px; padding: 3px 5px; pointer-events: none; }
+.active-badge { position: absolute; left: calc(var(--corner) + var(--marks)); top: 6px; border-radius: 3px; background: var(--media-badge); color: var(--media-badge-ink); font-size: 10px; padding: 3px 5px; pointer-events: none; }
 /* Discover download ring, sized the way Wallpaper Engine's own library draws it: the still dims
    behind it, the stroke carries progress, the middle carries the number and the transfer speed,
    and one click cancels. Nothing here rotates: the busy sweep is a travelling dash so the arc
@@ -343,24 +380,12 @@ small, .muted { color: var(--muted); }
 .tile-download.failed { color: var(--media-danger); }
 .tile-download.failed .ring-track { stroke: var(--media-danger); }
 @keyframes ring-pulse { from { box-shadow: 0 0 0 0 var(--media-star); } to { box-shadow: 0 0 0 8px transparent; } }
-.tile-installed { position: absolute; left: 6px; top: 6px; width: 20px; height: 20px; border-radius: 50%; background: var(--media-badge); color: var(--media-badge-ink); display: grid; place-items: center; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .tile-download.busy .ring-value, .tile-download.attention { animation: none; } }
-.workshop-filters { overflow: auto; padding: 16px 13px; border-right: 1px solid var(--line); }
-.workshop-filters.collapsed { padding: 0; overflow: hidden; display: flex; }
-.filter-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; gap: 6px; }
-.filter-heading h3 { flex: 1; min-width: 0; }
-/* The sidebar toggle uses Lucide's panel glyphs (a framed pane with an arrow) so it reads
-   as "hide/show this sidebar" rather than a bare chevron, and keeps the bordered button
-   look so it is visibly clickable next to the text-only Clear link. */
-.filter-toggle { padding: 4px; min-height: 26px; min-width: 26px; color: var(--muted); }
-.filter-toggle:hover:not(:disabled) { color: var(--text); }
-/* Collapsed, the entire strip is one full-height button: glyph, active count, then a
-   vertical "Filters" label; hovering anywhere highlights the whole rail. */
-.filter-rail { flex: 1; width: 100%; min-height: 100%; border: 0; border-radius: 0; background: transparent; color: var(--muted); flex-direction: column; justify-content: flex-start; gap: 10px; padding: 12px 0; }
-.filter-rail:hover:not(:disabled) { background: var(--raised); color: var(--text); border-color: transparent; }
-.filter-rail:focus-visible { outline-offset: -2px; }
-.filter-rail-label { writing-mode: vertical-rl; font-size: 12px; font-weight: 600; letter-spacing: .04em; }
-.filter-rail-count { font-size: 10px; font-weight: 600; min-width: 16px; height: 16px; line-height: 16px; padding: 0 4px; border-radius: 8px; text-align: center; background: var(--badge); color: var(--badge-ink); font-variant-numeric: tabular-nums; }
+/* The sidebar has no chrome of its own beyond a heading and Clear: the Filter button in
+   the toolbar is its one switch, so nothing here duplicates it. */
+.filter-sidebar { overflow: auto; padding: 16px 14px; border-right: 1px solid var(--line); scrollbar-gutter: stable; }
+.filter-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 8px; min-height: 26px; }
+.filter-heading h3 { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; }
 .filter-group { border-top: 1px solid var(--line); padding: 10px 0; }
 summary { list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 6px; font-weight: 600; min-height: 24px; }
 summary::-webkit-details-marker { display: none; }
@@ -369,20 +394,48 @@ details[open] > summary svg { transform: rotate(90deg); }
 .filter-options { display: grid; gap: 8px; padding-top: 9px; }
 .check-label { display: flex; align-items: center; gap: 8px; font-size: 12px; min-height: 20px; }
 .check-label span { min-width: 0; overflow-wrap: anywhere; }
+/* Show-only options carry a glyph between the checkbox and the label: muted while off, primary
+   once ticked. Approved is always the green trophy Workshop uses for staff-approved wallpapers. */
+.check-icon { flex: none; display: grid; place-items: center; width: 16px; height: 16px; color: var(--muted); transition: color 120ms ease-out; }
+.check-label:has(input:checked) .check-icon { color: var(--primary); }
+.check-icon.approved, .check-label:has(input:checked) .check-icon.approved { color: var(--approved); }
 .filter-options select { width: 100%; }
-.installed-filter { position: relative; }
-.installed-filter > summary { border: 1px solid var(--line); border-radius: var(--radius); background: var(--raised); padding: 5px 9px; font-weight: 400; min-height: 30px; }
-.filter-popover { position: absolute; top: 38px; right: 0; width: 220px; z-index: 4; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); padding: 14px; box-shadow: var(--shadow-menu); display: grid; gap: 13px; }
-.filter-popover label:not(.check-label) { display: grid; gap: 6px; }
-.inspector { overflow: auto; border-left: 1px solid var(--line); background: var(--surface); }
+/* Sub-groups inside one filter (Widescreen, Dual monitor, ...) keep a small heading and the
+   All / None shortcuts Wallpaper Engine puts beside it; a rule separates one from the next. */
+.filter-section { display: grid; gap: 8px; }
+.filter-section + .filter-section { border-top: 1px solid var(--line); padding-top: 9px; }
+.filter-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 20px; }
+.filter-section-head h4 { margin: 0; font-size: 12px; font-weight: 600; }
+.filter-quick { display: flex; gap: 10px; }
+.filter-quick button.link { font-size: 11px; min-height: 20px; }
+.inspector { --inspector-inset: 16px; overflow: auto; border-left: 1px solid var(--line); background: var(--surface); container-type: inline-size; }
 .inspector-empty { display: grid; place-content: center; text-align: center; min-height: 100%; gap: 8px; padding: 24px; color: var(--muted); }
-.inspector-preview { aspect-ratio: 16/10; position: relative; background: var(--media-well); display: grid; place-items: center; color: var(--muted); }
+/* The heading reads top to bottom on one centered axis, as Wallpaper Engine's own sidebar
+   does: square preview (Workshop previews are square), title, creator, facts, tags, actions. */
+.inspector-preview { aspect-ratio: 1; width: min(100%, 280px); justify-self: center; position: relative; overflow: hidden; border-radius: var(--radius); background: var(--media-well); display: grid; place-items: center; color: var(--muted); margin-bottom: 5px; }
 .inspector-preview img { width: 100%; height: 100%; position: absolute; object-fit: cover; }
-.inspector-heading, .inspector-section { padding: 16px; }
-.inspector-heading { display: grid; gap: 9px; }
-.inspector-heading h2 { overflow-wrap: anywhere; }
+.inspector-heading, .inspector-section { padding: 16px var(--inspector-inset); }
+.inspector-heading { display: grid; gap: 9px; grid-template-columns: minmax(0, 1fr); }
+.inspector-heading h2 { overflow-wrap: anywhere; text-align: center; text-wrap: balance; line-height: 1.3; }
+.inspector-creator, .inspector-meta { text-align: center; font-size: 12px; }
+.inspector-creator { color: var(--accent); font-size: 13px; }
+.inspector-meta { color: var(--muted); font-variant-numeric: tabular-nums; }
+.inspector-heading .tags { justify-content: center; }
+.inspector-heading .tag { padding: 2px 9px; border: 0; border-radius: 10px; background: var(--raised); font-size: 11px; }
+.inspector-actions { margin-top: 5px; }
+.inspector-actions > .primary { flex: 1 1 100%; min-height: 32px; }
+.inspector-actions > .wide { flex: 1; min-width: 0; }
+.inspector-actions > .wide .button-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inspector-section { border-top: 1px solid var(--line); display: grid; gap: 12px; }
 .inspector-section > details > .section-content { padding-top: 12px; display: grid; gap: 13px; }
+/* The inspector lays its own contents out by its width, not the window's: once it
+   passes 360px the insets open up and a display's scale factor and frame rate share a
+   row instead of stacking, so a wide window shows more without a taller scroll. */
+@container (min-width: 360px) {
+  .inspector { --inspector-inset: 20px; }
+  .display-options .section-content { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 12px; }
+  .display-options .section-content > :not(.field), .display-options .section-content > .field:has(select) { grid-column: 1 / -1; }
+}
 .tags { display: flex; gap: 5px; flex-wrap: wrap; }
 .tag { padding: 2px 6px; border: 1px solid var(--tag-line); border-radius: 3px; font-size: 10px; color: var(--tag-ink); }
 .actions { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
@@ -401,7 +454,7 @@ details[open] > summary svg { transform: rotate(90deg); }
 .display-options { border-top: 1px solid var(--line); padding-top: 10px; }
 .display-options:first-child { border-top: 0; padding-top: 0; }
 .display-options .section-content { display: grid; gap: 12px; padding-top: 12px; }
-.inspector-save { position: sticky; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 7px; }
+.inspector-save { position: sticky; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); padding: 12px var(--inspector-inset); display: flex; flex-wrap: wrap; gap: 7px; }
 .inspector-save button { flex: 1; }
 .inspector-save p { width: 100%; font-size: 11px; color: var(--muted); }
 .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 12px; }
@@ -414,7 +467,6 @@ details[open] > summary svg { transform: rotate(90deg); }
 .page-jump input { width: 7ch; min-height: 26px; padding: 3px 6px; text-align: center; -moz-appearance: textfield; appearance: textfield; }
 .page-jump input::-webkit-inner-spin-button, .page-jump input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .page-jump button.link { padding: 2px 4px; }
-.pagination-note { flex-basis: 100%; text-align: center; font-size: 11px; color: var(--muted); }
 #settings-content { height: 100%; overflow: auto; }
 .activity-bar { min-height: 43px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 15px; border-top: 1px solid var(--line); background: var(--footer); flex: none; }
 .activity-left, .activity-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -499,8 +551,7 @@ progress:indeterminate::-webkit-progress-bar { background: transparent; }
 .output { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, monospace; font-size: 11px; max-height: 180px; overflow: auto; padding: 8px; background: var(--well); }
 .import-controls { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
 @media (max-width: 1040px) {
-  .library-page { --inspector-width: 270px; }
-  .library-page.discover { --inspector-width: 260px; --filters-width: 148px; }
+  .library-page { --filters-width: 160px; }
   .wallpaper-grid { padding-left: 12px; padding-right: 12px; }
   .browser-toolbar { padding-left: 12px; padding-right: 12px; }
   .topbar { padding: 0 14px; }
@@ -509,10 +560,9 @@ progress:indeterminate::-webkit-progress-bar { background: transparent; }
 @media (max-width: 840px) {
   /* Only the GitHub button stays in the middle; the name and version would ellipsize against the picker. */
   .app-title { display: none; }
-  .library-page.discover { --filters-width: 142px; }
+  .library-page { --filters-width: 148px; }
   .browser-toolbar select { flex: 1; max-width: 100%; }
   .top-actions select { max-width: 150px; }
   .popover { width: 318px; }
 }
-.library-page.inspector-sized { --inspector-width: clamp(240px, var(--inspector-user-width), 45vw); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

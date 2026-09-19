@@ -106,11 +106,16 @@ Swift tests cover, without starting the app:
   change while a page loads), superseded requests, cancellation, and exact
   failed-request retry through the real page parser. Two tests use live Steam responses and therefore
   require network access. Thumbnail cache: CDN scaling only for Steam image
-  hosts, first-frame JPEG extraction from animated previews, one download per
+  hosts, still-frame JPEG extraction from animated previews (skipping a black
+  fade-in, keeping frame 0 for bright, uniformly dark or still sources), one download per
   URL under concurrent requests, disk hits across instances, fallback when the
   CDN refuses scaling, no cache entry after a failed fetch, the concurrency cap
-  and oldest-first pruning; the scheme handler refuses thumbnail ids it has not
-  announced.
+  and oldest-first pruning; the animated relay returns Steam's bytes on its own
+  lane and refuses single-frame sources without a request; the scheme handler
+  refuses thumbnail and animated ids it has not announced. An offscreen WebKit
+  regression (`ControlPanelLayoutTests`) checks that Discover tiles load the
+  still first, admit the animation beneath it, fade the still out only for a
+  bright animation and never for a black one, and skip single-frame previews.
 - **Downloads** — private terminals per job, transfers side by side up to the
   slot limit once the first job's sign-in is accepted and saved (siblings start
   silently while it still transfers), the queue waiting behind a job that is

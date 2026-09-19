@@ -12,56 +12,110 @@ Credentials for a download are entered only in the app's own local prompts.
 
 The **Discover** tab searches the Workshop and pages through results with
 previous/next buttons or by typing a page number and pressing Return. A page
-holds exactly as many tiles as the grid shows without scrolling: the panel
-measures its columns and rows and reports that size (`workshopPageSize`),
-and the store cuts each page from Steam's fixed pages of 30, fetching as many as
-the page spans and caching them per query, so paging back or resizing the window
-rarely touches the network. Square tiles sized by the grid's width rarely divide
-its height evenly, so Discover tiles may stretch or squash by up to 15% for the
-rows to fill the grid exactly (a 1px shortfall would otherwise leave a whole row
-blank); past that they stay square and the remainder stays empty. The width is
-measured outside any scrollbar so a briefly overflowing page cannot flip the fit
-back and forth. Resizing keeps the first visible tile in view by
-remapping the page number. Steam's public browse page clamps every query to
+is exactly one Steam page of 30 tiles, and the panel never offers more than
+1,000 pages (`WorkshopStore.maxPages`, mirrored in the snapshot as `maxPages`):
+the page number, the jump field and the native `workshopPage` action all clamp
+to that limit. Fetched pages are cached per query, so paging back never touches
+the network; a new search always starts a fresh cache. Nothing about a page
+depends on the window: the grid lays its 30 tiles out in as many columns as its
+width holds and scrolls the rest, so resizing only reflows the tiles and never
+re-fetches or re-cuts a page. Tiles are always exactly square, on both Installed
+and Discover, and there are never fewer than three per row: the grid's track
+minimum is the smaller of the preferred tile size (154px, smaller in narrow
+columns) and a third of the grid's width, so the 760px window minimum still
+shows three columns and wider windows add columns as they fit. The grid
+reserves its scrollbar gutter so the columns hold still whether or not a page
+scrolls, and the column count is a pure function of the grid's width, so the
+layout cannot flap. Steam's public browse page clamps every query to
 1,000 pages of 30 items, so at most 30,000 results are reachable per query
-(the snapshot's `reachable` count); when the result count is larger the
-pagination row says so and suggests narrowing the search or filters. A left
-filter sidebar groups multi-select tags:
+(the snapshot's `reachable` count) and the page jump clamps to that. The
+filter sidebar on the left (opened and closed with the toolbar's **Filter**
+button, see [control-panel](control-panel.md#filtering)) mirrors Wallpaper
+Engine's own sidebar, tag for tag and default for default:
 
-| Group | Values |
-| --- | --- |
-| Resolution | 1280 x 720, 1366 x 768, 1920 x 1080, 2560 x 1440, 3840 x 2160, Dynamic resolution, Other resolution |
-| Ultrawide & portrait | Ultrawide 2560 x 1080, Ultrawide 3440 x 1440, Portrait 1080 x 1920, Portrait 1440 x 2560, Portrait 2160 x 3840 |
-| Genre | Abstract, Anime, Fantasy, Landscape, Nature, Pixel art, Sci-Fi |
-| Age rating | Everyone, Questionable, Mature |
-| Category | Wallpaper, Preset, Asset |
+| Group | Boxes | Default |
+| --- | --- | --- |
+| Show only | Approved, Audio responsive, Customizable | all off |
+| Type | Scene, Video, Web; Wallpaper, Preset | all on |
+| Age rating | Everyone (G), Questionable (PG-13), Mature (R-18) | Everyone only |
+| Resolution | Widescreen (Standard definition, 1280 x 720, 1366 x 768, 1920 x 1080, 2560 x 1440, 3840 x 2160), Ultrawide (standard, 2560 x 1080, 3440 x 1440), Dual monitor (standard, 3840 x 1080, 5120 x 1440, 7680 x 2160), Triple monitor (standard, 4096 x 768, 5760 x 1080, 7680 x 1440, 11520 x 2160), Portrait monitor / phone (standard, 720 x 1280, 1080 x 1920, 1440 x 2560, 2160 x 3840), Other resolution, Dynamic resolution | all on |
+| Tags | Abstract, Animal, Anime, Cartoon, CGI, Cyberpunk, Fantasy, Game, Girls, Guys, Landscape, Medieval, Memes, MMD, Music, Nature, Pixel art, Relaxing, Retro, Sci-Fi, Sports, Technology, Television, Vehicle, Unspecified genre | all on except Unspecified |
 
-Selected tags are sent to Steam as `requiredtags[]`, so Steam returns only items
-matching *every* selected tag. Tags that are selected but not in the known
-groups are kept in an **Other selected tags** group. **Clear filters** removes
-them. Results can be sorted by Trending this week, Most subscribed, Newest or
-Relevance, and a type menu narrows to Scene, Video, Web or Application.
+A ticked **Show only** box is sent to Steam as `requiredtags[]`, so every ticked
+one must be on an item. Every other box starts ticked and unticking it sends the
+tag as `excludedtags[]`: Steam drops an item carrying *any* excluded tag, so a
+group with everything ticked filters nothing and unticking Anime hides every
+item tagged Anime whatever else it carries. Resolution sub-groups and Tags have
+**All** / **None** shortcuts. Application and Asset items are never offered, so
+those two tags are always excluded (`WorkshopStore.defaultExcludedTags` holds
+the out-of-the-box list: Application, Asset, Questionable, Mature,
+Unspecified). A tag that is both required and excluded would empty the result,
+so the required one wins and it is not sent as excluded. The toolbar's filter
+count is the number of boxes that differ from the defaults; **Clear** restores
+them. Results open on Most popular this year and can be sorted by Highest
+rated (Steam's all-time `toprated`), Most popular today / Trending this week /
+Most popular this month / Most popular this year (Steam's `trend` sort with a
+`days` window of 1, 7, 30 or 365), Most subscribed, Newest or Relevance.
+Steam's public browse page has no "most voted" sort; unknown `browsesort`
+values silently fall back to trending, so none is offered. Wallpaper Engine's
+"mobile compatible" box has no Steam tag behind it, so it is not offered.
 
 ### Tile thumbnails
 
 Steam's `preview_url` is the full-size preview, and most trending previews are
-animated GIFs of roughly a megabyte each, so a page of 30 tiles weighed 20 MB
-or more and stayed blank for a minute on slow links. Tiles therefore load
-`mwe-ui://thumbnail/<id>` instead: the panel's scheme handler asks
-`WorkshopThumbnailCache` for the item, which downloads the preview once (asking
-Steam's image CDN for a 512px version, falling back to the original if the CDN
-refuses the scaling query), decodes only the first frame with ImageIO, and
-stores it as a JPEG under `Cache/WorkshopThumbnails` in the app-support folder.
-At most four previews download at once, concurrent requests for the same tile
+animated GIFs of roughly a megabyte each. Tiles load `mwe-ui://thumbnail/<id>`
+instead: the panel's scheme handler asks `WorkshopThumbnailCache` for the
+item, which downloads the preview **once, exactly as Steam published it**, and
+keeps both halves under `Cache/WorkshopThumbnails` in the app-support folder:
+one still frame decoded with ImageIO and stored as a 512px JPEG (`<key>.jpg`),
+and, when the preview is animated, the original bytes beside it (`<key>.anim`).
+A single-frame preview gets an empty `<key>.still` marker instead.
+
+The original is fetched on purpose. Steam's CDN serves it from its edge in
+0.15–0.3 s, whereas a scaled variant (`?imw=512…`) makes the CDN re-encode the
+whole GIF on a cold path: measured on 2026-09-19 at 2–5 s per tile for about a
+quarter fewer bytes, 14.0 s for a cold 29-tile page at four at a time against
+1.1 s for the originals at eight at a time. Asking for the scaled variant and
+then the original for the animation also downloaded every animated tile twice.
+
+Many animated previews fade in from black, so the still is not simply the
+first frame: the cache measures the mean luminance of up to eight evenly spaced
+frames on a 32px decode and keeps the earliest one that is nearly as bright
+(at least 60%) as the brightest sample. A preview that starts bright, is dark
+throughout, or is a still image keeps frame 0.
+
+At most eight previews download at once, concurrent requests for the same tile
 share one download, cache hits cost no network at all and survive relaunches,
-and the folder is trimmed to 128 MB oldest-first. Only ids announced in the
-current snapshot (results, queued downloads and pending requests) resolve; a
-tile pulses its placeholder until its image arrives and hides a failed image.
-Animation is on demand: the tile under the mouse pointer (after a short dwell,
-so sweeping across the grid downloads nothing) or under keyboard focus streams
-Steam's full preview over its still and fades it in once loaded, so only one
-animated preview downloads at a time on any connection. The inspector keeps the
-full-size preview for the selected item.
+and the folder is trimmed to 512 MB oldest-first (stills and animations age
+independently; a hit keeps its entry young). Only ids announced in the current
+snapshot (results, queued downloads and pending requests) resolve; a tile
+pulses its placeholder until its image arrives and hides a failed image.
+
+Nothing waits for the web view to ask. `WorkshopStore.onPreviewsAvailable`
+hands every Steam page's preview URLs to `WorkshopThumbnailCache.warm` the
+moment the page is decoded, and with `prefetchesNextPage` (both set by
+`WebControlPanel.makeCoordinator`) the store fetches the page after the one on
+show in the background, so paging forward is served from the page cache and its
+tiles from disk, like paging back. A failed prefetch is silent; the page is
+simply loaded normally when the user gets there.
+
+The animation follows the stills. Discover stills load eagerly, and no
+animation is requested until every still on the page has settled (loaded or
+failed). After that, for each tile on screen, the panel requests
+`mwe-ui://animated/<id>`, six at a time, which is normally a local read of the
+`.anim` file the still pass left behind (an animation asked for while its still
+is still downloading waits for that download rather than starting another). It
+is fetched again, two at a time on its own lane and then kept, only when that
+copy was pruned or the still predates this layout; a preview the still pass
+found to be a single frame is refused without a request. The animation is
+placed beneath the still, not over it. Steam's GIFs often open on, and loop
+back through, black frames, so the panel samples each playing animation four
+times a second on a 16px canvas (both images are served with CORS headers, so
+the canvas stays readable) and fades the still out only while the animation is
+at least 60% as bright as the still, fading it back in below 40%. A tile
+therefore never shows black where its still was bright. Leaving the page or
+flipping to another one drops the pending animation requests. The inspector
+keeps the full-size preview for the selected item.
 
 ## One decision per download
 

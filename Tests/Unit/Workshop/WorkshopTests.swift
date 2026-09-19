@@ -31,6 +31,28 @@ final class WorkshopTests: XCTestCase {
         XCTAssertNil(components?.fragment)
     }
 
+    func testSortOrdersMapToSteamBrowseSortAndTrendWindow() {
+        func query(_ sort: WorkshopSort) -> (sort: String?, days: String?) {
+            let url = WorkshopService.browseURL(search: "", kind: .scene, sort: sort, page: 1)
+            let values = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            return (values.first { $0.name == "browsesort" }?.value, values.first { $0.name == "days" }?.value)
+        }
+        XCTAssertEqual(query(.topRated).sort, "toprated")
+        XCTAssertEqual(query(.trendingToday).sort, "trend")
+        XCTAssertEqual(query(.trendingToday).days, "1")
+        XCTAssertEqual(query(.trending).sort, "trend")
+        XCTAssertEqual(query(.trending).days, "7")
+        XCTAssertEqual(query(.trendingMonth).sort, "trend")
+        XCTAssertEqual(query(.trendingMonth).days, "30")
+        XCTAssertEqual(query(.trendingYear).sort, "trend")
+        XCTAssertEqual(query(.trendingYear).days, "365")
+        XCTAssertEqual(query(.popular).sort, "totaluniquesubscribers")
+        XCTAssertEqual(query(.newest).sort, "mostrecent")
+        XCTAssertEqual(query(.relevance).sort, "textsearch")
+        // The panel round-trips raw values, so every case must survive the trip.
+        for sort in WorkshopSort.allCases { XCTAssertEqual(WorkshopSort(rawValue: sort.rawValue), sort) }
+    }
+
     func testRequiredTagsDeduplicateTypeAndPreserveQueryBoundaries() {
         let specialTag = "rain & snow #winter + 日本語"
         let url = WorkshopService.browseURL(search: "", kind: .scene, sort: .popular, page: 2,
@@ -46,5 +68,19 @@ final class WorkshopTests: XCTestCase {
                                                      tags: ["Everyone", "Everyone"])
         let allTypesValues = URLComponents(url: allTypesURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
         XCTAssertEqual(allTypesValues.filter { $0.name == "requiredtags[]" }.compactMap(\.value), ["Everyone"])
+    }
+
+    func testExcludedTagsAreSentOnceAndNeverContradictRequiredTags() {
+        let url = WorkshopService.browseURL(search: "", kind: .scene, sort: .trendingYear, page: 1,
+                                             tags: ["Approved"],
+                                             excludedTags: ["Mature", "Scene", "Approved", "Mature", "Unspecified"])
+        let values = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertEqual(values.filter { $0.name == "requiredtags[]" }.compactMap(\.value), ["Scene", "Approved"])
+        // Steam drops an item carrying any excluded tag, so a tag that is also required must not be sent.
+        XCTAssertEqual(values.filter { $0.name == "excludedtags[]" }.compactMap(\.value), ["Mature", "Unspecified"])
+
+        let plain = WorkshopService.browseURL(search: "", kind: .all, sort: .trendingYear, page: 1)
+        let plainValues = URLComponents(url: plain, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertTrue(plainValues.allSatisfy { $0.name != "excludedtags[]" && $0.name != "requiredtags[]" })
     }
 }

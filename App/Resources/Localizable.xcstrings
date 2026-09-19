@@ -4,6 +4,30 @@
     "Finished downloads" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Finished downloads"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已结束的下载"}}}
     },
+    "The appearance could not update: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The appearance could not update: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "外观无法更新：%@"}}}
+    },
+    "The interface could not update: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The interface could not update: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "界面无法更新：%@"}}}
+    },
+    "This page is not allowed to control the application." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This page is not allowed to control the application."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此页面无权控制应用。"}}}
+    },
+    "The interface stopped unexpectedly. Close and reopen the control panel to retry." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The interface stopped unexpectedly. Close and reopen the control panel to retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "界面意外停止。请关闭并重新打开控制面板重试。"}}}
+    },
+    "Couldn’t load the interface" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Couldn’t load the interface"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法加载界面"}}}
+    },
+    "Reload" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Reload"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "重新加载"}}}
+    },
+    "The control panel has closed." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The control panel has closed."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "控制面板已关闭。"}}}
+    },
+    "Assets folder not found" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Assets folder not found"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "未找到资源文件夹"}}}
+    },
     "Sign-in needed" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Sign-in needed"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "需要登录验证"}}}
     },
@@ -963,6 +987,18 @@
     },
     "Compatibility checked after download" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Compatibility checked after download"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载后检查兼容性"}}}
+    },
+    "Highest rated" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Highest rated"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "评分最高"}}}
+    },
+    "Most popular today" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Most popular today"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "今日最热门"}}}
+    },
+    "Most popular this month" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Most popular this month"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "本月最热门"}}}
+    },
+    "Most popular this year" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Most popular this year"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "今年最热门"}}}
     },
     "Trending this week" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Trending this week"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "本周热门"}}}

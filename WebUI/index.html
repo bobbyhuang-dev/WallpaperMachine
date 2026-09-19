@@ -14,34 +14,33 @@
 <body>
   <div id="app">
     <header class="topbar">
-      <nav class="tabs" aria-label="Main navigation">
-        <button type="button" data-page="discover">Discover</button>
-        <button type="button" data-page="installed">Installed</button>
-        <button type="button" data-page="settings">Settings</button>
+      <nav class="tabs" aria-label="Main navigation" data-i18n-label="Main navigation">
+        <button type="button" data-page="discover" data-i18n="Discover">Discover</button>
+        <button type="button" data-page="installed" data-i18n="Installed">Installed</button>
+        <button type="button" data-page="settings" data-i18n="Settings">Settings</button>
       </nav>
       <div id="app-identity" class="app-identity"></div>
       <div id="top-actions" class="top-actions"></div>
     </header>
     <div id="error-banner" class="error-banner" role="alert" hidden></div>
     <main id="main">
-      <section id="library-page" class="library-page" aria-label="Wallpapers">
-        <aside id="workshop-filters" class="workshop-filters" aria-label="Workshop filters" hidden></aside>
-        <section class="browser-column" aria-label="Wallpaper browser">
+      <section id="library-page" class="library-page" aria-label="Wallpapers" data-i18n-label="Wallpapers">
+        <aside id="filter-sidebar" class="filter-sidebar" aria-label="Filters" data-i18n-label="Filters" hidden></aside>
+        <section class="browser-column" aria-label="Wallpaper browser" data-i18n-label="Wallpaper browser">
           <div id="browser-toolbar" class="browser-toolbar"></div>
           <div id="browser-summary" class="browser-summary" aria-live="polite"></div>
-          <div id="wallpaper-grid" class="wallpaper-grid" aria-label="Wallpapers"></div>
-          <div id="browser-empty" class="empty-state" role="status"><h1>Connecting to MacWallpaperEngine</h1><p>Waiting for the native application.</p></div>
+          <div id="wallpaper-grid" class="wallpaper-grid" aria-label="Wallpapers" data-i18n-label="Wallpapers"></div>
+          <div id="browser-empty" class="empty-state" role="status"><h1 data-i18n="Connecting to MacWallpaperEngine">Connecting to MacWallpaperEngine</h1><p data-i18n="Waiting for the native application.">Waiting for the native application.</p></div>
           <div id="pagination" class="pagination"></div>
         </section>
-        <aside id="inspector" class="inspector" aria-label="Wallpaper details"></aside>
-        <div id="inspector-resizer" class="inspector-resizer" role="separator" aria-orientation="vertical" aria-label="Resize wallpaper details" aria-controls="inspector" tabindex="0" title="Drag to resize. Double-click to reset."></div>
+        <aside id="inspector" class="inspector" aria-label="Wallpaper details" data-i18n-label="Wallpaper details"></aside>
       </section>
-      <section id="settings-content" aria-label="Settings" hidden></section>
+      <section id="settings-content" aria-label="Settings" data-i18n-label="Settings" hidden></section>
     </main>
     <div id="queue-popover" class="popover queue-popover" role="dialog" aria-labelledby="queue-popover-title" tabindex="-1" hidden></div>
     <div id="import-popover" class="popover import-popover" role="dialog" aria-labelledby="import-popover-title" tabindex="-1" hidden></div>
     <dialog id="download-dialog" class="download-dialog" aria-labelledby="download-dialog-title"></dialog>
-    <footer id="activity-bar" class="activity-bar" aria-label="Playback and download activity"></footer>
+    <footer id="activity-bar" class="activity-bar" aria-label="Playback and download activity" data-i18n-label="Playback and download activity"></footer>
   </div>
   <div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
 </body>

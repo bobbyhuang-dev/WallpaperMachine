@@ -101,7 +101,7 @@ enum ClientPaths {
             try configureAssetsFolder(at: assets)
         } catch {
             let alert = NSAlert()
-            alert.messageText = "Assets folder not found"
+            alert.messageText = String(localized: "Assets folder not found")
             alert.informativeText = error.localizedDescription
             alert.runModal()
             return false

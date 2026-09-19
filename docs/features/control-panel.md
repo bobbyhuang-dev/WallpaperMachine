@@ -12,19 +12,22 @@ a system dialog and renderer content is never loaded into the web view.
 | --- | --- |
 | Top tabs | **Discover**, **Installed**, **Settings** |
 | Top bar | Sits in the window's title-bar strip beside the traffic lights: tabs on the left, product name, version and a GitHub button (opens the repository in the default browser) centered, target-display picker and a downloads button (only while there is download activity) on the right. The side groups never shrink below their content, so a long display name nudges the brand off-center rather than under the controls; in windows up to 840px wide the name and version hide and only the GitHub button stays. The renderer's own repository is linked from Settings → About. Its background drags the window and follows the system double-click action |
-| Browser column | Search field, sort menu, filters, tile grid, result summary, Workshop pagination with an editable page number. On Discover a page holds exactly the tiles that fill the grid at the current window size, so pages never scroll or end in a partial row |
-| Left sidebar | Workshop tag filters (Discover only). Fixed width; the sidebar button in its heading collapses it to a narrow labelled rail that expands it again when clicked, and that choice is remembered across launches |
-| Inspector | Preview, title, kind, creator, tags, actions, and the selected wallpaper's options and properties. Grows from 280px to 340px with the window width by default; dragging its left edge sets a width (240px to 45% of the window) that is remembered, and double-clicking the edge restores the fluid width. The edge is keyboard-focusable: arrow keys resize, `Home` resets |
+| Browser column | Filter button, search field, sort menu, tile grid, result summary, Workshop pagination with an editable page number. On Discover a page is one Steam page of 30 square tiles (at most 1,000 pages); the grid shows as many columns as fit, never fewer than three, and scrolls the rest |
+| Left sidebar | Workshop filters (Discover only), mirroring Wallpaper Engine's sidebar: Show only, Type, Age rating, Resolution and Tags tick boxes. Fixed width; the sidebar button in its heading collapses it to a narrow labelled rail that expands it again when clicked, and that choice is remembered across launches |
+| Inspector | Preview, title, kind, creator, tags, actions, and the selected wallpaper's options and properties. Its width is a function of the window width alone and cannot be dragged: 260px at the 760px minimum, `15vw + 146px` in between (290px at 960px, 386px at 1600px) and 420px from about 1830px on, the same on Discover and Installed. Nothing is stored, so a given window size always yields the same layout. Inside, the panel adapts to its own width: past 360px the insets widen and a display's scale factor and frame rate share a row |
 | Activity bar | Pause/resume playback, import status, download progress |
 
 Wallpapers appear as square, image-first tiles with a transparent title overlay
 (Discover tiles may deviate from square by up to 15% so a page's rows fill the
 grid; see [Workshop downloads](workshop-downloads.md#discover)).
-Discover tiles show cached still thumbnails rather than Steam's full previews
-(see [Workshop downloads](workshop-downloads.md#tile-thumbnails)).
+Discover tiles show cached still thumbnails first and then, for tiles on
+screen, play Steam's animated preview beneath the still, which only fades out
+while the animation is bright (see
+[Workshop downloads](workshop-downloads.md#tile-thumbnails)).
 Both tabs fill the grid with as many columns as the browser column can hold at a
-minimum tile size that shrinks with the column, so a narrower window shows
-smaller tiles and more of them rather than fewer, larger ones. The window
+preferred tile size that shrinks with the column, and never fewer than three,
+so a narrower window shows smaller tiles and more of them rather than fewer,
+larger ones; the grid scrolls vertically for whatever rows that takes. The window
 itself never shrinks below a 760×560 content area (capped by the visible screen
 on small displays): `ControlPanelWindow` owns that floor and `AppDelegate`
 enforces it in `windowWillResize`, because the SwiftUI hosting controller
@@ -62,8 +65,18 @@ screen. Activation is explicit.
   display, or when the wallpaper kind cannot be rendered (Web, Application,
   Unknown).
 
-The inspector's action row also offers favorites, **Show in Finder** and moving
-the wallpaper to the Trash.
+The inspector's heading is one centered column, laid out like Wallpaper Engine's
+own sidebar: square preview, title, creator (Discover), a facts line (type, size,
+subscribers), pill tags, then the actions. The primary action (**Apply
+wallpaper** or **Download**) spans the full width; the row under it holds
+**Show in Finder**, favorites and the trash on Installed, or **View on Steam
+Workshop** on Discover.
+
+That row ends with **Report a problem on GitHub** (warning-triangle icon). It
+opens the repository's new-issue form in the browser with the wallpaper's title,
+Workshop link or id, type and the app version pre-filled. Nothing is submitted by
+the app; the user edits and sends the issue on GitHub. The button is hidden when
+the snapshot carries no `https` repository URL.
 
 ## Deleting wallpapers
 
@@ -107,17 +120,32 @@ are unchanged, so nothing persisted or sent over the bridge moves.
 
 ## Filtering
 
-- Installed: a compact filter popover narrows the collection by wallpaper type,
-  favorites only, and active-on-target; sort is Title or Type. Filtering never
-  activates a wallpaper. **Clear filters** resets the popover.
-- Discover: the sidebar carries the Workshop type menu and multi-select tag
-  groups; sort is Trending this week, Most subscribed, Newest or Relevance.
-  The sidebar button beside the heading (Lucide's panel-left-close glyph,
-  tooltip "Hide filters") collapses it to a 36px rail that is one full-height
-  button: the panel-left-open glyph, the active filter count and a vertical
-  "Filters" label; clicking anywhere on the rail expands it again.
-  Collapsing never changes the search; the choice is stored natively (the
-  panel's web storage is not persistent) and restored on the next launch.
+Both library pages share one filter sidebar on the left of the grid (the
+inspector keeps the right). Its only switch is the toolbar's **Filter** button:
+the first control in the toolbar, filled in the accent colour with a funnel
+glyph, the label "Filter" and, when filters are active, their count in a pill.
+Open, the button reads as pressed (`aria-expanded`) beside the sidebar; closed,
+the sidebar leaves the layout and the grid takes its column. The sidebar itself
+has no collapse control and no rail. Each page remembers its own choice natively
+(`filters` action, `filtersCollapsed` in the snapshot; the panel's web storage is
+not persistent) and restores it on the next launch. Closing never changes the
+search or the filters.
+
+- Installed: the sidebar narrows the collection by wallpaper type, favorites
+  only, and active-on-target; **Clear** resets it. Filtering never activates a
+  wallpaper. The toolbar's sort menu offers Name, Type, Favorites, File size and
+  Date added, with a direction button beside it. Choosing a key starts in the
+  direction people ask for it (names A→Z; favorites, largest and newest first)
+  and the button flips it; names break ties. File size is the wallpaper folder's
+  total and Date added is when the folder entered the library (download or
+  import), both measured off the main thread by `LibraryMetricsService` and
+  re-checked only after a library reload; wallpapers not yet measured sort last.
+- Discover: the sidebar is Wallpaper Engine's own filter list — Show only
+  (required tags), then Type, Age rating, Resolution and Tags as tick boxes
+  whose unticked entries are excluded (see
+  [workshop-downloads](workshop-downloads.md)); sort opens on Most popular this
+  year and offers Highest rated, Most popular today, Trending this week, Most
+  popular this month, Most popular this year, Most subscribed, Newest or Relevance.
 
 ## Properties
 

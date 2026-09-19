@@ -30,15 +30,40 @@ enum WorkshopKind: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Sort orders Steam's public browse page actually honours. The raw value is the stable key
+/// shared with the web panel; `browseSort` and `days` are what the request sends. Steam has no
+/// public "most voted" sort: unknown `browsesort` values silently fall back to trending.
 enum WorkshopSort: String, CaseIterable, Identifiable, Sendable {
-    case trending = "trend", popular = "totaluniquesubscribers", newest = "mostrecent", relevance = "textsearch"
+    case topRated = "toprated"
+    case trendingToday = "trend-today", trending = "trend", trendingMonth = "trend-month", trendingYear = "trend-year"
+    case popular = "totaluniquesubscribers", newest = "mostrecent", relevance = "textsearch"
     var id: String { rawValue }
     var title: String {
         switch self {
+        case .topRated: String(localized: "Highest rated")
+        case .trendingToday: String(localized: "Most popular today")
         case .trending: String(localized: "Trending this week")
+        case .trendingMonth: String(localized: "Most popular this month")
+        case .trendingYear: String(localized: "Most popular this year")
         case .popular: String(localized: "Most subscribed")
         case .newest: String(localized: "Newest")
         case .relevance: String(localized: "Relevance")
+        }
+    }
+    /// Steam's `browsesort` query value.
+    var browseSort: String {
+        switch self {
+        case .trendingToday, .trending, .trendingMonth, .trendingYear: "trend"
+        default: rawValue
+        }
+    }
+    /// Steam's `days` window; only trending sorts read it, the others ignore it.
+    var days: Int {
+        switch self {
+        case .trendingToday: 1
+        case .trendingMonth: 30
+        case .trendingYear: 365
+        default: 7
         }
     }
 }
@@ -59,20 +84,22 @@ actor WorkshopService {
     /// Steam's public browse page clamps `numperpage` to 30 and `total_pages` to 1000, so a single
     /// query can only ever expose the first 30,000 results; the panel explains that cap.
     static let pageSize = 30
+    static let maxPages = 1000
     private let session: URLSession
 
     init(session: URLSession = .shared) { self.session = session }
 
-    static func browseURL(search: String, kind: WorkshopKind, sort: WorkshopSort, page: Int, tags: [String] = []) -> URL {
+    static func browseURL(search: String, kind: WorkshopKind, sort: WorkshopSort, page: Int, tags: [String] = [],
+                          excludedTags: [String] = []) -> URL {
         var url = URLComponents(string: "https://steamcommunity.com/workshop/browse/")!
         url.queryItems = [
             URLQueryItem(name: "appid", value: "431960"),
             URLQueryItem(name: "section", value: "readytouseitems"),
-            URLQueryItem(name: "browsesort", value: sort.rawValue),
+            URLQueryItem(name: "browsesort", value: sort.browseSort),
             URLQueryItem(name: "searchtext", value: search),
             URLQueryItem(name: "p", value: String(max(1, page))),
             URLQueryItem(name: "numperpage", value: String(Self.pageSize)),
-            URLQueryItem(name: "days", value: "7"),
+            URLQueryItem(name: "days", value: String(sort.days)),
             URLQueryItem(name: "l", value: "english")
         ]
         if kind != .all { url.queryItems?.append(URLQueryItem(name: "requiredtags[]", value: kind.rawValue)) }
@@ -81,11 +108,19 @@ actor WorkshopService {
         for tag in tags where seen.insert(tag).inserted {
             url.queryItems?.append(URLQueryItem(name: "requiredtags[]", value: tag))
         }
+        // Steam drops an item carrying any excluded tag; a tag that is also required would
+        // empty the result, so it is not sent as excluded.
+        var excluded: Set<String> = []
+        for tag in excludedTags where !seen.contains(tag) && excluded.insert(tag).inserted {
+            url.queryItems?.append(URLQueryItem(name: "excludedtags[]", value: tag))
+        }
         return url.url!
     }
 
-    func browse(search: String, kind: WorkshopKind, sort: WorkshopSort, page: Int, tags: [String] = []) async throws -> WorkshopPage {
-        var request = URLRequest(url: Self.browseURL(search: search, kind: kind, sort: sort, page: page, tags: tags))
+    func browse(search: String, kind: WorkshopKind, sort: WorkshopSort, page: Int, tags: [String] = [],
+                excludedTags: [String] = []) async throws -> WorkshopPage {
+        var request = URLRequest(url: Self.browseURL(search: search, kind: kind, sort: sort, page: page, tags: tags,
+                                                     excludedTags: excludedTags))
         request.timeoutInterval = 35
         request.setValue("MacWallpaperEngine/1.0 (macOS; public Workshop browser)", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)

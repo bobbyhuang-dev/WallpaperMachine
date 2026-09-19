@@ -15,14 +15,18 @@ final class WebPanelAssetsTests: XCTestCase {
     XCTAssertNil(assets.route(try XCTUnwrap(URL(string: "mwe-ui://thumbnail/300"))))
     XCTAssertNil(assets.route(try XCTUnwrap(URL(string: "mwe-ui://thumbnail:8080/100"))))
     XCTAssertNil(assets.route(try XCTUnwrap(URL(string: "https://thumbnail/100"))))
+    XCTAssertEqual(assets.route(try XCTUnwrap(URL(string: "mwe-ui://animated/100"))), .animated(steam))
+    XCTAssertNil(assets.route(try XCTUnwrap(URL(string: "mwe-ui://animated/200"))))
+    XCTAssertNil(assets.route(try XCTUnwrap(URL(string: "mwe-ui://preview-cdn/100"))))
 
     assets.thumbnails = [:]
     XCTAssertNil(assets.route(try XCTUnwrap(URL(string: "mwe-ui://thumbnail/100"))))
+    XCTAssertNil(assets.route(try XCTUnwrap(URL(string: "mwe-ui://animated/100"))))
   }
 
   func testServesEveryBundledPanelModule() throws {
     let assets = WebPanelAssets()
-    for name in ["index.html", "panel.js", "settings.js", "theme.js", "icons.js", "panel.css", "settings.css"] {
+    for name in ["index.html", "panel.js", "settings.js", "theme.js", "icons.js", "i18n.js", "panel.css", "settings.css"] {
       let route = assets.route(try XCTUnwrap(URL(string: "mwe-ui://app/\(name)")))
       guard case .file(let file)? = route else { return XCTFail("\(name) is not served") }
       XCTAssertEqual(file.lastPathComponent, name)

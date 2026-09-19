@@ -37,41 +37,33 @@ extension WebPanelController {
       }
       return
     case "workshopSearch":
-      guard let kind = WorkshopKind(rawValue: try request.string("kind")),
+      // The sidebar narrows by tags alone, so `kind` is optional and defaults to every type.
+      let excludedTags = body["excludedTags"] as? [String] ?? []
+      guard let kind = WorkshopKind(rawValue: body["kind"] as? String ?? WorkshopKind.all.rawValue),
         let sort = WorkshopSort(rawValue: try request.string("sort")),
-        let tags = body["tags"] as? [String], tags.count <= 32, tags.allSatisfy({ $0.count <= 128 })
+        let tags = body["tags"] as? [String], tags.count <= 32, tags.allSatisfy({ $0.count <= 128 }),
+        excludedTags.count <= 64, excludedTags.allSatisfy({ $0.count <= 128 })
       else { throw WebPanelRequest.invalid }
       workshop.searchText = try request.string("text")
       workshop.kind = kind
       workshop.sort = sort
       workshop.tags = tags
+      workshop.excludedTags = excludedTags
       workshop.search()
       return
     case "workshopPage":
-      workshop.loadPage(Int(try request.number("page", range: 1...1_000_000)))
+      workshop.loadPage(
+        Int(try request.number("page", range: 1...Double(WorkshopStore.maxPages))))
       return
     case "workshopRetry":
       workshop.retrySearch()
       return
-    case "workshopPageSize":
-      let range = WorkshopStore.pageSizeRange
-      workshop.setPageSize(
-        Int(try request.number("size", range: Double(range.lowerBound)...Double(range.upperBound))))
-      return
-    case "workshopFilters":
-      guard let collapsed = body["collapsed"] as? Bool else { throw WebPanelRequest.invalid }
-      workshopFiltersCollapsed = collapsed
-      defaults.set(collapsed, forKey: Self.workshopFiltersCollapsedKey)
-      return
-    case "inspectorWidth":
-      if body["width"] == nil || body["width"] is NSNull {
-        inspectorWidth = nil
-        defaults.removeObject(forKey: Self.inspectorWidthKey)
-      } else {
-        let width = try request.number("width", range: Self.inspectorWidthRange).rounded()
-        inspectorWidth = width
-        defaults.set(width, forKey: Self.inspectorWidthKey)
-      }
+    case "filters":
+      guard let page = body["page"] as? String, let key = Self.filtersCollapsedKeys[page],
+        let collapsed = body["collapsed"] as? Bool
+      else { throw WebPanelRequest.invalid }
+      filtersCollapsed[page] = collapsed
+      defaults.set(collapsed, forKey: key)
       return
     case "workshopSelect":
       guard let id = body["id"] as? String, let item = workshop.workshopItem(id: id) else {
@@ -751,7 +743,7 @@ extension WebPanelController {
     alert.messageText = title
     alert.informativeText = detail
     alert.addButton(withTitle: button)
-    alert.addButton(withTitle: "Cancel")
+    alert.addButton(withTitle: String(localized: "Cancel"))
     return await withCheckedContinuation { continuation in
       alert.beginSheetModal(for: window) {
         continuation.resume(returning: $0 == .alertFirstButtonReturn)

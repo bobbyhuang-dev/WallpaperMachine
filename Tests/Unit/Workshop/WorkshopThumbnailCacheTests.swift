@@ -17,20 +17,6 @@ final class WorkshopThumbnailCacheTests: XCTestCase {
         try? FileManager.default.removeItem(at: root)
     }
 
-    func testScaledPreviewURLOnlyAsksSteamImageHostsForSmallerImages() throws {
-        let steam = try XCTUnwrap(URL(string: "https://images.steamusercontent.com/ugc/1/ABC/?imw=5000&x=1"))
-        let scaled = WorkshopThumbnailCache.scaledPreviewURL(steam, maxPixelSize: 320)
-        let items = try XCTUnwrap(URLComponents(url: scaled, resolvingAgainstBaseURL: false)?.queryItems)
-        XCTAssertEqual(scaled.host, steam.host)
-        XCTAssertEqual(scaled.path, steam.path)
-        XCTAssertEqual(items.filter { $0.name == "imw" }.map(\.value), ["320"])
-        XCTAssertEqual(items.first { $0.name == "imh" }?.value, "320")
-        XCTAssertEqual(items.first { $0.name == "x" }?.value, "1")
-
-        let other = try XCTUnwrap(URL(string: "https://example.com/preview.gif"))
-        XCTAssertEqual(WorkshopThumbnailCache.scaledPreviewURL(other), other)
-    }
-
     func testEncodeThumbnailKeepsOneScaledFrameOfAnAnimatedPreview() throws {
         let gif = try Self.image(type: .gif, width: 1024, height: 640, frames: 3)
         let jpeg = try WorkshopThumbnailCache.encodeThumbnail(gif, maxPixelSize: 512)
@@ -41,6 +27,29 @@ final class WorkshopThumbnailCacheTests: XCTestCase {
         XCTAssertEqual(image.width, 512)
         XCTAssertEqual(image.height, 320)
         XCTAssertThrowsError(try WorkshopThumbnailCache.encodeThumbnail(Data("not an image".utf8)))
+    }
+
+    func testEncodeThumbnailSkipsTheBlackFadeInOfAnAnimatedPreview() throws {
+        // Six black frames, then a fade to a bright scene: the still must not be black.
+        let fadeIn = try Self.image(type: .gif, width: 256, height: 160, frames: 24) { frame in
+            frame < 6 ? 0 : min(1, Double(frame - 6) / 6)
+        }
+        let stillOfFadeIn = try WorkshopThumbnailCache.encodeThumbnail(fadeIn, maxPixelSize: 128)
+        XCTAssertGreaterThan(try Self.meanLuminance(of: stillOfFadeIn), 0.35)
+
+        // A preview that is dark throughout keeps its first frame rather than hunting for light.
+        let darkSource = try XCTUnwrap(CGImageSourceCreateWithData(
+            try Self.image(type: .gif, width: 64, height: 64, frames: 12) { _ in 0.02 } as CFData, nil))
+        XCTAssertEqual(WorkshopThumbnailCache.representativeFrameIndex(of: darkSource), 0)
+
+        // A preview that starts bright keeps its first frame too.
+        let brightSource = try XCTUnwrap(CGImageSourceCreateWithData(
+            try Self.image(type: .gif, width: 64, height: 64, frames: 12) { frame in 0.9 - Double(frame) * 0.02 } as CFData, nil))
+        XCTAssertEqual(WorkshopThumbnailCache.representativeFrameIndex(of: brightSource), 0)
+
+        let stillSource = try XCTUnwrap(CGImageSourceCreateWithData(
+            try Self.image(type: .png, width: 64, height: 64, frames: 1) { _ in 0 } as CFData, nil))
+        XCTAssertEqual(WorkshopThumbnailCache.representativeFrameIndex(of: stillSource), 0)
     }
 
     func testThumbnailIsFetchedOnceThenServedFromDiskAcrossInstances() async throws {
@@ -55,7 +64,7 @@ final class WorkshopThumbnailCacheTests: XCTestCase {
         let results = try await [first, second, third]
         XCTAssertEqual(Set(results.map(\.count)).count, 1)
         XCTAssertEqual(fetcher.requests.count, 1)
-        XCTAssertEqual(fetcher.requests.first.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "imw" }?.value }, "512")
+        XCTAssertEqual(fetcher.requests.first, preview, "Steam's edge serves the original fastest; no scaled variant is asked for")
 
         let relaunched = WorkshopThumbnailCache(directory: root, fetcher: fetcher)
         let again = try await relaunched.thumbnail(for: preview)
@@ -63,19 +72,6 @@ final class WorkshopThumbnailCacheTests: XCTestCase {
         XCTAssertEqual(fetcher.requests.count, 1)
         let files = try FileManager.default.contentsOfDirectory(atPath: root.path).filter { $0.hasSuffix(".jpg") }
         XCTAssertEqual(files.count, 1)
-    }
-
-    func testRefusedScalingFallsBackToTheOriginalPreview() async throws {
-        let png = try Self.image(type: .png, width: 300, height: 200, frames: 1)
-        let fetcher = RecordingFetcher { url in
-            guard url.query == nil else { throw WorkshopThumbnailFailure(code: .httpStatus(400)) }
-            return png
-        }
-        let preview = try XCTUnwrap(URL(string: "https://steamuserimages-a.akamaihd.net/ugc/3/GHI/"))
-        let cache = WorkshopThumbnailCache(directory: root, fetcher: fetcher)
-        let data = try await cache.thumbnail(for: preview)
-        XCTAssertFalse(data.isEmpty)
-        XCTAssertEqual(fetcher.requests.map { $0.query == nil }, [false, true])
     }
 
     func testFailedFetchLeavesNothingCachedAndRetriesLater() async throws {
@@ -109,6 +105,95 @@ final class WorkshopThumbnailCacheTests: XCTestCase {
         XCTAssertLessThanOrEqual(fetcher.peakConcurrency, 2)
     }
 
+    func testOneDownloadYieldsTheStillAndTheAnimationAndStillsAreRefused() async throws {
+        let gif = try Self.image(type: .gif, width: 200, height: 120, frames: 4)
+        let png = try Self.image(type: .png, width: 200, height: 120, frames: 1)
+        let fetcher = RecordingFetcher { url in url.path.contains("gif") ? gif : png }
+        let animated = try XCTUnwrap(URL(string: "https://images.steamusercontent.com/ugc/5/gif/"))
+        let still = try XCTUnwrap(URL(string: "https://images.steamusercontent.com/ugc/6/png/"))
+        let cache = WorkshopThumbnailCache(directory: root, fetcher: fetcher)
+
+        _ = try await cache.thumbnail(for: animated)
+        _ = try await cache.thumbnail(for: still)
+        XCTAssertEqual(fetcher.requests.count, 2)
+
+        let played = try await cache.animatedPreview(for: animated)
+        XCTAssertEqual(played, gif, "The animation plays as Steam encoded it")
+        XCTAssertEqual(WorkshopThumbnailCache.mimeType(of: played), "image/gif")
+        let relaunched = WorkshopThumbnailCache(directory: root, fetcher: fetcher)
+        let afterRelaunch = try await relaunched.animatedPreview(for: animated)
+        XCTAssertEqual(afterRelaunch, gif)
+        XCTAssertEqual(fetcher.requests.count, 2, "The still's download already paid for the animation")
+
+        do {
+            _ = try await cache.animatedPreview(for: still)
+            XCTFail("a single-frame preview must not be relayed")
+        } catch let failure as WorkshopThumbnailFailure {
+            XCTAssertEqual(failure.code, .notAnimated)
+        }
+        XCTAssertEqual(fetcher.requests.count, 2, "Refusing a still costs no request")
+    }
+
+    func testAnimationAskedForDuringTheStillPassSharesItsDownload() async throws {
+        let gif = try Self.image(type: .gif, width: 200, height: 120, frames: 4)
+        let fetcher = RecordingFetcher(delay: .milliseconds(60)) { _ in gif }
+        let preview = try XCTUnwrap(URL(string: "https://images.steamusercontent.com/ugc/7/gif/"))
+        let cache = WorkshopThumbnailCache(directory: root, fetcher: fetcher)
+        async let still = cache.thumbnail(for: preview)
+        try await Task.sleep(for: .milliseconds(15))
+        let animation = try await cache.animatedPreview(for: preview)
+        _ = try await still
+        XCTAssertEqual(animation, gif)
+        XCTAssertEqual(fetcher.requests.count, 1)
+    }
+
+    func testPrunedAnimationIsFetchedAgainOnceAndKept() async throws {
+        let gif = try Self.image(type: .gif, width: 200, height: 120, frames: 4)
+        let fetcher = RecordingFetcher { _ in gif }
+        let preview = try XCTUnwrap(URL(string: "https://images.steamusercontent.com/ugc/8/gif/"))
+        let cache = WorkshopThumbnailCache(directory: root, fetcher: fetcher)
+        _ = try await cache.thumbnail(for: preview)
+        let file = await cache.fileURL(for: preview)
+        try FileManager.default.removeItem(at: WorkshopThumbnailCache.animationFile(for: file))
+
+        async let first = cache.animatedPreview(for: preview)
+        async let second = cache.animatedPreview(for: preview)
+        let results = try await [first, second]
+        XCTAssertEqual(results, [gif, gif])
+        _ = try await cache.animatedPreview(for: preview)
+        XCTAssertEqual(fetcher.requests.count, 2, "One refetch serves every waiter and later plays")
+    }
+
+    func testWarmingCachesPreviewsBeforeAnyoneAsks() async throws {
+        let png = try Self.image(type: .png, width: 300, height: 200, frames: 1)
+        let fetcher = RecordingFetcher { _ in png }
+        let cache = WorkshopThumbnailCache(directory: root, fetcher: fetcher)
+        let previews = try (0..<3).map { try XCTUnwrap(URL(string: "https://images.steamusercontent.com/ugc/\($0)/warm/")) }
+        cache.warm(previews)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while try FileManager.default.contentsOfDirectory(atPath: root.path).filter({ $0.hasSuffix(".jpg") }).count < 3 {
+            guard ContinuousClock.now < deadline else { return XCTFail("warming never finished") }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        for preview in previews { _ = try await cache.thumbnail(for: preview) }
+        XCTAssertEqual(fetcher.requests.count, 3, "Tiles asked for after warming cost no request")
+    }
+
+    func testAnimatedPreviewsQueueOnTheirOwnLaneBesideStills() async throws {
+        let gif = try Self.image(type: .gif, width: 64, height: 64, frames: 2)
+        let fetcher = RecordingFetcher(delay: .milliseconds(40)) { _ in gif }
+        let cache = WorkshopThumbnailCache(directory: root, fetcher: fetcher, maxConcurrentFetches: 1, maxConcurrentAnimatedFetches: 2)
+        try await withThrowingTaskGroup(of: Int.self) { group in
+            for index in 0..<4 {
+                let url = try XCTUnwrap(URL(string: "https://images.steamusercontent.com/ugc/\(index)/anim/"))
+                group.addTask { try await cache.animatedPreview(for: url).count }
+            }
+            for try await _ in group {}
+        }
+        XCTAssertEqual(fetcher.requests.count, 4)
+        XCTAssertEqual(fetcher.peakConcurrency, 2, "Two animations stream at once even though stills are limited to one")
+    }
+
     func testPruneRemovesTheOldestEntriesUntilTheCacheFits() async throws {
         let cache = WorkshopThumbnailCache(directory: root, fetcher: RecordingFetcher { _ in Data() }, byteLimit: 2_500)
         let files = FileManager.default
@@ -122,7 +207,25 @@ final class WorkshopThumbnailCacheTests: XCTestCase {
         XCTAssertEqual(remaining, ["entry-2.jpg", "entry-3.jpg"])
     }
 
-    private static func image(type: UTType, width: Int, height: Int, frames: Int) throws -> Data {
+    private static func meanLuminance(of encoded: Data) throws -> Double {
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(encoded as CFData, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let pixels = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+        var total = 0
+        for row in 0..<image.height {
+            for column in 0..<image.width { total += Int(pixels[row * context.bytesPerRow + column]) }
+        }
+        return Double(total) / Double(image.width * image.height * 255)
+    }
+
+    /// `brightness` maps a frame index to 0...1; `nil` keeps the default varied fill per frame.
+    private static func image(
+        type: UTType, width: Int, height: Int, frames: Int, brightness: ((Int) -> Double)? = nil
+    ) throws -> Data {
         let output = NSMutableData()
         let destination = try XCTUnwrap(CGImageDestinationCreateWithData(output, type.identifier as CFString, frames, nil))
         let space = CGColorSpaceCreateDeviceRGB()
@@ -130,12 +233,19 @@ final class WorkshopThumbnailCacheTests: XCTestCase {
             let context = try XCTUnwrap(CGContext(
                 data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-            context.setFillColor(CGColor(red: CGFloat(frame) / CGFloat(max(frames, 2)), green: 0.4, blue: 0.7, alpha: 1))
+            if let level = brightness?(frame) {
+                context.setFillColor(gray: level, alpha: 1)
+            } else {
+                context.setFillColor(CGColor(red: CGFloat(frame) / CGFloat(max(frames, 2)), green: 0.4, blue: 0.7, alpha: 1))
+            }
             context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-            // Noise keeps the encoder from collapsing the frame to a few bytes.
-            for y in stride(from: 0, to: height, by: 16) {
-                context.setFillColor(CGColor(red: CGFloat(y % 97) / 97, green: CGFloat(y % 53) / 53, blue: 0.2, alpha: 1))
-                context.fill(CGRect(x: (y * 7) % width, y: y, width: 40, height: 8))
+            // Noise keeps the encoder from collapsing the frame to a few bytes; a black fade-in
+            // frame stays black so the still-frame choice sees what a real preview shows.
+            if brightness == nil {
+                for y in stride(from: 0, to: height, by: 16) {
+                    context.setFillColor(CGColor(red: CGFloat(y % 97) / 97, green: CGFloat(y % 53) / 53, blue: 0.2, alpha: 1))
+                    context.fill(CGRect(x: (y * 7) % width, y: y, width: 40, height: 8))
+                }
             }
             let image = try XCTUnwrap(context.makeImage())
             let properties: [CFString: Any] = type == .gif

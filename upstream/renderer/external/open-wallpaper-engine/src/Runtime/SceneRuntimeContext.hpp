@@ -5,6 +5,7 @@
 #include "Runtime/ScalarAnimation.hpp"
 #include "Scene/Parse/WPPuppet.hpp"
 #include "Scene/include/Scene/SceneShader.h"
+#include "Scene/include/Scene/SceneUpdateDemand.hpp"
 #include "Text/TextLayer.hpp"
 #include "Video/VideoTextureSource.hpp"
 
@@ -164,6 +165,17 @@ public:
     void RegisterNodeVideoTexture(std::string name, std::string texture_key);
     void RegisterSoundLayer(std::string name, std::shared_ptr<WPSoundStream> stream);
     std::size_t     sceneScriptCount() const;
+
+    /// Which of this runtime's facilities advance with time, as
+    /// `SceneDemandReason` bits.
+    ///
+    /// Derived from what `Tick` actually steps, registry by registry, not from
+    /// searching script or shader text. A registry that exists but is empty
+    /// contributes nothing; a registry this function does not know about is a
+    /// compile-time omission, which is why the caller starts from "unknown"
+    /// rather than from "still" and this only ever clears bits it can account
+    /// for.
+    [[nodiscard]] uint32_t DescribeTimeAdvancingWork() const;
     bool            HasNodeNamed(std::string_view name) const;
     bool            HasSoundLayer(std::string_view name) const;
     bool            PlaySoundLayer(std::string_view name);

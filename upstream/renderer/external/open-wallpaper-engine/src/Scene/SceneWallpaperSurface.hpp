@@ -24,6 +24,16 @@ struct RenderInitInfo {
     TexTiling                     offscreen_tiling { TexTiling::OPTIMAL };
     VulkanSurfaceInfo             surface_info;
 
+    /// The `CAMetalLayer` this surface presents to, when there is one.
+    ///
+    /// `surface_info.createSurfaceOp` already closes over it, but a closure
+    /// cannot be handed to a backend that does not create a `VkSurfaceKHR`.
+    /// Carrying the handle alongside lets the native Metal backend adopt the
+    /// same layer without a second plumbing path, and keeps the invariant that
+    /// exactly one backend ever owns it. Null off Apple platforms and in
+    /// offscreen mode.
+    void* metal_layer { nullptr };
+
     uint16_t width { 1920 };
     uint16_t height { 1080 };
     uint16_t render_width { 0 };

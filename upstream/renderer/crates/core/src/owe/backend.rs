@@ -96,6 +96,7 @@ impl OweBackend {
         let mut scene = OweScene {
             raw: Some(raw),
             render_initialized: false,
+            registration: None,
         };
         scene.initialize_renderer(desc, metal_layer, render_resolution)?;
         scene.set_first_frame_callback(first_frame_callback)?;
@@ -221,6 +222,33 @@ impl OweBackend {
         }
     }
 
+    /// Turns whole-scene on-demand updating on or off, process-wide.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if the call unwinds.
+    pub fn set_scene_on_demand_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        unsafe {
+            UnwindSafeFFI::new("owe_set_scene_on_demand_enabled")
+                .call(|| sys::owe_set_scene_on_demand_enabled(enabled))
+        }
+    }
+
+    /// Chooses which renderer newly opened scenes prefer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if the call unwinds.
+    pub fn set_scene_renderer_preference(
+        &self,
+        preference: crate::SceneRendererPreference,
+    ) -> Result<(), EngineError> {
+        unsafe {
+            UnwindSafeFFI::new("owe_set_scene_renderer_preference")
+                .call(|| sys::owe_set_scene_renderer_preference(preference.as_raw()))
+        }
+    }
+
     /// Latest system-audio spectrum, or `None` when no analysis has run yet.
     ///
     /// # Errors
@@ -298,6 +326,12 @@ impl OweBackend {
 pub struct OweScene {
     raw: Option<NonNull<sys::owe_scene_wallpaper>>,
     render_initialized: bool,
+    /// Registry entry to withdraw before this scene is destroyed.
+    ///
+    /// Held here, not by the caller, because `Drop` also closes: a scene that
+    /// is dropped without an explicit close must still withdraw, or a reader
+    /// could follow a pointer into freed memory.
+    registration: Option<(crate::SceneRegistry, u64)>,
 }
 
 // SAFETY: The pointer is an owned renderer token. Rust mutates it behind the
@@ -874,7 +908,28 @@ impl OweScene {
     /// Returns [`EngineError::Render`] if any OWE quiesce/shutdown/delete call
     /// fails. The scene pointer is still consumed so repeated close is
     /// harmless.
+    /// Publishes this scene so its live update state can be read without
+    /// going through the engine actor.
+    ///
+    /// Registering twice for one handle replaces the entry, which is what a
+    /// display whose scene was rebuilt needs.
+    pub fn publish_runtime_state(&mut self, registry: &crate::SceneRegistry, handle: u64, display_id: u32) {
+        let Some(raw) = self.raw else {
+            return;
+        };
+        if let Some((previous, previous_handle)) = self.registration.take() {
+            previous.unregister(previous_handle);
+        }
+        registry.register(handle, display_id, raw);
+        self.registration = Some((registry.clone(), handle));
+    }
+
     pub fn close(&mut self) -> Result<(), EngineError> {
+        // Withdraw first, unconditionally, and before anything that can fail
+        // or return early. After this line no reader can reach this scene.
+        if let Some((registry, handle)) = self.registration.take() {
+            registry.unregister(handle);
+        }
         let Some(raw) = self.raw.take() else {
             return Ok(());
         };
@@ -1089,7 +1144,7 @@ mod pointer_callback_tests {
         let dropped = Arc::new(AtomicUsize::new(0));
         let witness = DropWitness(dropped.clone());
         let callback: PointerInputCallback = Arc::new(move |_| { let _ = &witness; });
-        let mut scene = OweScene { raw: None, render_initialized: false };
+        let mut scene = OweScene { raw: None, render_initialized: false, registration: None };
         assert!(scene.set_pointer_input_callback(Some(callback)).is_err());
         assert_eq!(dropped.load(Ordering::SeqCst), 1);
     }

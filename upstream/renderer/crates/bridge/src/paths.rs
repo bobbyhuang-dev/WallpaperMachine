@@ -69,6 +69,20 @@ impl BridgePaths {
         )
     }
 
+    /// Where the app keeps its copies of the files a user picked for a
+    /// wallpaper's file or directory properties.
+    ///
+    /// Under the support root but deliberately not under `shader-cache`: these
+    /// are user-imported originals that nothing regenerates, so an ordinary
+    /// cache clean must never reach them.
+    #[must_use]
+    pub fn user_assets_root(&self) -> PathBuf {
+        if let Some(root) = std::env::var_os("MAC_WALLPAPER_ENGINE_USER_ASSETS_ROOT") {
+            return PathBuf::from(root);
+        }
+        self.app_support_root().join("UserAssets")
+    }
+
     #[must_use]
     pub fn shader_cache_root(&self) -> PathBuf {
         self.app_support_root().join("shader-cache")

@@ -1,0 +1,134 @@
+#pragma once
+
+#include "Core/RendererCounters.hpp"
+#include "Presentation/WallpaperScaling.hpp"
+#include "Type.hpp"
+
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <vector>
+
+namespace wallpaper
+{
+class Scene;
+
+namespace rg
+{
+class RenderGraph;
+}
+
+namespace metal
+{
+
+/// Everything the native backend needs to start drawing.
+///
+/// `metal_layer` is the `CAMetalLayer` the host created for this wallpaper
+/// window, never the `NSView`. The backend takes the layer over: it owns the
+/// drawable for as long as it is running, because a Vulkan swapchain and a
+/// Metal drawable loop cannot share one layer.
+struct MetalRenderInitInfo
+{
+    void*                 metal_layer { nullptr };
+    uint16_t              width { 1920 };
+    uint16_t              height { 1080 };
+    uint16_t              render_width { 0 };
+    uint16_t              render_height { 0 };
+    double                display_scale_factor { 1.0 };
+    std::function<void()> redraw_callback;
+};
+
+/// Whether this machine has a Metal device at all. Tests that need one skip
+/// visibly when it answers false rather than passing on a machine that never
+/// ran them.
+[[nodiscard]] bool MetalDeviceAvailable();
+
+/// Native Metal scene renderer.
+///
+/// Mirrors the entry points `vulkan::VulkanRender` exposes so the scene's
+/// render handler can hold either behind one interface. It replaces the draw
+/// backend only: parsing, the scene graph, materials, shaders, animation,
+/// scripts, resource resolution and pause policy are all unchanged and shared.
+///
+/// There is no clock in here. The scene's existing `FrameTimer` remains the
+/// single clock; this acquires one drawable per `drawFrame` call and never
+/// starts a display link of its own, so the configured frame-rate ceiling and
+/// the on-demand idle path keep working exactly as they do for the
+/// compatibility backend.
+class MetalRender {
+public:
+    MetalRender();
+    ~MetalRender();
+
+    MetalRender(const MetalRender&) = delete;
+    MetalRender& operator=(const MetalRender&) = delete;
+
+    bool init(const MetalRenderInitInfo& info);
+    void destroy();
+    [[nodiscard]] bool inited() const;
+
+    /// Releases presentation-scoped state: the layer and its drawable. The
+    /// device, queue, compiled pipelines and uploaded textures survive, so a
+    /// display reconfiguration does not reload the wallpaper.
+    bool releaseSurface();
+    bool resetSurface(const MetalRenderInitInfo& info);
+
+    bool clearLastRenderGraph();
+    bool compileRenderGraph(Scene& scene, rg::RenderGraph& graph);
+    /// Applies a new internal rasterization scale to an already compiled graph.
+    /// Render targets and the pipelines attached to them are rebuilt; the
+    /// parsed scene, uploaded images and shader libraries are not.
+    bool ApplyRenderScale(Scene& scene, rg::RenderGraph& graph, double scale);
+
+    bool drawFrame(Scene& scene);
+
+    void UpdateCameraFillMode(Scene& scene, FillMode fillmode);
+    void SetWallpaperScalingMode(WallpaperScalingMode mode);
+    void SetWallpaperScalingFactor(double factor);
+    void SetWallpaperHorizontalFlip(bool enabled);
+    /// Accepted and recorded so the host's pause policy has one shape for both
+    /// backends. A scene with a video texture never reaches this backend --
+    /// the capability gate rejects it -- so there is no decoder here to pause.
+    void SetVideoPlaybackPaused(bool paused);
+    void SetVideoPlaybackRate(float rate);
+    /// Always 0.0: a scene this backend accepts has no video source, so there
+    /// is no content period to report and the frame clock keeps its configured
+    /// cadence.
+    [[nodiscard]] double ShortestVideoFramePeriod() const;
+
+    /// Scene-level demand bits for the graph currently compiled, in the same
+    /// `vulkan::DynamicReason` vocabulary the compatibility backend reports, so
+    /// the on-demand mapping has one vocabulary to consume.
+    ///
+    /// Reports `UnknownInput` before any graph has been analysed, and for any
+    /// pass whose inputs this backend cannot account for. Reporting nothing
+    /// would tell the on-demand path a still-animating scene is provably
+    /// static and let it stop the clock.
+    [[nodiscard]] uint32_t ShaderUpdateDemandReasons() const;
+
+    void SetCounters(RendererCounters* counters);
+
+    [[nodiscard]] WallpaperCursorMapping CursorMapping(const Scene& scene) const;
+
+    /// Why the last failed call failed, for the fallback reason the settings
+    /// pane shows. Empty when nothing has failed.
+    [[nodiscard]] const std::string& lastError() const;
+
+#ifdef WESCENE_BUILD_TESTS
+    /// Copies one render target back to host memory as RGBA8.
+    ///
+    /// Test-only, and the only way to see what the author's translated shader
+    /// actually wrote: the targets are private-storage textures and the
+    /// drawable is gone once it has been presented. Synchronous by nature,
+    /// which is why it is not on the per-frame path.
+    bool ReadRenderTargetForTests(const std::string& key, std::vector<uint8_t>& rgba,
+                                  uint32_t& width, uint32_t& height);
+#endif
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> pImpl;
+};
+
+} // namespace metal
+} // namespace wallpaper

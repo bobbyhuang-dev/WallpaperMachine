@@ -986,6 +986,25 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func setScalingMode(wallpaperId: String, displayId: String, mode: BridgeScalingMode) async throws  -> BridgeWallpaperMutationBundle
     
     /**
+     * Turns whole-scene on-demand updating on or off for the renderer
+     * process.
+     *
+     * Off by default. With it on, a scene the renderer can prove has no
+     * continuing reason to redraw stops its periodic tick and wakes on
+     * events; a scene it cannot prove that about keeps running. It is not a
+     * frame-rate cap, and it is not the scene optimisation setting: that one
+     * changes how a frame is built, this one changes whether one is built at
+     * all. The snapshot's `scene_update_modes` reports what each running
+     * scene actually settled on.
+     *
+     * # Errors
+     *
+     * Returns an error when the setting cannot be saved or the renderer
+     * rejects the call.
+     */
+    func setSceneOnDemandEnabled(enabled: Bool) async throws  -> BridgeSnapshotBundle
+    
+    /**
      * Turns the scene renderer's static-subgraph caching and redundant
      * copy-pass elimination on or off for the renderer process.
      *
@@ -999,6 +1018,24 @@ public protocol WallpaperBridgeProtocol : AnyObject {
      * rejects the call.
      */
     func setSceneOptimizationEnabled(enabled: Bool) async throws  -> BridgeSnapshotBundle
+    
+    /**
+     * Chooses which renderer draws scene wallpapers.
+     *
+     * `"compatibility"` keeps every scene on the established Vulkan/MoltenVK
+     * path. `"native_metal_preferred"` asks for the native Metal backend
+     * where the whole scene falls inside the subset it can draw, and falls
+     * back as a whole scene otherwise. Independent of the video backend: a
+     * scene is not a plain video. The snapshot's `scene_renderers` reports
+     * what each display actually got.
+     *
+     * # Errors
+     *
+     * Returns an error when `mode` is not one of the two names, or when the
+     * scene list cannot be rebuilt for the new routing, in which case the
+     * previous renderer keeps running.
+     */
+    func setSceneRenderer(mode: String) async throws  -> BridgeSnapshotBundle
     
     /**
      * Turns shared video decoding on or off for the renderer process.
@@ -2381,6 +2418,40 @@ open func setScalingMode(wallpaperId: String, displayId: String, mode: BridgeSca
 }
     
     /**
+     * Turns whole-scene on-demand updating on or off for the renderer
+     * process.
+     *
+     * Off by default. With it on, a scene the renderer can prove has no
+     * continuing reason to redraw stops its periodic tick and wakes on
+     * events; a scene it cannot prove that about keeps running. It is not a
+     * frame-rate cap, and it is not the scene optimisation setting: that one
+     * changes how a frame is built, this one changes whether one is built at
+     * all. The snapshot's `scene_update_modes` reports what each running
+     * scene actually settled on.
+     *
+     * # Errors
+     *
+     * Returns an error when the setting cannot be saved or the renderer
+     * rejects the call.
+     */
+open func setSceneOnDemandEnabled(enabled: Bool)async throws  -> BridgeSnapshotBundle {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_scene_on_demand_enabled(
+                    self.uniffiClonePointer(),
+                    FfiConverterBool.lower(enabled)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBridgeSnapshotBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
      * Turns the scene renderer's static-subgraph caching and redundant
      * copy-pass elimination on or off for the renderer process.
      *
@@ -2400,6 +2471,39 @@ open func setSceneOptimizationEnabled(enabled: Bool)async throws  -> BridgeSnaps
                 uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_scene_optimization_enabled(
                     self.uniffiClonePointer(),
                     FfiConverterBool.lower(enabled)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBridgeSnapshotBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Chooses which renderer draws scene wallpapers.
+     *
+     * `"compatibility"` keeps every scene on the established Vulkan/MoltenVK
+     * path. `"native_metal_preferred"` asks for the native Metal backend
+     * where the whole scene falls inside the subset it can draw, and falls
+     * back as a whole scene otherwise. Independent of the video backend: a
+     * scene is not a plain video. The snapshot's `scene_renderers` reports
+     * what each display actually got.
+     *
+     * # Errors
+     *
+     * Returns an error when `mode` is not one of the two names, or when the
+     * scene list cannot be rebuilt for the new routing, in which case the
+     * previous renderer keeps running.
+     */
+open func setSceneRenderer(mode: String)async throws  -> BridgeSnapshotBundle {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_scene_renderer(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(mode)
                 )
             },
             pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
@@ -3522,6 +3626,12 @@ public func FfiConverterTypeBridgeLibrarySnapshot_lower(_ value: BridgeLibrarySn
  */
 public struct BridgeLockScreenScene {
     public var displayId: UInt32
+    /**
+     * Stable library id. The app needs it to find the wallpaper's managed
+     * user-asset manifest, which is keyed on the id rather than on the project
+     * path so a Workshop update does not orphan it.
+     */
+    public var wallpaperId: String
     public var title: String
     public var projectPath: String
     public var assetsPath: String
@@ -3536,11 +3646,17 @@ public struct BridgeLockScreenScene {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(displayId: UInt32, title: String, projectPath: String, assetsPath: String, fps: UInt32, scalingMode: BridgeScalingMode, scalingFactor: Double, 
+    public init(displayId: UInt32, 
+        /**
+         * Stable library id. The app needs it to find the wallpaper's managed
+         * user-asset manifest, which is keyed on the id rather than on the project
+         * path so a Workshop update does not orphan it.
+         */wallpaperId: String, title: String, projectPath: String, assetsPath: String, fps: UInt32, scalingMode: BridgeScalingMode, scalingFactor: Double, 
         /**
          * Renderer-ready property overrides with nested keys flattened.
          */propertiesJson: String?, paused: Bool) {
         self.displayId = displayId
+        self.wallpaperId = wallpaperId
         self.title = title
         self.projectPath = projectPath
         self.assetsPath = assetsPath
@@ -3557,6 +3673,9 @@ public struct BridgeLockScreenScene {
 extension BridgeLockScreenScene: Equatable, Hashable {
     public static func ==(lhs: BridgeLockScreenScene, rhs: BridgeLockScreenScene) -> Bool {
         if lhs.displayId != rhs.displayId {
+            return false
+        }
+        if lhs.wallpaperId != rhs.wallpaperId {
             return false
         }
         if lhs.title != rhs.title {
@@ -3588,6 +3707,7 @@ extension BridgeLockScreenScene: Equatable, Hashable {
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(displayId)
+        hasher.combine(wallpaperId)
         hasher.combine(title)
         hasher.combine(projectPath)
         hasher.combine(assetsPath)
@@ -3608,6 +3728,7 @@ public struct FfiConverterTypeBridgeLockScreenScene: FfiConverterRustBuffer {
         return
             try BridgeLockScreenScene(
                 displayId: FfiConverterUInt32.read(from: &buf), 
+                wallpaperId: FfiConverterString.read(from: &buf), 
                 title: FfiConverterString.read(from: &buf), 
                 projectPath: FfiConverterString.read(from: &buf), 
                 assetsPath: FfiConverterString.read(from: &buf), 
@@ -3621,6 +3742,7 @@ public struct FfiConverterTypeBridgeLockScreenScene: FfiConverterRustBuffer {
 
     public static func write(_ value: BridgeLockScreenScene, into buf: inout [UInt8]) {
         FfiConverterUInt32.write(value.displayId, into: &buf)
+        FfiConverterString.write(value.wallpaperId, into: &buf)
         FfiConverterString.write(value.title, into: &buf)
         FfiConverterString.write(value.projectPath, into: &buf)
         FfiConverterString.write(value.assetsPath, into: &buf)
@@ -4147,6 +4269,22 @@ public struct BridgePropertyDescriptor {
     public var dirty: Bool
     public var canRestoreDefaults: Bool
     public var enabled: Bool
+    /**
+     * File and directory properties only: the app holds its own copy of this
+     * property's assets in managed storage, so deleting or re-downloading the
+     * wallpaper does not lose them. Always false for every other kind.
+     */
+    public var assetManaged: Bool
+    /**
+     * File and directory properties only: the property names something, and
+     * neither the user's own path nor a managed copy resolves any more. An
+     * unset property is not missing.
+     */
+    public var assetMissing: Bool
+    /**
+     * The user's own path, for display. `None` when the property is unset.
+     */
+    public var assetSourcePath: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -4157,7 +4295,20 @@ public struct BridgePropertyDescriptor {
          */fileFilter: BridgeFileFilter?, 
         /**
          * Present only on directory properties.
-         */directoryMode: BridgeDirectoryMode?, dirty: Bool, canRestoreDefaults: Bool, enabled: Bool) {
+         */directoryMode: BridgeDirectoryMode?, dirty: Bool, canRestoreDefaults: Bool, enabled: Bool, 
+        /**
+         * File and directory properties only: the app holds its own copy of this
+         * property's assets in managed storage, so deleting or re-downloading the
+         * wallpaper does not lose them. Always false for every other kind.
+         */assetManaged: Bool, 
+        /**
+         * File and directory properties only: the property names something, and
+         * neither the user's own path nor a managed copy resolves any more. An
+         * unset property is not missing.
+         */assetMissing: Bool, 
+        /**
+         * The user's own path, for display. `None` when the property is unset.
+         */assetSourcePath: String?) {
         self.id = id
         self.kind = kind
         self.labelHtml = labelHtml
@@ -4170,6 +4321,9 @@ public struct BridgePropertyDescriptor {
         self.dirty = dirty
         self.canRestoreDefaults = canRestoreDefaults
         self.enabled = enabled
+        self.assetManaged = assetManaged
+        self.assetMissing = assetMissing
+        self.assetSourcePath = assetSourcePath
     }
 }
 
@@ -4213,6 +4367,15 @@ extension BridgePropertyDescriptor: Equatable, Hashable {
         if lhs.enabled != rhs.enabled {
             return false
         }
+        if lhs.assetManaged != rhs.assetManaged {
+            return false
+        }
+        if lhs.assetMissing != rhs.assetMissing {
+            return false
+        }
+        if lhs.assetSourcePath != rhs.assetSourcePath {
+            return false
+        }
         return true
     }
 
@@ -4229,6 +4392,9 @@ extension BridgePropertyDescriptor: Equatable, Hashable {
         hasher.combine(dirty)
         hasher.combine(canRestoreDefaults)
         hasher.combine(enabled)
+        hasher.combine(assetManaged)
+        hasher.combine(assetMissing)
+        hasher.combine(assetSourcePath)
     }
 }
 
@@ -4251,7 +4417,10 @@ public struct FfiConverterTypeBridgePropertyDescriptor: FfiConverterRustBuffer {
                 directoryMode: FfiConverterOptionTypeBridgeDirectoryMode.read(from: &buf), 
                 dirty: FfiConverterBool.read(from: &buf), 
                 canRestoreDefaults: FfiConverterBool.read(from: &buf), 
-                enabled: FfiConverterBool.read(from: &buf)
+                enabled: FfiConverterBool.read(from: &buf), 
+                assetManaged: FfiConverterBool.read(from: &buf), 
+                assetMissing: FfiConverterBool.read(from: &buf), 
+                assetSourcePath: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -4268,6 +4437,9 @@ public struct FfiConverterTypeBridgePropertyDescriptor: FfiConverterRustBuffer {
         FfiConverterBool.write(value.dirty, into: &buf)
         FfiConverterBool.write(value.canRestoreDefaults, into: &buf)
         FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterBool.write(value.assetManaged, into: &buf)
+        FfiConverterBool.write(value.assetMissing, into: &buf)
+        FfiConverterOptionString.write(value.assetSourcePath, into: &buf)
     }
 }
 
@@ -4811,6 +4983,224 @@ public func FfiConverterTypeBridgeRendererSurfaceCounters_lower(_ value: BridgeR
 }
 
 
+/**
+ * Which renderer actually drew the scene on one display.
+ *
+ * `backend` is what ran, not what was asked for. `fallback_reason` is present
+ * only when the user preferred the native Metal backend and this scene did
+ * not get it, so its absence on a compatibility row means the user never
+ * asked rather than that no reason was recorded.
+ */
+public struct BridgeSceneBackendReport {
+    public var displayId: UInt32
+    public var displayName: String
+    public var wallpaperId: String
+    public var wallpaperTitle: String
+    public var backend: String
+    public var fallbackReason: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(displayId: UInt32, displayName: String, wallpaperId: String, wallpaperTitle: String, backend: String, fallbackReason: String?) {
+        self.displayId = displayId
+        self.displayName = displayName
+        self.wallpaperId = wallpaperId
+        self.wallpaperTitle = wallpaperTitle
+        self.backend = backend
+        self.fallbackReason = fallbackReason
+    }
+}
+
+
+
+extension BridgeSceneBackendReport: Equatable, Hashable {
+    public static func ==(lhs: BridgeSceneBackendReport, rhs: BridgeSceneBackendReport) -> Bool {
+        if lhs.displayId != rhs.displayId {
+            return false
+        }
+        if lhs.displayName != rhs.displayName {
+            return false
+        }
+        if lhs.wallpaperId != rhs.wallpaperId {
+            return false
+        }
+        if lhs.wallpaperTitle != rhs.wallpaperTitle {
+            return false
+        }
+        if lhs.backend != rhs.backend {
+            return false
+        }
+        if lhs.fallbackReason != rhs.fallbackReason {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(displayId)
+        hasher.combine(displayName)
+        hasher.combine(wallpaperId)
+        hasher.combine(wallpaperTitle)
+        hasher.combine(backend)
+        hasher.combine(fallbackReason)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeSceneBackendReport: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeSceneBackendReport {
+        return
+            try BridgeSceneBackendReport(
+                displayId: FfiConverterUInt32.read(from: &buf), 
+                displayName: FfiConverterString.read(from: &buf), 
+                wallpaperId: FfiConverterString.read(from: &buf), 
+                wallpaperTitle: FfiConverterString.read(from: &buf), 
+                backend: FfiConverterString.read(from: &buf), 
+                fallbackReason: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BridgeSceneBackendReport, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.displayId, into: &buf)
+        FfiConverterString.write(value.displayName, into: &buf)
+        FfiConverterString.write(value.wallpaperId, into: &buf)
+        FfiConverterString.write(value.wallpaperTitle, into: &buf)
+        FfiConverterString.write(value.backend, into: &buf)
+        FfiConverterOptionString.write(value.fallbackReason, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeSceneBackendReport_lift(_ buf: RustBuffer) throws -> BridgeSceneBackendReport {
+    return try FfiConverterTypeBridgeSceneBackendReport.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeSceneBackendReport_lower(_ value: BridgeSceneBackendReport) -> RustBuffer {
+    return FfiConverterTypeBridgeSceneBackendReport.lower(value)
+}
+
+
+/**
+ * What one running scene wallpaper's update clock is actually doing.
+ *
+ * `mode` composes the renderer's own answer with the host's pause state, in
+ * that precedence: a wallpaper the user paused reads `user_paused` whatever
+ * the renderer says, a display whose presentation is suspended reads
+ * `policy_suspended`, and only then does the renderer's classification show
+ * through. A scene that is running but cannot be read reads `unknown` — never
+ * `continuous`, because "we could not tell" and "it is definitely ticking"
+ * are different facts and only one of them is evidence.
+ *
+ * `reasons` are the inputs the renderer says keep the scene updating, already
+ * lowercase snake_case. Empty is a real answer: nothing is demanding updates.
+ */
+public struct BridgeSceneUpdateModeReport {
+    public var displayId: UInt32
+    public var displayName: String
+    public var wallpaperId: String
+    public var wallpaperTitle: String
+    public var mode: String
+    public var reasons: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(displayId: UInt32, displayName: String, wallpaperId: String, wallpaperTitle: String, mode: String, reasons: [String]) {
+        self.displayId = displayId
+        self.displayName = displayName
+        self.wallpaperId = wallpaperId
+        self.wallpaperTitle = wallpaperTitle
+        self.mode = mode
+        self.reasons = reasons
+    }
+}
+
+
+
+extension BridgeSceneUpdateModeReport: Equatable, Hashable {
+    public static func ==(lhs: BridgeSceneUpdateModeReport, rhs: BridgeSceneUpdateModeReport) -> Bool {
+        if lhs.displayId != rhs.displayId {
+            return false
+        }
+        if lhs.displayName != rhs.displayName {
+            return false
+        }
+        if lhs.wallpaperId != rhs.wallpaperId {
+            return false
+        }
+        if lhs.wallpaperTitle != rhs.wallpaperTitle {
+            return false
+        }
+        if lhs.mode != rhs.mode {
+            return false
+        }
+        if lhs.reasons != rhs.reasons {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(displayId)
+        hasher.combine(displayName)
+        hasher.combine(wallpaperId)
+        hasher.combine(wallpaperTitle)
+        hasher.combine(mode)
+        hasher.combine(reasons)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeSceneUpdateModeReport: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeSceneUpdateModeReport {
+        return
+            try BridgeSceneUpdateModeReport(
+                displayId: FfiConverterUInt32.read(from: &buf), 
+                displayName: FfiConverterString.read(from: &buf), 
+                wallpaperId: FfiConverterString.read(from: &buf), 
+                wallpaperTitle: FfiConverterString.read(from: &buf), 
+                mode: FfiConverterString.read(from: &buf), 
+                reasons: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BridgeSceneUpdateModeReport, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.displayId, into: &buf)
+        FfiConverterString.write(value.displayName, into: &buf)
+        FfiConverterString.write(value.wallpaperId, into: &buf)
+        FfiConverterString.write(value.wallpaperTitle, into: &buf)
+        FfiConverterString.write(value.mode, into: &buf)
+        FfiConverterSequenceString.write(value.reasons, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeSceneUpdateModeReport_lift(_ buf: RustBuffer) throws -> BridgeSceneUpdateModeReport {
+    return try FfiConverterTypeBridgeSceneUpdateModeReport.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeSceneUpdateModeReport_lower(_ value: BridgeSceneUpdateModeReport) -> RustBuffer {
+    return FfiConverterTypeBridgeSceneUpdateModeReport.lower(value)
+}
+
+
 public struct BridgeSettingsSnapshot {
     public var displays: [BridgeDisplaySettingsRow]
     public var launchAtLoginAvailable: Bool
@@ -4845,6 +5235,34 @@ public struct BridgeSettingsSnapshot {
      * renderer has no query for it.
      */
     public var sceneOptimizationEnabled: Bool
+    /**
+     * The saved preference for whole-scene on-demand updating. Off by
+     * default. A preference, not a read-back: `scene_update_modes` is where
+     * what actually happened shows up.
+     */
+    public var sceneOnDemandEnabled: Bool
+    /**
+     * `"compatibility"` or `"native_metal_preferred"`: the user's choice,
+     * which for a given scene may or may not be what `scene_renderers`
+     * reports. A saved preference, not a read-back.
+     */
+    public var sceneRenderer: String
+    /**
+     * Live per-scene state read back from the renderer on this rebuild. One
+     * row per running scene wallpaper; an empty vector means no scene
+     * wallpaper is running, and a row reading `unknown` means one is running
+     * and could not be read.
+     */
+    public var sceneUpdateModes: [BridgeSceneUpdateModeReport]
+    /**
+     * Live per-scene backend read back from the renderer on this rebuild.
+     */
+    public var sceneRenderers: [BridgeSceneBackendReport]
+    /**
+     * The directory the app keeps user-imported property assets in. Shown
+     * read-only; it is where the files are, not a setting.
+     */
+    public var userAssetsPath: String
     /**
      * The internal rasterization scale in force right now, after any power
      * profile. `preferred_render_scale` is what the user saved.
@@ -4882,6 +5300,29 @@ public struct BridgeSettingsSnapshot {
          * renderer has no query for it.
          */sceneOptimizationEnabled: Bool, 
         /**
+         * The saved preference for whole-scene on-demand updating. Off by
+         * default. A preference, not a read-back: `scene_update_modes` is where
+         * what actually happened shows up.
+         */sceneOnDemandEnabled: Bool, 
+        /**
+         * `"compatibility"` or `"native_metal_preferred"`: the user's choice,
+         * which for a given scene may or may not be what `scene_renderers`
+         * reports. A saved preference, not a read-back.
+         */sceneRenderer: String, 
+        /**
+         * Live per-scene state read back from the renderer on this rebuild. One
+         * row per running scene wallpaper; an empty vector means no scene
+         * wallpaper is running, and a row reading `unknown` means one is running
+         * and could not be read.
+         */sceneUpdateModes: [BridgeSceneUpdateModeReport], 
+        /**
+         * Live per-scene backend read back from the renderer on this rebuild.
+         */sceneRenderers: [BridgeSceneBackendReport], 
+        /**
+         * The directory the app keeps user-imported property assets in. Shown
+         * read-only; it is where the files are, not a setting.
+         */userAssetsPath: String, 
+        /**
          * The internal rasterization scale in force right now, after any power
          * profile. `preferred_render_scale` is what the user saved.
          */renderScale: Float, preferredRenderScale: Float, batteryProfileEnabled: Bool, batteryRenderScale: Float, batteryTargetFps: UInt32, onBatteryPower: Bool, 
@@ -4905,6 +5346,11 @@ public struct BridgeSettingsSnapshot {
         self.sharedVideoDecodeSessions = sharedVideoDecodeSessions
         self.sharedVideoDecodeConsumers = sharedVideoDecodeConsumers
         self.sceneOptimizationEnabled = sceneOptimizationEnabled
+        self.sceneOnDemandEnabled = sceneOnDemandEnabled
+        self.sceneRenderer = sceneRenderer
+        self.sceneUpdateModes = sceneUpdateModes
+        self.sceneRenderers = sceneRenderers
+        self.userAssetsPath = userAssetsPath
         self.renderScale = renderScale
         self.preferredRenderScale = preferredRenderScale
         self.batteryProfileEnabled = batteryProfileEnabled
@@ -4967,6 +5413,21 @@ extension BridgeSettingsSnapshot: Equatable, Hashable {
         if lhs.sceneOptimizationEnabled != rhs.sceneOptimizationEnabled {
             return false
         }
+        if lhs.sceneOnDemandEnabled != rhs.sceneOnDemandEnabled {
+            return false
+        }
+        if lhs.sceneRenderer != rhs.sceneRenderer {
+            return false
+        }
+        if lhs.sceneUpdateModes != rhs.sceneUpdateModes {
+            return false
+        }
+        if lhs.sceneRenderers != rhs.sceneRenderers {
+            return false
+        }
+        if lhs.userAssetsPath != rhs.userAssetsPath {
+            return false
+        }
         if lhs.renderScale != rhs.renderScale {
             return false
         }
@@ -5008,6 +5469,11 @@ extension BridgeSettingsSnapshot: Equatable, Hashable {
         hasher.combine(sharedVideoDecodeSessions)
         hasher.combine(sharedVideoDecodeConsumers)
         hasher.combine(sceneOptimizationEnabled)
+        hasher.combine(sceneOnDemandEnabled)
+        hasher.combine(sceneRenderer)
+        hasher.combine(sceneUpdateModes)
+        hasher.combine(sceneRenderers)
+        hasher.combine(userAssetsPath)
         hasher.combine(renderScale)
         hasher.combine(preferredRenderScale)
         hasher.combine(batteryProfileEnabled)
@@ -5042,6 +5508,11 @@ public struct FfiConverterTypeBridgeSettingsSnapshot: FfiConverterRustBuffer {
                 sharedVideoDecodeSessions: FfiConverterUInt32.read(from: &buf), 
                 sharedVideoDecodeConsumers: FfiConverterUInt32.read(from: &buf), 
                 sceneOptimizationEnabled: FfiConverterBool.read(from: &buf), 
+                sceneOnDemandEnabled: FfiConverterBool.read(from: &buf), 
+                sceneRenderer: FfiConverterString.read(from: &buf), 
+                sceneUpdateModes: FfiConverterSequenceTypeBridgeSceneUpdateModeReport.read(from: &buf), 
+                sceneRenderers: FfiConverterSequenceTypeBridgeSceneBackendReport.read(from: &buf), 
+                userAssetsPath: FfiConverterString.read(from: &buf), 
                 renderScale: FfiConverterFloat.read(from: &buf), 
                 preferredRenderScale: FfiConverterFloat.read(from: &buf), 
                 batteryProfileEnabled: FfiConverterBool.read(from: &buf), 
@@ -5069,6 +5540,11 @@ public struct FfiConverterTypeBridgeSettingsSnapshot: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value.sharedVideoDecodeSessions, into: &buf)
         FfiConverterUInt32.write(value.sharedVideoDecodeConsumers, into: &buf)
         FfiConverterBool.write(value.sceneOptimizationEnabled, into: &buf)
+        FfiConverterBool.write(value.sceneOnDemandEnabled, into: &buf)
+        FfiConverterString.write(value.sceneRenderer, into: &buf)
+        FfiConverterSequenceTypeBridgeSceneUpdateModeReport.write(value.sceneUpdateModes, into: &buf)
+        FfiConverterSequenceTypeBridgeSceneBackendReport.write(value.sceneRenderers, into: &buf)
+        FfiConverterString.write(value.userAssetsPath, into: &buf)
         FfiConverterFloat.write(value.renderScale, into: &buf)
         FfiConverterFloat.write(value.preferredRenderScale, into: &buf)
         FfiConverterBool.write(value.batteryProfileEnabled, into: &buf)
@@ -7249,6 +7725,56 @@ fileprivate struct FfiConverterSequenceTypeBridgeRendererSurfaceCounters: FfiCon
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeBridgeSceneBackendReport: FfiConverterRustBuffer {
+    typealias SwiftType = [BridgeSceneBackendReport]
+
+    public static func write(_ value: [BridgeSceneBackendReport], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBridgeSceneBackendReport.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BridgeSceneBackendReport] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BridgeSceneBackendReport]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBridgeSceneBackendReport.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeBridgeSceneUpdateModeReport: FfiConverterRustBuffer {
+    typealias SwiftType = [BridgeSceneUpdateModeReport]
+
+    public static func write(_ value: [BridgeSceneUpdateModeReport], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBridgeSceneUpdateModeReport.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BridgeSceneUpdateModeReport] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BridgeSceneUpdateModeReport]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBridgeSceneUpdateModeReport.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeBridgeVideoBackendReport: FfiConverterRustBuffer {
     typealias SwiftType = [BridgeVideoBackendReport]
 
@@ -7535,7 +8061,13 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_scaling_mode() != 14052) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_scene_on_demand_enabled() != 64117) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_scene_optimization_enabled() != 6485) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_scene_renderer() != 23711) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_shared_video_decode_enabled() != 19328) {

@@ -7,4 +7,4 @@ pub use activation::{
 };
 #[cfg(test)]
 pub use facade::FakeEngineFacade;
-pub use facade::{EngineFacade, RealEngineFacade, RendererVideoPipelineState};
+pub use facade::{EngineFacade, RealEngineFacade, RendererVideoPipelineState, SceneRuntimeReport};

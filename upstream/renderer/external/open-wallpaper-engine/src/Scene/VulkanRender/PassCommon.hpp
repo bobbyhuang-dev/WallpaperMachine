@@ -9,6 +9,7 @@
 #include "SpecTexs.hpp"
 #include "Scene/Scene.h"
 #include "Scene/SceneRenderTarget.h"
+#include "Utils/Algorism.h"
 
 #include <algorithm>
 #include <cmath>
@@ -309,6 +310,61 @@ inline SceneRasterExtents ResolveScreenBoundRenderTargetSizes(Scene&            
         }
     }
     return { source_extent, raster_extent };
+}
+
+/// Fits the scene's authored canvas into an output of `width` x `height`.
+///
+/// Purely scene-side camera arithmetic with nothing Vulkan in it, so both
+/// render backends call this one definition. Two copies of it would drift, and
+/// the drift would show as the two backends framing the same wallpaper
+/// differently.
+inline void ApplyCameraFillMode(wallpaper::Scene& scene, wallpaper::FillMode fillmode,
+                                uint32_t width, uint32_t height) {
+    using namespace wallpaper;
+    if (width == 0 || height == 0) return;
+    const auto global = scene.cameras.find("global");
+    const auto global_perspective = scene.cameras.find("global_perspective");
+    if (global == scene.cameras.end() || global_perspective == scene.cameras.end()) return;
+    if (global->second == nullptr || global_perspective->second == nullptr) return;
+
+    double sw = scene.ortho[0], sh = scene.ortho[1];
+    double fboAspect = width / (double)height, sAspect = sw / sh;
+    auto&  gCam    = *global->second;
+    auto&  gPerCam = *global_perspective->second;
+    switch (fillmode) {
+    case FillMode::STRETCH:
+        gCam.SetWidth(sw);
+        gCam.SetHeight(sh);
+        gPerCam.SetAspect(sAspect);
+        break;
+    case FillMode::ASPECTFIT:
+        if (fboAspect < sAspect) {
+            // scale height
+            gCam.SetWidth(sw);
+            gCam.SetHeight(sw / fboAspect);
+        } else {
+            gCam.SetWidth(sh * fboAspect);
+            gCam.SetHeight(sh);
+        }
+        gPerCam.SetAspect(fboAspect);
+        break;
+    case FillMode::ASPECTCROP:
+    default:
+        if (fboAspect > sAspect) {
+            // scale height
+            gCam.SetWidth(sw);
+            gCam.SetHeight(sw / fboAspect);
+        } else {
+            gCam.SetWidth(sh * fboAspect);
+            gCam.SetHeight(sh);
+        }
+        gPerCam.SetAspect(fboAspect);
+        break;
+    }
+    gPerCam.SetFov(algorism::CalculatePersperctiveFov(1000.0f, gCam.Height()));
+    gCam.Update();
+    gPerCam.Update();
+    scene.UpdateLinkedCamera("global");
 }
 
 inline void SetAttachmentLoadOp(BlendMode bm, VkAttachmentLoadOp& load_op) {

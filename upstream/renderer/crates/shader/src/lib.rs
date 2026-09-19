@@ -49,9 +49,10 @@ pub use codegen as legalize;
 pub use error::{ShaderDiagnostic, ShaderError, ShaderResult, SourceSpan};
 pub use model::{
     BindingIndex, BindingSet, ComboName, CompiledShaderProgram, CompiledShaderStage,
-    CompiledStageArtifact, DefaultTextureValue, DefaultUniformValue, IncludePath, LocationIndex,
-    MaterialAlias, ShaderCacheKey, ShaderCacheStrategy, ShaderComboValue, ShaderCompiler,
-    ShaderDescriptorBinding, ShaderDescriptorKind, ShaderMetadata, ShaderName,
+    CompiledStageArtifact, CompiledStageCode, DefaultTextureValue, DefaultUniformValue,
+    IncludePath, LocationIndex, MaterialAlias, MetalCoordinateConventions, MetalResourceBinding,
+    MetalSlotKind, MetalStageCode, ShaderCacheKey, ShaderCacheStrategy, ShaderComboValue,
+    ShaderCompiler, ShaderDescriptorBinding, ShaderDescriptorKind, ShaderMetadata, ShaderName,
     ShaderProgramRequest, ShaderProgramRequestBuilder, ShaderReflection, ShaderReflector,
     ShaderStageKind, ShaderStageMask, ShaderStageSource, ShaderSymbolName, ShaderTarget,
     ShaderTextureInfo, ShaderUniformBlock, ShaderUniformMember, ShaderVertexInput,

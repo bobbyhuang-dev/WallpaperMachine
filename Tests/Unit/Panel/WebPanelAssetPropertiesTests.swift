@@ -219,12 +219,14 @@ final class WebPanelAssetPropertiesTests: XCTestCase {
 
   static func property(
     id: String, kind: BridgePropertyKind, value: BridgePropertyValue = .empty,
-    filter: BridgeFileFilter? = nil, mode: BridgeDirectoryMode? = nil
+    filter: BridgeFileFilter? = nil, mode: BridgeDirectoryMode? = nil,
+    assetManaged: Bool = false, assetMissing: Bool = false, assetSourcePath: String? = nil
   ) -> BridgePropertyDescriptor {
     BridgePropertyDescriptor(
       id: id, kind: kind, labelHtml: id, value: value, defaultValue: .empty, slider: nil,
       comboOptions: [], fileFilter: filter, directoryMode: mode, dirty: false,
-      canRestoreDefaults: false, enabled: true)
+      canRestoreDefaults: false, enabled: true, assetManaged: assetManaged,
+      assetMissing: assetMissing, assetSourcePath: assetSourcePath)
   }
 
   static func options(properties: [BridgePropertyDescriptor]) -> BridgeWallpaperOptionsSnapshot {

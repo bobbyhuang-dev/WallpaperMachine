@@ -16,7 +16,7 @@ serde = ["dep:serde", "smol_str/serde"]
 linkme = "0.3.36"
 logos = "0.16.1"
 miette = { version = "7.6.0", features = ["fancy"] }
-naga = { version = "29.0.3", features = ["glsl-in", "spv-out"] }
+naga = { version = "29.0.3", features = ["glsl-in", "spv-out", "msl-out"] }
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
 smol_str = "0.3.6"

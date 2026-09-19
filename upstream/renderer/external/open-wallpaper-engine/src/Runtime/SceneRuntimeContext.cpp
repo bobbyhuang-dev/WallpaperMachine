@@ -1258,6 +1258,58 @@ std::size_t SceneRuntimeContext::sceneScriptCount() const {
     return m_scripted_values.size() + m_scene_scripts.size();
 }
 
+uint32_t SceneRuntimeContext::DescribeTimeAdvancingWork() const {
+    // Mirrors `Tick` step for step. Anything `Tick` advances has to be
+    // represented here, or a scene would be allowed to sleep through work it
+    // still performs. The ordering below is deliberately the ordering of the
+    // loops in `Tick`, so the two can be diffed by eye.
+    uint32_t reasons = 0;
+
+    for (const auto& [texture_key, playback] : m_video_texture_playback) {
+        (void)texture_key;
+        // A paused source, or one stopped by a zero rate, advances nothing.
+        // That is the same condition `Tick` uses to skip it.
+        if (playback.paused || playback.rate <= 0.0F) continue;
+        reasons |= SceneDemandReason::Video;
+        break;
+    }
+
+    if (! m_scalar_animations.empty() || m_scene_zoom_animation != nullptr ||
+        ! m_material_alpha.empty()) {
+        reasons |= SceneDemandReason::Animation;
+    }
+
+    // Scripted values re-evaluate every tick and may read the clock, the
+    // pointer or anything else the script engine exposes. Their bodies are not
+    // analysed; their presence is the answer.
+    if (! m_scripted_values.empty() || ! m_scene_scripts.empty()) {
+        reasons |= SceneDemandReason::Script;
+    }
+
+    if (! m_node_visibility.empty() || ! m_node_translate.empty() || ! m_node_scale.empty() ||
+        ! m_node_rotation.empty() || ! m_node_effect_final.empty() ||
+        ! m_material_constants.empty()) {
+        reasons |= SceneDemandReason::NodeBinding;
+    }
+
+    if (! m_text_values.empty()) reasons |= SceneDemandReason::TextBinding;
+
+    if (! m_puppet_layers.empty()) reasons |= SceneDemandReason::Puppet;
+
+    // A sound layer that has been released by its owner is gone; one that is
+    // still held may be playing. Image stillness is not a licence to stop
+    // audio the user asked for, and this analysis cannot yet prove a given
+    // sound is independent of the tick, so its presence keeps the clock.
+    for (const auto& [name, stream] : m_sound_layers) {
+        (void)name;
+        if (stream.expired()) continue;
+        reasons |= SceneDemandReason::Sound;
+        break;
+    }
+
+    return reasons;
+}
+
 bool SceneRuntimeContext::HasNodeNamed(std::string_view name) const {
     return m_nodes.count(std::string(name)) != 0;
 }

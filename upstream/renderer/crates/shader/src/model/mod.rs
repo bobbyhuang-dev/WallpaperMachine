@@ -6,6 +6,8 @@ mod compiled;
 mod identifiers;
 /// Extracted shader metadata model.
 mod metadata;
+/// Metal Shading Language stage output model.
+mod metal;
 /// Renderer-neutral reflection model.
 mod reflection;
 /// Shader compilation request model.
@@ -18,7 +20,8 @@ mod texture;
 mod traits;
 
 pub use compiled::{
-    CompiledShaderProgram, CompiledShaderStage, CompiledStageArtifact, ShaderCacheKey,
+    CompiledShaderProgram, CompiledShaderStage, CompiledStageArtifact, CompiledStageCode,
+    ShaderCacheKey,
 };
 pub use identifiers::{
     BindingIndex, BindingSet, ComboName, IncludePath, LocationIndex, ShaderName, ShaderSymbolName,
@@ -26,6 +29,7 @@ pub use identifiers::{
 pub use metadata::{
     DefaultTextureValue, DefaultUniformValue, MaterialAlias, ShaderComboValue, ShaderMetadata,
 };
+pub use metal::{MetalCoordinateConventions, MetalResourceBinding, MetalSlotKind, MetalStageCode};
 pub use reflection::{
     ShaderDescriptorBinding, ShaderDescriptorKind, ShaderReflection, ShaderStageMask,
     ShaderUniformBlock, ShaderUniformMember, ShaderVertexInput, VertexFormat,

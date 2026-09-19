@@ -1,5 +1,5 @@
 use shader::{
-    ShaderCompiler, ShaderStageKind,
+    ShaderCompiler, ShaderStageKind, ShaderTarget,
     compile::NagaCompiler,
     legalize::{Codegen, CodegenStageSource},
     syntax::ShaderModule,
@@ -22,7 +22,7 @@ fn user_scalar_argument_conversion_preserves_vector_overloads() {
     );
     let legalized = legalize(ShaderStageKind::Fragment, source);
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("vector overload must remain selected for vector arguments");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -67,7 +67,7 @@ fn type_coercion_strategy_does_not_widen_vec2_constructor_next_to_swizzled_vec3(
     assert!(!source.contains("vec3(vec2(0.005, -0.0005), 0.0)"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("swizzled vec3 peer should keep vec2 expression width");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -94,7 +94,7 @@ fn type_coercion_strategy_does_not_widen_vec2_initializer_binary_expression() {
     assert!(!source.contains("vec2 cs = vec3(vec2(cos(r), sin(r)), 0.0);"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("rotateVec2 helper should preserve vec2 initializer width");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -126,7 +126,7 @@ fn type_coercion_strategy_does_not_widen_common_header_rotate_vec2_helper() {
     assert!(!source.contains("vec2 cs = vec3(vec2(cos(r), sin(r)), 0.0);"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("common.h rotateVec2 helper should preserve vec2 initializer width");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -149,7 +149,7 @@ fn type_coercion_strategy_narrows_vec4_constructor_for_vec3_initializer() {
     assert!(source.contains("vec3 finalColor = (vec4(r.r, g.g, b.b, 0.1)).xyz;"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("vec4 constructor initializer should narrow for vec3 declaration");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -211,7 +211,7 @@ fn type_coercion_strategy_broadcasts_scalar_literal_before_swizzled_vector_max()
     assert!(!source.contains("max(0, albedo.rgb)"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("vector max with swizzled vector operand should compile through Naga");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -236,7 +236,7 @@ fn type_coercion_strategy_broadcasts_scalar_literal_before_vector_call_max() {
     assert!(!source.contains("max(1, abs(scale))"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("vector max with vector-returning peer should compile through Naga");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -261,7 +261,7 @@ fn type_coercion_strategy_broadcasts_scalar_literal_before_uniform_vector_call_m
     assert!(!source.contains("max(1, abs(u_ShadowScale))"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("vector max with top-level vector uniform should compile through Naga");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -286,7 +286,7 @@ fn type_coercion_strategy_repairs_shadow_antitruncation_factor_initializer() {
     assert!(!source.contains("max(1, abs(u_ShadowScale))"), "{source}");
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Vertex, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Vertex, &legalized)
         .expect("shadow anti-truncation initializer should compile through Naga");
     assert_eq!(artifact.kind(), ShaderStageKind::Vertex);
 }
@@ -312,7 +312,7 @@ fn type_coercion_strategy_broadcasts_scalar_literal_before_swizzled_texture_samp
     assert!(!source.contains("max(0.5, texSample2D("));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("swizzled texture sample max coercion should compile through Naga");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -373,7 +373,7 @@ fn type_coercion_strategy_uses_nested_vector_call_width_for_max() {
     assert!(!source.contains("float factor = max(1, abs(scale)).x;"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("nested vector-returning max argument should compile through Naga");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -397,7 +397,7 @@ fn type_coercion_strategy_treats_void_signature_as_zero_argument_vector_return()
     assert!(!source.contains("float factor = amount();"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("scalar initializer from void-signature vector return should compile");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -422,7 +422,7 @@ fn texture_sampling_strategy_narrows_vec4_coordinates_for_sampler2d() {
     assert!(!source.contains("sampler2D(g_Texture0, _we_Sampler_g_Texture0), v_TexCoord);"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("sampler2D vec4 coordinate should compile after narrowing");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -451,7 +451,7 @@ fn texture_sampling_strategy_narrows_vector_expression_coordinates_for_sampler2d
     );
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("sampler2D vector expression coordinate should compile after narrowing");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -478,7 +478,7 @@ fn texture_sampling_strategy_narrows_each_vec4_coordinate_operand_for_sampler2d(
     assert!(!source.contains("v_TexCoord.xy + v_TexOffset);"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("sampler2D vector coordinate operands should compile after narrowing");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -505,7 +505,7 @@ fn texture_sampling_strategy_narrows_parenthesized_vec4_coordinate_operands_for_
     assert!(!source.contains("(v_TexCoord + v_TexOffset)"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect(
             "sampler2D parenthesized vector coordinate operands should compile after narrowing",
         );
@@ -534,7 +534,7 @@ fn texture_sampling_strategy_wraps_vec4_call_coordinate_operand_for_sampler2d() 
     assert!(!source.contains("abs(v_TexCoord).xy + v_TexOffset"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("sampler2D vector call coordinate operand should compile after narrowing");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -560,7 +560,7 @@ fn texture_sampling_strategy_wraps_direct_vec4_call_coordinate_for_sampler2d() {
     assert!(!source.contains("abs(v_TexCoord).xy"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("sampler2D direct vector call coordinate should compile after narrowing");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -589,7 +589,7 @@ fn texture_sampling_strategy_narrows_vector_binary_inside_call_coordinate_for_sa
     ));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("sampler2D vector binary inside call coordinate should compile after narrowing");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -618,7 +618,7 @@ fn texture_sampling_strategy_narrows_parenthesized_vector_inside_call_coordinate
     );
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect(
             "sampler2D parenthesized vector inside call coordinate should compile after narrowing",
         );
@@ -642,7 +642,7 @@ fn type_coercion_strategy_selects_scalar_component_from_vector_expression_initia
     assert!(!source.contains("float at_factor = 2.0 * max(vec2(1.0), abs(shadow_scale));"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("scalar initializer from vector expression should compile through Naga");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -667,7 +667,7 @@ fn type_coercion_strategy_keeps_binary_expression_width_after_vector_builtin_cal
     assert!(!source.contains("float factor = max(vec2(1.0), abs(scale)) * (2.0);"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("scalar initializer from vector call binary expression should compile");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -694,7 +694,7 @@ fn texture_sampling_strategy_narrows_vec3_coordinates_for_sampler2d() {
     assert!(!source.contains("sampler2D(g_Texture0, _we_Sampler_g_Texture0), uv3);"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("sampler2D vec3 coordinate should compile after narrowing");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -723,7 +723,7 @@ fn type_coercion_strategy_uses_overload_signature_for_scalar_call_assignment() {
     assert!(!source.contains("color += choose(time);"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("scalar overload call compound assignment should compile after wrapping");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -770,7 +770,7 @@ fn type_coercion_strategy_broadcasts_scalar_compound_assignment_to_vector_lhs() 
     assert!(!source.contains("uv += time * 0.5;"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("scalar compound assignment to vector lhs should compile through Naga");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -796,7 +796,7 @@ fn type_coercion_strategy_broadcasts_scalar_call_compound_assignment_to_vector_l
     assert!(!source.contains("uv += amount(time);"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("scalar call compound assignment to vector lhs should compile through Naga");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -822,7 +822,7 @@ fn type_coercion_strategy_preserves_vector_call_compound_assignment_to_vector_lh
     assert!(!source.contains("uv += vec4(amount(time));"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect("vector-returning call compound assignment should compile without scalar wrapping");
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
 }
@@ -848,7 +848,7 @@ fn type_coercion_strategy_preserves_vector_call_expression_compound_assignment_t
     assert!(!source.contains("uv += vec4(amount(time) * 0.5);"));
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &legalized)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
         .expect(
             "vector-returning call expression compound assignment should compile without scalar \
              wrapping",

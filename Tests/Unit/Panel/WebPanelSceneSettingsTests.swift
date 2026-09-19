@@ -1,0 +1,324 @@
+import XCTest
+
+@testable import MacWallpaperEngine
+
+/// The panel half of whole-scene on-demand updating, the scene renderer choice,
+/// and the managed-asset storage row.
+///
+/// Two things are worth a permanent test here. The dispatcher must refuse a
+/// renderer name the Rust side would also refuse, rather than substituting
+/// Compatibility behind the user's back. And the live status the page renders
+/// must keep `unknown` — a scene that is running and could not be read — apart
+/// from `continuous`, `user_paused` and `policy_suspended`. Collapsing those is
+/// the round-6 failure repeated: an absent reading dressed up as a real state.
+@MainActor
+final class WebPanelSceneSettingsTests: XCTestCase {
+  func testSceneOnDemandDefaultsOffAndRoundTripsThroughTheEngine() async throws {
+    let context = try Context()
+    defer { context.tearDown() }
+    context.store.settingsSnapshot = BridgeSnapshotFixtures.settings()
+
+    let shipped = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])
+    XCTAssertEqual(
+      shipped["sceneOnDemand"] as? Bool, false,
+      "Stopping a scene's tick ships off; a page rendering it on would invert the default")
+
+    try await context.controller.perform("setting", body: ["key": "sceneOnDemand", "value": true])
+
+    XCTAssertEqual(context.bridge.sceneOnDemand, [true])
+    let on = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])
+    XCTAssertEqual(
+      on["sceneOnDemand"] as? Bool, true,
+      "The page must re-render from the snapshot the engine returned, not from the click")
+
+    try await context.controller.perform("setting", body: ["key": "sceneOnDemand", "value": false])
+    XCTAssertEqual(context.bridge.sceneOnDemand, [true, false])
+  }
+
+  func testNonBooleanSceneOnDemandValueIsRefused() async throws {
+    let context = try Context()
+    defer { context.tearDown() }
+
+    do {
+      try await context.controller.perform("setting", body: ["key": "sceneOnDemand", "value": 1])
+      XCTFail("A numeric value must not be accepted for a switch")
+    } catch {}
+    XCTAssertTrue(context.bridge.sceneOnDemand.isEmpty)
+  }
+
+  func testUnknownSceneRendererIsRefusedInsteadOfSilentlyDefaulting() async throws {
+    let context = try Context()
+    defer { context.tearDown() }
+
+    for rejected in ["metal", "native_preferred", "NativeMetalPreferred", ""] {
+      do {
+        try await context.controller.perform(
+          "setting", body: ["key": "sceneRenderer", "value": rejected])
+        XCTFail("An unrecognised renderer name must not be applied: \(rejected)")
+      } catch {}
+    }
+    XCTAssertTrue(
+      context.bridge.sceneRenderers.isEmpty,
+      "A rejected name must not fall back to Compatibility behind the user's back")
+
+    try await context.controller.perform(
+      "setting", body: ["key": "sceneRenderer", "value": "native_metal_preferred"])
+    XCTAssertEqual(context.bridge.sceneRenderers, ["native_metal_preferred"])
+    let applied = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])
+    XCTAssertEqual(applied["sceneRenderer"] as? String, "native_metal_preferred")
+  }
+
+  func testSceneUpdateModesKeepUnknownApartFromEveryRealState() throws {
+    let context = try Context()
+    defer { context.tearDown() }
+    context.store.settingsSnapshot = BridgeSnapshotFixtures.settings(
+      sceneUpdateModes: [
+        BridgeSceneUpdateModeReport(
+          displayId: 1, displayName: "Display 1", wallpaperId: "forest", wallpaperTitle: "Forest",
+          mode: "waiting_for_event", reasons: []),
+        BridgeSceneUpdateModeReport(
+          displayId: 2, displayName: "Display 2", wallpaperId: "rain", wallpaperTitle: "Rain",
+          mode: "continuous", reasons: ["video", "audio_response"]),
+        BridgeSceneUpdateModeReport(
+          displayId: 3, displayName: "Display 3", wallpaperId: "city", wallpaperTitle: "City",
+          mode: "user_paused", reasons: []),
+        BridgeSceneUpdateModeReport(
+          displayId: 4, displayName: "Display 4", wallpaperId: "dunes", wallpaperTitle: "Dunes",
+          mode: "policy_suspended", reasons: []),
+        BridgeSceneUpdateModeReport(
+          displayId: 5, displayName: "Display 5", wallpaperId: "sea", wallpaperTitle: "Sea",
+          mode: "unknown", reasons: ["unknown_input"]),
+      ])
+
+    let settings = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])
+    let rows = try XCTUnwrap(settings["sceneUpdateModes"] as? [[String: Any]])
+
+    XCTAssertEqual(
+      rows.map { $0["mode"] as? String },
+      ["waiting_for_event", "continuous", "user_paused", "policy_suspended", "unknown"],
+      "Each state has to survive the trip intact; an unreadable scene must not become continuous")
+    XCTAssertEqual(rows[0]["display"] as? String, "Display 1")
+    XCTAssertEqual(rows[1]["reasons"] as? [String], ["video", "audio_response"])
+    XCTAssertEqual(
+      rows[4]["reasons"] as? [String], ["unknown_input"],
+      "An input the renderer could not account for is the whole diagnosis and must reach the page")
+
+    context.store.settingsSnapshot = BridgeSnapshotFixtures.settings()
+    let empty = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])
+    XCTAssertEqual(
+      (empty["sceneUpdateModes"] as? [[String: Any]])?.isEmpty, true,
+      "No scene running is an empty list, which the page words differently from unknown")
+  }
+
+  func testSceneRendererReportNamesTheBackendInUseAndOnlyRealFallbacks() throws {
+    let context = try Context()
+    defer { context.tearDown() }
+    context.store.settingsSnapshot = BridgeSnapshotFixtures.settings(
+      sceneRenderer: "native_metal_preferred",
+      sceneRenderers: [
+        BridgeSceneBackendReport(
+          displayId: 1, displayName: "Display 1", wallpaperId: "forest", wallpaperTitle: "Forest",
+          backend: "native_metal", fallbackReason: nil),
+        BridgeSceneBackendReport(
+          displayId: 2, displayName: "Display 2", wallpaperId: "rain", wallpaperTitle: "Rain",
+          backend: "legacy_vulkan", fallbackReason: "the scene uses a puppet"),
+        BridgeSceneBackendReport(
+          displayId: 3, displayName: "Display 3", wallpaperId: "sea", wallpaperTitle: "Sea",
+          backend: "unknown", fallbackReason: nil),
+      ])
+
+    let settings = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])
+    let rows = try XCTUnwrap(settings["sceneRenderers"] as? [[String: Any]])
+
+    XCTAssertEqual(rows[0]["backend"] as? String, "native_metal")
+    XCTAssertNil(
+      rows[0]["fallbackReason"] as? String,
+      "A scene that got what was asked for did not fall back")
+    XCTAssertEqual(rows[1]["backend"] as? String, "legacy_vulkan")
+    XCTAssertEqual(rows[1]["fallbackReason"] as? String, "the scene uses a puppet")
+    XCTAssertEqual(
+      rows[2]["backend"] as? String, "unknown",
+      "A backend the renderer could not name must not be shown as the preference")
+    XCTAssertNotEqual(
+      rows[2]["backend"] as? String, settings["sceneRenderer"] as? String,
+      "Reporting the preference as the backend in use would make a preference look like evidence")
+  }
+
+  func testStoragePublishesTheManagedAssetDirectory() throws {
+    let context = try Context()
+    defer { context.tearDown() }
+    context.store.settingsSnapshot = BridgeSnapshotFixtures.settings(
+      userAssetsPath: "/Users/someone/Library/Application Support/app/UserAssets")
+
+    let settings = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])
+
+    XCTAssertEqual(
+      settings["userAssetsPath"] as? String,
+      "/Users/someone/Library/Application Support/app/UserAssets")
+    XCTAssertTrue(
+      settings["userAssetsReleasedBytes"] is NSNull,
+      "No purge has run; that is not the same answer as a purge that released nothing")
+
+    context.controller.userAssetsReleasedBytes = 0
+    let afterEmptyPurge = try XCTUnwrap(
+      context.controller.snapshot()["settings"] as? [String: Any])
+    XCTAssertEqual(
+      afterEmptyPurge["userAssetsReleasedBytes"] as? UInt64, 0,
+      "A purge that found nothing reports zero, which must not be published as never-run")
+  }
+
+  @MainActor
+  private final class Context {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "panel-scene-\(UUID().uuidString)")
+    let bridge = SceneRecordingBridge(noPointer: .init())
+    let store: BridgeStore
+    let defaults: UserDefaults
+    let workshop: WorkshopStore
+    let controller: WebPanelController
+
+    init() throws {
+      store = BridgeStore(bridge: bridge)
+      defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+      workshop = WorkshopStore(
+        downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
+        defaults: defaults)
+      controller = WebPanelController(
+        store: store, navigation: ControlPanelNavigation(), workshop: workshop, defaults: defaults)
+      bridge.snapshots = { [store] in
+        BridgeSnapshotBundle(
+          app: store.appSnapshot, library: store.librarySnapshot, wallpaperOptions: nil,
+          monitorInformation: store.monitorInformationSnapshot, settings: store.settingsSnapshot)
+      }
+    }
+
+    func tearDown() {
+      controller.stop()
+      defaults.removePersistentDomain(forName: root.lastPathComponent)
+      try? FileManager.default.removeItem(at: root)
+    }
+  }
+}
+
+private final class SceneRecordingBridge: WallpaperBridge {
+  @MainActor var snapshots: (() -> BridgeSnapshotBundle)?
+  @MainActor var sceneOnDemand: [Bool] = []
+  @MainActor var sceneRenderers: [String] = []
+
+  /// Both overrides return the setting applied, the way the engine does: a
+  /// double that returned the old value could not tell acceptance from a
+  /// silently dropped click.
+  override func setSceneOnDemandEnabled(enabled: Bool) async throws -> BridgeSnapshotBundle {
+    var bundle = await record { $0.sceneOnDemand.append(enabled) }
+    bundle.settings.sceneOnDemandEnabled = enabled
+    return bundle
+  }
+
+  override func setSceneRenderer(mode: String) async throws -> BridgeSnapshotBundle {
+    var bundle = await record { $0.sceneRenderers.append(mode) }
+    bundle.settings.sceneRenderer = mode
+    return bundle
+  }
+
+  @MainActor private func record(_ note: @MainActor (SceneRecordingBridge) -> Void)
+    -> BridgeSnapshotBundle
+  {
+    note(self)
+    guard let snapshots else { fatalError("The fixture must publish a snapshot") }
+    return snapshots()
+  }
+}
+
+/// The wallpaper inspector's view of where a file or directory property's asset
+/// actually lives. App-managed and external reference are different situations
+/// for the user, and a missing asset is the only one that needs an action, so
+/// the three must not collapse into a single "has a path" boolean.
+@MainActor
+final class WebPanelAssetProvenanceTests: XCTestCase {
+  func testAssetKeysDistinguishManagedFromExternalAndPresentFromMissing() throws {
+    let context = try Context()
+    defer { context.tearDown() }
+    let file = context.root.appendingPathComponent("chosen.png")
+    try FileManager.default.createDirectory(
+      at: context.root, withIntermediateDirectories: true)
+    try Data([0x89, 0x50]).write(to: file)
+
+    context.store.wallpaperOptionsSnapshot = Self.options(properties: [
+      Self.property(id: "managed", value: .string(value: file.path), assetManaged: true),
+      Self.property(
+        id: "external", value: .string(value: file.path), assetManaged: false,
+        assetSourcePath: "/Volumes/Photos/chosen.png"),
+      Self.property(
+        id: "gone", value: .string(value: file.path), assetManaged: true, assetMissing: true,
+        assetSourcePath: "/Volumes/Photos/chosen.png"),
+    ])
+
+    let options = try XCTUnwrap(context.controller.snapshot()["options"] as? [String: Any])
+    let rows = try XCTUnwrap(options["properties"] as? [[String: Any]])
+    let byID = Dictionary(uniqueKeysWithValues: rows.map { ($0["id"] as! String, $0) })
+
+    XCTAssertEqual(byID["managed"]?["assetManaged"] as? Bool, true)
+    XCTAssertEqual(byID["managed"]?["assetMissing"] as? Bool, false)
+    XCTAssertNil(
+      byID["managed"]?["assetSourcePath"] as? String,
+      "A copied asset has no original worth showing once the copy is the truth")
+
+    XCTAssertEqual(
+      byID["external"]?["assetManaged"] as? Bool, false,
+      "A reference the app does not own must not be reported as app-managed")
+    XCTAssertEqual(byID["external"]?["assetMissing"] as? Bool, false)
+    XCTAssertEqual(
+      byID["external"]?["assetSourcePath"] as? String, "/Volumes/Photos/chosen.png",
+      "The user's own path is what makes an external reference recognisable")
+
+    XCTAssertEqual(
+      byID["gone"]?["assetMissing"] as? Bool, true,
+      "An asset that can no longer be resolved is the one state needing a reselect")
+    XCTAssertEqual(byID["gone"]?["assetSourcePath"] as? String, "/Volumes/Photos/chosen.png")
+  }
+
+  static func property(
+    id: String, value: BridgePropertyValue, assetManaged: Bool = false,
+    assetMissing: Bool = false, assetSourcePath: String? = nil
+  ) -> BridgePropertyDescriptor {
+    BridgePropertyDescriptor(
+      id: id, kind: .file, labelHtml: id, value: value, defaultValue: .empty, slider: nil,
+      comboOptions: [], fileFilter: nil, directoryMode: nil, dirty: false,
+      canRestoreDefaults: false, enabled: true, assetManaged: assetManaged,
+      assetMissing: assetMissing, assetSourcePath: assetSourcePath)
+  }
+
+  static func options(properties: [BridgePropertyDescriptor]) -> BridgeWallpaperOptionsSnapshot {
+    BridgeWallpaperOptionsSnapshot(
+      wallpaperId: "scene-1", title: "Scene one", kind: .projectScene, supported: true, dirty: false,
+      properties: properties, displayConfigurations: [], audioResponseEnabled: true,
+      mediaIntegrationEnabled: false, muted: false, volume: 0.5)
+  }
+
+  @MainActor
+  private final class Context {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "panel-provenance-\(UUID().uuidString)")
+    let bridge = SceneRecordingBridge(noPointer: .init())
+    let store: BridgeStore
+    let defaults: UserDefaults
+    let workshop: WorkshopStore
+    let controller: WebPanelController
+
+    init() throws {
+      store = BridgeStore(bridge: bridge)
+      defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+      workshop = WorkshopStore(
+        downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
+        defaults: defaults)
+      controller = WebPanelController(
+        store: store, navigation: ControlPanelNavigation(), workshop: workshop, defaults: defaults)
+    }
+
+    func tearDown() {
+      controller.stop()
+      defaults.removePersistentDomain(forName: root.lastPathComponent)
+      try? FileManager.default.removeItem(at: root)
+    }
+  }
+}

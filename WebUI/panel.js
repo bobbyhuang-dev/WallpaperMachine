@@ -335,9 +335,22 @@ function assetProperty(id, property, fieldID, unavailable, name) {
       ? 'The wallpaper receives the whole list of files.'
       : 'The wallpaper picks files from the folder itself.');
   }
+  const missing = chosen && property.assetMissing === true;
+  // Where the file lives now. A missing asset is the one state the user has to
+  // act on, so it gets a visible alert and the picker, and the where-it-lives
+  // note is dropped: telling someone an asset is safely copied and also gone
+  // reads as a contradiction rather than as two facts.
+  if (chosen && !missing && property.assetManaged === true) {
+    notes.push('Copied into this app’s managed folder, so it survives cache cleans and wallpaper updates.');
+  } else if (chosen && !missing && property.assetManaged === false) {
+    notes.push(property.assetSourcePath
+      ? `Used in place from ${property.assetSourcePath}. Moving or deleting it there breaks the wallpaper.`
+      : 'Used in place from where you chose it. Moving or deleting it there breaks the wallpaper.');
+  }
   return `<input type="text" id="${escapeHTML(fieldID)}" class="asset-value" readonly value="${escapeHTML(chosen || empty)}">`
-    + `<div class="actions">${button('Choose…', 'choosePropertyPath', { id, propertyID: property.id }, { icon: 'folder', title: directory ? `Choose a folder for ${name}` : `Choose a file for ${name}`, disabled: unavailable })}`
+    + `<div class="actions">${button(missing ? 'Reselect…' : 'Choose…', 'choosePropertyPath', { id, propertyID: property.id }, { icon: 'folder', title: directory ? `Choose a folder for ${name}` : `Choose a file for ${name}`, disabled: unavailable })}`
     + `${button('Clear', 'clearPropertyPath', { id, propertyID: property.id }, { title: `Clear ${name}`, disabled: unavailable || !chosen })}</div>`
+    + (missing ? `<p class="notice warning" role="alert">${escapeHTML(property.assetSourcePath ? `Missing — this ${directory ? 'folder' : 'file'} is no longer at ${property.assetSourcePath}. Reselect it.` : `Missing — this ${directory ? 'folder' : 'file'} can no longer be found. Reselect it.`)}</p>` : '')
     + notes.map(note => `<p class="muted"><small>${escapeHTML(note)}</small></p>`).join('')
     + (property.error ? `<p class="notice error" role="alert">${escapeHTML(property.error)}</p>` : '');
 }

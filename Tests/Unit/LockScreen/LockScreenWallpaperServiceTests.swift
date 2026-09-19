@@ -1,4 +1,5 @@
 import CoreGraphics
+import Darwin
 import Foundation
 import XCTest
 
@@ -14,6 +15,8 @@ final class LockScreenWallpaperServiceTests: XCTestCase {
   private var journal: URL { root.appendingPathComponent("journal.plist") }
   private var documents: URL { root.appendingPathComponent("Documents") }
   private var project: URL { root.appendingPathComponent("Project") }
+  private var home: URL { root.appendingPathComponent("Home") }
+  private var previousHome: String?
 
   override func setUpWithError() throws {
     defaultsSuite = "lock-screen-service-tests-" + UUID().uuidString
@@ -26,6 +29,10 @@ final class LockScreenWallpaperServiceTests: XCTestCase {
       "Library/Caches/lock-screen-service-tests-" + UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
+    // The managed user-asset store lives under the support root; every test that
+    // publishes one has to land in a throwaway home, not the user's own.
+    previousHome = ProcessInfo.processInfo.environment["MAC_WALLPAPER_ENGINE_HOME"]
+    setenv("MAC_WALLPAPER_ENGINE_HOME", home.path, 1)
     try Data(#"{"type":"video","title":"t","file":"a.mp4"}"#.utf8).write(
       to: project.appendingPathComponent("project.json"))
     try Data([0x00]).write(to: project.appendingPathComponent("a.mp4"))
@@ -36,6 +43,11 @@ final class LockScreenWallpaperServiceTests: XCTestCase {
     timers.removeAll()
     defaults.removePersistentDomain(forName: defaultsSuite)
     try FileManager.default.removeItem(at: root)
+    if let previousHome {
+      setenv("MAC_WALLPAPER_ENGINE_HOME", previousHome, 1)
+    } else {
+      unsetenv("MAC_WALLPAPER_ENGINE_HOME")
+    }
   }
 
   @MainActor
@@ -80,12 +92,35 @@ final class LockScreenWallpaperServiceTests: XCTestCase {
       to: store, options: .atomic)
   }
 
-  private func scene() -> BridgeLockScreenScene {
+  private func scene(propertiesJSON: String? = nil) -> BridgeLockScreenScene {
     BridgeLockScreenScene(
-      displayId: CGMainDisplayID(), title: "t",
+      displayId: CGMainDisplayID(), wallpaperId: "2001", title: "t",
       projectPath: project.appendingPathComponent("project.json").path,
       assetsPath: project.path, fps: 30, scalingMode: .fill, scalingFactor: 1,
-      propertiesJson: nil, paused: false)
+      propertiesJson: propertiesJSON, paused: false)
+  }
+
+  /// The managed store as the app writes it, isolated per test through
+  /// `MAC_WALLPAPER_ENGINE_HOME`.
+  @discardableResult
+  private func writeManagedAsset(
+    propertyId: String, fileName: String, bytes: String, kind: String = "file"
+  ) throws -> URL {
+    let store = ClientPaths.userAssetsURL.appendingPathComponent("2001", isDirectory: true)
+    let digest = "d" + String(bytes.hashValue, radix: 16, uppercase: false)
+    let directory = store.appendingPathComponent("\(propertyId)/\(digest)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent(fileName)
+    try Data(bytes.utf8).write(to: file)
+    let manifest = """
+      {"version":1,"wallpaperId":"2001","properties":{"\(propertyId)":{"kind":"\(kind)",\
+      "sourcePath":"/Users/someone/\(fileName)","truncated":false,"migratedLegacyPaths":[],\
+      "assets":[{"assetId":"\(digest)","fileName":"\(fileName)",\
+      "sourcePath":"/Users/someone/\(fileName)","size":\(bytes.utf8.count),\
+      "modified":"2024-01-01T00:00:00Z","digest":"\(digest)"}]}}}
+      """
+    try Data(manifest.utf8).write(to: store.appendingPathComponent("manifest.json"))
+    return file
   }
 
   @MainActor
@@ -401,6 +436,150 @@ final class LockScreenWallpaperServiceTests: XCTestCase {
     await waitFor("explicit restoration retry") { !service.isBusy }
     XCTAssertNil(service.errorMessage)
     XCTAssertTrue(timers.allSatisfy { !$0.isValid })
+  }
+
+  // MARK: - Managed user assets
+
+  /// The extension can only read its own container, so a property pointing at the
+  /// app's managed store has to be republished into the container and the value
+  /// rewritten. Only the assets this wallpaper references may travel.
+  @MainActor
+  func testReferencedUserAssetsArePublishedIntoTheContainerAndNothingElseIs() async throws {
+    try XCTSkipIf(CGDisplayIsOnline(CGMainDisplayID()) == 0, "No online main display")
+    try writeManagedAsset(propertyId: "cover", fileName: "a b+c.png", bytes: "cover-bytes")
+    // A second wallpaper's import, which this one must not carry into the container.
+    let other = ClientPaths.userAssetsURL.appendingPathComponent(
+      "9999/cover/abc", isDirectory: true)
+    try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+    try Data("other-wallpaper".utf8).write(to: other.appendingPathComponent("other.png"))
+
+    let service = LockScreenWallpaperService(
+      scenes: { [self.scene(propertiesJSON: #"{"cover":"/Users/someone/a b+c.png"}"#)] },
+      selection: LockScreenWallpaperSelection(
+        storeURL: store, journalURL: journal, reload: {}),
+      documents: documents, defaults: defaults, scheduleMonitor: scheduleMonitor)
+    let responder = readinessResponder()
+    defer { responder.cancel() }
+    try service.start()
+    service.setEnabled(true)
+    await waitFor("enabled with published assets") { service.isEnabled }
+
+    let configuration = try JSONDecoder().decode(
+      LockScreenConfiguration.self,
+      from: Data(contentsOf: documents.appendingPathComponent(LockScreenConfiguration.fileName)))
+    let json = try XCTUnwrap(XCTUnwrap(configuration.scenes.first).propertiesJSON)
+    let root = try XCTUnwrap(
+      try JSONSerialization.jsonObject(with: XCTUnwrap(json.data(using: .utf8))) as? [String: Any])
+    let value = try XCTUnwrap(root["cover"] as? String)
+
+    XCTAssertTrue(
+      value.hasPrefix(documents.path + "/revisions/"),
+      "the extension cannot read the app's own store, so the value must name the container copy")
+    XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: value)), Data("cover-bytes".utf8))
+    let published = try FileManager.default.subpathsOfDirectory(atPath: documents.path)
+    XCTAssertFalse(
+      published.contains { $0.hasSuffix("other.png") },
+      "another wallpaper's imports are not this wallpaper's to publish")
+
+    try await service.shutdown()
+  }
+
+  /// Republishing the same selection must not copy it again, and must not leave the
+  /// revision it replaced behind for good — there was no collection at all before.
+  @MainActor
+  func testRepublishingReusesTheRevisionAndCollectsOnlyUnreferencedOnes() async throws {
+    try XCTSkipIf(CGDisplayIsOnline(CGMainDisplayID()) == 0, "No online main display")
+    try writeManagedAsset(propertyId: "cover", fileName: "first.png", bytes: "first-bytes")
+    var properties = #"{"cover":"/Users/someone/first.png"}"#
+    let service = LockScreenWallpaperService(
+      scenes: { [self.scene(propertiesJSON: properties)] },
+      selection: LockScreenWallpaperSelection(
+        storeURL: store, journalURL: journal, reload: {}),
+      documents: documents, defaults: defaults, scheduleMonitor: scheduleMonitor)
+    let responder = readinessResponder()
+    defer { responder.cancel() }
+    try service.start()
+    service.setEnabled(true)
+    await waitFor("first publication") { service.isEnabled }
+
+    let revisions = documents.appendingPathComponent("revisions", isDirectory: true)
+    let firstNames = try Set(FileManager.default.contentsOfDirectory(atPath: revisions.path))
+    let assetRevision = try XCTUnwrap(
+      publishedAssetRevision(), "the first publication must name an asset revision")
+    let inode = try XCTUnwrap(try? FileManager.default.attributesOfItem(
+      atPath: assetRevision.path)[.systemFileNumber] as? NSNumber)
+
+    // A stale revision of exactly the shape earlier activations left behind.
+    let orphan = revisions.appendingPathComponent(String(repeating: "a", count: 64), isDirectory: true)
+    try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
+    try Data("stale".utf8).write(to: orphan.appendingPathComponent("stale.png"))
+
+    // Off and on again republishes the same selection from scratch, which is the
+    // path that would copy the assets a second time if the fingerprint were unstable.
+    service.setEnabled(false)
+    await waitFor("deactivated") { !service.isBusy && !service.isEnabled }
+    service.setEnabled(true)
+    await waitFor("second publication") { service.isEnabled && !service.isBusy }
+
+    XCTAssertEqual(
+      try XCTUnwrap(try? FileManager.default.attributesOfItem(
+        atPath: assetRevision.path)[.systemFileNumber] as? NSNumber), inode,
+      "an unchanged selection must reuse its revision rather than copy it again")
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: orphan.path),
+      "an unreferenced revision is a leak; there was no collection before this")
+    let afterNames = try Set(FileManager.default.contentsOfDirectory(atPath: revisions.path))
+    XCTAssertTrue(
+      firstNames.isSubset(of: afterNames),
+      "a revision the published configuration still names must never be collected")
+
+    // Now change the selection: the old asset revision becomes unreferenced.
+    try writeManagedAsset(propertyId: "cover", fileName: "second.png", bytes: "second-bytes")
+    properties = #"{"cover":"/Users/someone/second.png"}"#
+    service.refresh()
+    await waitFor("third publication") { service.isEnabled && !service.isBusy }
+
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: assetRevision.path),
+      "the replaced asset revision is unreferenced and must be collected")
+    let replacement = try XCTUnwrap(publishedAssetRevision())
+    XCTAssertEqual(
+      try Data(contentsOf: replacement.appendingPathComponent("cover/second.png")),
+      Data("second-bytes".utf8))
+
+    try await service.shutdown()
+  }
+
+  /// A web wallpaper has no lock-screen renderer. That combination is not applicable,
+  /// and must never be reported as a failure or as something still being waited for.
+  @MainActor
+  func testAWebOnlyDesktopIsReportedAsNotApplicableRatherThanFailed() async throws {
+    let service = LockScreenWallpaperService(
+      scenes: { [] }, webWallpapersApplied: { true },
+      selection: LockScreenWallpaperSelection(
+        storeURL: store, journalURL: journal, reload: {}),
+      documents: documents, defaults: defaults, scheduleMonitor: scheduleMonitor)
+    try service.start()
+    service.setEnabled(true)
+    await waitFor("settled status") { !service.isBusy }
+
+    XCTAssertTrue(
+      service.status.lowercased().contains("not applicable"),
+      "web plus lock screen is unsupported, not failed: got “\(service.status)”")
+    XCTAssertFalse(service.status.lowercased().contains("failed"))
+    XCTAssertNil(service.errorMessage)
+    XCTAssertFalse(service.isEnabled)
+
+    try await service.shutdown()
+  }
+
+  /// The asset revision is the one holding a `cover` directory; the project payload
+  /// revision holds `project.json`.
+  private func publishedAssetRevision() throws -> URL? {
+    let revisions = documents.appendingPathComponent("revisions", isDirectory: true)
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: revisions.path)) ?? []
+    return names.map { revisions.appendingPathComponent($0, isDirectory: true) }
+      .first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("cover").path) }
   }
 
   private func answerPublishedReadiness() throws {

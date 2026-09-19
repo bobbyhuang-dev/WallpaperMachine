@@ -28,6 +28,12 @@ pub struct AppConfig {
     /// [`AppConfig::migrate_legacy_keys`].
     #[serde(default)]
     pub video_backend: VideoBackendModeCfg,
+    /// Which renderer draws a scene wallpaper. Independent of
+    /// [`AppConfig::video_backend`]: a scene is not a plain video, and the two
+    /// choices route different wallpapers. New in this schema, so unlike
+    /// `video_backend` it has no predecessor key to migrate from.
+    #[serde(default)]
+    pub scene_renderer: SceneRendererModeCfg,
     #[serde(default)]
     pub quality: QualityCfg,
     #[serde(default)]
@@ -45,6 +51,7 @@ impl Default for AppConfig {
             ui: UiCfg::default(),
             experimental: ExperimentalCfg::default(),
             video_backend: VideoBackendModeCfg::default(),
+            scene_renderer: SceneRendererModeCfg::default(),
             quality: QualityCfg::default(),
             monitors: Vec::new(),
             monitor_settings: Vec::new(),
@@ -69,6 +76,21 @@ pub enum VideoBackendModeCfg {
     #[default]
     Compatibility,
     NativePreferred,
+}
+
+/// Which renderer draws a scene wallpaper.
+///
+/// `Compatibility` is the established Vulkan/MoltenVK path, which supports
+/// every scene. `NativeMetalPreferred` asks for the native Metal backend where
+/// the whole scene falls inside the subset it can draw, and falls back to
+/// Compatibility as a whole scene otherwise, so the choice is a preference
+/// rather than a guarantee.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneRendererModeCfg {
+    #[default]
+    Compatibility,
+    NativeMetalPreferred,
 }
 
 /// Internal rasterization size and frame rate the renderer targets.
@@ -110,6 +132,12 @@ pub struct QualityCfg {
     /// a wallpaper disagrees, not to opt in.
     #[serde(default = "default_true")]
     pub scene_optimization_enabled: bool,
+    /// Stop the scene's periodic tick when the scene has no continuing reason
+    /// to redraw, waking it on events instead. Off by default: unlike
+    /// `scene_optimization_enabled` this changes when a scene runs at all, so
+    /// it is opted into rather than taken away.
+    #[serde(default)]
+    pub scene_on_demand_enabled: bool,
 }
 
 impl Default for QualityCfg {
@@ -119,6 +147,7 @@ impl Default for QualityCfg {
             battery_profile_enabled: false,
             battery: QualityProfileCfg::default(),
             scene_optimization_enabled: default_true(),
+            scene_on_demand_enabled: false,
         }
     }
 }

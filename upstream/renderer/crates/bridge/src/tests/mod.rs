@@ -15,6 +15,7 @@ mod persistence_round_trip;
 mod playback;
 mod power_settings;
 mod quality_settings;
+mod scene_settings;
 mod production_constructor;
 mod project_parse;
 mod property_snapshot;

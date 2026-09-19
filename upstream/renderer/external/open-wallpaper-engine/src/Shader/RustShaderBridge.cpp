@@ -11,6 +11,8 @@ namespace
 {
 
 constexpr uint32_t SPIRV_MAGIC = 0x07230203u;
+constexpr int RS_SHADER_TARGET_VULKAN_SPIRV = 0;
+constexpr int RS_SHADER_TARGET_METAL_MSL    = 1;
 
 struct RsShaderOwnedBytes {
     uint8_t* ptr;
@@ -37,6 +39,13 @@ const uint32_t* rs_shader_program_stage_spv_words(
     const RsShaderProgram* program,
     size_t stage_index);
 size_t rs_shader_program_stage_spv_word_count(const RsShaderProgram* program, size_t stage_index);
+int rs_shader_program_stage_target(const RsShaderProgram* program, size_t stage_index);
+const char* rs_shader_program_stage_msl_source(
+    const RsShaderProgram* program,
+    size_t stage_index);
+const char* rs_shader_program_stage_metal_json(
+    const RsShaderProgram* program,
+    size_t stage_index);
 const char* rs_shader_program_metadata_json(const RsShaderProgram* program);
 const char* rs_shader_program_reflection_json(const RsShaderProgram* program);
 const char* rs_shader_program_diagnostics_json(const RsShaderProgram* program);
@@ -76,6 +85,38 @@ ShaderType FromRustStageKind(int kind)
     case 1: return ShaderType::FRAGMENT;
     default: throw std::runtime_error("Rust shader returned an invalid stage kind");
     }
+}
+
+const char* ToTargetName(RustShaderTarget target)
+{
+    switch (target) {
+    case RustShaderTarget::VulkanSpirv: return "vulkan_spirv";
+    case RustShaderTarget::MetalMsl: return "metal_msl";
+    }
+    throw std::runtime_error("unsupported Rust shader target");
+}
+
+int ToRustTarget(RustShaderTarget target)
+{
+    switch (target) {
+    case RustShaderTarget::VulkanSpirv: return RS_SHADER_TARGET_VULKAN_SPIRV;
+    case RustShaderTarget::MetalMsl: return RS_SHADER_TARGET_METAL_MSL;
+    }
+    throw std::runtime_error("unsupported Rust shader target");
+}
+
+RustShaderMetalSlotKind FromMetalSlotKind(std::string_view slot_kind)
+{
+    if (slot_kind == "buffer") {
+        return RustShaderMetalSlotKind::Buffer;
+    }
+    if (slot_kind == "texture") {
+        return RustShaderMetalSlotKind::Texture;
+    }
+    if (slot_kind == "sampler") {
+        return RustShaderMetalSlotKind::Sampler;
+    }
+    throw std::runtime_error("Rust shader returned an unknown metal slot kind");
 }
 
 VkShaderStageFlags ToVkStageFlags(const nlohmann::json& stages)
@@ -276,7 +317,7 @@ nlohmann::json BuildRustShaderRequestJson(const RustShaderRequest& request)
 
     return {
         { "shader_name", request.shader_name },
-        { "target", "vulkan_spirv" },
+        { "target", ToTargetName(request.target) },
         { "cache_policy", std::move(cache_policy) },
         { "stages", std::move(stages) },
         { "combos", std::move(combos) },
@@ -370,16 +411,53 @@ void ApplyRustShaderReflectionJson(std::string_view reflection_json, RustShaderO
     ApplyActiveTextureSlots(reflection, output.fragment_preprocessor_info);
 }
 
+void ApplyRustShaderMetalStageJson(
+    std::string_view metal_json,
+    std::string_view msl_source,
+    ShaderType kind,
+    RustShaderMetalStage& stage)
+{
+    const auto metal = nlohmann::json::parse(metal_json);
+
+    stage.kind        = kind;
+    stage.source      = std::string(msl_source);
+    stage.entry_point = metal.at("entry_point").get<std::string>();
+    if (stage.entry_point.empty()) {
+        throw std::runtime_error("Rust shader returned an empty metal entry point");
+    }
+    stage.language_version = metal.value("language_version", std::string {});
+
+    stage.bindings.clear();
+    for (const auto& binding : metal.value("bindings", nlohmann::json::array())) {
+        stage.bindings.push_back(RustShaderMetalBinding {
+            .name      = binding.at("name").get<std::string>(),
+            .set       = binding.at("set").get<uint32_t>(),
+            .binding   = binding.at("binding").get<uint32_t>(),
+            .slot_kind = FromMetalSlotKind(binding.at("slot_kind").get<std::string>()),
+            .slot      = binding.at("slot").get<uint32_t>(),
+        });
+    }
+
+    const auto conventions = metal.value("conventions", nlohmann::json::object());
+    stage.conventions      = RustShaderMetalConventions {
+             .clip_space_y_flipped      = conventions.value("clip_space_y_flipped", false),
+             .clip_space_depth_remapped = conventions.value("clip_space_depth_remapped", false),
+             .texture_origin_flipped    = conventions.value("texture_origin_flipped", false),
+    };
+}
+
 namespace
 {
 
 bool CompileRustShaderProgramJson(
     const std::string& request_json,
+    RustShaderTarget target,
     RustShaderOutput& output,
     const RustShaderIncludeReader& include_reader)
 {
 #ifndef WESCENE_HAS_RUST_SHADER_FFI
     (void)request_json;
+    (void)target;
     (void)output;
     (void)include_reader;
     output = {};
@@ -398,10 +476,36 @@ bool CompileRustShaderProgramJson(
         return false;
     }
 
-    const size_t stage_count = rs_shader_program_stage_count(program.ptr);
-    next_output.codes.reserve(stage_count);
+    const int    expected_target = ToRustTarget(target);
+    const size_t stage_count     = rs_shader_program_stage_count(program.ptr);
+    if (target == RustShaderTarget::MetalMsl) {
+        next_output.metal_stages.reserve(stage_count);
+    } else {
+        next_output.codes.reserve(stage_count);
+    }
+
     for (size_t i = 0; i < stage_count; ++i) {
-        (void)FromRustStageKind(rs_shader_program_stage_kind(program.ptr, i));
+        const auto kind = FromRustStageKind(rs_shader_program_stage_kind(program.ptr, i));
+        if (rs_shader_program_stage_target(program.ptr, i) != expected_target) {
+            output = {};
+            return false;
+        }
+
+        if (target == RustShaderTarget::MetalMsl) {
+            const auto metal_json = BorrowedString(
+                rs_shader_program_stage_metal_json(program.ptr, i));
+            const auto msl_source = BorrowedString(
+                rs_shader_program_stage_msl_source(program.ptr, i));
+            if (msl_source.empty()) {
+                output = {};
+                return false;
+            }
+            RustShaderMetalStage metal_stage;
+            ApplyRustShaderMetalStageJson(metal_json, msl_source, kind, metal_stage);
+            next_output.metal_stages.push_back(std::move(metal_stage));
+            continue;
+        }
+
         const auto* words = rs_shader_program_stage_spv_words(program.ptr, i);
         const auto  count = rs_shader_program_stage_spv_word_count(program.ptr, i);
         if (words == nullptr || count == 0 || words[0] != SPIRV_MAGIC) {
@@ -415,6 +519,9 @@ bool CompileRustShaderProgramJson(
     next_output.reflection_json  = BorrowedString(rs_shader_program_reflection_json(program.ptr));
     next_output.diagnostics_json = BorrowedString(rs_shader_program_diagnostics_json(program.ptr));
     next_output.cache_key        = BorrowedString(rs_shader_program_cache_key(program.ptr));
+    // Reflection is target-independent: the Metal path consumes exactly the
+    // same uniform-block layout, descriptor names and texture slots the Vulkan
+    // path does.
     ApplyRustShaderMetadataJson(next_output.metadata_json, next_output);
     ApplyRustShaderReflectionJson(next_output.reflection_json, next_output);
 
@@ -432,6 +539,7 @@ bool CompileRustShaderProgram(
 {
     return CompileRustShaderProgramJson(
         BuildRustShaderRequestJson(request).dump(),
+        request.target,
         output,
         include_reader);
 }
@@ -460,7 +568,13 @@ bool CompileRustShaderProgramWithBridgeJson(
     RustShaderOutput& output,
     const RustShaderIncludeReader& include_reader)
 {
-    return CompileRustShaderProgramJson(request_json.dump(), output, include_reader);
+    return CompileRustShaderProgramJson(
+        request_json.dump(),
+        request_json.value("target", std::string { "vulkan_spirv" }) == "metal_msl"
+            ? RustShaderTarget::MetalMsl
+            : RustShaderTarget::VulkanSpirv,
+        output,
+        include_reader);
 }
 #endif
 

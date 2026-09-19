@@ -11,6 +11,85 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-19 — Round 7: on-demand updating, managed user assets, native Metal
+
+P02 whole-scene on-demand updating (default off), the relocation of
+`file`/`directory` property assets into app-managed storage, and a first native
+Metal scene backend (default off) wired into the production creation path.
+
+- `python3 scripts/check_renderer.py` — exit 0. All 10 golden cases
+  `pixels_equal=True`, 0 diagnostics, 8 projects × 2 reload cycles clean.
+- `cargo test -p wallpaper-core --lib` — 209 passed, 0 failed.
+- `cargo test -p wallpaper-bridge --lib` — 310 passed, 0 failed.
+- `timer_tests` — 24 passed, including four new cases: frame requests are
+  bounded by the configured interval; a request made while running survives
+  into idle; an idle clock produces no ticks at all and still answers one
+  request with exactly one frame; and a deadline already past is taken
+  immediately rather than after a cadence interval. The last two were each
+  confirmed to fail against the defect they describe — idle re-implemented as a
+  16 ms wait ticks 16 times in 300 ms, and the owed frame waited 905 ms for the
+  cadence.
+- `python3 scripts/test.py` — **482 tests, 472 passed, 9 skipped, 1 failed.**
+  The failure is `ControlPanelLayoutTests`
+  `testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes`, pre-existing
+  since round 4 with identical numbers (overflow 52 px, tile 166, 5 columns,
+  4 rows). The Discover grid was not touched this round.
+- `python3 scripts/build.py --configuration Release` — BUILD SUCCEEDED,
+  including UniFFI regeneration of `App/Bridge/Generated/`.
+
+Cargo cannot be run bare on this machine: a broken Homebrew `ffmpeg` 7.1.1
+shadows `ffmpeg@8` and its `libavdevice` wants a `libvpx.11` that is not
+installed, and `libvulkan` is not on the default search path. The counts above
+were taken with the environment `scripts/build.py` itself constructs
+(`OWE_NIX_LIBRARY_PATH` and friends). Setting `LIBRARY_PATH=/opt/homebrew/lib`
+by hand reproduces the breakage rather than fixing it.
+
+Metal evidence, specifically: `metal_backend_test` 11/11 and
+`metal_scene_draw_smoke` 2/2, both registered in `check_renderer.py`. The draw
+test parses a real project, translates its shaders to MSL, compiles them with
+`newLibraryWithSource:`, draws, and reads the render target back. Two mutation
+checks were executed rather than assumed: wrapping the author draw call in
+`if (false)` fails the pixel assertion, and inserting a Y flip into
+`MetalClipSpaceFold` fails the projection test.
+
+One tautological assertion was found and replaced:
+`EXPECT_TRUE(reasons != 0 || true)`, under a comment promising a check it was
+not making. The original derivation behind it was **not** shown to be wrong —
+it returned zero, and zero is correct for a fixture whose shader binds no
+frame-varying uniform, which this one does not. `FrameVaryingUniforms` returns
+`kAll` for a node the updater never captured, so an unprepared pass reads as
+fully dynamic rather than still. The rewrite is a hardening: demand is derived
+from the Metal backend's own pass descriptions, and a compiled graph yielding no
+shader pass reports `UnknownInput`. The replacement assertion checks that an
+unanalysed renderer reports `UnknownInput`, which is the property that catches
+the dangerous case.
+
+A genuine regression WAS found and fixed, introduced by this round's own work.
+`ThreadTimer` honoured a `WakeOnce` latch unconditionally and rebased its
+cadence afterwards, and `RequestFrame` is called on every pointer sample for a
+pointer-reactive scene. On the default path — on-demand updating off, where the
+FPS ceiling is the only bound — that let the pointer drive the frame rate.
+Measured: 159 frames in 200 ms against a 10 FPS ceiling. The latch is now
+honoured immediately only while idle and is cleared by the next cadence tick
+otherwise, which keeps the lost-event race closed. Two tests cover it, and the
+rate one was confirmed to fail against the old behaviour by restoring it.
+
+Not verified: no desktop session. No scene was observed stopping its clock on a
+real wallpaper, no Metal frame has ever been presented to a screen, the
+production backend-switch path has never executed, there was no visual check and
+no power measurement. The Metal evidence is an offscreen readback in a test.
+Nothing here is a power claim, and no comparison between the two backends was
+measured.
+
+A sibling agent's cleanup test ran `clean.main()` against the real repository
+root and deleted `build/` and `artifacts/` mid-round. Both are declared
+disposable, and both were regenerated; no tracked source was affected. The test
+now redirects `clean.ROOT`, `clean.ARTIFACTS` and `clean.BUILD` into its own
+temporary directory, asserts that redirection before calling `main()`, and
+asserts in teardown that the repository's own `build/` and `artifacts/` are
+untouched. No guard was added to `clean.py` itself: the tool is supposed to
+delete those directories, and it was the test that was aimed at the wrong root.
+
 ## 2026-09-18 — Remove the password guide card from the Steam sign-in dialog
 
 `WebUI/panel.js`: `signInGuide` no longer returns a guide for a secure

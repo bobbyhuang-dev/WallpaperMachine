@@ -38,13 +38,43 @@ public:
     /// zero period keeps the fixed cadence, so a scene that cannot prove its own
     /// rate is unaffected.
     struct FrameDemand {
+        /// What the scene needs from the clock.
+        ///
+        /// `Continuous` is the safe baseline and the only value a scene that
+        /// cannot describe itself ever produces. `Idle` stops the periodic
+        /// deadline outright; the clock then ticks only when something asks it
+        /// to. `Timed` keeps the clock stopped until one known deadline.
+        enum class Kind : uint8_t
+        {
+            Continuous = 0,
+            Idle       = 1,
+            Timed      = 2,
+        };
+
+        Kind kind { Kind::Continuous };
         /// Zero when the content cannot say how often it changes.
         std::chrono::microseconds content_period { std::chrono::microseconds::zero() };
+        /// Only read for `Timed`. Measured on the same clock as the frame
+        /// clock, so a deadline already in the past ticks immediately rather
+        /// than wrapping into a very long wait.
+        std::chrono::steady_clock::time_point deadline {};
     };
 
     /// Pushed by the owner from the render thread, so the timer thread never
     /// reaches into scene or renderer state to ask.
     void SetFrameDemand(FrameDemand);
+
+    /// Requests exactly one tick, coalescing with any already pending.
+    ///
+    /// This is how an idle scene is woken: a property change, a resize, a new
+    /// resource or a pointer event asks for one frame, and what happens after
+    /// that frame is decided by the demand the frame itself produces. Safe to
+    /// call from any thread, including while the clock is stopped, in which
+    /// case it does nothing rather than resurrecting a paused wallpaper.
+    void RequestFrame();
+
+    /// Whether the clock is currently holding no periodic deadline.
+    [[nodiscard]] bool Idle() const;
 
     /// Interval the next tick will use, for diagnostics and tests.
     [[nodiscard]] std::chrono::microseconds TickInterval() const;
@@ -87,6 +117,8 @@ private:
     std::atomic<std::chrono::microseconds> m_tick_interval;
     /// Zero means unknown, which keeps the fixed cadence.
     std::atomic<std::chrono::microseconds> m_content_period { std::chrono::microseconds::zero() };
+    std::atomic<FrameDemand::Kind>         m_demand_kind { FrameDemand::Kind::Continuous };
+    std::atomic<std::chrono::steady_clock::time_point> m_demand_deadline {};
     std::atomic<bool>                      m_reset_frame_clock { true };
     std::atomic<i32>                       m_frame_busy_count;
 

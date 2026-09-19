@@ -5,6 +5,7 @@
 #include "SceneWallpaper.hpp"
 #include "SceneWallpaperSurface.hpp"
 #include "Utils/Logging.h"
+#include "MetalRender/MetalBackendRouter.hpp"
 #include "VulkanRender/StaticSubgraphCache.hpp"
 #include "Video/SharedVideoSession.hpp"
 #include "Video/VideoFramePacing.hpp"
@@ -15,6 +16,7 @@
 #include <vulkan/vulkan_metal.h>
 
 #include <algorithm>
+#include <cstring>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -147,6 +149,9 @@ wallpaper::RenderInitInfo make_render_init_info(
     // wallpaper-core.
     wallpaper::RenderInitInfo info;
     info.offscreen = false;
+    // Carried alongside the surface closure so a backend that does not create a
+    // VkSurfaceKHR can still adopt this layer. Exactly one backend ever owns it.
+    info.metal_layer = metal_layer_handle;
     info.width = static_cast<uint16_t>(width);
     info.height = static_cast<uint16_t>(height);
     info.render_width = static_cast<uint16_t>(render_width == 0 ? width : render_width);
@@ -730,6 +735,93 @@ extern "C" void owe_scene_optimization_stats(
     if (out_skipped_passes != nullptr) *out_skipped_passes = totals.skipped_passes;
     if (out_elided_copies != nullptr) *out_elided_copies = totals.elided_copies;
     if (out_pinned_bytes != nullptr) *out_pinned_bytes = totals.pinned_bytes;
+}
+
+extern "C" void owe_set_scene_on_demand_enabled(bool enabled)
+{
+    wallpaper::SetSceneOnDemandEnabled(enabled);
+}
+
+extern "C" bool owe_scene_on_demand_enabled(void)
+{
+    return wallpaper::SceneOnDemandEnabled();
+}
+
+extern "C" int owe_scene_wallpaper_update_mode(void* scene)
+{
+    auto* wallpaper_scene = static_cast<wallpaper::SceneWallpaper*>(scene);
+    // -1 rather than any enumerated mode: a caller with no scene has observed
+    // nothing, which is different from observing a scene that is idle.
+    if (wallpaper_scene == nullptr) return -1;
+    switch (wallpaper_scene->sceneUpdateKind()) {
+    case wallpaper::SceneUpdateDemand::Kind::WaitingForEvent:
+        return OWE_SCENE_UPDATE_WAITING_FOR_EVENT;
+    case wallpaper::SceneUpdateDemand::Kind::WaitingForDeadline:
+        return OWE_SCENE_UPDATE_WAITING_FOR_DEADLINE;
+    case wallpaper::SceneUpdateDemand::Kind::Continuous:
+        return OWE_SCENE_UPDATE_CONTINUOUS;
+    }
+    return OWE_SCENE_UPDATE_UNKNOWN;
+}
+
+extern "C" void owe_set_scene_renderer_preference(int preference)
+{
+    // An unrecognised value falls back to compatibility rather than being
+    // stored: a host built against a newer enum must not silently select a
+    // backend this binary does not have.
+    const auto value = preference == OWE_SCENE_RENDERER_NATIVE_METAL_PREFERRED
+                           ? wallpaper::SceneRendererPreference::NativeMetalPreferred
+                           : wallpaper::SceneRendererPreference::Compatibility;
+    wallpaper::SetSceneRendererPreference(value);
+    // A remembered prepare failure is only meaningful for the preference that
+    // was in force when it happened. Turning the preference off and on again is
+    // the one deliberate act that makes the question worth asking a second
+    // time, so the record is cleared here rather than aged out on a timer.
+    wallpaper::metal::ForgetMetalPrepareFailures();
+}
+
+extern "C" int owe_current_scene_renderer_preference(void)
+{
+    switch (wallpaper::CurrentSceneRendererPreference()) {
+    case wallpaper::SceneRendererPreference::NativeMetalPreferred:
+        return OWE_SCENE_RENDERER_NATIVE_METAL_PREFERRED;
+    case wallpaper::SceneRendererPreference::Compatibility:
+        break;
+    }
+    return OWE_SCENE_RENDERER_COMPATIBILITY;
+}
+
+extern "C" int owe_scene_wallpaper_backend(void* scene)
+{
+    auto* wallpaper_scene = static_cast<wallpaper::SceneWallpaper*>(scene);
+    if (wallpaper_scene == nullptr) return -1;
+    switch (wallpaper_scene->sceneBackendSelection().backend) {
+    case wallpaper::SceneBackend::NativeMetal: return OWE_SCENE_BACKEND_NATIVE_METAL;
+    case wallpaper::SceneBackend::LegacyVulkan: break;
+    }
+    return OWE_SCENE_BACKEND_LEGACY_VULKAN;
+}
+
+extern "C" size_t owe_scene_wallpaper_backend_fallback_reason(void* scene, char* out,
+                                                              size_t out_len)
+{
+    auto* wallpaper_scene = static_cast<wallpaper::SceneWallpaper*>(scene);
+    if (wallpaper_scene == nullptr) return 0;
+    const auto reason = wallpaper_scene->sceneBackendSelection().fallback_reason;
+    if (reason.empty()) return 0;
+    // Sizing call: report what would be needed without writing anything.
+    if (out == nullptr || out_len == 0) return reason.size();
+    const size_t copied = std::min(reason.size(), out_len - 1);
+    std::memcpy(out, reason.data(), copied);
+    out[copied] = '\0';
+    return reason.size();
+}
+
+extern "C" uint32_t owe_scene_wallpaper_demand_reasons(void* scene)
+{
+    auto* wallpaper_scene = static_cast<wallpaper::SceneWallpaper*>(scene);
+    if (wallpaper_scene == nullptr) return 0;
+    return wallpaper_scene->sceneDemandReasons();
 }
 
 extern "C" int owe_audio_submit_mono_frames(

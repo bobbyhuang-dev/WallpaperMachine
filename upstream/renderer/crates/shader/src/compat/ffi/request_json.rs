@@ -54,18 +54,24 @@ impl RequestDto {
 }
 
 /// Shader target DTO.
+///
+/// Unknown target strings are rejected by `serde` so a caller can never be
+/// silently downgraded to a different backend than the one it asked for.
 #[derive(Clone, Copy, Debug, Default, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum TargetDto {
     /// Vulkan SPIR-V target.
     #[default]
     VulkanSpirv,
+    /// Metal Shading Language target.
+    MetalMsl,
 }
 
 impl From<TargetDto> for ShaderTarget {
     fn from(target: TargetDto) -> Self {
         match target {
             TargetDto::VulkanSpirv => Self::VulkanSpirv,
+            TargetDto::MetalMsl => Self::MetalMsl,
         }
     }
 }

@@ -1,10 +1,10 @@
 use shader::{
     BindingIndex, BindingSet, ComboName, CompiledShaderStage, CompiledStageArtifact,
-    InMemoryShaderSourceProvider, IncludePath, PropertyName, PropertyValue, ShaderCacheStrategy,
-    ShaderComboValue, ShaderCompiler, ShaderDescriptorKind, ShaderError, ShaderName,
-    ShaderProgramRequest, ShaderReflection, ShaderReflector, ShaderResult, ShaderStageKind,
-    ShaderStageSource, ShaderTextureInfo, ShaderUniformBlock, ShaderUniformMember,
-    TextureFormatHint, TextureSlot,
+    CompiledStageCode, InMemoryShaderSourceProvider, IncludePath, PropertyName, PropertyValue,
+    ShaderCacheStrategy, ShaderComboValue, ShaderCompiler, ShaderDescriptorKind, ShaderError,
+    ShaderName, ShaderProgramRequest, ShaderReflection, ShaderReflector, ShaderResult,
+    ShaderStageKind, ShaderStageSource, ShaderTarget, ShaderTextureInfo, ShaderUniformBlock,
+    ShaderUniformMember, TextureFormatHint, TextureSlot,
     compile::NagaCompiler,
     legalize::CodegenStageSource,
     pipeline::{DefaultShaderPipeline, ShaderPipeline, ShaderPipelineRevision},
@@ -76,7 +76,7 @@ fn compiles_program_and_merges_metadata_reflection_and_diagnostics() {
         program
             .stages()
             .iter()
-            .all(|stage| stage.spirv().first() == Some(&SPIRV_MAGIC))
+            .all(|stage| stage.spirv().and_then(<[u32]>::first) == Some(&SPIRV_MAGIC))
     );
     assert!(program.stages().iter().any(|stage| {
         stage.kind() == ShaderStageKind::Vertex
@@ -170,6 +170,36 @@ fn cache_key_tracks_sources_combos_revision_and_legalized_output() {
     assert_ne!(base, combo_change);
     assert_ne!(base, revision_change);
     assert_ne!(base, legalized_change);
+}
+
+#[test]
+fn cache_key_separates_spirv_and_metal_targets_for_identical_sources() {
+    let pipeline = pipeline();
+    let spirv = pipeline
+        .compile(&request_with_target("1.0", "1", ShaderTarget::VulkanSpirv))
+        .expect("vulkan_spirv request should compile");
+    let metal = pipeline
+        .compile(&request_with_target("1.0", "1", ShaderTarget::MetalMsl))
+        .expect("metal_msl request should compile");
+
+    assert_eq!(spirv.stages().len(), metal.stages().len());
+    assert!(
+        spirv
+            .stages()
+            .iter()
+            .all(|stage| stage.target() == ShaderTarget::VulkanSpirv)
+    );
+    assert!(
+        metal
+            .stages()
+            .iter()
+            .all(|stage| stage.target() == ShaderTarget::MetalMsl)
+    );
+    assert_ne!(
+        spirv.cache_key(),
+        metal.cache_key(),
+        "a spirv cache entry must never be served for a metal request or the reverse"
+    );
 }
 
 #[test]
@@ -2895,12 +2925,13 @@ impl ShaderCompiler for SourceCaptureCompiler {
 
     fn compile_stage(
         &self,
+        _target: ShaderTarget,
         stage: ShaderStageKind,
         source: &CodegenStageSource,
     ) -> ShaderResult<CompiledStageArtifact<Self::Module>> {
         let compiled_stage = CompiledShaderStage::new(
             stage,
-            Box::from([SPIRV_MAGIC]),
+            CompiledStageCode::VulkanSpirv(Box::from([SPIRV_MAGIC])),
             Some(source.source().to_owned()),
             Box::from([]),
         );
@@ -3004,6 +3035,32 @@ fn assert_uniform_block_member_order(source: &str, members: &[&str]) {
 
 fn request(brightness: &str, combo_value: &str) -> ShaderProgramRequest {
     request_with_fragment_call(brightness, "texture2D(g_Texture0, v_Uv)", combo_value)
+}
+
+fn request_with_target(
+    brightness: &str,
+    combo_value: &str,
+    target: ShaderTarget,
+) -> ShaderProgramRequest {
+    let base = request(brightness, combo_value);
+    let mut builder = ShaderProgramRequest::builder(base.shader_name().clone())
+        .target(target)
+        .cache_strategy(base.cache_strategy().clone());
+
+    for stage in base.stages() {
+        builder = builder.stage(stage.clone());
+    }
+    for combo in base.combos() {
+        builder = builder.combo(combo.clone());
+    }
+    for texture in base.textures() {
+        builder = builder.texture(texture.clone());
+    }
+    for property in base.properties() {
+        builder = builder.property(property.clone());
+    }
+
+    builder.build().expect("request should be valid")
 }
 
 fn request_with_fragment_call(

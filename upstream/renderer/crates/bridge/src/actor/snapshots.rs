@@ -1,6 +1,8 @@
-use std::{fs, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 
-use wallpaper_core::{DisplaySnapshotEntry, WallpaperAssignment, project::ScalingMode};
+use wallpaper_core::{
+    DisplaySnapshotEntry, SceneBackend, SceneUpdateMode, WallpaperAssignment, project::ScalingMode,
+};
 
 use crate::{
     actor::state::BridgeActorState,
@@ -8,17 +10,19 @@ use crate::{
         BridgeComboOption, BridgeDirectoryMode, BridgeDisplayConfigRow, BridgeDisplayMode,
         BridgeDisplaySettingsRow, BridgeError, BridgeFileFilter, BridgeMonitorInfoRow,
         BridgeMonitorInformationSnapshot, BridgePlaybackState, BridgePropertyDescriptor,
-        BridgePropertyKind, BridgePropertyValue, BridgeScalingMode, BridgeSettingsSnapshot,
-        BridgeSliderMetadata, BridgeStorageStatus, BridgeVideoBackendReport,
-        BridgeWallpaperOptionsSnapshot, bridge_log_status,
+        BridgePropertyKind, BridgePropertyValue, BridgeScalingMode, BridgeSceneBackendReport,
+        BridgeSceneUpdateModeReport, BridgeSettingsSnapshot, BridgeSliderMetadata,
+        BridgeStorageStatus, BridgeVideoBackendReport, BridgeWallpaperOptionsSnapshot,
+        bridge_log_status,
     },
-    config::{SerializedSelector, VideoBackendModeCfg},
-    engine::{ActivationInputs, RendererVideoPipelineState},
+    config::{SceneRendererModeCfg, SerializedSelector, VideoBackendModeCfg},
+    engine::{ActivationInputs, RendererVideoPipelineState, SceneRuntimeReport},
     display::{DisplayLabelExt, DisplaySelectorExt, DisplaySnapshotExt},
     logging::{ApplicationLogger, LogStatus},
     login::LaunchAtLoginStatus,
     paths::BridgePaths,
     project::{Condition, DirectoryMode, FileFilter, FileMedia, PropertyMetadata, PropertyValue},
+    user_assets::UserAssetManifest,
 };
 
 const MIRROR_DISPLAY_MODE: &str = "mirror";
@@ -28,6 +32,30 @@ const VIDEO_BACKEND_COMPATIBILITY: &str = "compatibility";
 const VIDEO_BACKEND_NATIVE_PREFERRED: &str = "native_preferred";
 const RUNNING_BACKEND_NATIVE: &str = "native";
 const RUNNING_BACKEND_LEGACY: &str = "legacy";
+const SCENE_RENDERER_COMPATIBILITY: &str = "compatibility";
+const SCENE_RENDERER_NATIVE_METAL_PREFERRED: &str = "native_metal_preferred";
+const SCENE_BACKEND_LEGACY_VULKAN: &str = "legacy_vulkan";
+const SCENE_BACKEND_NATIVE_METAL: &str = "native_metal";
+/// A scene that is running and whose backend the renderer could not name.
+/// Distinct from both real backends on purpose.
+const SCENE_BACKEND_UNKNOWN: &str = "unknown";
+const SCENE_MODE_CONTINUOUS: &str = "continuous";
+const SCENE_MODE_WAITING_FOR_EVENT: &str = "waiting_for_event";
+const SCENE_MODE_WAITING_FOR_DEADLINE: &str = "waiting_for_deadline";
+const SCENE_MODE_USER_PAUSED: &str = "user_paused";
+const SCENE_MODE_POLICY_SUSPENDED: &str = "policy_suspended";
+const SCENE_MODE_NOT_APPLICABLE: &str = "not_applicable";
+/// A scene that is running and could not be read. Never `continuous`.
+const SCENE_MODE_UNKNOWN: &str = "unknown";
+
+/// How one running scene is named in the panel. A display with no wallpaper
+/// recorded against it keeps empty strings rather than a placeholder: the
+/// scene's state is still worth reporting even when the host cannot name it.
+struct SceneReportLabels {
+    display_name: String,
+    wallpaper_id: String,
+    wallpaper_title: String,
+}
 
 /// The filter a file or directory property declared, or `None` when the
 /// project declared none: an editor showing "image" there would be inventing a
@@ -65,6 +93,7 @@ impl BridgeActorState {
         &self,
         displays: &[DisplaySnapshotEntry],
         wallpaper_id: String,
+        paths: &BridgePaths,
     ) -> Result<BridgeWallpaperOptionsSnapshot, BridgeError> {
         let entry = self
             .library
@@ -76,6 +105,11 @@ impl BridgeActorState {
 
         let draft = self.wallpaper_draft(&wallpaper_id)?;
         let config = draft.current();
+        // One read per snapshot, shared by every file and directory property: the
+        // manifest is the app's record of what it copied, and the panel needs it to
+        // tell an imported asset from one that has gone missing.
+        let user_assets_root = paths.user_assets_root();
+        let user_assets = UserAssetManifest::load(&user_assets_root, &wallpaper_id);
         let properties = self
             .project_models
             .get(&wallpaper_id)
@@ -144,6 +178,35 @@ impl BridgeActorState {
                             ),
                             _ => (None, None),
                         };
+                        // Only file and directory properties have a user asset behind
+                        // them; a texture picker names a path inside the package, which
+                        // the app never imports and must never report as missing.
+                        let is_asset_property = matches!(
+                            property.metadata,
+                            PropertyMetadata::File { .. } | PropertyMetadata::Directory { .. }
+                        );
+                        let picked = if is_asset_property {
+                            value.to_property_string()
+                        } else {
+                            String::new()
+                        };
+                        let asset = if !is_asset_property {
+                            crate::user_assets::UserAssetStatus::default()
+                        } else if let Some(manifest) = user_assets.as_ref() {
+                            manifest.status(
+                                &user_assets_root,
+                                &wallpaper_id,
+                                &property.id,
+                                &picked,
+                            )
+                        } else {
+                            crate::user_assets::unmanaged_status(&picked)
+                        };
+                        let asset_source_path = user_assets
+                            .as_ref()
+                            .and_then(|manifest| manifest.source_path(&property.id))
+                            .map(ToString::to_string)
+                            .or_else(|| (!picked.is_empty()).then(|| picked.clone()));
 
                         BridgePropertyDescriptor {
                             id: property.id.clone(),
@@ -158,6 +221,9 @@ impl BridgeActorState {
                             dirty,
                             can_restore_defaults: dirty,
                             enabled: true,
+                            asset_managed: asset.managed,
+                            asset_missing: asset.missing,
+                            asset_source_path,
                         }
                     })
                     .collect()
@@ -322,6 +388,100 @@ impl BridgeActorState {
         BridgeMonitorInformationSnapshot { rows }
     }
 
+    /// Composes one running scene's renderer read-back with the host's own
+    /// pause state into the mode the panel shows.
+    ///
+    /// Precedence is deliberate and is not the renderer's to decide. A
+    /// wallpaper the user paused reads `user_paused` however the renderer has
+    /// classified it; a display whose presentation the host suspended reads
+    /// `policy_suspended`; only then does the renderer's own answer show
+    /// through. Those three are separate states, so an event wake must never
+    /// look like the user un-pausing.
+    ///
+    /// `None` from the renderer means it could not answer, which becomes
+    /// `unknown`. It never becomes `continuous`: "we could not tell" is not
+    /// evidence that a scene is ticking.
+    fn scene_update_mode(&self, report: &SceneRuntimeReport) -> &'static str {
+        if self.playback_state == BridgePlaybackState::Paused {
+            // Battery policy pauses through the same flag the user does, so
+            // the two are told apart by who asked, not by the flag.
+            return if self.auto_paused_for_battery {
+                SCENE_MODE_POLICY_SUSPENDED
+            } else {
+                SCENE_MODE_USER_PAUSED
+            };
+        }
+        if self.presentation_suspended || self.suspended_displays.contains(&report.display_id) {
+            return SCENE_MODE_POLICY_SUSPENDED;
+        }
+        match report.update_mode {
+            Some(SceneUpdateMode::Continuous) => SCENE_MODE_CONTINUOUS,
+            Some(SceneUpdateMode::WaitingForEvent) => SCENE_MODE_WAITING_FOR_EVENT,
+            Some(SceneUpdateMode::WaitingForDeadline) => SCENE_MODE_WAITING_FOR_DEADLINE,
+            Some(SceneUpdateMode::NotApplicable) => SCENE_MODE_NOT_APPLICABLE,
+            // A stopped clock the host did not ask for is not a state the user
+            // can act on, and `Unknown` is the renderer saying so itself.
+            Some(SceneUpdateMode::ClockStopped | SceneUpdateMode::Unknown) | None => {
+                SCENE_MODE_UNKNOWN
+            }
+        }
+    }
+
+    /// Display title and wallpaper for every display a runtime report names.
+    ///
+    /// Built once per snapshot rather than per report: the two scene lists
+    /// describe the same displays, and `monitor_rows` walks and allocates the
+    /// whole display configuration each time it is called.
+    ///
+    /// A display the snapshot no longer lists falls back to its numeric id
+    /// rather than being dropped: a scene the host cannot name is still a
+    /// scene that is running.
+    fn scene_report_labels(
+        &self,
+        displays: &[DisplaySnapshotEntry],
+        app_config: &crate::config::AppConfig,
+        scene_reports: &[SceneRuntimeReport],
+    ) -> BTreeMap<u32, SceneReportLabels> {
+        let primary = displays.first().map(|first| first.desc.display_id);
+        let rows = app_config.monitor_rows(displays);
+        scene_reports
+            .iter()
+            .map(|report| report.display_id)
+            .map(|display_id| {
+                let entry = displays
+                    .iter()
+                    .find(|entry| entry.desc.display_id == display_id);
+                let display_name = entry.map_or_else(
+                    || display_id.to_string(),
+                    |entry| entry.title_with_role(primary == Some(entry.desc.display_id)),
+                );
+                let wallpaper_id = rows
+                    .iter()
+                    .find(|row| {
+                        row.display_index
+                            .and_then(|index| displays.get(index))
+                            .is_some_and(|entry| entry.desc.display_id == display_id)
+                    })
+                    .and_then(|row| row.config.wallpaper.clone())
+                    .unwrap_or_default();
+                let wallpaper_title = self
+                    .library
+                    .iter()
+                    .find(|entry| entry.id == wallpaper_id)
+                    .map(|entry| entry.title.clone())
+                    .unwrap_or_default();
+                (
+                    display_id,
+                    SceneReportLabels {
+                        display_name,
+                        wallpaper_id,
+                        wallpaper_title,
+                    },
+                )
+            })
+            .collect()
+    }
+
     #[allow(clippy::too_many_lines)]
     pub fn settings(
         &self,
@@ -329,6 +489,7 @@ impl BridgeActorState {
         launch_at_login: LaunchAtLoginStatus,
         paths: &BridgePaths,
         renderer: RendererVideoPipelineState,
+        scene_reports: &[SceneRuntimeReport],
     ) -> BridgeSettingsSnapshot {
         let app_config = self.app_config.normalized(displays);
         let rows = if displays.is_empty() {
@@ -463,6 +624,48 @@ impl BridgeActorState {
                 fallback_reason: routed.fallback_reason,
             })
             .collect();
+        let scene_labels = self.scene_report_labels(displays, &app_config, scene_reports);
+        let scene_update_modes = scene_reports
+            .iter()
+            .map(|report| {
+                let labels = scene_labels.get(&report.display_id);
+                BridgeSceneUpdateModeReport {
+                    display_id: report.display_id,
+                    display_name: labels.map(|l| l.display_name.clone()).unwrap_or_default(),
+                    wallpaper_id: labels.map(|l| l.wallpaper_id.clone()).unwrap_or_default(),
+                    wallpaper_title: labels.map(|l| l.wallpaper_title.clone()).unwrap_or_default(),
+                    mode: self.scene_update_mode(report).to_string(),
+                    reasons: report
+                        .demand_reasons
+                        .names()
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect(),
+                }
+            })
+            .collect();
+        let scene_renderers = scene_reports
+            .iter()
+            .map(|report| {
+                let labels = scene_labels.get(&report.display_id);
+                BridgeSceneBackendReport {
+                    display_id: report.display_id,
+                    display_name: labels.map(|l| l.display_name.clone()).unwrap_or_default(),
+                    wallpaper_id: labels.map(|l| l.wallpaper_id.clone()).unwrap_or_default(),
+                    wallpaper_title: labels.map(|l| l.wallpaper_title.clone()).unwrap_or_default(),
+                    // A backend the renderer could not name is reported as
+                    // unknown rather than as the preference, which would make
+                    // the preference look like evidence of what ran.
+                    backend: match report.backend {
+                        Some(SceneBackend::LegacyVulkan) => SCENE_BACKEND_LEGACY_VULKAN,
+                        Some(SceneBackend::NativeMetal) => SCENE_BACKEND_NATIVE_METAL,
+                        None => SCENE_BACKEND_UNKNOWN,
+                    }
+                    .to_string(),
+                    fallback_reason: report.fallback_reason.clone(),
+                }
+            })
+            .collect();
         BridgeSettingsSnapshot {
             displays: rows,
             launch_at_login_available: matches!(
@@ -507,6 +710,16 @@ impl BridgeActorState {
             shared_video_decode_sessions: renderer.shared_video_decode_sessions,
             shared_video_decode_consumers: renderer.shared_video_decode_consumers,
             scene_optimization_enabled: self.app_config.quality.scene_optimization_enabled,
+            scene_on_demand_enabled: self.app_config.quality.scene_on_demand_enabled,
+            scene_renderer: match self.app_config.scene_renderer {
+                SceneRendererModeCfg::Compatibility => SCENE_RENDERER_COMPATIBILITY.to_string(),
+                SceneRendererModeCfg::NativeMetalPreferred => {
+                    SCENE_RENDERER_NATIVE_METAL_PREFERRED.to_string()
+                }
+            },
+            scene_update_modes,
+            scene_renderers,
+            user_assets_path: paths.user_assets_root().to_string_lossy().into_owned(),
             render_scale: self.app_config.effective_render_scale(on_battery),
             preferred_render_scale: self.app_config.quality.render_scale,
             battery_profile_enabled: self.app_config.quality.battery_profile_enabled,
@@ -548,12 +761,28 @@ mod tests {
             LaunchAtLoginStatus::Unavailable,
             &paths,
             crate::engine::RendererVideoPipelineState::default(),
+            &[],
         );
 
         assert_eq!(snapshot.storage.shader_cache_size_bytes, 4);
         assert_eq!(
             snapshot.storage.logs.logs_root,
             paths.logs_root().to_string_lossy()
+        );
+        assert_eq!(
+            snapshot.user_assets_path,
+            paths.user_assets_root().to_string_lossy(),
+            "the panel must show the directory the app actually imports into"
+        );
+        assert!(
+            !snapshot
+                .user_assets_path
+                .starts_with(&*paths.shader_cache_root().to_string_lossy()),
+            "user-imported originals must not live under a directory a cache clean wipes"
+        );
+        assert!(
+            snapshot.scene_update_modes.is_empty() && snapshot.scene_renderers.is_empty(),
+            "nothing was observed, so nothing may be reported as running"
         );
     }
 }

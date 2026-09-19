@@ -1,18 +1,18 @@
-//! Naga-backed GLSL to SPIR-V shader compilation.
+//! Naga-backed GLSL to SPIR-V and Metal Shading Language compilation.
 
 use naga::{
     back::spv,
     front::glsl,
-    valid::{Capabilities, ValidationFlags, Validator},
+    valid::{Capabilities, ModuleInfo, ValidationFlags, Validator},
 };
 
-use super::diagnostic::DiagnosticBuilder;
+use super::{diagnostic::DiagnosticBuilder, metal::MetalEmitter};
 use crate::{
-    CompiledShaderStage, CompiledStageArtifact, ShaderCompiler, ShaderError, ShaderResult,
-    ShaderStageKind, legalize::CodegenStageSource,
+    CompiledShaderStage, CompiledStageArtifact, CompiledStageCode, ShaderCompiler, ShaderError,
+    ShaderResult, ShaderStageKind, ShaderTarget, legalize::CodegenStageSource,
 };
 
-/// Compiler backend that lowers legalized GLSL through Naga and emits SPIR-V.
+/// Compiler backend that lowers legalized GLSL through Naga.
 #[derive(Clone, Debug, Default)]
 pub struct NagaCompiler;
 
@@ -21,6 +21,7 @@ impl ShaderCompiler for NagaCompiler {
 
     fn compile_stage(
         &self,
+        target: ShaderTarget,
         stage: ShaderStageKind,
         source: &CodegenStageSource,
     ) -> ShaderResult<CompiledStageArtifact<Self::Module>> {
@@ -68,33 +69,29 @@ impl ShaderCompiler for NagaCompiler {
             }
         })?;
 
-        let pipeline_options = spv::PipelineOptions {
-            shader_stage: stage.into_naga(),
-            entry_point: "main".to_owned(),
-        };
-        let mut spv_options = spv::Options::default();
-        spv_options
-            .flags
-            .remove(spv::WriterFlags::ADJUST_COORDINATE_SPACE);
-
-        let spirv = spv::write_vec(&module, &module_info, &spv_options, Some(&pipeline_options))
-            .map_err(|err| {
-                let diagnostic = DiagnosticBuilder::new(stage, "naga spv write", source_path)
-                    .with_message(format!(
-                        "{err}\n{source_path}\n{}",
-                        source_text.lines().next().unwrap_or_default()
-                    ))
-                    .with_source(source_text)
-                    .build();
-
-                ShaderError::Compile {
-                    diagnostics: Box::from([diagnostic]),
+        let code = match target {
+            ShaderTarget::VulkanSpirv => CompiledStageCode::VulkanSpirv(write_spirv(
+                stage,
+                &module,
+                &module_info,
+                source_text,
+                source_path,
+            )?),
+            ShaderTarget::MetalMsl => CompiledStageCode::MetalMsl(
+                MetalEmitter {
+                    stage,
+                    module: &module,
+                    module_info: &module_info,
+                    source_text,
+                    source_path,
                 }
-            })?;
+                .emit()?,
+            ),
+        };
 
         let compiled_stage = CompiledShaderStage::new(
             stage,
-            spirv.into_boxed_slice(),
+            code,
             Some(source_text.to_owned()),
             Box::from([]),
         );
@@ -105,6 +102,42 @@ impl ShaderCompiler for NagaCompiler {
             Box::from([]),
         ))
     }
+}
+
+/// Emits SPIR-V words for one validated Naga module.
+fn write_spirv(
+    stage: ShaderStageKind,
+    module: &naga::Module,
+    module_info: &ModuleInfo,
+    source_text: &str,
+    source_path: &'static str,
+) -> ShaderResult<Box<[u32]>> {
+    let pipeline_options = spv::PipelineOptions {
+        shader_stage: stage.into_naga(),
+        entry_point: "main".to_owned(),
+    };
+    let mut spv_options = spv::Options::default();
+    spv_options
+        .flags
+        .remove(spv::WriterFlags::ADJUST_COORDINATE_SPACE);
+
+    let spirv = spv::write_vec(module, module_info, &spv_options, Some(&pipeline_options)).map_err(
+        |err| {
+            let diagnostic = DiagnosticBuilder::new(stage, "naga spv write", source_path)
+                .with_message(format!(
+                    "{err}\n{source_path}\n{}",
+                    source_text.lines().next().unwrap_or_default()
+                ))
+                .with_source(source_text)
+                .build();
+
+            ShaderError::Compile {
+                diagnostics: Box::from([diagnostic]),
+            }
+        },
+    )?;
+
+    Ok(spirv.into_boxed_slice())
 }
 
 impl ShaderStageKind {

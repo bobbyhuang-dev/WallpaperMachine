@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 
 @testable import MacWallpaperEngine
@@ -86,7 +87,8 @@ final class WebWallpaperPropertyPayloadTests: XCTestCase {
     let fixture = try Fixture()
     defer { fixture.remove() }
     let host = WebWallpaperHost(
-      fetch: { [] }, screens: { [] }, assetStore: { UserAssetStore(projectURL: $0) })
+      fetch: { [] }, screens: { [] },
+      assetStore: { UserAssetStore(projectURL: $0, wallpaperId: $1) })
 
     let staged = host.stageAssets(for: fixture.wallpaper)
     XCTAssertTrue(staged.restaged)
@@ -107,7 +109,8 @@ final class WebWallpaperPropertyPayloadTests: XCTestCase {
     let fixture = try Fixture()
     defer { fixture.remove() }
     let host = WebWallpaperHost(
-      fetch: { [] }, screens: { [] }, assetStore: { UserAssetStore(projectURL: $0) })
+      fetch: { [] }, screens: { [] },
+      assetStore: { UserAssetStore(projectURL: $0, wallpaperId: $1) })
     let first = host.stageAssets(for: fixture.wallpaper)
     let second = host.stageAssets(for: fixture.wallpaper)
     XCTAssertFalse(second.restaged, "re-linking a whole folder on every reconcile is not free")
@@ -118,7 +121,8 @@ final class WebWallpaperPropertyPayloadTests: XCTestCase {
     let fixture = try Fixture()
     defer { fixture.remove() }
     let host = WebWallpaperHost(
-      fetch: { [] }, screens: { [] }, assetStore: { UserAssetStore(projectURL: $0) })
+      fetch: { [] }, screens: { [] },
+      assetStore: { UserAssetStore(projectURL: $0, wallpaperId: $1) })
     _ = host.stageAssets(for: fixture.wallpaper)
 
     var cleared = fixture.wallpaper
@@ -137,16 +141,21 @@ final class WebWallpaperPropertyPayloadTests: XCTestCase {
   /// A project folder and a separate folder of the user's own files, the way a
   /// real selection arrives: the source is never inside the project.
   private struct Fixture {
+    let home: URL
     let project: URL
     let source: URL
     let wallpaper: BridgeWebWallpaper
 
     init() throws {
       let base = FileManager.default.temporaryDirectory
+      home = base.appendingPathComponent("web-home-\(UUID().uuidString)", isDirectory: true)
       project = base.appendingPathComponent("web-staging-\(UUID().uuidString)", isDirectory: true)
       source = base.appendingPathComponent("web-source-\(UUID().uuidString)", isDirectory: true)
       try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
       try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+      // The managed user-asset store lives under the support root, so every test
+      // import has to land in a throwaway home rather than the real one.
+      setenv("MAC_WALLPAPER_ENGINE_HOME", home.path, 1)
       let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
       // A name with a space and a plus: both load unescaped and must survive.
       try png.write(to: source.appendingPathComponent("a b+c.png"))
@@ -167,6 +176,8 @@ final class WebWallpaperPropertyPayloadTests: XCTestCase {
     }
 
     func remove() {
+      unsetenv("MAC_WALLPAPER_ENGINE_HOME")
+      try? FileManager.default.removeItem(at: home)
       try? FileManager.default.removeItem(at: project)
       try? FileManager.default.removeItem(at: source)
     }

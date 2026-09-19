@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "../../Core/RendererCounters.h"
@@ -226,6 +227,67 @@ bool owe_scene_optimization_enabled(void);
  */
 void owe_scene_optimization_stats(uint64_t* out_executed_passes, uint64_t* out_skipped_passes,
                                   uint64_t* out_elided_copies, uint64_t* out_pinned_bytes);
+
+/*
+ * Whole-scene on-demand updating, process-wide. Off by default.
+ *
+ * When a scene can be shown to have nothing that advances on its own — no
+ * script, animation, particle emitter, video, audio-reactive shader, time
+ * uniform, animated sprite, puppet, bound text, sound or unaccounted input —
+ * its frame clock stops entirely instead of ticking at the configured rate.
+ * The last presented frame stays on screen and events restart the clock.
+ *
+ * This is not a frame-rate setting and does not lower quality. A scene that
+ * cannot be shown to be still keeps its existing cadence.
+ */
+void owe_set_scene_on_demand_enabled(bool enabled);
+bool owe_scene_on_demand_enabled(void);
+
+/*
+ * How one scene is currently being updated, and why.
+ *
+ * Pull-only and unaffected by whether renderer counting is enabled: this is
+ * live state a settings pane displays, not instrumentation.
+ *
+ * `owe_scene_wallpaper_update_mode` returns an `owe_scene_update_mode`, or -1
+ * when the scene pointer is null. -1 means "not observed" and must not be
+ * shown as any real state. `owe_scene_wallpaper_demand_reasons` returns a
+ * bitmask of `owe_scene_demand_reason`; zero alongside a continuous mode means
+ * on-demand updating is switched off rather than that no reason exists.
+ */
+int      owe_scene_wallpaper_update_mode(void* scene);
+uint32_t owe_scene_wallpaper_demand_reasons(void* scene);
+
+/*
+ * Scene renderer preference, process-wide. Compatibility by default.
+ *
+ * A preference, not an outcome. A scene the native backend cannot draw falls
+ * back to the compatibility backend and says why; the preference is never
+ * reported as the backend in use.
+ */
+typedef enum owe_scene_renderer_preference {
+    OWE_SCENE_RENDERER_COMPATIBILITY = 0,
+    OWE_SCENE_RENDERER_NATIVE_METAL_PREFERRED = 1
+} owe_scene_renderer_preference;
+
+typedef enum owe_scene_backend {
+    OWE_SCENE_BACKEND_LEGACY_VULKAN = 0,
+    OWE_SCENE_BACKEND_NATIVE_METAL = 1
+} owe_scene_backend;
+
+void owe_set_scene_renderer_preference(int preference);
+int  owe_current_scene_renderer_preference(void);
+
+/*
+ * Which backend actually drew this scene, or -1 when nothing has been observed.
+ *
+ * `owe_scene_wallpaper_backend_fallback_reason` writes a NUL-terminated reason
+ * into `out` and returns the length excluding the terminator; passing a null
+ * `out` or a zero `out_len` reports the length that would be needed. Zero means
+ * the active backend is the preferred one.
+ */
+int    owe_scene_wallpaper_backend(void* scene);
+size_t owe_scene_wallpaper_backend_fallback_reason(void* scene, char* out, size_t out_len);
 
 /*
  * Renderer work counters.

@@ -467,3 +467,47 @@ if(TARGET deep_version_tests)
         DISCOVERY_TIMEOUT 60
     )
 endif()
+
+# Native Metal backend: capability gate, blend mapping, clip-space derivation
+# and pipeline cache keys. No device needed for any of it; the one
+# device-backed check skips visibly when no Metal device is present.
+add_executable(metal_backend_test metal_backend_test.cpp)
+target_link_libraries(metal_backend_test PRIVATE
+    ${PROJECT_NAME} wpMetalRender wpVulkanRender wpVulkan wpScene wpRGraph wpParticle
+    nlohmann_json::nlohmann_json GTest::gtest_main)
+target_include_directories(metal_backend_test PRIVATE
+    . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/MetalRender/include)
+target_compile_features(metal_backend_test PRIVATE cxx_std_20)
+gtest_discover_tests(
+    metal_backend_test
+    TEST_PREFIX metal_backend_test.
+    PROPERTIES TIMEOUT 60
+    DISCOVERY_TIMEOUT 60
+)
+
+if(APPLE)
+  # The first thing to feed translated Metal Shading Language to the Metal
+  # compiler, and the first to draw an author layer with a render command
+  # encoder. Creates only private textures and an offscreen layer.
+  add_executable(metal_scene_draw_smoke metal_scene_draw_smoke.mm)
+  target_link_libraries(metal_scene_draw_smoke PRIVATE
+      ${PROJECT_NAME} wpMetalRender wpVulkanRender wpVulkan wpScene wpRGraph
+      wpParticle wpAudio wpFs nlohmann_json::nlohmann_json GTest::gtest_main)
+  target_include_directories(metal_scene_draw_smoke PRIVATE
+      . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/MetalRender/include
+      ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender)
+  target_compile_features(metal_scene_draw_smoke PRIVATE cxx_std_20)
+  set_target_properties(metal_scene_draw_smoke PROPERTIES
+      OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES)
+  target_compile_options(metal_scene_draw_smoke PRIVATE
+      $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+  if(TARGET wescene_rust_shader)
+      target_link_libraries(metal_scene_draw_smoke PRIVATE wescene_rust_shader)
+  endif()
+  gtest_discover_tests(
+      metal_scene_draw_smoke
+      TEST_PREFIX metal_scene_draw_smoke.
+      PROPERTIES TIMEOUT 120
+      DISCOVERY_TIMEOUT 60
+  )
+endif()

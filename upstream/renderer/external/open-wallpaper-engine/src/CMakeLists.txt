@@ -31,6 +31,7 @@ if(APPLE)
   find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
   find_library(IOSURFACE_FRAMEWORK IOSurface REQUIRED)
   find_library(METAL_FRAMEWORK Metal REQUIRED)
+  find_library(QUARTZ_CORE_FRAMEWORK QuartzCore REQUIRED)
   find_library(VIDEOTOOLBOX_FRAMEWORK VideoToolbox REQUIRED)
 endif()
 
@@ -57,10 +58,10 @@ add_subdirectory(Scene/Timer)
 add_subdirectory(Scene/Particle)
 add_subdirectory(Scene/VulkanRender)
 add_subdirectory(Scene/RenderGraph)
+add_subdirectory(Scene/MetalRender)
 
 add_library(
   ${PROJECT_NAME} STATIC
-  Presentation/WallpaperScaling.cpp
   Scene/WPJson.cpp
   Scene/WPPkgFs.cpp
   Type.cpp
@@ -103,6 +104,7 @@ add_library(wescene::renderer ALIAS ${PROJECT_NAME})
 set(InteralLib
     wpAudio
     wpLooper
+    wpMetalRender
     wpVulkanRender
     wpFs
     wpScene

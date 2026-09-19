@@ -1,5 +1,5 @@
 use crate::{
-    ShaderCompiler, ShaderMetadata, ShaderReflection, ShaderReflector, ShaderResult,
+    ShaderCompiler, ShaderMetadata, ShaderReflection, ShaderReflector, ShaderResult, ShaderTarget,
     ShaderTextureInfo,
     legalize::{Codegen, CodegenStageSource, StageInterfaceLayout, StageResourceLayout},
     preprocess::PreprocessedStage,
@@ -18,6 +18,8 @@ pub(super) struct StagePipeline<'src, 'module, 'backend, C, R> {
     pub interface_layout: StageInterfaceLayout,
     /// Program-level resource layout for this stage.
     pub resource_layout: StageResourceLayout,
+    /// Requested compilation target.
+    pub target: ShaderTarget,
     /// Compiler backend.
     pub compiler: &'backend C,
     /// Reflection backend.
@@ -39,7 +41,9 @@ where
             self.interface_layout,
             self.resource_layout,
         )?;
-        let artifact = self.compiler.compile_stage(self.stage.kind(), &legalized)?;
+        let artifact = self
+            .compiler
+            .compile_stage(self.target, self.stage.kind(), &legalized)?;
         let reflection = self
             .reflector
             .reflect_stage(self.stage.kind(), artifact.module())?;

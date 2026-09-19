@@ -292,6 +292,14 @@ impl SceneRuntime {
         };
         runtime.desc = stored_desc;
         runtime.apply_runtime_properties(&descriptor_state)?;
+        // Published last, so a reader never sees a scene whose properties have
+        // not been applied yet. Withdrawal is the scene's own responsibility
+        // and happens on close and on drop.
+        runtime.renderer.publish_runtime_state(
+            &crate::SceneRegistry::shared(),
+            handle.raw(),
+            desc.display.display_id,
+        );
         Ok(runtime)
     }
 

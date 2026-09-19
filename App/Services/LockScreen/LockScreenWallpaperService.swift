@@ -16,6 +16,10 @@ final class LockScreenWallpaperService {
 
   private static let preference = "MacWallpaperEngineAnimateLockScreen"
   @ObservationIgnored private let scenes: () async throws -> [BridgeLockScreenScene]
+  /// Whether any applied wallpaper is a web wallpaper. Web has no lock-screen
+  /// renderer, so the app has to be able to say "not applicable" instead of
+  /// leaving the user waiting for something that will never arrive.
+  @ObservationIgnored private let webWallpapersApplied: () async -> Bool
   @ObservationIgnored private let selection: LockScreenWallpaperSelection
   @ObservationIgnored private let documents: URL
   @ObservationIgnored private let defaults: UserDefaults
@@ -32,6 +36,7 @@ final class LockScreenWallpaperService {
   convenience init(bridge: WallpaperBridge) {
     self.init(
       scenes: { try await bridge.lockScreenScenes() },
+      webWallpapersApplied: { ((try? await bridge.webWallpapers()) ?? []).isEmpty == false },
       selection: LockScreenWallpaperSelection(
         folder: ClientPaths.supportURL.appendingPathComponent("LockScreen")),
       documents: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
@@ -41,12 +46,14 @@ final class LockScreenWallpaperService {
 
   init(
     scenes: @escaping () async throws -> [BridgeLockScreenScene],
+    webWallpapersApplied: @escaping () async -> Bool = { false },
     selection: LockScreenWallpaperSelection, documents: URL,
     defaults: UserDefaults = .standard,
     scheduleMonitor: @escaping (@escaping @MainActor () -> Void) -> Timer =
       LockScreenWallpaperService.scheduleMonitorTimer
   ) {
     self.scenes = scenes
+    self.webWallpapersApplied = webWallpapersApplied
     self.selection = selection
     self.documents = documents
     self.defaults = defaults
@@ -174,14 +181,20 @@ final class LockScreenWallpaperService {
         }
         return LockScreenPublishInput(
           displayID: record.displayId,
-          displayUUID: CFUUIDCreateString(nil, uuid) as String, title: record.title,
+          displayUUID: CFUUIDCreateString(nil, uuid) as String,
+          wallpaperID: record.wallpaperId, title: record.title,
           projectPath: record.projectPath, assetsPath: record.assetsPath, fps: record.fps,
           scalingMode: mode, scalingFactor: record.scalingFactor,
           propertiesJSON: record.propertiesJson, paused: record.paused)
       }.sorted { $0.displayID < $1.displayID }
       guard !inputs.isEmpty else {
         try deactivate()
-        status = "Waiting for an applied video or live scene on a connected display"
+        // A web wallpaper has no lock-screen renderer at all, so this is not a
+        // failure and not something the user can act on: it is the combination
+        // being unsupported. Anything else means nothing eligible is applied yet.
+        status = await webWallpapersApplied()
+          ? "Not applicable — web wallpapers have no lock-screen support"
+          : "Waiting for an applied video or live scene on a connected display"
         errorMessage = nil
         return
       }
@@ -202,14 +215,17 @@ final class LockScreenWallpaperService {
         isEnabled = false
       }
       let root = documents
+      let userAssets = UserAssetStorage.managedRootURL
       let staging = Task.detached(priority: .utility) {
-        try LockScreenAssetPublisher.prepare(inputs: inputs, documents: root)
+        try LockScreenAssetPublisher.prepare(
+          inputs: inputs, documents: root, userAssets: userAssets)
       }
-      let configuration = try await withTaskCancellationHandler {
+      let prepared = try await withTaskCancellationHandler {
         try await staging.value
       } onCancel: {
         staging.cancel()
       }
+      let configuration = prepared.configuration
       try Task.checkCancellation()
       guard generation == revision, isRequested else { return }
       if !ownsDesktopProvider {
@@ -217,6 +233,10 @@ final class LockScreenWallpaperService {
         ownsDesktopProvider = true
       }
       try publish(configuration)
+      // After the configuration naming the new revisions is on disk, never before:
+      // a revision is only unreferenced once nothing published points at it.
+      LockScreenAssetPublisher.collectGarbage(
+        documents: root, keeping: prepared.referencedRevisions)
       try selection.synchronize(
         displays: Set(inputs.map(\.displayUUID)), revision: configuration.revision)
       status = "Waiting for the system wallpaper renderer…"
@@ -328,6 +348,7 @@ final class LockScreenWallpaperService {
 private struct LockScreenPublishInput: Equatable, Sendable {
   var displayID: UInt32
   var displayUUID: String
+  var wallpaperID: String
   var title: String
   var projectPath: String
   var assetsPath: String
@@ -348,9 +369,16 @@ private enum LockScreenAssetPublisher {
     var modified: Date
   }
 
-  static func prepare(inputs: [LockScreenPublishInput], documents: URL) throws
-    -> LockScreenConfiguration
-  {
+  /// A published configuration, plus every revision directory it names. The caller
+  /// needs the second to know what is safe to collect.
+  struct Prepared {
+    var configuration: LockScreenConfiguration
+    var referencedRevisions: Set<String>
+  }
+
+  static func prepare(
+    inputs: [LockScreenPublishInput], documents: URL, userAssets: URL
+  ) throws -> Prepared {
     var sources: [String: String] = [:]
     var scenes: [LockScreenScene] = []
     for input in inputs {
@@ -367,9 +395,12 @@ private enum LockScreenAssetPublisher {
       let source = project.deletingLastPathComponent()
       let data = try Data(contentsOf: project)
       guard let metadata = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-        let type = metadata["type"] as? String,
-        ["video", "scene"].contains(type.lowercased())
+        let type = metadata["type"] as? String
       else {
+        throw LockScreenWallpaperFailure(
+          message: "The committed wallpaper does not declare a project type.")
+      }
+      guard ["video", "scene"].contains(type.lowercased()) else {
         throw LockScreenWallpaperFailure(
           message: "Only committed video and live scene projects support Animate Lock Screen.")
       }
@@ -383,15 +414,134 @@ private enum LockScreenAssetPublisher {
         // Video rendering does not consume shared scene assets.
         assetsRevision = projectRevision
       }
+      let properties = try publishUserAssets(
+        input: input, documents: documents, userAssets: userAssets, reused: &sources)
       scenes.append(
         LockScreenScene(
           displayID: input.displayID, title: input.title,
           projectPath: projectRevision + "/project.json", assetsPath: assetsRevision,
           previewPath: nil,
           fps: input.fps, scalingMode: input.scalingMode, scalingFactor: input.scalingFactor,
-          propertiesJSON: input.propertiesJSON, paused: input.paused))
+          propertiesJSON: properties, paused: input.paused))
     }
-    return LockScreenConfiguration(scenes: scenes)
+    return Prepared(
+      configuration: LockScreenConfiguration(scenes: scenes),
+      referencedRevisions: Set(sources.values))
+  }
+
+  /// Copies the managed user assets this wallpaper actually references into the
+  /// extension container and rewrites the property values to point at the copy.
+  ///
+  /// Only the referenced assets travel: the store may hold imports for every wallpaper
+  /// in the library, and the extension has no business seeing any of them. The copy
+  /// goes through the same fingerprint-and-atomic-move path as the project payload, so
+  /// an unchanged selection is recognised and nothing is copied again on the next
+  /// status update.
+  ///
+  /// Returns the property payload the extension should receive, unchanged when the
+  /// wallpaper references no managed asset.
+  private static func publishUserAssets(
+    input: LockScreenPublishInput, documents: URL, userAssets: URL,
+    reused: inout [String: String]
+  ) throws -> String? {
+    guard let json = input.propertiesJSON, !input.wallpaperID.isEmpty else {
+      return input.propertiesJSON
+    }
+    let store = ManagedUserAssetStore(root: userAssets)
+    let manifest = store.manifest(wallpaperId: input.wallpaperID)
+    guard !manifest.properties.isEmpty,
+      let data = json.data(using: .utf8),
+      var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    else { return input.propertiesJSON }
+
+    let manager = FileManager.default
+    // Planned before anything is copied: the plan is what the fingerprint covers, so a
+    // manifest entry this wallpaper does not reference cannot change the revision, and
+    // an unchanged selection is recognised without reading a byte.
+    var plan: [(property: String, isFile: Bool, files: [(name: String, source: URL, digest: String)])] = []
+    for (propertyId, record) in manifest.properties.sorted(by: { $0.key < $1.key }) {
+      guard root[propertyId] != nil, !record.assets.isEmpty else { continue }
+      var files: [(name: String, source: URL, digest: String)] = []
+      for asset in record.assets.sorted(by: { $0.fileName < $1.fileName }) {
+        let stored = try store.storedURL(
+          wallpaperId: input.wallpaperID, propertyId: propertyId, asset: asset)
+        guard manager.fileExists(atPath: stored.path) else { continue }
+        files.append((asset.fileName, stored, asset.digest))
+      }
+      guard !files.isEmpty else { continue }
+      plan.append((propertyId, record.kind == .file, files))
+    }
+    guard !plan.isEmpty else { return input.propertiesJSON }
+
+    // Content digests rather than file metadata: a clone preserves modification
+    // times but a chunked fallback copy does not, and a fingerprint that moved with
+    // the copy would republish the same assets on every status update.
+    var hash = SHA256()
+    hash.update(data: Data("user-assets\u{0}".utf8))
+    for entry in plan {
+      hash.update(data: Data("\u{0}\(entry.property)\u{0}\(entry.isFile)".utf8))
+      for file in entry.files {
+        hash.update(data: Data("\u{0}\(file.name)\u{0}\(file.digest)".utf8))
+      }
+    }
+    let relative = "revisions/" + hash.finalize().map { String(format: "%02x", $0) }.joined()
+    let published = documents.appendingPathComponent(relative, isDirectory: true)
+    if !manager.fileExists(atPath: published.path) {
+      let revisions = documents.appendingPathComponent("revisions", isDirectory: true)
+      try manager.createDirectory(at: revisions, withIntermediateDirectories: true)
+      let pending = revisions.appendingPathComponent(
+        ".pending-\(UUID().uuidString)", isDirectory: true)
+      defer { try? manager.removeItem(at: pending) }
+      for entry in plan {
+        let directory = pending.appendingPathComponent(entry.property, isDirectory: true)
+        try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        for file in entry.files {
+          try Task.checkCancellation()
+          try copyFile(from: file.source, to: directory.appendingPathComponent(file.name))
+        }
+      }
+      try Task.checkCancellation()
+      try manager.moveItem(at: pending, to: published)
+    }
+    reused["user-assets:" + relative] = relative
+
+    for entry in plan {
+      let directory = published.appendingPathComponent(entry.property, isDirectory: true)
+      // A `file` property names one published file; a `directory` property names the
+      // folder, exactly as the renderer already expects on the desktop side.
+      root[entry.property] = entry.isFile
+        ? directory.appendingPathComponent(entry.files[0].name).path
+        : directory.path
+    }
+    guard let encoded = try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+    else { return input.propertiesJSON }
+    return String(data: encoded, encoding: .utf8)
+  }
+
+  /// Removes revision trees the published configuration no longer names.
+  ///
+  /// Nothing collected this before, so every asset revision the user ever activated
+  /// stayed in the container for good. Only the revisions the caller passes are kept,
+  /// and only complete fingerprint directories are candidates: a `.pending-` tree
+  /// belongs to a publish that is still running.
+  static func collectGarbage(documents: URL, keeping referenced: Set<String>) {
+    let manager = FileManager.default
+    let revisions = documents.appendingPathComponent("revisions", isDirectory: true)
+    guard let entries = try? manager.contentsOfDirectory(
+      at: revisions, includingPropertiesForKeys: [.isDirectoryKey], options: []) else { return }
+    let live = Set(referenced.map { URL(fileURLWithPath: $0).lastPathComponent })
+    for entry in entries {
+      let name = entry.lastPathComponent
+      guard !name.hasPrefix("."), !live.contains(name) else { continue }
+      guard (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else {
+        continue
+      }
+      do {
+        try manager.removeItem(at: entry)
+      } catch {
+        AppLog.warn("lock screen: could not remove unused revision \(name): \(error.localizedDescription)")
+      }
+    }
   }
 
   private static func snapshot(source: URL, documents: URL, reused: inout [String: String]) throws

@@ -11,7 +11,7 @@ use crate::{
         BridgeWallpaperKind, BridgeWallpaperMutationBundle, BridgeWallpaperOptionsSnapshot,
         BridgeWebWallpaper,
     },
-    config::{AppConfig, VideoBackendModeCfg, WallpaperConfig},
+    config::{AppConfig, SceneRendererModeCfg, VideoBackendModeCfg, WallpaperConfig},
     power::PowerSource,
 };
 
@@ -200,6 +200,10 @@ pub struct SetVideoBackend {
     pub mode: VideoBackendModeCfg,
 }
 
+pub struct SetSceneRenderer {
+    pub mode: SceneRendererModeCfg,
+}
+
 pub struct SetRenderScale {
     pub scale: f32,
 }
@@ -219,6 +223,10 @@ pub struct SetSharedVideoDecodeEnabled {
 }
 
 pub struct SetSceneOptimizationEnabled {
+    pub enabled: bool,
+}
+
+pub struct SetSceneOnDemandEnabled {
     pub enabled: bool,
 }
 
@@ -355,6 +363,8 @@ pub type SetBatteryQualityProfileReply = AllSnapshotsReply;
 pub type SetContentPacingEnabledReply = AllSnapshotsReply;
 pub type SetSharedVideoDecodeEnabledReply = AllSnapshotsReply;
 pub type SetSceneOptimizationEnabledReply = AllSnapshotsReply;
+pub type SetSceneRendererReply = AllSnapshotsReply;
+pub type SetSceneOnDemandEnabledReply = AllSnapshotsReply;
 pub type SetWebAudioSubscribedReply = Result<(), BridgeError>;
 pub type SetMediaIntegrationEnabledReply = WallpaperMutationReply;
 pub type SetPropertyPathReply = WallpaperMutationReply;

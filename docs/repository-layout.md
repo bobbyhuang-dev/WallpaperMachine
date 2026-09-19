@@ -27,8 +27,9 @@ App/                               MacWallpaperEngine application target sources
   Services/NativeVideo/            AVFoundation video backend: admission, player and host window
   Services/Steam/                  SteamCMD runtime discovery and setup state
   Services/SystemMedia/            system now-playing provider and artwork palette for the web media integration
-  Services/UserAssets/             staging, watching and picking for file/directory wallpaper properties;
-                                   hard-links user selections into <project>/.mwe-user-assets/
+  Services/UserAssets/             importing, watching and picking for file/directory wallpaper properties;
+                                   owns the app's copies under <support>/UserAssets/ and the derived,
+                                   regenerable <project>/.mwe-user-assets/ bridge a page can read
   Services/WebWallpaper/           WKWebView host windows and page protocol for web wallpapers
   Services/Workshop/               Workshop query model, browse store, downloader and queue
   ViewModels/                      BridgeStore and editor draft state; observable, no view code

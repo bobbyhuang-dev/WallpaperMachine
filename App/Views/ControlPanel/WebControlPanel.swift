@@ -75,6 +75,10 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
   /// Why choosing or clearing a path failed, by wallpaper then property id. It belongs
   /// beside the control the user just used, not in the window-wide error banner.
   var propertyPathErrors: [String: [String: String]] = [:]
+  /// Bytes the last cache purge released, or nil when none has run this session.
+  /// Nil and zero are different answers — "not run" versus "nothing to release" —
+  /// so the page is given the distinction rather than a substituted 0.
+  var userAssetsReleasedBytes: UInt64?
   var recoveryAttempted = false
   var dismissedErrorRevision: UInt64 = 0
   var dismissedLibraryError: String?

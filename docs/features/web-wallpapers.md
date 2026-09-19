@@ -192,11 +192,36 @@ whole application-support tree. A symlink placed inside the root is resolved by
 WebKit and refused, a hard link is not. Both were measured, and together they fix
 the design.
 
-- `App/Services/UserAssets/UserAssetStore.swift` stages each chosen file into
-  `<project>/.mwe-user-assets/<propertyId>/`, as a hard link when the source shares
-  the project's volume and as a byte copy when it does not. The user's own file is
-  never moved, renamed or written to, and no authored wallpaper file is touched:
-  the dot directory is the only thing created.
+- `App/Services/UserAssets/ManagedUserAssetStore.swift` holds the app's own copy of
+  each chosen file under `~/Library/Application Support/mac-wallpaper-engine/UserAssets/`
+  (`MAC_WALLPAPER_ENGINE_HOME` relocates it), laid out as
+  `<stableWallpaperId>/<propertyId>/<assetId>/<fileName>` with a `manifest.json` per
+  wallpaper. The manifest, not the wallpaper package, is the system of record: it
+  records the asset id, the user's original path, the size, the modification time, a
+  SHA-256 content digest, and whether the import was a file or a folder. Keying on the
+  stable wallpaper id rather than the display name or entry file name is what lets an
+  import survive a Workshop update or a delete-and-re-download. Importing clones the
+  user's file with `clonefile` where the filesystem supports it, and copies otherwise;
+  the user's original is never moved, renamed or written to.
+- `App/Services/UserAssets/UserAssetStore.swift` keeps a **derived** bridge at
+  `<project>/.mwe-user-assets/<propertyId>/`, as a hard link onto the store's copy when
+  the project shares its volume and a byte copy when it does not. The bridge exists only
+  because of the WebKit read-access rule above, and holds nothing of its own: deleting
+  all of it loses nothing, because the next import rebuilds it from the manifest. Data
+  flows store → bridge only. No authored wallpaper file is touched; the dot directory is
+  the only thing created inside the project.
+- A round-6 staging directory is absorbed into the store once, and only when the
+  property's original source no longer resolves. Nothing in the old location is deleted,
+  and the manifest records that the migration happened, so it never runs twice. If the
+  copy or the record fails, the old staged entry is still exactly where it was and still
+  loads.
+  A bridge this build writes drops a hidden `.managed-by` naming the wallpaper it
+  belongs to, so a different wallpaper id cannot mistake it for a round-6 staging
+  directory and adopt files that are not its own. A genuine round-6 bridge has no such
+  marker, which is exactly what makes it migratable.
+- An asset whose original path no longer resolves but which is still in the store stays
+  usable, served from the store. One that is in neither place is reported as missing —
+  `assetMissing` on the property descriptor — rather than silently cleared.
 - The value handed to the page is the staged absolute path with its leading `/`
   removed and `%`, `#` and `?` percent-escaped, so the page's `'file:///' + value`
   resolves. Spaces, non-ASCII, `+`, `&` and `'` are left literal, because a page
@@ -210,17 +235,31 @@ the design.
   debounced into a single added/removed diff, which re-stages added or rewritten
   files, drops the links for removed ones, and reaches the page as
   `userDirectoryFilesAddedOrChanged` / `userDirectoryFilesRemoved`.
-- Lifetime: the staged files outlive the process, the in-memory index does not.
-  `WebWallpaperHost` re-imports on next use, and discards the store for a project
-  nothing displays any more. Changing the pick replaces that property's staged
-  files; the app removes them when a property is cleared, and
-  `python3 scripts/clean.py --user-assets` removes every `.mwe-user-assets`
-  directory in the imported library and the Steam workshop folder. That command is
-  deliberately opt-in: staged assets are live wallpaper state, so neither the
-  default pass nor `--all` touches them.
+- Lifetime: the store outlives the project, the bridge outlives the process, the
+  in-memory index does not. `WebWallpaperHost` re-imports on next use — which is what
+  rebuilds a missing bridge — and discards the store handle for a project nothing
+  displays any more. Changing the pick replaces that property's assets in both places;
+  clearing a property removes them from both.
+  `python3 scripts/clean.py --user-assets` removes every `.mwe-user-assets` bridge in
+  the imported library and the Steam workshop folder, which the app rebuilds on next
+  load. `python3 scripts/clean.py --managed-user-assets` is the destructive one: it
+  deletes the app's own copies, which nothing regenerates. Neither the default pass nor
+  `--all` nor `--derived` reaches either of them.
+- The control panel's Storage row shows the managed directory, reveals it in Finder, and
+  offers a purge that reclaims only stored bytes no manifest still lists — an orphaned
+  `assetId` folder, a property the manifest no longer mentions, a wallpaper folder with
+  no manifest. A referenced asset is never a purge candidate, which matters most for the
+  property whose original has gone and whose stored copy is now the only one.
 - The lock-screen extension is sandboxed
-  (`Extension/WallpaperExtension.entitlements`) and cannot read these files. `file`
-  and `directory` properties are a desktop-wallpaper feature only.
+  (`Extension/WallpaperExtension.entitlements`) and cannot read either the store or the
+  bridge. For a committed **video or scene** wallpaper, the assets that wallpaper
+  actually references are republished into the extension container as their own
+  `Documents/revisions/<fingerprint>/` tree and the property values are rewritten to
+  point at that copy; the fingerprint is taken over the recorded content digests, so an
+  unchanged selection is recognised and nothing is copied again. Revisions the published
+  configuration no longer names are collected after each successful publish.
+  **Web** wallpapers have no lock-screen support at all: that combination is reported as
+  not applicable, never as a failure.
 
 ### In the inspector
 

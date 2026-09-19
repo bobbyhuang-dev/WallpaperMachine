@@ -2,6 +2,27 @@ const views = new WeakMap();
 const sections = [['general', 'General'], ['appearance', 'Appearance'], ['performance', 'Performance'], ['displays', 'Displays'], ['library', 'Library & Steam'], ['storage', 'Storage'], ['about', 'About']];
 const renderScales = [[1, '100% (native)'], [0.75, '75%'], [0.5, '50%']];
 const videoBackends = [['compatibility', 'Compatibility'], ['native_preferred', 'Native video preferred (falls back automatically)']];
+const sceneRenderers = [['compatibility', 'Compatibility'], ['native_metal_preferred', 'Native Metal preferred (falls back automatically)']];
+// The renderer's own words for why a scene is still updating. `unknown_input`
+// is deliberately not folded into a generic phrase: it means the renderer found
+// an input it could not account for and kept the scene running, which is the
+// whole diagnosis when on-demand appears to do nothing.
+const demandReasons = {
+  script: 'a script', animation: 'animation', particles: 'particles', video: 'video',
+  audio_response: 'audio response', time_uniform: 'a time-based effect',
+  animated_sprite: 'an animated sprite', dynamic_mesh: 'a dynamic mesh', puppet: 'a puppet',
+  feedback: 'a feedback pass', text_binding: 'bound text', sound: 'sound',
+  node_binding: 'a bound node', unknown_input: 'an input the renderer could not account for',
+};
+// Every mode the bridge can emit. `unknown` is a running scene that could not be
+// read, which is not the same as one that is ticking, so it gets its own words.
+const sceneModes = {
+  continuous: 'updating continuously', waiting_for_event: 'waiting for events',
+  waiting_for_deadline: 'waiting for a timer', user_paused: 'paused by you',
+  policy_suspended: 'suspended by the app', not_applicable: 'not applicable to this wallpaper',
+  unknown: 'running — state could not be read',
+};
+const sceneBackends = { legacy_vulkan: 'Compatibility', native_metal: 'Native Metal', unknown: 'not reported yet' };
 
 // Reports the scale the engine actually published. Quantizing here would let a
 // value the control cannot offer be shown as one that it can.
@@ -98,6 +119,23 @@ function draw(view) {
   const plural = (count, noun) => `${count} ${noun}${count === 1 ? '' : 's'}`;
   const backendLine = report => `${report.displayName || `Display ${report.displayId}`} — ${report.wallpaperTitle || report.wallpaperId}: ${report.backend}${report.fallbackReason ? ` (fallback: ${report.fallbackReason})` : ''}`;
   const backendReport = (settings.videoBackends || []).map(report => `<li>${e(backendLine(report))}</li>`).join('');
+  // `no_frame_yet` is not a content reason — the scene simply has not finished a
+  // first frame — so it is reported as starting rather than listed as a cause.
+  const sceneModeLine = report => {
+    const where = `${report.display || `Display ${report.displayId}`} — ${report.wallpaperTitle || report.wallpaperId || 'wallpaper'}`;
+    const reasons = Array.isArray(report.reasons) ? report.reasons : [];
+    if (reasons.includes('no_frame_yet')) return `${where}: starting — no frame drawn yet`;
+    const named = reasons.map(reason => demandReasons[reason] || reason);
+    const mode = sceneModes[report.mode] || `state reported as ${report.mode}`;
+    return `${where}: ${mode}${named.length ? ` (${named.join(', ')})` : ''}`;
+  };
+  const sceneRendererLine = report => {
+    const where = `${report.display || `Display ${report.displayId}`} — ${report.wallpaperTitle || report.wallpaperId || 'wallpaper'}`;
+    const backend = sceneBackends[report.backend] || report.backend;
+    return `${where}: ${backend}${report.fallbackReason ? ` (fell back: ${report.fallbackReason})` : ''}`;
+  };
+  const sceneModeReport = (settings.sceneUpdateModes || []).map(report => `<li>${e(sceneModeLine(report))}</li>`).join('');
+  const sceneBackendReport = (settings.sceneRenderers || []).map(report => `<li>${e(sceneRendererLine(report))}</li>`).join('');
   const performance = `<h3>Video backend</h3>`
     + row('video-backend', 'Video playback', select('videoBackend', 'Video playback backend', draft('videoBackend', settings.videoBackend), videoBackends, 'data-setting="videoBackend"', busy || unavailable), 'Native uses the system video path where a wallpaper qualifies, and returns to Compatibility on its own where it does not.')
     + row('video-backend-report', 'In use now', backendReport ? `<ul class="settings-list">${backendReport}</ul>` : '<span class="settings-status" role="status">No video wallpaper is running.</span>')
@@ -111,6 +149,10 @@ function draw(view) {
       + row('battery-state', 'Power source', `<span class="settings-status" role="status">${e(batteryActive ? `On battery — the battery profile is supplying the effective quality shown above.` : settings.onBatteryPower ? 'On battery' : 'Plugged in — your saved quality is in use.')}</span>`) : '')
     + `<div class="settings-group-gap"></div><h3>Scene wallpapers</h3>`
     + settingToggle('sceneOptimization', 'Scene render optimisation', false, 'On by default. Reuses the result of scene subgraphs whose inputs have not changed and removes render passes proven redundant. It applies to legacy scene wallpapers only and changes neither resolution, frame rate nor animation speed. Turn it off to compare.')
+    + settingToggle('sceneOnDemand', 'Update only when the scene changes', false, 'Off unless you turn it on. A scene the renderer can prove has nothing left to update stops its repeating frame timer and wakes on events instead; anything it cannot prove keeps running normally. It is not a frame-rate limit, and scripts, sound and input keep working. No power saving is measured or promised.')
+    + row('scene-update-report', 'Updating now', sceneModeReport ? `<ul class="settings-list">${sceneModeReport}</ul>` : '<span class="settings-status" role="status">No scene wallpaper is running.</span>')
+    + row('scene-renderer', 'Scene renderer', select('sceneRenderer', 'Scene renderer', draft('sceneRenderer', settings.sceneRenderer), sceneRenderers, 'data-setting="sceneRenderer"', busy || unavailable), 'Native Metal draws only scenes it can draw in full; any other scene falls back to Compatibility as a whole. Desktop wallpapers only — the lock screen stays on Compatibility.')
+    + row('scene-renderer-report', 'Drawn by', sceneBackendReport ? `<ul class="settings-list">${sceneBackendReport}</ul>` : '<span class="settings-status" role="status">No scene wallpaper is running.</span>')
     + `<div class="settings-group-gap"></div><h3>Advanced</h3>`
     + settingToggle('contentPacing', 'Content pacing', false, 'Experimental, off by default. Drives presentation from the content’s own frame cadence instead of the display refresh.')
     + settingToggle('sharedVideoDecode', 'Shared video decode', false, 'Experimental, off by default. Lets equivalent display surfaces showing the same video share one decode session.')
@@ -190,10 +232,16 @@ function draw(view) {
     + sceneSummary
     + row('steam-account', 'Steam account', state.savedAccount ? button('Log out…', 'logOutSteam', {}, anyDownload || busy, 'settings-destructive') : '<span class="settings-note">Not signed in</span>', state.savedAccount ? `Signed in as ${state.savedAccount}${anyDownload ? ' · log out once downloads finish' : ''}` : 'You sign in when a download starts.')
     + disclosure('library-context', 'Setup, compatibility & account privacy', `<p>Scene wallpapers need shared resources from a purchased Wallpaper Engine installation. Videos do not. Locate its assets folder or download the shared assets once through Steam. Scene support is experimental; effects and scripts may differ from Windows.</p><p>Steam downloads the Windows version to temporary storage; only shared assets are kept. Windows programs are never run. Allow several GB of temporary space. Imports are copied; original files and your Steam library stay untouched.</p><p>SteamCMD is Valve’s download tool. Install it without signing in. Downloading requires a Steam account that owns Wallpaper Engine; Steam enforces access. Passwords and Steam Guard codes go directly to the private SteamCMD terminal and are not saved by this app. “Keep me signed in” saves Steam-issued sign-in cache on this Mac. Logging out removes only this Mac’s saved sign-in; other Steam devices stay signed in.</p><p>Approve Steam Guard in the Steam mobile app, or enter the fresh code when requested. Steam may require a new sign-in after expiry or security changes. If Steam reports too many attempts, wait before retrying.</p><p>Security approval applies only to the exact downloaded SteamCMD copy after native confirmation. It does not disable Gatekeeper or signature checks.</p>${settings.assetsPath ? `<div class="settings-path">${e(settings.assetsPath)}</div>` : ''}<div class="settings-help-links">${button('Wallpaper Engine on Steam', 'openExternal', { url: 'https://store.steampowered.com/app/431960/Wallpaper_Engine/' })}${button('Rosetta installation', 'openExternal', { url: 'https://support.apple.com/en-us/102527' })}${button('macOS app security', 'openExternal', { url: 'https://support.apple.com/en-us/102445' })}</div>`);
-  const storage = row('shader-cache', 'Shader cache', button('Clear…', 'clearCache', {}, busy || unavailable || !settings.shaderCacheBytes), bytes(settings.shaderCacheBytes))
+  // Nil released-bytes means no purge has run this session; 0 means one ran and
+  // found nothing. They read differently on purpose.
+  const released = settings.userAssetsReleasedBytes;
+  const storage = row('user-assets', 'Wallpaper files you chose', button('Show in Finder', 'revealUserAssets', {}, busy || unavailable) + button('Clear unused caches…', 'purgeUnreferencedUserAssets', {}, busy || unavailable), settings.userAssetsPath || 'Unavailable')
+    + `<div class="settings-note" data-key="user-assets-note">Files you pick for a wallpaper’s settings are copied here and kept. “Clear unused caches” removes only regenerable caches under this folder — never a file you imported.${released == null ? '' : ` Last clear released ${e(bytes(released))}.`}</div>`
+    + `<div class="settings-group-gap"></div>`
+    + row('shader-cache', 'Shader cache', button('Clear…', 'clearCache', {}, busy || unavailable || !settings.shaderCacheBytes), bytes(settings.shaderCacheBytes))
     + row('logs', 'Logs', button('Show in Finder', 'showLogs', {}, busy || unavailable) + button('Clear…', 'clearLogs', {}, busy || unavailable || !settings.logBytes), bytes(settings.logBytes))
     + row('download-history', 'Completed downloads', button('Clear history', 'clearDownloads', {}, busy || !downloads.some(download => !download.pending)))
-    + disclosure('storage-context', 'What gets removed', '<p>Clearing the shader cache removes compiled shaders. They are rebuilt as wallpapers load, which may temporarily slow playback. Clearing logs removes diagnostic history, not wallpapers or settings. Clearing download history keeps downloaded files.</p>');
+    + disclosure('storage-context', 'What gets removed', '<p>Clearing the shader cache removes compiled shaders. They are rebuilt as wallpapers load, which may temporarily slow playback. Clearing logs removes diagnostic history, not wallpapers or settings. Clearing download history keeps downloaded files.</p><p>Files you chose for a wallpaper’s file or folder settings are copied into the managed folder above so they survive a cache clean and a wallpaper update. Nothing on this page deletes them; removing one means clearing that setting on the wallpaper itself.</p>');
   const versionRow = (id, label, value) => row(id, label, `<span class="settings-version">${e(value || 'Unavailable')}</span>`);
   const update = state.update || {};
   const updateBusy = Boolean(update.busy) || ['checkForUpdates', 'downloadUpdate', 'installUpdate', 'openReleases', 'revealDownloadedUpdate'].some(action => view.pending.has(action));

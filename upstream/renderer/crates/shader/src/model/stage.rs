@@ -48,6 +48,22 @@ pub enum ShaderTarget {
     /// Vulkan-compatible SPIR-V output.
     #[default]
     VulkanSpirv,
+    /// Metal Shading Language source output.
+    MetalMsl,
+}
+
+impl ShaderTarget {
+    /// Returns the stable bridge identifier for this target.
+    ///
+    /// The value is part of the shader cache key, so it must never change for
+    /// an existing target.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::VulkanSpirv => "vulkan_spirv",
+            Self::MetalMsl => "metal_msl",
+        }
+    }
 }
 
 /// Shader cache behavior for a request.

@@ -1,10 +1,92 @@
 //! Bridge response JSON DTOs.
 
 use crate::{
-    DefaultTextureValue, DefaultUniformValue, MaterialAlias, PropertyValue, ShaderComboValue,
-    ShaderDescriptorBinding, ShaderMetadata, ShaderReflection, ShaderStageMask, ShaderUniformBlock,
-    ShaderUniformMember, ShaderVertexInput, VertexFormat,
+    DefaultTextureValue, DefaultUniformValue, MaterialAlias, MetalCoordinateConventions,
+    MetalResourceBinding, MetalStageCode, PropertyValue, ShaderComboValue, ShaderDescriptorBinding,
+    ShaderMetadata, ShaderReflection, ShaderStageMask, ShaderUniformBlock, ShaderUniformMember,
+    ShaderVertexInput, VertexFormat,
 };
+
+/// Metal stage response JSON.
+///
+/// The generated Metal source is exposed through a separate accessor so it is
+/// not JSON-escaped; this payload carries only the structured facts the Metal
+/// renderer needs to bind resources and look up the entry point.
+#[derive(Debug, serde::Serialize)]
+pub(super) struct MetalStageJson<'program> {
+    /// Generated Metal entry-point function name.
+    entry_point: &'program str,
+    /// Targeted Metal Shading Language version, as `"major.minor"`.
+    language_version: String,
+    /// Resource-to-slot mapping the source was generated against.
+    bindings: Vec<MetalResourceBindingJson<'program>>,
+    /// Coordinate conventions the generated source follows.
+    conventions: MetalConventionsJson,
+}
+
+impl<'program> From<&'program MetalStageCode> for MetalStageJson<'program> {
+    fn from(metal: &'program MetalStageCode) -> Self {
+        let (major, minor) = metal.language_version();
+        Self {
+            entry_point: metal.entry_point(),
+            language_version: format!("{major}.{minor}"),
+            bindings: metal
+                .bindings()
+                .iter()
+                .map(MetalResourceBindingJson::from)
+                .collect(),
+            conventions: metal.conventions().into(),
+        }
+    }
+}
+
+/// Metal resource binding response JSON.
+#[derive(Debug, serde::Serialize)]
+struct MetalResourceBindingJson<'program> {
+    /// Shader-visible global name.
+    name: &'program str,
+    /// SPIR-V descriptor set.
+    set: u32,
+    /// SPIR-V binding index.
+    binding: u32,
+    /// Metal argument-table namespace.
+    slot_kind: &'static str,
+    /// Metal argument-table index within `slot_kind`.
+    slot: u32,
+}
+
+impl<'program> From<&'program MetalResourceBinding> for MetalResourceBindingJson<'program> {
+    fn from(binding: &'program MetalResourceBinding) -> Self {
+        Self {
+            name: binding.name().as_str(),
+            set: binding.set(),
+            binding: binding.binding(),
+            slot_kind: binding.slot_kind().as_str(),
+            slot: binding.slot(),
+        }
+    }
+}
+
+/// Metal coordinate-convention response JSON.
+#[derive(Debug, serde::Serialize)]
+struct MetalConventionsJson {
+    /// Whether the backend negated clip-space `Y`.
+    clip_space_y_flipped: bool,
+    /// Whether the backend remapped clip-space depth.
+    clip_space_depth_remapped: bool,
+    /// Whether the backend flipped the texture-sample origin.
+    texture_origin_flipped: bool,
+}
+
+impl From<MetalCoordinateConventions> for MetalConventionsJson {
+    fn from(conventions: MetalCoordinateConventions) -> Self {
+        Self {
+            clip_space_y_flipped: conventions.clip_space_y_flipped(),
+            clip_space_depth_remapped: conventions.clip_space_depth_remapped(),
+            texture_origin_flipped: conventions.texture_origin_flipped(),
+        }
+    }
+}
 
 /// Metadata response JSON.
 #[derive(Debug, serde::Serialize)]

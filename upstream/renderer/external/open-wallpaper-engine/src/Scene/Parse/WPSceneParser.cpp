@@ -33,6 +33,10 @@
 #include "wpscene/WPScene.h"
 
 #include "Fs/VFS.h"
+#include "MetalRender/MetalCapability.hpp"
+#include "MetalRender/SceneMetalProgram.hpp"
+#include "Scene/SceneBackendSelection.hpp"
+#include "Shader/RustShaderBridge.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -53,6 +57,120 @@ using namespace wallpaper;
 using namespace Eigen;
 
 std::string getAddr(void* p) { return std::to_string(reinterpret_cast<intptr_t>(p)); }
+
+namespace
+{
+
+/// One material's shader, captured with everything a Metal translation needs.
+///
+/// Metal Shading Language can only be produced here. It needs the final combo
+/// set, the preprocessed units and the texture info the SPIR-V compile settled
+/// on, and none of those outlive `LoadMaterial`. The translation itself is
+/// deferred to the end of the parse so a scene that has already disqualified
+/// itself structurally -- a particle emitter, a puppet, a video texture --
+/// never pays for a second full shader compile it would not have used.
+struct PendingMetalTranslation {
+    std::shared_ptr<SceneShader>      shader;
+    std::string                       shader_name;
+    std::string                       scene_id;
+    std::vector<WPShaderUnit>         units;
+    WPShaderInfo                      shader_info;
+    std::vector<WPShaderTexInfo>      texinfos;
+    fs::VFS*                          vfs { nullptr };
+};
+
+/// Parsing is single-threaded per scene but several scenes may parse at once,
+/// so the queue is per-thread rather than global.
+thread_local std::vector<PendingMetalTranslation> g_pending_metal_translations;
+
+bool MetalTranslationRequested() {
+    return CurrentSceneRendererPreference() == SceneRendererPreference::NativeMetalPreferred;
+}
+
+SceneMetalSlotKind ToSceneMetalSlotKind(shader::RustShaderMetalSlotKind kind) {
+    switch (kind) {
+    case shader::RustShaderMetalSlotKind::Texture: return SceneMetalSlotKind::Texture;
+    case shader::RustShaderMetalSlotKind::Sampler: return SceneMetalSlotKind::Sampler;
+    case shader::RustShaderMetalSlotKind::Buffer: break;
+    }
+    return SceneMetalSlotKind::Buffer;
+}
+
+/// Runs the queued translations, if the scene is still a candidate.
+///
+/// A failure here never fails the parse: the wallpaper loads and draws on the
+/// compatibility backend, and the recorded error is what the capability gate
+/// turns into a user-readable reason. A wallpaper must not stop working
+/// because someone ticked a renderer preference.
+void FlushPendingMetalTranslations(Scene& scene) {
+    auto pending = std::move(g_pending_metal_translations);
+    g_pending_metal_translations.clear();
+    if (pending.empty()) return;
+    if (! metal::SceneMetalStructuralRejection(scene).empty()) return;
+
+    for (auto& request : pending) {
+        if (request.shader == nullptr || request.vfs == nullptr) continue;
+        auto program = std::make_shared<SceneMetalProgram>();
+
+        std::vector<shader::RustShaderMetalStage> stages;
+        std::string                               reflection_json;
+        bool                                      compiled = false;
+        try {
+            compiled = WPShaderParser::CompileToMslRust(request.scene_id,
+                                                        request.shader_name,
+                                                        request.units,
+                                                        stages,
+                                                        *request.vfs,
+                                                        &request.shader_info,
+                                                        request.texinfos,
+                                                        &reflection_json);
+        } catch (const std::exception& e) {
+            program->error = e.what();
+        }
+        if (! compiled && program->error.empty()) {
+            program->error = shader::LastRustShaderError();
+            if (program->error.empty()) program->error = "metal translation failed";
+        }
+
+        if (compiled) {
+            program->reflection_json = std::move(reflection_json);
+            for (const auto& stage : stages) {
+                SceneMetalStage out;
+                out.kind             = stage.kind == ShaderType::FRAGMENT
+                                           ? SceneMetalStageKind::Fragment
+                                           : SceneMetalStageKind::Vertex;
+                out.source           = stage.source;
+                out.entry_point      = stage.entry_point;
+                out.language_version = stage.language_version;
+                out.bindings.reserve(stage.bindings.size());
+                for (const auto& binding : stage.bindings) {
+                    out.bindings.push_back(SceneMetalBinding {
+                        .name      = binding.name,
+                        .set       = binding.set,
+                        .binding   = binding.binding,
+                        .slot_kind = ToSceneMetalSlotKind(binding.slot_kind),
+                        .slot      = binding.slot,
+                    });
+                }
+                program->stages.push_back(std::move(out));
+            }
+            if (program->stages.empty() || program->reflection_json.empty()) {
+                program->error = "metal translation produced no usable shader";
+            }
+        }
+        if (! program->error.empty()) {
+            LOG_ERROR("metal translation of '%s' failed: %s",
+                      request.shader_name.c_str(),
+                      program->error.c_str());
+        }
+        // Stored either way: a recorded failure is what distinguishes "tried
+        // and could not" from "never tried", and only the first is a fault in
+        // the shader.
+        request.shader->metal_program = std::move(program);
+    }
+}
+
+} // namespace
 
 struct ParseContext {
     std::shared_ptr<Scene>                                  scene;
@@ -1095,6 +1213,26 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::WPMaterial& wpmat, Scene* pScene,
                                  textures);
 
         const auto texinfos = BuildShaderTexInfos(*pScene, texHeaders, textures);
+        // Captured before the compile that consumes them, so the record holds
+        // the exact input the SPIR-V compile saw rather than the state it left
+        // behind. Overwritten on every iteration, so the last one to run is the
+        // one that stabilised.
+        if (MetalTranslationRequested()) {
+            PendingMetalTranslation pending;
+            pending.shader      = shader;
+            pending.shader_name = wpmat.shader;
+            pending.scene_id    = pScene->scene_id;
+            pending.units.assign(sd_units.begin(), sd_units.end());
+            pending.shader_info = *pWPShaderInfo;
+            pending.texinfos.assign(texinfos.begin(), texinfos.end());
+            pending.vfs = &vfs;
+            if (! g_pending_metal_translations.empty() &&
+                g_pending_metal_translations.back().shader == shader) {
+                g_pending_metal_translations.back() = std::move(pending);
+            } else {
+                g_pending_metal_translations.push_back(std::move(pending));
+            }
+        }
         if (! WPShaderParser::CompileToSpvRust(
                 pScene->scene_id, wpmat.shader, sd_units, shader->codes, vfs, pWPShaderInfo, texinfos, &reflection_json)) {
             return false;
@@ -3689,6 +3827,9 @@ void wallpaper::LoadMaterialConstantShaderValues(SceneMaterial& material,
 std::shared_ptr<Scene> WPSceneParser::Parse(const SceneParseRequest& request,
                                             const std::string& buf, fs::VFS& vfs,
                                             audio::SoundManager& sm) {
+    // A previous parse that returned early would otherwise leave records
+    // pointing at a VFS that is gone.
+    g_pending_metal_translations.clear();
     nlohmann::json json;
     if (! PARSE_JSON(buf, json)) return nullptr;
     wpscene::WPScene sc;
@@ -3883,6 +4024,10 @@ std::shared_ptr<Scene> WPSceneParser::Parse(const SceneParseRequest& request,
     }
 
     BuildBloomPostProcess(context, sc);
+
+    // Last, once the scene graph, the cameras and the textures are all in
+    // place: the structural check it consults needs the finished scene.
+    FlushPendingMetalTranslations(*context.scene);
 
     WPShaderParser::FinalGlslang();
     return context.scene;

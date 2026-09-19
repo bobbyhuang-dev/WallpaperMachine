@@ -29,6 +29,10 @@ pub enum BridgeScalingMode {
 #[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct BridgeLockScreenScene {
     pub display_id: u32,
+    /// Stable library id. The app needs it to find the wallpaper's managed
+    /// user-asset manifest, which is keyed on the id rather than on the project
+    /// path so a Workshop update does not orphan it.
+    pub wallpaper_id: String,
     pub title: String,
     pub project_path: String,
     pub assets_path: String,
@@ -223,6 +227,16 @@ pub struct BridgePropertyDescriptor {
     pub dirty: bool,
     pub can_restore_defaults: bool,
     pub enabled: bool,
+    /// File and directory properties only: the app holds its own copy of this
+    /// property's assets in managed storage, so deleting or re-downloading the
+    /// wallpaper does not lose them. Always false for every other kind.
+    pub asset_managed: bool,
+    /// File and directory properties only: the property names something, and
+    /// neither the user's own path nor a managed copy resolves any more. An
+    /// unset property is not missing.
+    pub asset_missing: bool,
+    /// The user's own path, for display. `None` when the property is unset.
+    pub asset_source_path: Option<String>,
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -316,6 +330,44 @@ pub struct BridgeVideoBackendReport {
     pub fallback_reason: Option<String>,
 }
 
+/// What one running scene wallpaper's update clock is actually doing.
+///
+/// `mode` composes the renderer's own answer with the host's pause state, in
+/// that precedence: a wallpaper the user paused reads `user_paused` whatever
+/// the renderer says, a display whose presentation is suspended reads
+/// `policy_suspended`, and only then does the renderer's classification show
+/// through. A scene that is running but cannot be read reads `unknown` — never
+/// `continuous`, because "we could not tell" and "it is definitely ticking"
+/// are different facts and only one of them is evidence.
+///
+/// `reasons` are the inputs the renderer says keep the scene updating, already
+/// lowercase snake_case. Empty is a real answer: nothing is demanding updates.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct BridgeSceneUpdateModeReport {
+    pub display_id: u32,
+    pub display_name: String,
+    pub wallpaper_id: String,
+    pub wallpaper_title: String,
+    pub mode: String,
+    pub reasons: Vec<String>,
+}
+
+/// Which renderer actually drew the scene on one display.
+///
+/// `backend` is what ran, not what was asked for. `fallback_reason` is present
+/// only when the user preferred the native Metal backend and this scene did
+/// not get it, so its absence on a compatibility row means the user never
+/// asked rather than that no reason was recorded.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct BridgeSceneBackendReport {
+    pub display_id: u32,
+    pub display_name: String,
+    pub wallpaper_id: String,
+    pub wallpaper_title: String,
+    pub backend: String,
+    pub fallback_reason: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct BridgeSettingsSnapshot {
     pub displays: Vec<BridgeDisplaySettingsRow>,
@@ -343,6 +395,24 @@ pub struct BridgeSettingsSnapshot {
     /// fields above this is the preference, not a renderer read-back: the
     /// renderer has no query for it.
     pub scene_optimization_enabled: bool,
+    /// The saved preference for whole-scene on-demand updating. Off by
+    /// default. A preference, not a read-back: `scene_update_modes` is where
+    /// what actually happened shows up.
+    pub scene_on_demand_enabled: bool,
+    /// `"compatibility"` or `"native_metal_preferred"`: the user's choice,
+    /// which for a given scene may or may not be what `scene_renderers`
+    /// reports. A saved preference, not a read-back.
+    pub scene_renderer: String,
+    /// Live per-scene state read back from the renderer on this rebuild. One
+    /// row per running scene wallpaper; an empty vector means no scene
+    /// wallpaper is running, and a row reading `unknown` means one is running
+    /// and could not be read.
+    pub scene_update_modes: Vec<BridgeSceneUpdateModeReport>,
+    /// Live per-scene backend read back from the renderer on this rebuild.
+    pub scene_renderers: Vec<BridgeSceneBackendReport>,
+    /// The directory the app keeps user-imported property assets in. Shown
+    /// read-only; it is where the files are, not a setting.
+    pub user_assets_path: String,
     /// The internal rasterization scale in force right now, after any power
     /// profile. `preferred_render_scale` is what the user saved.
     pub render_scale: f32,

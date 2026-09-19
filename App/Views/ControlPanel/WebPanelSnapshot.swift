@@ -300,6 +300,25 @@ extension WebPanelController {
         "fallbackReason": report.fallbackReason as Any? ?? null,
       ]
     }
+    // Live per-scene read-backs, rebuilt with every snapshot. An empty array
+    // is "no scene wallpaper is running"; a row whose mode or backend reads
+    // `unknown` is "one is running and could not be read". The page must keep
+    // those apart, so neither is padded here into something more definite.
+    let sceneUpdateModes: [[String: Any]] = settings.sceneUpdateModes.map { report in
+      [
+        "displayId": Int(report.displayId), "display": report.displayName,
+        "wallpaperId": report.wallpaperId, "wallpaperTitle": report.wallpaperTitle,
+        "mode": report.mode, "reasons": report.reasons,
+      ]
+    }
+    let sceneRenderers: [[String: Any]] = settings.sceneRenderers.map { report in
+      [
+        "displayId": Int(report.displayId), "display": report.displayName,
+        "wallpaperId": report.wallpaperId, "wallpaperTitle": report.wallpaperTitle,
+        "backend": report.backend,
+        "fallbackReason": report.fallbackReason as Any? ?? null,
+      ]
+    }
     return [
       "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         ?? "",
@@ -333,6 +352,9 @@ extension WebPanelController {
         "contentPacing": settings.contentPacingEnabled,
         "sharedVideoDecode": settings.sharedVideoDecodeEnabled,
         "sceneOptimization": settings.sceneOptimizationEnabled,
+        "sceneOnDemand": settings.sceneOnDemandEnabled,
+        "sceneUpdateModes": sceneUpdateModes,
+        "sceneRenderer": settings.sceneRenderer, "sceneRenderers": sceneRenderers,
         "sharedVideoDecodeSessions": Int(settings.sharedVideoDecodeSessions),
         "sharedVideoDecodeConsumers": Int(settings.sharedVideoDecodeConsumers),
         "renderScale": Double(settings.renderScale),
@@ -351,6 +373,8 @@ extension WebPanelController {
         "assetsPath": ClientPaths.assetsURL.path, "libraryPath": ClientPaths.libraryURL.path,
         "shaderCacheBytes": settings.storage.shaderCacheSizeBytes,
         "logBytes": settings.storage.logs.activeFileSizeBytes,
+        "userAssetsPath": settings.userAssetsPath,
+        "userAssetsReleasedBytes": userAssetsReleasedBytes as Any? ?? null,
         "bridgeVersion": settings.bridgeVersion, "coreVersion": settings.coreVersion,
         "shaderVersion": settings.shaderPipelineVersion, "gitSha": settings.gitSha,
       ],
@@ -581,6 +605,12 @@ extension WebPanelController {
         row["fileName"] = asset?.name as Any? ?? null
         row["fileTypes"] = assetFilter(property.fileFilter).allowedExtensions.sorted()
         row["error"] = errors[property.id] as Any? ?? null
+        // Where the file actually lives now, and whether it is still there.
+        // `assetSourcePath` is the user's original pick, shown so an external
+        // reference can be recognised; it is not the path the renderer reads.
+        row["assetManaged"] = property.assetManaged
+        row["assetMissing"] = property.assetMissing
+        row["assetSourcePath"] = property.assetSourcePath as Any? ?? null
         guard property.kind == .directory else { return row }
         row["directoryMode"] = property.directoryMode == .fetchAll ? "fetchAll" : "onDemand"
         let matches = asset?.matches

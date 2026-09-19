@@ -2,6 +2,7 @@
 
 mod compiler;
 mod diagnostic;
+mod metal;
 mod reflector;
 
 pub use compiler::NagaCompiler;

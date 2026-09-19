@@ -1,5 +1,5 @@
 use shader::{
-    BindingIndex, BindingSet, ComboName, CompiledShaderStage, CompiledStageArtifact,
+    BindingIndex, BindingSet, ComboName, CompiledShaderStage, CompiledStageArtifact, CompiledStageCode,
     DefaultUniformValue, InMemoryShaderSourceProvider, IncludePath, LocationIndex, MaterialAlias,
     ProjectPropertyBinding, PropertyName, PropertyValue, ShaderCacheStrategy, ShaderComboValue,
     ShaderCompiler, ShaderDescriptorBinding, ShaderDescriptorKind, ShaderDiagnostic, ShaderError,
@@ -460,11 +460,16 @@ fn compiler_trait_returns_artifact_with_backend_module() {
 
         fn compile_stage(
             &self,
+            _target: ShaderTarget,
             stage: ShaderStageKind,
             _source: &CodegenStageSource,
         ) -> ShaderResult<CompiledStageArtifact<Self::Module>> {
-            let compiled_stage =
-                CompiledShaderStage::new(stage, Box::from([0x0723_0203]), None, Box::from([]));
+            let compiled_stage = CompiledShaderStage::new(
+                stage,
+                CompiledStageCode::VulkanSpirv(Box::from([0x0723_0203])),
+                None,
+                Box::from([]),
+            );
             Ok(CompiledStageArtifact::new(
                 compiled_stage,
                 "backend-module",
@@ -479,11 +484,11 @@ fn compiler_trait_returns_artifact_with_backend_module() {
         Box::from([]),
     );
     let artifact = UnitCompiler
-        .compile_stage(ShaderStageKind::Fragment, &source)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &source)
         .expect("compiler should return an artifact");
 
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
-    assert_eq!(artifact.stage().spirv(), &[0x0723_0203]);
+    assert_eq!(artifact.stage().spirv(), Some(&[0x0723_0203][..]));
     assert_eq!(artifact.module(), &"backend-module");
     assert_eq!(artifact.diagnostics()[0].message(), "compiled");
 }

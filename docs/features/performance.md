@@ -69,6 +69,8 @@ other two exactly as the engine currently reports them.
 | Setting | Values | Default |
 | --- | --- | --- |
 | Scene render optimisation | Off / On | **On** |
+| Update only when the scene changes | Off / On | Off |
+| Scene renderer | Compatibility / Native Metal preferred | Compatibility |
 
 The only control here that ships on. It reuses the result of scene subgraphs
 whose inputs have not changed and removes render passes proven redundant, inside
@@ -84,6 +86,50 @@ Unlike content pacing and shared video decode, which are read back from the
 renderer, this row reports the saved preference: the renderer publishes no query
 for it. The engine applies a change to running scenes in place, so nothing
 restarts and no wallpaper reloads.
+
+### Update only when the scene changes
+
+Off by default, because stopping a wallpaper's clock changes what the user sees
+happen. When a scene can be shown to have nothing that advances on its own, its
+frame clock stops entirely instead of ticking at the configured rate: the last
+frame stays on screen and events restart it.
+
+This is not a frame-rate setting and it lowers no quality. It is also not the
+same question as scene render optimisation. That one asks whether a render
+target's pixels can be reused; this one asks whether the whole runtime can
+sleep. A scene whose image happens to be still may still be running scripts,
+sound and timelines, so both analyses must agree before anything stops.
+
+A scene keeps its clock if any of these is present: a script or scripted
+property, an animation, a particle emitter, a playing video texture, an
+audio-reactive shader, a time uniform, an animated sprite, a dynamic mesh, a
+puppet, a feedback pass, a bound text layer, a sound layer, a node transform or
+material constant bound to a dynamic value, or any input the renderer could not
+account for. That last one is reported as **an input the renderer could not
+account for**, and it is the answer when a wallpaper does not go idle.
+
+Pointer-reactive scenes do sleep, and pointer movement wakes them. Property
+changes, resizes, display reconfiguration, resource updates and visibility
+changes all wake the scene; a wallpaper the user paused is never woken by any
+of them.
+
+The status line reports what each running scene is doing right now — updating
+continuously and why, waiting for events, paused by you, suspended by the
+system, or that the state could not be read. A scene that is running but cannot
+be read says so; it is never shown as updating normally.
+
+### Scene renderer
+
+Which renderer scene wallpapers prefer. **Compatibility** is the existing
+Vulkan-through-MoltenVK path and the default. **Native Metal preferred** asks
+for the native Metal backend, which covers a subset of scene features; a scene
+it cannot draw runs on the compatibility backend and the status line says why.
+
+The row shows the backend actually in use, not the preference. The lock-screen
+extension always uses the compatibility backend.
+
+No power comparison has been measured between the two. Choosing native Metal is
+not a documented saving.
 
 ## Advanced
 

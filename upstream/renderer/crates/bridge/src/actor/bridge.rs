@@ -11,7 +11,8 @@ use kameo::{
     reply::{DelegatedReply, Reply},
 };
 use wallpaper_core::{
-    DisplayIdentity, DisplaySelector, DisplaySnapshotEntry, WallpaperAssignment,
+    DisplayIdentity, DisplaySelector, DisplaySnapshotEntry, SceneRendererPreference,
+    WallpaperAssignment,
     media::audio::AudioVolume,
     project::{ScalingMode, SceneDesc, SceneHandle, SerdeValudeExt},
     render::{
@@ -43,7 +44,8 @@ use crate::{
             SetPauseOnBatteryPower, SetPowerSource, SetPresentationSuspended, SetPropertyPath,
             SetRenderScale,
             SetRendererCountersEnabled, SetScalingFactor, SetScalingMode,
-            SetSceneOptimizationEnabled, SetSharedVideoDecodeEnabled, SetTargetFps,
+            SetSceneOnDemandEnabled, SetSceneOptimizationEnabled, SetSceneRenderer,
+            SetSharedVideoDecodeEnabled, SetTargetFps,
             SetVideoBackend, SetVolume, SetWebAudioSubscribed,
             Shutdown,
         },
@@ -59,7 +61,8 @@ use crate::{
         BridgeWallpaperMutationBundle, BridgeWebWallpaper, MousePollingControl,
     },
     config::{
-        AppConfig, ConfigStore, SerializedSelector, VideoBackendModeCfg, WallpaperConfig,
+        AppConfig, ConfigStore, SceneRendererModeCfg, SerializedSelector, VideoBackendModeCfg,
+        WallpaperConfig,
     },
     display::{DisplaySelectorExt, DisplaySnapshotExt},
     engine::{ActivationInputs, EngineFacade, NativeVideoRejection, NativeVideoRejections},
@@ -401,9 +404,9 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                 .state
                 .selected_wallpaper_id
                 .as_ref()
-                .and_then(|id| self.state.options(&displays, id.clone()).ok()),
+                .and_then(|id| self.state.options(&displays, id.clone(), &self.paths).ok()),
             monitor_information: self.state.monitor_info(&displays),
-            settings: self.state.settings(&displays, launch_at_login, &self.paths, self.engine.video_pipeline_state()),
+            settings: self.state.settings(&displays, launch_at_login, &self.paths, self.engine.video_pipeline_state(), &self.engine.scene_runtime_reports()),
         }
     }
 
@@ -416,9 +419,9 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         Ok(BridgeSnapshotBundle {
             app: self.app_snapshot(),
             library: self.library_snapshot(),
-            wallpaper_options: Some(self.state.options(&displays, wallpaper_id)?),
+            wallpaper_options: Some(self.state.options(&displays, wallpaper_id, &self.paths)?),
             monitor_information: self.state.monitor_info(&displays),
-            settings: self.state.settings(&displays, launch_at_login, &self.paths, self.engine.video_pipeline_state()),
+            settings: self.state.settings(&displays, launch_at_login, &self.paths, self.engine.video_pipeline_state(), &self.engine.scene_runtime_reports()),
         })
     }
 
@@ -431,9 +434,9 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         Ok(BridgeWallpaperMutationBundle {
             app: self.app_snapshot(),
             library: self.library_snapshot(),
-            wallpaper_options: self.state.options(&displays, wallpaper_id)?,
+            wallpaper_options: self.state.options(&displays, wallpaper_id, &self.paths)?,
             monitor_information: self.state.monitor_info(&displays),
-            settings: self.state.settings(&displays, launch_at_login, &self.paths, self.engine.video_pipeline_state()),
+            settings: self.state.settings(&displays, launch_at_login, &self.paths, self.engine.video_pipeline_state(), &self.engine.scene_runtime_reports()),
         })
     }
 
@@ -444,7 +447,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             app: self.app_snapshot(),
             library: self.library_snapshot(),
             monitor_information: self.state.monitor_info(&displays),
-            settings: self.state.settings(&displays, launch_at_login, &self.paths, self.engine.video_pipeline_state()),
+            settings: self.state.settings(&displays, launch_at_login, &self.paths, self.engine.video_pipeline_state(), &self.engine.scene_runtime_reports()),
         }
     }
 
@@ -1057,7 +1060,10 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                             "cannot identify lock-screen wallpaper from {}",
                             scene.scene_path
                         ))
-                    })?;
+                    })?
+                    // Owned before the paths below are rewritten in place: the id has to
+                    // outlive that mutable borrow to reach the record.
+                    .to_string();
                 let title = self
                     .state
                     .library
@@ -1099,6 +1105,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                     .transpose()?;
                 Ok(BridgeLockScreenScene {
                     display_id: scene.display.display_id,
+                    wallpaper_id,
                     title,
                     project_path: scene.scene_path,
                     assets_path: scene.assets_path,
@@ -1296,6 +1303,24 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         app_config: AppConfig,
         wallpaper_configs: BTreeMap<String, WallpaperConfig>,
     ) -> Result<Vec<SceneDesc>, BridgeError> {
+        self.reconcile_engine_with(app_config, wallpaper_configs, false).await
+    }
+
+    /// Reconciles, optionally forcing every scene to be rebuilt.
+    ///
+    /// A descriptor carries what a scene is, not which renderer draws it, so a
+    /// change that only alters renderer selection produces identical
+    /// descriptors and `RuntimeRefreshMode::from_transition` reports
+    /// `Unchanged` — nothing is rebuilt and the setting appears to do nothing
+    /// until the wallpaper is changed. `force_shader_refresh` is the existing
+    /// flag that already means "rebuild regardless", so the renderer
+    /// preference reuses it rather than adding a second rebuild trigger.
+    async fn reconcile_engine_with(
+        &self,
+        app_config: AppConfig,
+        wallpaper_configs: BTreeMap<String, WallpaperConfig>,
+        force_shader_refresh: bool,
+    ) -> Result<Vec<SceneDesc>, BridgeError> {
         let project_models = self.state.configured_project_models(&app_config);
         reconcile_with(
             self.engine.clone(),
@@ -1305,7 +1330,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
             self.playback_paused(),
             self.state.suspended_displays.clone(),
             self.paths.clone(),
-            false,
+            force_shader_refresh,
             self.state.native_video_rejected.clone(),
             self.quality_runtime(),
         )
@@ -1492,7 +1517,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         let mut candidate_state = self.state.clone();
         candidate_state.app_config = app_config.clone();
         candidate_state
-            .settings(displays, self.launch_at_login.status(), &self.paths, self.engine.video_pipeline_state())
+            .settings(displays, self.launch_at_login.status(), &self.paths, self.engine.video_pipeline_state(), &self.engine.scene_runtime_reports())
             .displays
             .into_iter()
             .map(|row| (row.display_id.clone(), row))
@@ -1789,6 +1814,20 @@ impl<E: EngineFacade + Clone> Message<Bootstrap> for BridgeActor<E> {
         {
             self.state.errors.push(error.to_string());
         }
+        if let Err(error) = self
+            .engine
+            .set_scene_on_demand_enabled(self.state.app_config.quality.scene_on_demand_enabled)
+        {
+            self.state.errors.push(error.to_string());
+        }
+        if let Err(error) = self
+            .engine
+            .set_scene_renderer_preference(scene_renderer_preference(
+                self.state.app_config.scene_renderer,
+            ))
+        {
+            self.state.errors.push(error.to_string());
+        }
 
         if let Err(error) = self.refresh_displays().await {
             self.state.errors.push(error.message().to_string());
@@ -1892,7 +1931,7 @@ impl<E: EngineFacade + Clone> Message<GetSettingsSnapshot> for BridgeActor<E> {
         let displays = self.engine.display_snapshot();
         Ok(self
             .state
-            .settings(&displays, self.launch_at_login.status(), &self.paths, self.engine.video_pipeline_state()))
+            .settings(&displays, self.launch_at_login.status(), &self.paths, self.engine.video_pipeline_state(), &self.engine.scene_runtime_reports()))
     }
 }
 
@@ -1963,7 +2002,7 @@ impl<E: EngineFacade + Clone> Message<ClearShaderCache> for BridgeActor<E> {
         let displays = self.engine.display_snapshot();
         Ok(self
             .state
-            .settings(&displays, self.launch_at_login.status(), &self.paths, self.engine.video_pipeline_state()))
+            .settings(&displays, self.launch_at_login.status(), &self.paths, self.engine.video_pipeline_state(), &self.engine.scene_runtime_reports()))
     }
 }
 
@@ -1976,7 +2015,7 @@ impl<E: EngineFacade + Clone> Message<GetWallpaperOptionsSnapshot> for BridgeAct
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let displays = self.engine.display_snapshot();
-        self.state.options(&displays, msg.wallpaper_id)
+        self.state.options(&displays, msg.wallpaper_id, &self.paths)
     }
 }
 
@@ -2785,6 +2824,57 @@ impl<E: EngineFacade + Clone> Message<SetVideoBackend> for BridgeActor<E> {
     }
 }
 
+/// The renderer-facing spelling of the saved scene renderer preference.
+fn scene_renderer_preference(mode: SceneRendererModeCfg) -> SceneRendererPreference {
+    match mode {
+        SceneRendererModeCfg::Compatibility => SceneRendererPreference::Compatibility,
+        SceneRendererModeCfg::NativeMetalPreferred => SceneRendererPreference::NativeMetalPreferred,
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<SetSceneRenderer> for BridgeActor<E> {
+    type Reply = messages::SetSceneRendererReply;
+
+    async fn handle(
+        &mut self,
+        msg: SetSceneRenderer,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        if self.state.app_config.scene_renderer == msg.mode {
+            return Ok(self.all_snapshots());
+        }
+        // The renderer picks a backend when a scene is opened, so the process
+        // switch has to be in place before anything is rebuilt against it.
+        self.engine
+            .set_scene_renderer_preference(scene_renderer_preference(msg.mode))
+            .map_err(|error| BridgeError::engine(error.to_string()))?;
+        let mut app_config = self.state.app_config.clone();
+        app_config.scene_renderer = msg.mode;
+        // A scene already on screen keeps the backend it was opened with, so
+        // the scene list is rebuilt for the new preference before it is
+        // committed: a failure leaves the previous renderer running rather
+        // than nothing at all. The descriptors are rebuilt from actor state
+        // this change never touches, so a wallpaper the user paused and a
+        // display whose presentation is suspended stay that way.
+        let wallpaper_configs = self.state.wallpaper_configs.clone();
+        // Forced: the descriptors are identical across a renderer-preference
+        // change, so without this the reconcile is a no-op and the setting has
+        // no effect until the wallpaper is changed or the app restarts. The
+        // rebuild is also what re-runs shader translation, which is gated on
+        // the preference at parse time.
+        let scenes = self
+            .reconcile_engine_with(app_config.clone(), wallpaper_configs, true)
+            .await?;
+        if let Some(store) = &self.config_store {
+            store.save_app_config(&app_config)?;
+        }
+        self.state.app_config = app_config;
+        self.state.set_active_ids_from_scenes(&scenes);
+        self.bump_generation();
+        Ok(self.all_snapshots())
+    }
+}
+
 impl<E: EngineFacade + Clone> Message<SetRenderScale> for BridgeActor<E> {
     type Reply = messages::SetRenderScaleReply;
 
@@ -2898,6 +2988,29 @@ impl<E: EngineFacade + Clone> Message<SetSceneOptimizationEnabled> for BridgeAct
         // up where they are, so nothing here rebuilds or reparses anything.
         self.engine
             .set_scene_optimization_enabled(msg.enabled)
+            .map_err(|error| BridgeError::engine(error.to_string()))?;
+        self.bump_generation();
+        Ok(self.all_snapshots())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<SetSceneOnDemandEnabled> for BridgeActor<E> {
+    type Reply = messages::SetSceneOnDemandEnabledReply;
+
+    async fn handle(
+        &mut self,
+        msg: SetSceneOnDemandEnabled,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.state.app_config.quality.scene_on_demand_enabled = msg.enabled;
+        if let Some(store) = &self.config_store {
+            store.save_app_config(&self.state.app_config)?;
+        }
+        // When a scene ticks, not what a scene is: running scenes re-decide
+        // where they are, so nothing here rebuilds, reparses, or restarts a
+        // wallpaper, and a pause the user asked for is untouched.
+        self.engine
+            .set_scene_on_demand_enabled(msg.enabled)
             .map_err(|error| BridgeError::engine(error.to_string()))?;
         self.bump_generation();
         Ok(self.all_snapshots())

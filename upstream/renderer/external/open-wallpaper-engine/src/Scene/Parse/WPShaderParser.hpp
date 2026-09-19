@@ -11,6 +11,10 @@ namespace fs
 {
 class VFS;
 }
+namespace shader
+{
+struct RustShaderMetalStage;
+}
 using Combos = Map<std::string, std::string>;
 
 // ui material name to gl uniform name
@@ -74,5 +78,14 @@ public:
                                   std::span<WPShaderUnit>, std::vector<ShaderCode>& spvs,
                                   fs::VFS&, WPShaderInfo*, std::span<const WPShaderTexInfo>,
                                   std::string* reflection_json = nullptr);
+
+    // Compiles the same units through the same include/combo/cache path as
+    // `CompileToSpvRust`, but emits Metal Shading Language instead of SPIR-V.
+    // `reflection_json` carries the identical reflection payload either way.
+    static bool CompileToMslRust(std::string_view scene_id, std::string_view shader_name,
+                                 std::span<WPShaderUnit>,
+                                 std::vector<shader::RustShaderMetalStage>& stages, fs::VFS&,
+                                 WPShaderInfo*, std::span<const WPShaderTexInfo>,
+                                 std::string* reflection_json = nullptr);
 };
 } // namespace wallpaper

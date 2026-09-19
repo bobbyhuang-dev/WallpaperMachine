@@ -13,6 +13,7 @@ final class UserAssetStoreTests: XCTestCase {
     private var project: URL!
     private var previousHome: String?
 
+    private var managedRoot: URL { ClientPaths.userAssetsURL }
     private var staging: URL { UserAssetStore.stagingRoot(projectURL: project) }
 
     override func setUpWithError() throws {
@@ -37,13 +38,14 @@ final class UserAssetStoreTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func makeStore(watcher: UserAssetStore.WatcherFactory? = nil) -> UserAssetStore {
-        if let watcher {
-            return UserAssetStore(projectURL: project, watcherFactory: watcher)
-        }
-        return UserAssetStore(projectURL: project, watcherFactory: { url, onChange in
-            ManualDirectoryWatcher(url: url, trigger: onChange)
-        })
+    private func makeStore(
+        wallpaperId: String = "2001", watcher: UserAssetStore.WatcherFactory? = nil
+    ) -> UserAssetStore {
+        UserAssetStore(
+            projectURL: project, wallpaperId: wallpaperId,
+            watcherFactory: watcher ?? { url, onChange in
+                ManualDirectoryWatcher(url: url, trigger: onChange)
+            })
     }
 
     @discardableResult
@@ -72,6 +74,24 @@ final class UserAssetStoreTests: XCTestCase {
         return UInt64(status.st_ino)
     }
 
+    /// Every regular file the managed store holds for a property, ordered by name.
+    /// Read straight off disk rather than through the store, so a test cannot pass by
+    /// agreeing with the implementation about where the bytes went.
+    private func storedFiles(wallpaperId: String, propertyId: String) -> [URL] {
+        let directory = managedRoot
+            .appendingPathComponent(wallpaperId, isDirectory: true)
+            .appendingPathComponent(propertyId, isDirectory: true)
+        guard let walker = FileManager.default.enumerator(
+            at: directory, includingPropertiesForKeys: [.isRegularFileKey]) else { return [] }
+        return walker.compactMap { $0 as? URL }
+            .filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    private func manifest(wallpaperId: String = "2001") -> UserAssetManifest {
+        ManagedUserAssetStore().manifest(wallpaperId: wallpaperId)
+    }
+
     private func assertFails(
         _ expected: UserAssetError.Code, _ body: () throws -> Void,
         file: StaticString = #filePath, line: UInt = #line
@@ -91,17 +111,25 @@ final class UserAssetStoreTests: XCTestCase {
 
     // MARK: - Single file
 
-    func testImportedFileIsAHardLinkReachableThroughItsPageValue() throws {
+    func testImportedFileIsReadableThroughItsPageValueWithoutASecondCopyOfTheBytes() throws {
         let source = try writeSource("clouds.png", bytes: "original-bytes")
-        let asset = try makeStore().importFile(at: source, propertyId: "background", filter: .image)
+        let store = makeStore()
+        let asset = try store.importFile(at: source, propertyId: "background", filter: .image)
 
         XCTAssertEqual(
             try Data(contentsOf: URL(fileURLWithPath: path(fromPageValue: asset.pageValue))),
             Data("original-bytes".utf8))
-        XCTAssertEqual(try inode(source.path), try inode(asset.stagedPath),
-                       "the staged entry must share the original's inode, not copy it")
         XCTAssertTrue(asset.stagedPath.hasPrefix(staging.path + "/"))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path),
+                      "the user's own file is copied from, never moved")
+
+        // The bridge entry is a hard link onto the app's managed copy, not onto the
+        // user's file and not a second set of bytes: importing costs one copy, and the
+        // user deleting their original cannot take the staged bytes with it.
+        let stored = try XCTUnwrap(storedFiles(wallpaperId: "2001", propertyId: "background").first)
+        XCTAssertEqual(try inode(stored.path), try inode(asset.stagedPath))
+        XCTAssertNotEqual(try inode(source.path), try inode(stored.path))
+        XCTAssertTrue(store.isManaged(propertyId: "background"))
     }
 
     func testPageValueSurvivesSpacesCJKAndURLPunctuation() throws {
@@ -338,6 +366,178 @@ final class UserAssetStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: staging.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: authored.path))
         XCTAssertNil(store.randomFile(propertyId: "background"))
+    }
+
+    // MARK: - Managed storage
+
+    /// The bridge inside the project is derived. Wiping all of it must cost nothing but
+    /// the work of relinking, because the bytes live in the managed store — which the
+    /// user's own file being gone as well is what actually proves.
+    func testDeletingTheWholeBridgeLosesNothing() throws {
+        let source = try writeSource("clouds.png", bytes: "survives-the-bridge")
+        let first = try makeStore().importFile(at: source, propertyId: "background", filter: .image)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.stagedPath))
+
+        try FileManager.default.removeItem(at: staging)
+        try FileManager.default.removeItem(at: source)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.stagedPath))
+
+        let rebuilt = try makeStore().importFile(at: source, propertyId: "background", filter: .image)
+        XCTAssertEqual(rebuilt.stagedPath, first.stagedPath)
+        XCTAssertEqual(
+            try Data(contentsOf: URL(fileURLWithPath: rebuilt.stagedPath)),
+            Data("survives-the-bridge".utf8))
+    }
+
+    /// Deleting the wallpaper and downloading it again replaces the whole project
+    /// folder. The property's asset is keyed on the stable wallpaper id, so it comes
+    /// back — and it comes back even though the user's own file is gone too.
+    func testStoreSurvivesDeletingAndRecreatingTheProject() throws {
+        let source = try writeSource("clouds.png", bytes: "survives-redownload")
+        try makeStore().importFile(at: source, propertyId: "background", filter: .image)
+
+        try FileManager.default.removeItem(at: project)
+        try FileManager.default.removeItem(at: source)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+
+        let store = makeStore()
+        let restored = try store.importFile(at: source, propertyId: "background", filter: .image)
+        XCTAssertEqual(
+            try Data(contentsOf: URL(fileURLWithPath: restored.stagedPath)),
+            Data("survives-redownload".utf8))
+        XCTAssertTrue(store.isSourceMissing(propertyId: "background"),
+                      "the user's own file is gone, and the panel has to be able to say so")
+        XCTAssertTrue(store.isManaged(propertyId: "background"))
+    }
+
+    /// A second wallpaper id is a different wallpaper. A bridge this build wrote names
+    /// its owner, so the other id cannot mistake it for a round-6 staging directory and
+    /// adopt files that are not its own.
+    func testAnotherWallpaperIdDoesNotInheritTheStoredAsset() throws {
+        let source = try writeSource("clouds.png")
+        try makeStore(wallpaperId: "2001").importFile(at: source, propertyId: "background", filter: .image)
+        try FileManager.default.removeItem(at: source)
+
+        XCTAssertEqual(
+            try Data(contentsOf: staging.appendingPathComponent(UserAssetStore.ownerMarkerName)),
+            Data("2001".utf8), "the bridge has to say whose it is")
+        assertFails(.sourceUnreadable) {
+            try makeStore(wallpaperId: "3002").importFile(
+                at: source, propertyId: "background", filter: .image)
+        }
+        XCTAssertTrue(
+            manifest(wallpaperId: "3002").properties.isEmpty,
+            "nothing may be recorded for a wallpaper that owns none of this")
+        XCTAssertNoThrow(
+            try makeStore(wallpaperId: "2001").importFile(
+                at: source, propertyId: "background", filter: .image),
+            "the same wallpaper id still recovers its own asset")
+    }
+
+    /// An unchanged selection must not be re-copied on every launch. The stored file's
+    /// inode is the proof: a fresh copy would be a new one.
+    func testReimportingAnUnchangedSelectionCopiesNothing() throws {
+        let source = try writeSource("clouds.png", bytes: "stable")
+        try makeStore().importFile(at: source, propertyId: "background", filter: .image)
+        let stored = try XCTUnwrap(storedFiles(wallpaperId: "2001", propertyId: "background").first)
+        let before = try inode(stored.path)
+
+        for _ in 0..<3 {
+            try makeStore().importFile(at: source, propertyId: "background", filter: .image)
+        }
+
+        let after = storedFiles(wallpaperId: "2001", propertyId: "background")
+        XCTAssertEqual(after.count, 1, "a second copy of an unchanged file is a leak")
+        XCTAssertEqual(try inode(XCTUnwrap(after.first).path), before)
+    }
+
+    /// An asset present in neither the user's folder nor the store is missing, and the
+    /// property has to fail loudly rather than come back silently empty.
+    func testAnAssetMissingFromBothPlacesIsReportedRatherThanCleared() throws {
+        let source = try writeSource("clouds.png")
+        let store = makeStore()
+        try store.importFile(at: source, propertyId: "background", filter: .image)
+
+        try FileManager.default.removeItem(at: source)
+        try FileManager.default.removeItem(
+            at: managedRoot.appendingPathComponent("2001/background", isDirectory: true))
+
+        assertFails(.sourceUnreadable) {
+            try makeStore().importFile(at: source, propertyId: "background", filter: .image)
+        }
+    }
+
+    /// A round-6 project still holds hard links into the user's file and nothing in the
+    /// store. Absorbing them must not touch the old location, and must happen once.
+    func testALegacyStagingDirectoryIsMigratedOnceWithoutBeingDeleted() throws {
+        let legacy = staging.appendingPathComponent("background", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        let original = try writeSource("clouds.png", bytes: "round-six-bytes")
+        let staged = legacy.appendingPathComponent("clouds.png")
+        try FileManager.default.linkItem(at: original, to: staged)
+        try FileManager.default.removeItem(at: original)
+
+        let restored = try makeStore().importFile(at: original, propertyId: "background", filter: .image)
+        XCTAssertEqual(
+            try Data(contentsOf: URL(fileURLWithPath: restored.stagedPath)),
+            Data("round-six-bytes".utf8))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.path),
+                      "migration publishes into the store; it never deletes the old location")
+        let record = try XCTUnwrap(manifest().properties["background"])
+        XCTAssertEqual(record.migratedLegacyPaths, [legacy.path])
+        XCTAssertEqual(record.sourcePath, original.path,
+                       "the path recorded is the user's original, not the staged link")
+
+        let stored = try XCTUnwrap(storedFiles(wallpaperId: "2001", propertyId: "background").first)
+        let before = try inode(stored.path)
+        try makeStore().importFile(at: original, propertyId: "background", filter: .image)
+        XCTAssertEqual(storedFiles(wallpaperId: "2001", propertyId: "background").count, 1)
+        XCTAssertEqual(try inode(XCTUnwrap(storedFiles(wallpaperId: "2001", propertyId: "background").first).path),
+                       before, "migration is recorded, so a second launch copies nothing")
+    }
+
+    // MARK: - Purging
+
+    func testPurgeKeepsEveryAssetTheManifestStillListsAndReclaimsTheRest() throws {
+        let store = makeStore()
+        try store.importFile(at: try writeSource("kept.png", bytes: "keep-me"), propertyId: "background", filter: .image)
+        let kept = try XCTUnwrap(storedFiles(wallpaperId: "2001", propertyId: "background").first)
+
+        // An orphan of exactly the shape a crash between copying and recording leaves.
+        let orphan = managedRoot
+            .appendingPathComponent("2001/background/deadbeefdeadbeefdeadbeefdeadbeef", isDirectory: true)
+        try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
+        try Data(String(repeating: "x", count: 512).utf8).write(to: orphan.appendingPathComponent("orphan.png"))
+        // A whole wallpaper folder nothing recorded.
+        let strayWallpaper = managedRoot.appendingPathComponent("9999/gallery", isDirectory: true)
+        try FileManager.default.createDirectory(at: strayWallpaper, withIntermediateDirectories: true)
+        try Data(String(repeating: "y", count: 256).utf8).write(to: strayWallpaper.appendingPathComponent("stray.png"))
+
+        let released = try UserAssetStorage.purgeUnreferencedDerivedCaches()
+
+        XCTAssertEqual(released, 768, "only the two unreferenced files can be reclaimed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: kept.path),
+                      "a referenced asset is never a purge candidate")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: managedRoot.appendingPathComponent("9999").path))
+        XCTAssertEqual(
+            try Data(contentsOf: URL(fileURLWithPath: store.stagedFiles(propertyId: "background")[0].stagedPath)),
+            Data("keep-me".utf8))
+    }
+
+    /// A property whose source has gone missing is exactly the case where the store's
+    /// copy is the only copy. Purging must not be what finally loses it.
+    func testPurgeKeepsTheStoredCopyOfAnAssetWhoseSourceIsGone() throws {
+        let source = try writeSource("clouds.png", bytes: "last-copy")
+        try makeStore().importFile(at: source, propertyId: "background", filter: .image)
+        try FileManager.default.removeItem(at: source)
+
+        XCTAssertEqual(try UserAssetStorage.purgeUnreferencedDerivedCaches(), 0)
+
+        let store = makeStore()
+        let restored = try store.importFile(at: source, propertyId: "background", filter: .image)
+        XCTAssertEqual(
+            try Data(contentsOf: URL(fileURLWithPath: restored.stagedPath)), Data("last-copy".utf8))
     }
 }
 

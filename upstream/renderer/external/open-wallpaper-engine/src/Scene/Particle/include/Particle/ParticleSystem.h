@@ -122,6 +122,13 @@ public:
 
     void Emitt();
 
+    /// Whether any emitter exists.
+    ///
+    /// Presence, not live particle count: an emitter with nothing alive this
+    /// instant is still going to emit on the next tick, so counting particles
+    /// would let a scene fall asleep between bursts.
+    [[nodiscard]] bool HasEmitters() const { return ! subsystems.empty(); }
+
     Scene& scene;
 
     std::vector<std::unique_ptr<ParticleSubSystem>> subsystems;

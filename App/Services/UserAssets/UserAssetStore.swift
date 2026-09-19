@@ -59,6 +59,7 @@ struct UserAssetError: LocalizedError, Equatable {
         case projectMissing
         case projectNotWritable
         case invalidPropertyID
+        case invalidWallpaperID
         case sourceUnreadable
         case sourceInsideStaging
         case sourceNotAFile
@@ -73,19 +74,27 @@ struct UserAssetError: LocalizedError, Equatable {
     var errorDescription: String? { reason }
 }
 
-/// Stages the files a `file` or `directory` property points at so a wallpaper page can read them.
+/// Puts a `file` or `directory` property's imported assets where a wallpaper page can
+/// read them. Two locations are involved, and the difference between them is the whole
+/// point of this type.
 ///
-/// Everything lands in `<project>/.mwe-user-assets/<propertyId>/`. That location is forced
-/// by WebKit: `loadFileURL(_:allowingReadAccessTo:)` only grants access below a root that is
-/// an ancestor of the entry file, so a page can never read a file outside its own project
-/// folder. Widening the root to a common ancestor would hand every wallpaper the whole
-/// application-support tree, and a symlink into the user's file is resolved and refused by
-/// WebKit, so the only workable form is a real directory entry inside the project.
+/// * The **managed store** — `ManagedUserAssetStore`, under application support — is
+///   canonical. It holds the app's own copy of the user's file, keyed by the stable
+///   wallpaper id, and it survives deleting the project, re-downloading it from the
+///   Workshop, and every pass of `scripts/clean.py` that does not name it explicitly.
+/// * The **bridge** — `<project>/.mwe-user-assets/<propertyId>/` — is derived and
+///   regenerable. It exists only because WebKit's `loadFileURL(_:allowingReadAccessTo:)`
+///   grants a page read access strictly below a root that is an ancestor of the entry
+///   file. A page therefore cannot read the managed store at all; a symlink out of the
+///   project is resolved and refused; and widening the read root would hand every
+///   wallpaper the whole application-support tree. Entries are hard links onto the
+///   store's files, and byte copies when the project sits on another volume. Deleting
+///   the entire bridge loses nothing: the next import rebuilds it from the manifest.
 ///
-/// Entries are hard links when the source shares the project's volume and byte copies when it
-/// does not. The user's original is never moved, renamed or written to, and no authored
-/// wallpaper file is touched: the dot-directory is the single thing this type creates, and
-/// `clear(propertyId:)` / `clearAll()` are its deletion route.
+/// Data flows store → bridge only. The one exception is the one-shot migration of a
+/// round-6 staging directory, which runs only when the property's original source no
+/// longer resolves and the store has never seen the property. The user's original is
+/// never moved, renamed or written to, and no authored wallpaper file is touched.
 @MainActor final class UserAssetStore {
     /// Watcher construction is injected so tests drive directory changes without FSEvents.
     typealias WatcherFactory = @MainActor (URL, @escaping @MainActor () -> Void) -> DirectoryWatching
@@ -97,6 +106,12 @@ struct UserAssetError: LocalizedError, Equatable {
 
     static let stagingDirectoryName = ".mwe-user-assets"
 
+    /// Names the wallpaper a bridge was written for, so a different wallpaper cannot
+    /// mistake it for a round-6 staging directory to absorb. Hidden, so the directory
+    /// scans that list staged files never see it.
+    static let ownerMarkerName = ".managed-by"
+
+    /// The derived, regenerable bridge directory inside the project.
     static func stagingRoot(projectURL: URL) -> URL {
         projectURL.standardizedFileURL.appendingPathComponent(stagingDirectoryName, isDirectory: true)
     }
@@ -104,18 +119,24 @@ struct UserAssetError: LocalizedError, Equatable {
     var onDirectoryChanged: ((_ propertyId: String, _ added: [UserAssetImport], _ removed: [UserAssetImport]) -> Void)?
 
     private let projectURL: URL
+    private let wallpaperId: String
+    private let managed: ManagedUserAssetStore
     private let fileManager: FileManager
     private let makeWatcher: WatcherFactory
     private var properties: [String: PropertyState] = [:]
 
     init(
         projectURL: URL,
+        wallpaperId: String,
+        managed: ManagedUserAssetStore = ManagedUserAssetStore(),
         fileManager: FileManager = .default,
         watcherFactory: @escaping WatcherFactory = { url, onChange in
             DirectoryWatcher(url: url, onChange: onChange)
         }
     ) {
         self.projectURL = projectURL
+        self.wallpaperId = wallpaperId
+        self.managed = managed
         self.fileManager = fileManager
         self.makeWatcher = watcherFactory
     }
@@ -128,58 +149,112 @@ struct UserAssetError: LocalizedError, Equatable {
 
     // MARK: - Import
 
-    /// Stages a single file. Replaces whatever the property staged before.
+    /// Imports a single file: into the store first, then onto the bridge.
+    ///
+    /// When the user's own file no longer resolves but the store still holds the
+    /// property's asset, the asset stays usable and the property reports a missing
+    /// source rather than being silently cleared.
     @discardableResult
     func importFile(at url: URL, propertyId: String, filter: UserAssetFilter) throws -> UserAssetImport {
-        let source = try canonicalSource(url)
-        guard try !isDirectory(source) else {
-            throw UserAssetError(code: .sourceNotAFile, reason: String(
-                localized: "Choose a file, not a folder."))
+        _ = try bridgeDirectoryURL(propertyId)
+        var manifest = managed.manifest(wallpaperId: wallpaperId)
+        let source: URL
+        do {
+            source = try canonicalSource(url)
+            guard try !isDirectory(source) else {
+                throw UserAssetError(code: .sourceNotAFile, reason: String(
+                    localized: "Choose a file, not a folder."))
+            }
+        } catch let error as UserAssetError where error.code == .sourceUnreadable {
+            let restored = try restoreFromStore(
+                propertyId: propertyId, declaredSource: url.path, kind: .file,
+                filter: filter, limit: 1, manifest: &manifest)
+            guard let first = restored.first else { throw error }
+            return first
         }
         guard filter.allowedExtensions.contains(source.pathExtension.lowercased()) else {
             throw UserAssetError(code: .unsupportedType, reason: unsupportedReason(filter))
         }
-        let directory = try resetPropertyDirectory(propertyId)
-        let staged = directory.appendingPathComponent(source.lastPathComponent)
-        try stage(source, at: staged)
-        let asset = UserAssetImport(stagedPath: staged.path)
+        try requireWritableProject()
+
+        let name = source.lastPathComponent
+        let previous = manifest.properties[propertyId]
+        // Store first, reference second: a crash between the two leaves an unreferenced
+        // copy, which purging reclaims, rather than a reference to nothing.
+        let asset = try managed.adopt(
+            readingFrom: source, fileName: name, sourcePath: source.path,
+            wallpaperId: wallpaperId, propertyId: propertyId,
+            known: previous?.assets.first { $0.fileName == name })
+        manifest.properties[propertyId] = ManagedUserAssetProperty(
+            kind: .file, sourcePath: source.path, assets: [asset],
+            migratedLegacyPaths: previous?.migratedLegacyPaths ?? [])
+        try managed.write(manifest)
+        managed.pruneUnlisted(wallpaperId: wallpaperId, propertyId: propertyId, keeping: [asset])
+
+        let staged = try publishBridge(propertyId: propertyId, assets: [asset])
+        guard let entry = staged[name] else {
+            throw UserAssetError(code: .stagingFailed, reason: String(
+                localized: "\(name) could not be prepared for this wallpaper."))
+        }
         var state = PropertyState(filter: filter, limit: 1)
-        state.entries[source.lastPathComponent] = StagedEntry(asset: asset, stamp: stamp(of: source))
+        state.entries[name] = entry
         properties[propertyId] = state
-        return asset
+        return entry.asset
     }
 
-    /// Stages up to `limit` matching files from the first level of `url` and watches it for
-    /// changes. Returns the staged assets ordered by file name.
+    /// Imports up to `limit` matching files from the first level of `url` and watches it
+    /// for changes. Returns the imported assets ordered by file name.
     @discardableResult
     func importDirectory(
         at url: URL, propertyId: String, filter: UserAssetFilter, limit: Int
     ) throws -> [UserAssetImport] {
-        let source = try canonicalSource(url)
-        guard try isDirectory(source) else {
-            throw UserAssetError(code: .sourceNotADirectory, reason: String(
-                localized: "Choose a folder, not a file."))
+        _ = try bridgeDirectoryURL(propertyId)
+        var manifest = managed.manifest(wallpaperId: wallpaperId)
+        let source: URL
+        do {
+            source = try canonicalSource(url)
+            guard try isDirectory(source) else {
+                throw UserAssetError(code: .sourceNotADirectory, reason: String(
+                    localized: "Choose a folder, not a file."))
+            }
+        } catch let error as UserAssetError where error.code == .sourceUnreadable {
+            let restored = try restoreFromStore(
+                propertyId: propertyId, declaredSource: url.path, kind: .directory,
+                filter: filter, limit: limit, manifest: &manifest)
+            guard !restored.isEmpty else { throw error }
+            return restored
         }
-        let directory = try resetPropertyDirectory(propertyId)
+        try requireWritableProject()
+
+        let previous = manifest.properties[propertyId]
         let scan = scanSource(source, filter: filter, limit: limit)
-        var state = PropertyState(filter: filter, limit: limit)
-        state.sourceDirectory = source
-        state.truncated = scan.truncated
+        var assets: [ManagedUserAsset] = []
         for candidate in scan.files {
-            let staged = directory.appendingPathComponent(candidate.name)
             do {
-                try stage(candidate.url, at: staged)
+                assets.append(try managed.adopt(
+                    readingFrom: candidate.url, fileName: candidate.name, sourcePath: candidate.url.path,
+                    wallpaperId: wallpaperId, propertyId: propertyId,
+                    known: previous?.assets.first { $0.fileName == candidate.name }))
             } catch {
                 // One unreadable entry must not cost the user the rest of the folder.
                 AppLog.warn("user assets \(propertyId): skipped \(candidate.name): \(error.localizedDescription)")
-                continue
             }
-            state.entries[candidate.name] = StagedEntry(
-                asset: UserAssetImport(stagedPath: staged.path), stamp: candidate.stamp)
         }
+        manifest.properties[propertyId] = ManagedUserAssetProperty(
+            kind: .directory, sourcePath: source.path, assets: assets, truncated: scan.truncated,
+            migratedLegacyPaths: previous?.migratedLegacyPaths ?? [])
+        try managed.write(manifest)
+        managed.pruneUnlisted(wallpaperId: wallpaperId, propertyId: propertyId, keeping: assets)
+
         if scan.truncated {
-            AppLog.warn("user assets \(propertyId): folder exceeds \(limit) files; staged the first \(state.entries.count)")
+            AppLog.warn("user assets \(propertyId): folder exceeds \(limit) files; staged the first \(assets.count)")
         }
+        var state = PropertyState(filter: filter, limit: limit)
+        state.sourceDirectory = source
+        state.truncated = scan.truncated
+        state.entries = try publishBridge(propertyId: propertyId, assets: assets)
+        // Watching the user's own folder, never the store and never the bridge: a change
+        // the user makes to their own files is the only thing that should re-import.
         state.watcher = makeWatcher(source) { [weak self] in
             self?.directoryDidChange(propertyId: propertyId)
         }
@@ -207,14 +282,33 @@ struct UserAssetError: LocalizedError, Equatable {
         properties[propertyId]?.truncated ?? false
     }
 
+    /// True when the app owns a copy of this property's assets in managed storage.
+    func isManaged(propertyId: String) -> Bool {
+        !(managed.manifest(wallpaperId: wallpaperId).properties[propertyId]?.assets.isEmpty ?? true)
+    }
+
+    /// True when the user's own file or folder no longer resolves and the property is
+    /// being served from the store alone.
+    func isSourceMissing(propertyId: String) -> Bool {
+        properties[propertyId]?.sourceMissing ?? false
+    }
+
     // MARK: - Removal
 
+    /// Forgets a property entirely: the user cleared it, so the app stops holding a copy.
     func clear(propertyId: String) {
         properties.removeValue(forKey: propertyId)?.watcher?.stop()
-        guard let directory = try? propertyDirectory(propertyId) else { return }
+        var manifest = managed.manifest(wallpaperId: wallpaperId)
+        if manifest.properties.removeValue(forKey: propertyId) != nil {
+            try? managed.write(manifest)
+        }
+        managed.removeProperty(wallpaperId: wallpaperId, propertyId: propertyId)
+        guard let directory = try? bridgeDirectoryURL(propertyId) else { return }
         try? fileManager.removeItem(at: directory)
     }
 
+    /// Drops the whole derived bridge for this project. The store is untouched, so the
+    /// next import rebuilds every file this removes.
     func clearAll() {
         for state in properties.values { state.watcher?.stop() }
         properties.removeAll()
@@ -225,35 +319,49 @@ struct UserAssetError: LocalizedError, Equatable {
 
     private func directoryDidChange(propertyId: String) {
         guard var state = properties[propertyId], let source = state.sourceDirectory else { return }
-        guard let directory = try? propertyDirectory(propertyId) else { return }
+        var manifest = managed.manifest(wallpaperId: wallpaperId)
+        guard var record = manifest.properties[propertyId] else { return }
         let scan = scanSource(source, filter: state.filter, limit: state.limit)
         if scan.truncated != state.truncated {
             AppLog.warn("user assets \(propertyId): folder \(scan.truncated ? "now exceeds" : "no longer exceeds") \(state.limit) files")
         }
         state.truncated = scan.truncated
 
-        var added: [UserAssetImport] = []
-        var surviving = Set<String>()
+        var assets: [ManagedUserAsset] = []
+        var rewritten = Set<String>()
         for candidate in scan.files {
-            surviving.insert(candidate.name)
-            if let existing = state.entries[candidate.name], existing.stamp == candidate.stamp { continue }
-            let staged = directory.appendingPathComponent(candidate.name)
+            let known = record.assets.first { $0.fileName == candidate.name }
             do {
-                try stage(candidate.url, at: staged)
+                let asset = try managed.adopt(
+                    readingFrom: candidate.url, fileName: candidate.name, sourcePath: candidate.url.path,
+                    wallpaperId: wallpaperId, propertyId: propertyId, known: known)
+                if asset != known { rewritten.insert(candidate.name) }
+                assets.append(asset)
             } catch {
                 AppLog.warn("user assets \(propertyId): skipped \(candidate.name): \(error.localizedDescription)")
-                continue
+                if let known { assets.append(known) }
             }
-            let asset = UserAssetImport(stagedPath: staged.path)
-            state.entries[candidate.name] = StagedEntry(asset: asset, stamp: candidate.stamp)
-            added.append(asset)
         }
+        record.assets = assets
+        record.truncated = scan.truncated
+        manifest.properties[propertyId] = record
+        try? managed.write(manifest)
+        managed.pruneUnlisted(wallpaperId: wallpaperId, propertyId: propertyId, keeping: assets)
 
+        let surviving = Set(assets.map(\.fileName))
         var removed: [UserAssetImport] = []
         for (name, entry) in state.entries where !surviving.contains(name) {
             try? fileManager.removeItem(atPath: entry.asset.stagedPath)
             state.entries[name] = nil
             removed.append(entry.asset)
+        }
+        var added: [UserAssetImport] = []
+        let republished = (try? publishBridge(
+            propertyId: propertyId, assets: assets, rewriting: rewritten)) ?? [:]
+        for (name, entry) in republished {
+            let isNew = state.entries[name] == nil
+            state.entries[name] = entry
+            if isNew { added.append(entry.asset) }
         }
 
         properties[propertyId] = state
@@ -264,9 +372,193 @@ struct UserAssetError: LocalizedError, Equatable {
             removed.sorted { $0.stagedPath < $1.stagedPath })
     }
 
-    // MARK: - Staging
+    // MARK: - Store to bridge
 
-    private func propertyDirectory(_ propertyId: String) throws -> URL {
+    /// Restores a property from managed storage when the user's own file or folder can no
+    /// longer be resolved, migrating a round-6 staging directory into the store first if
+    /// this property has never been recorded there.
+    ///
+    /// Returns an empty array when nothing is recoverable, which the caller turns back
+    /// into the original "cannot be read" error.
+    private func restoreFromStore(
+        propertyId: String, declaredSource: String, kind: ManagedUserAssetProperty.Kind,
+        filter: UserAssetFilter, limit: Int, manifest: inout UserAssetManifest
+    ) throws -> [UserAssetImport] {
+        if manifest.properties[propertyId] == nil {
+            migrateLegacyBridge(
+                propertyId: propertyId, declaredSource: declaredSource, kind: kind,
+                filter: filter, limit: limit, manifest: &manifest)
+        }
+        guard let record = manifest.properties[propertyId], !record.assets.isEmpty else { return [] }
+        let present = record.assets.filter { asset in
+            guard let url = try? managed.storedURL(
+                wallpaperId: wallpaperId, propertyId: propertyId, asset: asset) else { return false }
+            return fileManager.fileExists(atPath: url.path)
+        }
+        guard !present.isEmpty else { return [] }
+        AppLog.warn("user assets \(propertyId): \(declaredSource) no longer resolves; serving \(present.count) file(s) from managed storage")
+
+        var state = PropertyState(filter: filter, limit: limit)
+        state.truncated = record.truncated
+        state.sourceMissing = true
+        state.entries = try publishBridge(propertyId: propertyId, assets: present, pruning: false)
+        properties[propertyId] = state
+        return orderedAssets(state)
+    }
+
+    /// One-shot, non-destructive absorption of a round-6 `.mwe-user-assets` directory.
+    ///
+    /// The staged files are hard links onto the user's original, so reading them here
+    /// reads the user's own bytes. Nothing in the old location is deleted, and the
+    /// manifest is written before anything else changes: if the copy or the write fails
+    /// the old staged entry is still exactly where it was and still loads.
+    ///
+    /// Refused when the bridge already belongs to a different wallpaper. A round-6
+    /// bridge carries no owner marker and is therefore migratable by the wallpaper whose
+    /// project it sits in; a bridge this build wrote names its owner, and a wallpaper id
+    /// that does not match must not adopt another wallpaper's files.
+    private func migrateLegacyBridge(
+        propertyId: String, declaredSource: String, kind: ManagedUserAssetProperty.Kind,
+        filter: UserAssetFilter, limit: Int, manifest: inout UserAssetManifest
+    ) {
+        if let owner = bridgeOwner(), owner != wallpaperId { return }
+        guard let directory = try? bridgeDirectoryURL(propertyId),
+              let contents = try? fileManager.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]),
+              !contents.isEmpty else { return }
+        let declaredName = URL(fileURLWithPath: declaredSource).lastPathComponent
+        let allowed = filter.allowedExtensions
+        var assets: [ManagedUserAsset] = []
+        for entry in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            let name = entry.lastPathComponent
+            guard allowed.contains(entry.pathExtension.lowercased()),
+                  (try? entry.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
+            else { continue }
+            if kind == .file, name != declaredName { continue }
+            guard assets.count < max(0, limit) else { break }
+            // A directory member's original sat inside the folder the user picked.
+            let recorded = kind == .file
+                ? declaredSource
+                : URL(fileURLWithPath: declaredSource, isDirectory: true)
+                    .appendingPathComponent(name).path
+            do {
+                assets.append(try managed.adopt(
+                    readingFrom: entry, fileName: name, sourcePath: recorded,
+                    wallpaperId: wallpaperId, propertyId: propertyId, known: nil))
+            } catch {
+                AppLog.warn("user assets \(propertyId): could not migrate \(name): \(error.localizedDescription)")
+            }
+        }
+        guard !assets.isEmpty else { return }
+        manifest.properties[propertyId] = ManagedUserAssetProperty(
+            kind: kind, sourcePath: declaredSource, assets: assets,
+            migratedLegacyPaths: [directory.path])
+        do {
+            try managed.write(manifest)
+            AppLog.warn("user assets \(propertyId): migrated \(assets.count) file(s) from \(directory.path) into managed storage")
+        } catch {
+            // References are unchanged, so the old location still serves the page.
+            manifest.properties[propertyId] = nil
+            AppLog.error("user assets \(propertyId): migration could not be recorded: \(error.localizedDescription)")
+        }
+    }
+
+    /// Reconciles the bridge directory against `assets`. Only missing, stale or
+    /// explicitly named entries are re-linked, so a reconcile that changed nothing
+    /// copies nothing — which matters on the cross-volume path, where a bridge entry
+    /// is a real byte copy rather than a link.
+    @discardableResult
+    private func publishBridge(
+        propertyId: String, assets: [ManagedUserAsset], rewriting: Set<String> = [],
+        pruning: Bool = true
+    ) throws -> [String: StagedEntry] {
+        let directory = try bridgeDirectoryURL(propertyId)
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            throw UserAssetError(code: .projectNotWritable, reason: notWritableReason(error))
+        }
+        markBridgeOwner()
+        var published: [String: StagedEntry] = [:]
+        for asset in assets {
+            let stored = try managed.storedURL(
+                wallpaperId: wallpaperId, propertyId: propertyId, asset: asset)
+            guard fileManager.fileExists(atPath: stored.path) else {
+                AppLog.warn("user assets \(propertyId): \(asset.fileName) is recorded but missing from managed storage")
+                continue
+            }
+            let destination = directory.appendingPathComponent(asset.fileName)
+            if rewriting.contains(asset.fileName) || !bridgeEntryMatches(destination, asset: asset) {
+                do {
+                    try link(stored, to: destination)
+                } catch {
+                    AppLog.warn("user assets \(propertyId): \(asset.fileName) could not be linked into the project: \(error.localizedDescription)")
+                    continue
+                }
+            }
+            published[asset.fileName] = StagedEntry(
+                asset: UserAssetImport(stagedPath: destination.path), managed: asset)
+        }
+        // A pick the property has replaced must stop being readable from the project,
+        // even though the bridge is otherwise left alone between reconciles. Skipped
+        // while restoring from the store, where an entry this run could not adopt is
+        // still the user's only copy.
+        guard pruning else { return published }
+        let live = Set(assets.map(\.fileName))
+        for entry in (try? fileManager.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil, options: [])) ?? []
+        where !live.contains(entry.lastPathComponent) {
+            try? fileManager.removeItem(at: entry)
+        }
+        return published
+    }
+
+    /// Which wallpaper this project's bridge was last written for, or nil when the
+    /// bridge predates the marker — which is exactly the round-6 case migration exists
+    /// to handle.
+    private func bridgeOwner() -> String? {
+        let marker = Self.stagingRoot(projectURL: projectURL)
+            .appendingPathComponent(Self.ownerMarkerName)
+        guard let data = try? Data(contentsOf: marker),
+              let owner = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !owner.isEmpty else { return nil }
+        return owner
+    }
+
+    private func markBridgeOwner() {
+        guard bridgeOwner() != wallpaperId else { return }
+        let marker = Self.stagingRoot(projectURL: projectURL)
+            .appendingPathComponent(Self.ownerMarkerName)
+        try? Data(wallpaperId.utf8).write(to: marker, options: .atomic)
+    }
+
+    /// A bridge entry is current when it is the same size and modification time as the
+    /// stored file it derives from. A hard link is trivially both; a cross-volume copy
+    /// preserves both, so an unchanged asset is never copied twice.
+    private func bridgeEntryMatches(_ destination: URL, asset: ManagedUserAsset) -> Bool {
+        guard let values = try? destination.resourceValues(
+            forKeys: [.fileSizeKey, .contentModificationDateKey]) else { return false }
+        return Int64(values.fileSize ?? -1) == asset.size && values.contentModificationDate == asset.modified
+    }
+
+    private func link(_ source: URL, to destination: URL) throws {
+        try? fileManager.removeItem(at: destination)
+        do {
+            // A hard link onto the store's own copy costs no space. WebKit refuses a
+            // symlink that leaves the read-access root, and resolves it before checking,
+            // so a link is the only zero-copy form a page can actually load.
+            try fileManager.linkItem(at: source, to: destination)
+        } catch {
+            // Hard links cannot cross volumes; a project on another disk needs a copy.
+            try fileManager.copyItem(at: source, to: destination)
+        }
+    }
+
+    // MARK: - Bridge paths
+
+    private func bridgeDirectoryURL(_ propertyId: String) throws -> URL {
         guard !propertyId.isEmpty, propertyId != ".", propertyId != "..",
               !propertyId.contains("/"), !propertyId.contains(":"), !propertyId.contains("\0") else {
             throw UserAssetError(code: .invalidPropertyID, reason: String(
@@ -274,21 +566,6 @@ struct UserAssetError: LocalizedError, Equatable {
         }
         return Self.stagingRoot(projectURL: projectURL)
             .appendingPathComponent(propertyId, isDirectory: true)
-    }
-
-    /// Empties and recreates a property's staging directory so a new pick never inherits
-    /// leftovers from the previous one.
-    private func resetPropertyDirectory(_ propertyId: String) throws -> URL {
-        let directory = try propertyDirectory(propertyId)
-        try requireWritableProject()
-        properties.removeValue(forKey: propertyId)?.watcher?.stop()
-        try? fileManager.removeItem(at: directory)
-        do {
-            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        } catch {
-            throw UserAssetError(code: .projectNotWritable, reason: notWritableReason(error))
-        }
-        return directory
     }
 
     private func requireWritableProject() throws {
@@ -301,24 +578,6 @@ struct UserAssetError: LocalizedError, Equatable {
         let parent = fileManager.fileExists(atPath: root.path) ? root : projectURL
         guard fileManager.isWritableFile(atPath: parent.path) else {
             throw UserAssetError(code: .projectNotWritable, reason: notWritableReason(nil))
-        }
-    }
-
-    private func stage(_ source: URL, at destination: URL) throws {
-        try? fileManager.removeItem(at: destination)
-        do {
-            // A hard link keeps the original untouched and costs no space. WebKit refuses a
-            // symlink that leaves the read-access root, and resolves it before checking, so a
-            // link is the only zero-copy form a page can actually load.
-            try fileManager.linkItem(at: source, to: destination)
-        } catch {
-            do {
-                // Hard links cannot cross volumes; an external disk needs a real copy.
-                try fileManager.copyItem(at: source, to: destination)
-            } catch {
-                throw UserAssetError(code: .stagingFailed, reason: String(
-                    localized: "\(source.lastPathComponent) could not be prepared for this wallpaper."))
-            }
         }
     }
 
@@ -352,7 +611,7 @@ struct UserAssetError: LocalizedError, Equatable {
     private func scanSource(
         _ directory: URL, filter: UserAssetFilter, limit: Int
     ) -> (files: [Candidate], truncated: Bool) {
-        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+        let keys: [URLResourceKey] = [.isRegularFileKey]
         guard let contents = try? fileManager.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: keys,
             options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]) else {
@@ -370,16 +629,9 @@ struct UserAssetError: LocalizedError, Equatable {
                 truncated = true
                 break
             }
-            candidates.append(Candidate(
-                url: url, name: name,
-                stamp: Stamp(size: values.fileSize ?? -1, modified: values.contentModificationDate)))
+            candidates.append(Candidate(url: url, name: name))
         }
         return (candidates, truncated)
-    }
-
-    private func stamp(of url: URL) -> Stamp {
-        let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-        return Stamp(size: values?.fileSize ?? -1, modified: values?.contentModificationDate)
     }
 
     private func orderedAssets(_ state: PropertyState) -> [UserAssetImport] {
@@ -414,20 +666,14 @@ struct UserAssetError: LocalizedError, Equatable {
 
     // MARK: - State
 
-    private struct Stamp: Equatable {
-        var size: Int
-        var modified: Date?
-    }
-
     private struct Candidate {
         var url: URL
         var name: String
-        var stamp: Stamp
     }
 
     private struct StagedEntry {
         var asset: UserAssetImport
-        var stamp: Stamp
+        var managed: ManagedUserAsset
     }
 
     private struct PropertyState {
@@ -436,6 +682,8 @@ struct UserAssetError: LocalizedError, Equatable {
         var sourceDirectory: URL?
         var entries: [String: StagedEntry] = [:]
         var truncated = false
+        /// The user's own file or folder could not be resolved; the store is serving it.
+        var sourceMissing = false
         var watcher: DirectoryWatching?
     }
 }

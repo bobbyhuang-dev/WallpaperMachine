@@ -6,6 +6,8 @@
 #include <string>
 #include <string_view>
 #include "Type.hpp"
+#include "Scene/include/Scene/SceneBackendSelection.hpp"
+#include "Scene/include/Scene/SceneUpdateDemand.hpp"
 #include "Swapchain/ExSwapchain.hpp"
 
 #if defined(WESCENE_BUILD_TESTS) && defined(__APPLE__)
@@ -94,6 +96,21 @@ public:
     void mouseEnter(bool entered);
     void applySystemMediaArtwork(uint32_t width, uint32_t height, const uint8_t* rgba,
                                  std::size_t rgba_len);
+
+    /// How this scene is currently being updated, and why.
+    ///
+    /// Pull-only live state, independent of diagnostic counting. Callers that
+    /// have no renderer yet get `Continuous` with `UnknownInput`, never a
+    /// value that reads as "nothing to do".
+    [[nodiscard]] SceneUpdateDemand::Kind sceneUpdateKind() const;
+    [[nodiscard]] uint32_t                sceneDemandReasons() const;
+
+    /// Which renderer actually drew this scene, and why it is not the
+    /// preferred one.
+    ///
+    /// Reports the backend in use, never the preference: a scene that fell
+    /// back has to look like it fell back.
+    [[nodiscard]] SceneBackendSelection sceneBackendSelection() const;
 
     void setPropertyBool(std::string_view, bool);
     void setPropertyInt32(std::string_view, int32_t);

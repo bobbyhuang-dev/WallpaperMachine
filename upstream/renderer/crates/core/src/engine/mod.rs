@@ -589,6 +589,52 @@ impl WallpaperEngine {
         self.backend.set_scene_optimization_enabled(enabled)
     }
 
+    /// Turns whole-scene on-demand updating on or off for every scene.
+    ///
+    /// A scene that can be shown to have nothing advancing on its own stops
+    /// its frame clock entirely and waits for an event. This is not a frame
+    /// rate setting: a scene that cannot be shown to be still keeps its
+    /// existing cadence, at full quality.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the renderer rejects the call.
+    pub fn set_scene_on_demand_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        self.backend.set_scene_on_demand_enabled(enabled)
+    }
+
+    /// Chooses which renderer new and rebuilt scenes prefer.
+    ///
+    /// A preference, not a guarantee: a scene the native backend cannot draw
+    /// runs on the compatibility backend and reports why.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the renderer rejects the call.
+    pub fn set_scene_renderer_preference(
+        &self,
+        preference: crate::SceneRendererPreference,
+    ) -> Result<(), EngineError> {
+        self.backend.set_scene_renderer_preference(preference)
+    }
+
+    /// Live update state and active backend for every open scene.
+    ///
+    /// Synchronous and infallible so it composes with a synchronous settings
+    /// snapshot, and pull-only so reading it never enables diagnostic
+    /// counting. Each row is a handful of relaxed atomic loads inside the
+    /// renderer, taken under the registry lock that also keeps the scene
+    /// alive for the duration of the read.
+    ///
+    /// A scene that is open but cannot be described yields a row with `None`
+    /// fields rather than being omitted: "running but unreadable" and
+    /// "nothing running" are different facts and must not collapse into an
+    /// empty result.
+    #[must_use]
+    pub fn scene_runtime_reports(&self) -> Vec<crate::SceneRuntimeReport> {
+        crate::SceneRegistry::shared().reports()
+    }
+
     /// Latest system-audio spectrum, or `None` when no analysis has run.
     ///
     /// # Errors

@@ -115,6 +115,10 @@ struct VulkanRender::Impl {
     /// Decides copy elimination and which targets may retain their pixels.
     /// Runs once per compiled graph, never per frame.
     bool applySceneOptimization(Scene&, rg::RenderGraph&);
+    /// Aggregates every pass's reflection-derived dynamic inputs. Runs whether
+    /// or not pixel reuse is enabled, because on-demand updating asks the same
+    /// question for a different purpose.
+    void computeShaderDynamicReasons(Scene&);
     /// Gives every pinned target back to the reuse pool.
     void releaseStaticCache();
     /// Per frame: samples the varying inputs and marks reusable passes.
@@ -185,6 +189,10 @@ struct VulkanRender::Impl {
     StaticSubgraphCache m_static_cache;
     std::vector<StaticPassSample> m_static_samples;
     std::vector<uint8_t> m_static_skip;
+    /// Union of every pass's reflection-derived dynamic inputs for the compiled
+    /// graph. `UnknownInput` until a graph has been analysed, so a renderer
+    /// that has not compiled anything never reports a scene as still.
+    uint32_t m_shader_dynamic_reasons { static_cast<uint32_t>(DynamicReason::UnknownInput) };
     /// The pass list this frame actually records, with skipped clears and
     /// copies removed. Rebuilt in place so no allocation happens per frame.
     std::vector<VulkanPass*> m_frame_passes;
@@ -250,6 +258,9 @@ void VulkanRender::SetVideoPlaybackRate(float rate) {
 double VulkanRender::ShortestVideoFramePeriod() const {
     if (pImpl->m_device == nullptr) return 0.0;
     return pImpl->m_device->tex_cache().ShortestVideoFramePeriod();
+}
+uint32_t VulkanRender::ShaderUpdateDemandReasons() const {
+    return pImpl->m_shader_dynamic_reasons;
 }
 void VulkanRender::SetCounters(RendererCounters* counters) {
     pImpl->m_counters = counters;
@@ -1031,52 +1042,8 @@ wallpaper::WallpaperCursorMapping VulkanRender::Impl::CursorMapping(const Scene&
 
 void VulkanRender::Impl::UpdateCameraFillMode(wallpaper::Scene&   scene,
                                               wallpaper::FillMode fillmode) {
-    using namespace wallpaper;
-    auto width  = m_device->out_extent().width;
-    auto height = m_device->out_extent().height;
-
-    if (width == 0) return;
-    double sw = scene.ortho[0], sh = scene.ortho[1];
-    double fboAspect = width / (double)height, sAspect = sw / sh;
-    auto&  gCam    = *scene.cameras.at("global");
-    auto&  gPerCam = *scene.cameras.at("global_perspective");
-    // assum cam
-    switch (fillmode) {
-    case FillMode::STRETCH:
-        gCam.SetWidth(sw);
-        gCam.SetHeight(sh);
-        gPerCam.SetAspect(sAspect);
-        gPerCam.SetFov(algorism::CalculatePersperctiveFov(1000.0f, gCam.Height()));
-        break;
-    case FillMode::ASPECTFIT:
-        if (fboAspect < sAspect) {
-            // scale height
-            gCam.SetWidth(sw);
-            gCam.SetHeight(sw / fboAspect);
-        } else {
-            gCam.SetWidth(sh * fboAspect);
-            gCam.SetHeight(sh);
-        }
-        gPerCam.SetAspect(fboAspect);
-        gPerCam.SetFov(algorism::CalculatePersperctiveFov(1000.0f, gCam.Height()));
-        break;
-    case FillMode::ASPECTCROP:
-    default:
-        if (fboAspect > sAspect) {
-            // scale height
-            gCam.SetWidth(sw);
-            gCam.SetHeight(sw / fboAspect);
-        } else {
-            gCam.SetWidth(sh * fboAspect);
-            gCam.SetHeight(sh);
-        }
-        gPerCam.SetAspect(fboAspect);
-        gPerCam.SetFov(algorism::CalculatePersperctiveFov(1000.0f, gCam.Height()));
-        break;
-    }
-    gCam.Update();
-    gPerCam.Update();
-    scene.UpdateLinkedCamera("global");
+    ApplyCameraFillMode(
+        scene, fillmode, m_device->out_extent().width, m_device->out_extent().height);
 }
 
 void VulkanRender::Impl::SetWallpaperScalingMode(wallpaper::WallpaperScalingMode mode) {
@@ -1196,6 +1163,12 @@ bool VulkanRender::Impl::applySceneOptimization(Scene& scene, rg::RenderGraph& r
     m_static_cache.Reset();
     m_static_samples.clear();
     m_static_skip.assign(m_passes.size(), uint8_t { 0 });
+    // Unconditional: on-demand updating needs to know what the shaders depend
+    // on whether or not pixel reuse is switched on. The two features answer
+    // different questions from the same reflection, and tying this to the
+    // reuse switch would make turning reuse off silently make every scene look
+    // dynamic.
+    computeShaderDynamicReasons(scene);
     if (! SceneOptimizationEnabled()) return true;
 
     // Copy elimination first: it changes which targets exist and who reads
@@ -1288,6 +1261,29 @@ bool VulkanRender::Impl::applySceneOptimization(Scene& scene, rg::RenderGraph& r
     }
     AdjustSceneOptimizationPinnedBytes(static_cast<int64_t>(m_static_pinned_bytes));
     return true;
+}
+
+void VulkanRender::Impl::computeShaderDynamicReasons(Scene& scene) {
+    // Starts at "unknown" and is replaced wholesale, so a pass shape this
+    // function does not recognise leaves the scene looking dynamic rather than
+    // still. Only `CustomShaderPass` carries shader reflection; clears and
+    // copies contribute nothing of their own.
+    uint32_t reasons = 0;
+    bool     understood_every_pass = true;
+    for (auto* pass : m_passes) {
+        if (pass == nullptr) continue;
+        if (auto* custom = dynamic_cast<CustomShaderPass*>(pass)) {
+            reasons |= custom->staticPassDesc(scene).dynamic_reasons;
+            continue;
+        }
+        if (dynamic_cast<CopyPass*>(pass) != nullptr || dynamic_cast<PrePass*>(pass) != nullptr ||
+            dynamic_cast<FinPass*>(pass) != nullptr) {
+            continue;
+        }
+        understood_every_pass = false;
+    }
+    if (! understood_every_pass) reasons |= DynamicReason::UnknownInput;
+    m_shader_dynamic_reasons = reasons;
 }
 
 void VulkanRender::Impl::releaseStaticCache() {

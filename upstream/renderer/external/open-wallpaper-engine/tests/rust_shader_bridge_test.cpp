@@ -655,3 +655,105 @@ TEST(RustShaderBridge, WPShaderParserCompileToSpvRustReportsGeneratedFragmentPat
     EXPECT_NE(error.find("generated/fragment.glsl"), std::string::npos) << error;
 #endif
 }
+
+TEST(RustShaderBridge, BuildsMetalTargetRequestJson)
+{
+    auto request   = TinyRequest();
+    request.target = wallpaper::shader::RustShaderTarget::MetalMsl;
+
+    const auto json = wallpaper::shader::BuildRustShaderRequestJson(request);
+
+    ASSERT_EQ(json.at("target"), "metal_msl");
+    ASSERT_EQ(json.at("stages").at(0).at("kind"), "vertex");
+}
+
+TEST(RustShaderBridge, WPShaderParserCompileToMslRustReturnsSourceBindingsAndReflection)
+{
+#ifndef WESCENE_HAS_RUST_SHADER_FFI
+    GTEST_SKIP() << "Rust shader staticlib was not linked";
+#else
+    wallpaper::fs::VFS                      vfs;
+    wallpaper::WPShaderInfo                 shader_info;
+    std::string                             reflection_json;
+    std::vector<wallpaper::WPShaderTexInfo> textures {
+        wallpaper::WPShaderTexInfo {
+            .present       = true,
+            .enabled       = true,
+            .composEnabled = { false, false, false },
+        },
+    };
+    auto                                                     units = ParserBridgeUnits();
+    std::vector<wallpaper::shader::RustShaderMetalStage> stages;
+
+    ASSERT_TRUE(wallpaper::WPShaderParser::CompileToMslRust("parser-bridge-scene",
+                                                            "tests/parser-bridge-metal",
+                                                            units,
+                                                            stages,
+                                                            vfs,
+                                                            &shader_info,
+                                                            textures,
+                                                            &reflection_json))
+        << wallpaper::shader::LastRustShaderError();
+
+    ASSERT_EQ(stages.size(), 2u);
+    EXPECT_EQ(stages.at(0).kind, ShaderType::VERTEX);
+    EXPECT_EQ(stages.at(1).kind, ShaderType::FRAGMENT);
+    EXPECT_EQ(stages.at(0).language_version, "2.0");
+
+    for (const auto& stage : stages) {
+        EXPECT_NE(stage.source.find("#include <metal_stdlib>"), std::string::npos);
+        // Naga renames entry points; callers must use the reported name.
+        ASSERT_FALSE(stage.entry_point.empty());
+        EXPECT_NE(stage.entry_point, "main");
+        EXPECT_NE(stage.source.find(stage.entry_point + "("), std::string::npos);
+        EXPECT_FALSE(stage.conventions.clip_space_y_flipped);
+        EXPECT_FALSE(stage.conventions.clip_space_depth_remapped);
+        EXPECT_FALSE(stage.conventions.texture_origin_flipped);
+    }
+
+    const auto& fragment_bindings = stages.at(1).bindings;
+    const auto  texture_binding =
+        std::find_if(fragment_bindings.begin(),
+                     fragment_bindings.end(),
+                     [](const wallpaper::shader::RustShaderMetalBinding& binding) {
+                         return binding.name == "g_Texture0";
+                     });
+    ASSERT_NE(texture_binding, fragment_bindings.end());
+    EXPECT_EQ(texture_binding->set, 0u);
+    EXPECT_EQ(texture_binding->slot_kind, wallpaper::shader::RustShaderMetalSlotKind::Texture);
+    // The mapping the Metal backend reproduces: metal slot == SPIR-V binding.
+    EXPECT_EQ(texture_binding->slot, texture_binding->binding);
+
+    const auto sampler_binding =
+        std::find_if(fragment_bindings.begin(),
+                     fragment_bindings.end(),
+                     [](const wallpaper::shader::RustShaderMetalBinding& binding) {
+                         return binding.name == "_we_Sampler_g_Texture0";
+                     });
+    ASSERT_NE(sampler_binding, fragment_bindings.end());
+    EXPECT_EQ(sampler_binding->slot_kind, wallpaper::shader::RustShaderMetalSlotKind::Sampler);
+    EXPECT_EQ(sampler_binding->slot, sampler_binding->binding);
+    EXPECT_NE(texture_binding->binding, sampler_binding->binding);
+
+    // The Metal target must return the same reflection payload the SPIR-V
+    // target does; the Metal backend reads uniform layout and texture slot
+    // names from it.
+    ASSERT_FALSE(reflection_json.empty());
+    const auto reflection  = nlohmann::json::parse(reflection_json);
+    const auto descriptors = reflection.value("descriptor_bindings", nlohmann::json::array());
+    EXPECT_FALSE(descriptors.empty());
+    EXPECT_FALSE(reflection.value("vertex_inputs", nlohmann::json::array()).empty());
+    EXPECT_EQ(shader_info.alias.at("albedo"), "g_Texture0");
+    EXPECT_TRUE(units.at(1).preprocess_info.active_tex_slots.contains(0));
+#endif
+}
+
+TEST(RustShaderBridge, MetalAndSpirvTargetsUseDifferentProgramCacheKeys)
+{
+    auto spirv_request   = TinyRequest();
+    auto metal_request   = TinyRequest();
+    metal_request.target = wallpaper::shader::RustShaderTarget::MetalMsl;
+
+    EXPECT_NE(wallpaper::shader::BuildRustShaderRequestJson(spirv_request).dump(),
+              wallpaper::shader::BuildRustShaderRequestJson(metal_request).dump());
+}

@@ -14,6 +14,13 @@ enum ClientPaths {
 
     static var libraryURL: URL { supportURL.appendingPathComponent("Library", isDirectory: true) }
     static var managedAssetsURL: URL { supportURL.appendingPathComponent("SceneAssets", isDirectory: true) }
+    /// Where user-picked `file`/`directory` property assets are kept for good.
+    ///
+    /// Deliberately not under any directory named `Cache`, not inside `Library/`
+    /// (the wallpaper library, which a re-download replaces) and not inside the
+    /// Steam workshop tree, so deleting or re-downloading a wallpaper cannot take
+    /// the user's imported files with it.
+    static var userAssetsURL: URL { supportURL.appendingPathComponent("UserAssets", isDirectory: true) }
     static var assetsURL: URL {
         if let configured = UserDefaults.standard.string(forKey: "MacWallpaperEngineAssetsPath"), !configured.isEmpty {
             let url = URL(fileURLWithPath: configured, isDirectory: true)
@@ -48,6 +55,7 @@ enum ClientPaths {
         setenv("MAC_WALLPAPER_ENGINE_SUPPORT_ROOT", supportURL.path, 1)
         setenv("MAC_WALLPAPER_ENGINE_LIBRARY_ROOT", libraryURL.path, 1)
         setenv("MAC_WALLPAPER_ENGINE_ASSETS_ROOT", assetsURL.path, 1)
+        setenv("MAC_WALLPAPER_ENGINE_USER_ASSETS_ROOT", userAssetsURL.path, 1)
     }
 
     static func hasSceneAssets(at url: URL) -> Bool {

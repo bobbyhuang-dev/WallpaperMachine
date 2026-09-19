@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <span>
 #include <optional>
+#include <memory>
 
 #include <Eigen/Dense>
 
@@ -74,6 +75,12 @@ public:
     uint32_t    location;
 };
 
+/// Metal Shading Language translation of a shader program, defined by the
+/// native Metal backend. Deliberately incomplete here: `shared_ptr` erases the
+/// deleter at construction, so this declaration gives the scene library the
+/// field without giving it a dependency on the renderer that fills it.
+struct SceneMetalProgram;
+
 struct SceneShader {
 public:
     uint32_t    id;
@@ -90,5 +97,10 @@ public:
     std::vector<ShaderAttribute> attrs;
     ShaderValues                 default_uniforms;
     std::optional<std::string>   rust_reflection_json;
+    /// Null means translation was never attempted, which is the normal state
+    /// whenever the compatibility renderer is selected. A non-null program
+    /// that reports an error means it was attempted and failed. The two must
+    /// stay distinguishable: only the second is a fault in the shader.
+    std::shared_ptr<const SceneMetalProgram> metal_program;
 };
 } // namespace wallpaper

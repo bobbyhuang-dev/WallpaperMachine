@@ -16,6 +16,21 @@
 namespace wallpaper::shader
 {
 
+// Shader compilation target requested from the Rust shader pipeline.
+enum class RustShaderTarget {
+    VulkanSpirv,
+    MetalMsl,
+};
+
+// Metal argument-table namespace a shader resource is bound into. Metal keeps
+// buffers, textures and samplers in independent index spaces, so a slot is
+// only meaningful together with its namespace.
+enum class RustShaderMetalSlotKind {
+    Buffer,
+    Texture,
+    Sampler,
+};
+
 struct RustShaderStageSource {
     ShaderType  kind;
     std::string source;
@@ -42,11 +57,46 @@ struct RustShaderProperty {
 struct RustShaderRequest {
     std::string                         shader_name;
     std::string                         scene_id;
+    RustShaderTarget                    target { RustShaderTarget::VulkanSpirv };
     bool                                cache_enabled { false };
     std::vector<RustShaderStageSource>  stages;
     Combos                              combos;
     std::vector<RustShaderTextureInfo>  textures;
     std::vector<RustShaderProperty>     properties;
+};
+
+// One shader resource and the Metal argument-table slot it was bound to.
+//
+// `name` is the original shader-visible global name, which is what the
+// reflection payload uses. It is not necessarily the identifier that appears
+// in the generated Metal source: the backend appends a suffix on collisions.
+struct RustShaderMetalBinding {
+    std::string             name;
+    uint32_t                set { 0 };
+    uint32_t                binding { 0 };
+    RustShaderMetalSlotKind slot_kind { RustShaderMetalSlotKind::Buffer };
+    uint32_t                slot { 0 };
+};
+
+// Coordinate conventions the generated Metal source follows. Every field
+// records a transform the shader compiler could have injected; the Metal
+// renderer has to agree with these instead of assuming them.
+struct RustShaderMetalConventions {
+    bool clip_space_y_flipped { false };
+    bool clip_space_depth_remapped { false };
+    bool texture_origin_flipped { false };
+};
+
+// Compiled Metal Shading Language output for one shader stage.
+struct RustShaderMetalStage {
+    ShaderType                          kind { ShaderType::VERTEX };
+    std::string                         source;
+    // Generated Metal entry-point function name. The backend renames entry
+    // points, so this is never assumed to be "main".
+    std::string                         entry_point;
+    std::string                         language_version;
+    std::vector<RustShaderMetalBinding> bindings;
+    RustShaderMetalConventions          conventions;
 };
 
 struct RustShaderOutput {
@@ -59,6 +109,9 @@ struct RustShaderOutput {
     std::string             reflection_json;
     std::string             diagnostics_json;
     std::string             cache_key;
+    // Populated only for RustShaderTarget::MetalMsl, one entry per stage in
+    // the same order as `codes` would carry for the SPIR-V target.
+    std::vector<RustShaderMetalStage> metal_stages;
 };
 
 using RustShaderIncludeReader = std::function<std::optional<std::string>(std::string_view)>;
@@ -66,6 +119,11 @@ using RustShaderIncludeReader = std::function<std::optional<std::string>(std::st
 nlohmann::json BuildRustShaderRequestJson(const RustShaderRequest& request);
 void ApplyRustShaderMetadataJson(std::string_view metadata_json, RustShaderOutput& output);
 void ApplyRustShaderReflectionJson(std::string_view reflection_json, RustShaderOutput& output);
+void ApplyRustShaderMetalStageJson(
+    std::string_view metal_json,
+    std::string_view msl_source,
+    ShaderType kind,
+    RustShaderMetalStage& stage);
 
 bool CompileRustShaderProgram(
     const RustShaderRequest& request,

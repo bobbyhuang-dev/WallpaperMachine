@@ -82,6 +82,9 @@ fn emit_static_link_flags(build_dir: &Path) {
         "wescene-renderer",
         "wpAudio",
         "wpLooper",
+        // Before wpVulkanRender: the Metal backend reuses that library's pass
+        // analysis and camera helpers, so it has to be resolved first.
+        "wpMetalRender",
         "wpVulkanRender",
         "wpScene",
         "wpVulkan",
@@ -137,6 +140,7 @@ fn static_link_search_paths(build_dir: &Path) -> Vec<PathBuf> {
         build_dir.join("src/Scene/Particle"),
         build_dir.join("src/Scene/RenderGraph"),
         build_dir.join("src/Scene/Timer"),
+        build_dir.join("src/Scene/MetalRender"),
         build_dir.join("src/Scene/VulkanRender"),
         build_dir.join("src/Utils"),
         build_dir.join("src/Vulkan"),

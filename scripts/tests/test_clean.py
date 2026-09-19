@@ -2,6 +2,7 @@
 """Unit tests for scripts/clean.py."""
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import os
 import sys
@@ -16,6 +17,13 @@ SPEC = importlib.util.spec_from_file_location("clean", SCRIPTS / "clean.py")
 clean = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(clean)
+
+# `clean.ROOT`, `clean.ARTIFACTS` and `clean.BUILD` are bound to the real checkout at
+# import time, and `clean.main` deletes what they name. Every test that calls into
+# `clean.main` has to redirect all three, and prove it did.
+REAL_ROOT = clean.ROOT
+REAL_ARTIFACTS = clean.ARTIFACTS
+REAL_BUILD = clean.BUILD
 
 
 def project(root, name, staged=("a.png",)):
@@ -70,6 +78,114 @@ class UserAssetDiscoveryTests(unittest.TestCase):
         project(self.library, "starter-aurora")
         with mock.patch.object(clean.Path, "home", staticmethod(lambda: self.home)):
             self.assertEqual([path for path in clean.evidence() if clean.USER_ASSETS_DIR in path.parts], [])
+
+
+class ManagedUserAssetTests(unittest.TestCase):
+    """The app's own copies of what the user imported. Nothing regenerates them, so
+    every pass that is not the one flag naming them has to leave them alone."""
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp())
+        self.support = self.home / "support"
+        os.environ["MAC_WALLPAPER_ENGINE_HOME"] = str(self.support)
+        self.managed = self.support / clean.MANAGED_USER_ASSETS_DIR / "2001" / "cover" / "abc"
+        self.managed.mkdir(parents=True)
+        self.asset = self.managed / "clouds.png"
+        self.asset.write_bytes(b"imported")
+        # A stand-in repository. `clean.main` deletes what `evidence()` finds, and
+        # `evidence()` reads the module-level ROOT / ARTIFACTS / BUILD, which are bound
+        # to the real checkout at import. Redirecting `Path.home()` alone is not enough:
+        # without all four, running this file deletes the developer's own `artifacts/`
+        # and `build/`.
+        self.repository = self.home / "repository"
+        (self.repository / "artifacts").mkdir(parents=True)
+        (self.repository / "artifacts" / "log.txt").write_text("evidence")
+        (self.repository / "build" / "Build").mkdir(parents=True)
+        (self.repository / "build" / "stray.log").write_text("stray")
+        self.real = self.setUpReal()
+
+    def setUpReal(self):
+        return {path: path.exists() for path in (REAL_ARTIFACTS, REAL_BUILD)}
+
+    def tearDown(self):
+        os.environ.pop("MAC_WALLPAPER_ENGINE_HOME", None)
+        # The check that would have caught cleaning the wrong tree: the real
+        # `artifacts/` and `build/` are exactly as they were before this test ran.
+        for path, existed in self.real.items():
+            self.assertEqual(
+                existed, path.exists(),
+                f"these tests must never reach the real {path}")
+
+    def isolated(self, *flags):
+        return (
+            mock.patch.object(clean.Path, "home", staticmethod(lambda: self.home)),
+            mock.patch.object(clean, "ROOT", self.repository),
+            mock.patch.object(clean, "ARTIFACTS", self.repository / "artifacts"),
+            mock.patch.object(clean, "BUILD", self.repository / "build"),
+            mock.patch.object(sys, "argv", ["clean.py", *flags]),
+        )
+
+    def run_clean(self, *flags):
+        with contextlib.ExitStack() as stack:
+            for patch in self.isolated(*flags):
+                stack.enter_context(patch)
+            # Structural, not merely careful: a redirection that silently stopped
+            # working would otherwise be invisible on a machine with no build output.
+            for redirected in (clean.ROOT, clean.ARTIFACTS, clean.BUILD):
+                self.assertTrue(
+                    self.home in redirected.parents,
+                    f"{redirected} is outside the test's own directory")
+            self.assertEqual(clean.main(), 0)
+
+    def test_the_default_pass_leaves_the_managed_store_alone(self):
+        self.run_clean()
+        self.assertTrue(self.asset.exists())
+
+    def test_all_leaves_the_managed_store_alone(self):
+        self.run_clean("--all")
+        self.assertTrue(self.asset.exists())
+
+    def test_derived_leaves_the_managed_store_alone(self):
+        self.run_clean("--derived")
+        self.assertTrue(self.asset.exists())
+
+    def test_clearing_the_regenerable_bridge_leaves_the_managed_store_alone(self):
+        library = self.support / "Library"
+        project(library, "2001")
+        bridge = library / "2001" / clean.USER_ASSETS_DIR
+        self.run_clean("--user-assets")
+        self.assertFalse(bridge.exists(), "the bridge is what --user-assets removes")
+        self.assertTrue(
+            self.asset.exists(),
+            "the bridge is derived from the store; removing it must not remove the store")
+
+    def test_only_the_flag_that_says_so_deletes_the_managed_store(self):
+        self.run_clean("--managed-user-assets")
+        self.assertFalse(self.asset.exists())
+        self.assertFalse((self.support / clean.MANAGED_USER_ASSETS_DIR).exists())
+
+    def test_a_dry_run_of_the_destructive_flag_deletes_nothing(self):
+        self.run_clean("--managed-user-assets", "--dry-run")
+        self.assertTrue(self.asset.exists())
+
+    def test_the_managed_store_is_never_reported_as_evidence(self):
+        with contextlib.ExitStack() as stack:
+            for patch in self.isolated():
+                stack.enter_context(patch)
+            self.assertEqual(
+                [path for path in clean.evidence()
+                 if clean.MANAGED_USER_ASSETS_DIR in path.parts],
+                [])
+
+    def test_the_stand_in_repository_is_what_the_default_pass_actually_cleans(self):
+        """Proves the redirection is real rather than merely careful: with ROOT,
+        ARTIFACTS and BUILD left unpatched this pass would be deleting the checkout."""
+        self.run_clean()
+        self.assertFalse((self.repository / "artifacts").exists())
+        self.assertTrue(
+            (self.repository / "build" / "Build").exists(),
+            "the default pass keeps the built app; only strays under build/ go")
+        self.assertFalse((self.repository / "build" / "stray.log").exists())
 
 
 class ReclaimableTests(unittest.TestCase):

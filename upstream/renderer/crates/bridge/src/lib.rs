@@ -16,6 +16,7 @@ pub mod paths;
 mod power;
 pub mod project;
 pub mod state;
+pub mod user_assets;
 
 #[doc(hidden)]
 pub use power::handle_power_change;
@@ -31,7 +32,8 @@ pub use api::{
     BridgeLibrarySnapshot, BridgeLockScreenScene, BridgeLogLevel, BridgeLogStatus,
     BridgeMonitorInfoRow, BridgeMonitorInformationSnapshot, BridgePlaybackState,
     BridgePropertyDescriptor, BridgePropertyKind, BridgePropertyValue, BridgeScalingMode,
-    BridgeSettingsSnapshot, BridgeSliderMetadata, BridgeSnapshotBundle, BridgeStorageStatus,
+    BridgeSceneBackendReport, BridgeSceneUpdateModeReport, BridgeSettingsSnapshot,
+    BridgeSliderMetadata, BridgeSnapshotBundle, BridgeStorageStatus,
     BridgeVideoBackendReport, BridgeWallpaperEntry, BridgeWallpaperKind,
     BridgeWallpaperMutationBundle,
     BridgeWallpaperOptionsSnapshot, WallpaperBridge,

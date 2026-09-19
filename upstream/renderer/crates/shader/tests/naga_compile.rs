@@ -1,5 +1,5 @@
 use shader::{
-    ShaderCompiler, ShaderError, ShaderStageKind,
+    CompiledStageArtifact, ShaderCompiler, ShaderError, ShaderStageKind, ShaderTarget,
     compile::NagaCompiler,
     legalize::{Codegen, CodegenStageSource},
     syntax::ShaderModule,
@@ -21,12 +21,15 @@ void main() {
     let source = legalized_source(ShaderStageKind::Vertex, source_text);
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Vertex, &source)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Vertex, &source)
         .expect("legalized vertex shader should compile");
 
     assert_eq!(artifact.kind(), ShaderStageKind::Vertex);
     assert_eq!(artifact.stage().kind(), ShaderStageKind::Vertex);
-    assert_eq!(artifact.stage().spirv().first(), Some(&SPIRV_MAGIC));
+    assert_eq!(
+        artifact.stage().spirv().and_then(<[u32]>::first),
+        Some(&SPIRV_MAGIC)
+    );
     assert_eq!(artifact.stage().legalized_source(), Some(source_text));
     assert_eq!(artifact.module().entry_points.len(), 1);
     assert!(artifact.diagnostics().is_empty());
@@ -44,11 +47,11 @@ void main() {
     let source = legalized_source(ShaderStageKind::Vertex, source_text);
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Vertex, &source)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Vertex, &source)
         .expect("legalized vertex shader should compile");
 
     assert!(
-        !spirv_contains_opcode(artifact.stage().spirv(), SPIRV_OP_FNEGATE),
+        !spirv_contains_opcode(spirv(&artifact), SPIRV_OP_FNEGATE),
         "vertex SPIR-V must not contain Naga's BuiltIn::Position coordinate-space Y flip"
     );
 }
@@ -75,15 +78,15 @@ void main() {
     );
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Vertex, &source)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Vertex, &source)
         .expect("legalized HLSL mul vertex shader should compile");
 
     assert!(
-        spirv_contains_opcode(artifact.stage().spirv(), SPIRV_OP_MATRIX_TIMES_VECTOR),
+        spirv_contains_opcode(spirv(&artifact), SPIRV_OP_MATRIX_TIMES_VECTOR),
         "MVP transform should match known-good shader-cache/proper SPIR-V OpMatrixTimesVector"
     );
     assert!(
-        !spirv_contains_opcode(artifact.stage().spirv(), SPIRV_OP_VECTOR_TIMES_MATRIX),
+        !spirv_contains_opcode(spirv(&artifact), SPIRV_OP_VECTOR_TIMES_MATRIX),
         "MVP transform must not regress to OpVectorTimesMatrix"
     );
 }
@@ -114,7 +117,7 @@ void main() {
     );
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Vertex, &source)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Vertex, &source)
         .expect("legalized bloom vertex shader with array varying should compile");
 
     assert_eq!(artifact.kind(), ShaderStageKind::Vertex);
@@ -132,12 +135,15 @@ void main() {
     let source = legalized_source(ShaderStageKind::Fragment, source_text);
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &source)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &source)
         .expect("legalized fragment shader should compile");
 
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
     assert_eq!(artifact.stage().kind(), ShaderStageKind::Fragment);
-    assert_eq!(artifact.stage().spirv().first(), Some(&SPIRV_MAGIC));
+    assert_eq!(
+        artifact.stage().spirv().and_then(<[u32]>::first),
+        Some(&SPIRV_MAGIC)
+    );
     assert_eq!(artifact.stage().legalized_source(), Some(source_text));
     assert_eq!(artifact.module().entry_points.len(), 1);
     assert!(artifact.diagnostics().is_empty());
@@ -168,7 +174,7 @@ void main() {
     );
 
     let artifact = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &source)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &source)
         .expect("scalar expression vector max shader should compile");
 
     assert_eq!(artifact.kind(), ShaderStageKind::Fragment);
@@ -186,7 +192,7 @@ void main() {
     let source = legalized_source(ShaderStageKind::Fragment, source_text);
 
     let err = NagaCompiler
-        .compile_stage(ShaderStageKind::Fragment, &source)
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &source)
         .expect_err("unknown GLSL symbol should fail compilation");
 
     let ShaderError::Compile { diagnostics } = err else {
@@ -210,6 +216,13 @@ void main() {
 
 fn legalized_source(stage: ShaderStageKind, source: &str) -> CodegenStageSource {
     CodegenStageSource::new(stage, source.to_owned(), Box::from([]))
+}
+
+fn spirv<M>(artifact: &CompiledStageArtifact<M>) -> &[u32] {
+    artifact
+        .stage()
+        .spirv()
+        .expect("vulkan_spirv target should produce SPIR-V words")
 }
 
 fn spirv_contains_opcode(words: &[u32], opcode: u16) -> bool {

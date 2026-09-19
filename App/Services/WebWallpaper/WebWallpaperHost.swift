@@ -62,7 +62,9 @@ final class WebWallpaperHost {
     /// the pages consuming the provider: a page whose user turned integration
     /// off still has to be told so.
     private var mediaListeners: Set<ObjectIdentifier> = []
-    private let makeAssetStore: (@MainActor (URL) -> any WebWallpaperAssetSource)?
+    /// Built per project, and keyed on the stable wallpaper id so the managed store
+    /// survives the project being deleted and downloaded again.
+    private let makeAssetStore: (@MainActor (URL, String) -> any WebWallpaperAssetSource)?
     private var assetStores: [String: any WebWallpaperAssetSource] = [:]
     /// What each `file`/`directory` property was last staged from, so a
     /// reconcile that changed nothing does not re-link a whole directory.
@@ -85,7 +87,7 @@ final class WebWallpaperHost {
         audioPump: WebWallpaperAudioPump? = nil,
         setAudioSubscribed: (@MainActor (String, UInt32, Bool) async throws -> Void)? = nil,
         mediaProvider: (any SystemMediaProvider)? = nil,
-        assetStore: (@MainActor (URL) -> any WebWallpaperAssetSource)? = nil
+        assetStore: (@MainActor (URL, String) -> any WebWallpaperAssetSource)? = nil
     ) {
         self.fetch = fetch
         self.screens = screens ?? { Self.systemScreens() }
@@ -108,7 +110,7 @@ final class WebWallpaperHost {
                     wallpaperId: wallpaperId, displayId: displayId, subscribed: subscribed)
             },
             mediaProvider: MediaRemoteMediaProvider(),
-            assetStore: { UserAssetStore(projectURL: $0) })
+            assetStore: { UserAssetStore(projectURL: $0, wallpaperId: $1) })
     }
 
     static func systemScreens() -> [(id: UInt32, frame: NSRect)] {
@@ -472,7 +474,9 @@ final class WebWallpaperHost {
                 }
             }
             if stagedAssets[project]?[property.id]?.source != property.source {
-                restage(property, project: project, title: wallpaper.title)
+                restage(
+                    property, project: project, wallpaperId: wallpaper.wallpaperId,
+                    title: wallpaper.title)
                 restaged = true
             }
         }
@@ -512,14 +516,18 @@ final class WebWallpaperHost {
         return String(data: encoded, encoding: .utf8)
     }
 
-    private func restage(_ property: PathProperty, project: String, title: String) {
-        guard let store = assetStore(forProject: project) else {
+    private func restage(
+        _ property: PathProperty, project: String, wallpaperId: String, title: String
+    ) {
+        guard let store = assetStore(forProject: project, wallpaperId: wallpaperId) else {
             // Nothing can stage the file, so the page is told the property is
             // unset rather than handed a path it is not allowed to read.
             stagedAssets[project, default: [:]][property.id] = StagedAsset(source: property.source, pageValue: "")
             return
         }
-        store.clear(propertyId: property.id)
+        // Only a genuinely cleared property is cleared in the store. Re-importing the
+        // same selection must not discard the app's managed copy and fetch it again.
+        if property.source.isEmpty { store.clear(propertyId: property.id) }
         let previousFiles = directoryFiles[project]?[property.id] ?? []
         directoryFiles[project]?[property.id] = nil
         guard !property.source.isEmpty else {
@@ -563,10 +571,12 @@ final class WebWallpaperHost {
         }
     }
 
-    private func assetStore(forProject project: String) -> (any WebWallpaperAssetSource)? {
+    private func assetStore(
+        forProject project: String, wallpaperId: String
+    ) -> (any WebWallpaperAssetSource)? {
         if let existing = assetStores[project] { return existing }
         guard let makeAssetStore else { return nil }
-        let store = makeAssetStore(URL(fileURLWithPath: project, isDirectory: true))
+        let store = makeAssetStore(URL(fileURLWithPath: project, isDirectory: true), wallpaperId)
         store.onDirectoryChanged = { [weak self] propertyId, added, removed in
             MainActor.assumeIsolated {
                 self?.directoryChanged(

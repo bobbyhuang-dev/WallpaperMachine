@@ -80,6 +80,218 @@ recorded as blocked rather than failed:
 **No power number, watt figure or saving percentage is reported anywhere in this
 document.** Counters and unit tests bound what is claimed.
 
+## Round 7 — on-demand scene updating, managed user assets, native Metal
+
+Three features. Whole-scene on-demand updating and the user-asset relocation
+are complete. The native Metal scene backend is the third and is reported
+separately at the end of this section, because it has a different completion
+state and must not be described as if it shipped alongside the other two.
+
+### P02 — a scene that has nothing to do stops ticking
+
+Round 6 let the renderer skip redrawing render targets whose pixels had not
+changed. It did not stop the frame loop: scripts, animations, the particle
+step, the video clock and the whole DRAW message still ran at the configured
+rate. This round stops that loop outright for scenes that can be shown to have
+no continuing update need.
+
+**The two questions are kept separate on purpose.** "This target's pixels can
+be reused" and "this scene's runtime can sleep" are different, and answering
+the second with the first would stop scripts, sound and timelines on a scene
+whose image merely happened to be still. A scene may idle only when *both* the
+renderer's shader analysis and the runtime's own registries report nothing that
+advances on its own.
+
+What the runtime contributes comes from
+`SceneRuntimeContext::DescribeTimeAdvancingWork`, which mirrors `Tick` loop for
+loop: an unpaused video texture with a positive rate, a scalar/zoom/material
+alpha animation, a scripted value or SceneScript, a node transform or material
+constant bound to a dynamic value, a bound text layer, a puppet layer, or a
+sound layer whose stream is still held. What the renderer contributes is the
+union of every pass's reflection-derived dynamic inputs, already computed for
+round 6's reuse analysis and now published as
+`VulkanRender::ShaderUpdateDemandReasons()`.
+
+Two of the renderer's reasons are deliberately *not* carried across:
+`PointerUniform` and `RuntimeImage`. Both make a target ineligible for pixel
+reuse, but neither means the scene changes on its own — they mean it changes
+when something happens. A pointer-reactive scene sleeps and is woken by pointer
+movement.
+
+**The clock genuinely stops.** `ThreadTimer` gained an idle state that waits on
+its condition variable with no deadline at all, rather than a very long
+interval: a long interval still wakes to discover there is nothing to do.
+`WakeOnce` is a latch taken under the same mutex the waiter re-checks, so a
+wake that lands between the decision to sleep and the wait itself still
+produces exactly one frame instead of being lost. `WakeAt` keeps a single
+appointment for content that knows when it next changes, and the appointment is
+consumed once rather than left to spin on an expired deadline.
+
+**Waking is done in one place, not at every call site.** Every render-handler
+command except the draw itself requests a frame, so a command added later wakes
+the scene by default; forgetting produces one redundant frame rather than a
+wallpaper that stops responding to a setting. Pointer input is the one event
+that never passes through the looper, so it wakes explicitly — and only when a
+pass actually samples the pointer, because waking on every mouse move would
+give a still wallpaper a frame rate equal to the pointer sample rate.
+
+A request is dropped while the clock is stopped, so no event can resume a
+wallpaper the user paused.
+
+**Conservative by construction.** The demand starts at `UnknownInput` and is
+only ever narrowed by evidence. No scene, no renderer, no compiled graph, no
+runtime, an unrecognised pass kind, or no completed first frame all keep the
+scene running. Idling before the first good frame would leave whatever was on
+the surface before the wallpaper started.
+
+Default off, in Settings → Performance → Scene wallpapers.
+
+### Live status, not a restated preference
+
+The panel shows what each running scene is actually doing: continuously
+updating with the reasons listed, waiting for events, waiting for a deadline,
+paused by the user, suspended by policy, not applicable, or unknown. A scene
+that is running but cannot be read is emitted as a row with `unknown`, never
+omitted and never shown as `continuous` — "running but unreadable" and "nothing
+running" are different facts.
+
+This is published through direct pull-only C getters, not through the renderer
+counters. Counters are opt-in diagnostics, and building a settings snapshot
+must not switch diagnostics on as a side effect. Reading costs a few relaxed
+atomic loads taken under the registry lock that also keeps the scene alive for
+the duration of the read. No timer, display link or periodic task was added.
+
+`unknown_input` is surfaced verbatim rather than folded into a generic message:
+it means the renderer found an input it could not account for and therefore
+kept the scene running, and it is the whole diagnosis when a user asks why
+on-demand updating did nothing for their wallpaper.
+
+### User assets — the store moved, the bridge did not
+
+Round 6 staged user-picked files inside the wallpaper package, at
+`<project>/.mwe-user-assets/`. That tied user data to a directory Steam can
+replace. The canonical store is now `<support>/UserAssets/<wallpaperId>/…`
+with a manifest recording the asset id, the user's original path, size, mtime,
+a content digest and the import kind. Identity is the stable library id plus
+the property id plus the digest, never the wallpaper's display name or entry
+file name, so a Workshop update or re-download does not orphan a selection.
+
+**The in-project directory still exists, and this is a deliberate consequence
+rather than an oversight.** A `WKWebView` may only read below a root that is an
+ancestor of its entry file; files outside it are blocked, symlinks are resolved
+and refused, and hard links load. There is no scheme handler or local server
+for wallpaper pages, and adding one would change the page origin and break the
+`'file:///' + value` contract author pages rely on. So `.mwe-user-assets` is
+demoted to a derived, regenerable bridge of hard links onto the store's copies,
+holding no bytes that exist nowhere else. Deleting the whole bridge loses
+nothing; deleting and re-downloading the project loses nothing. Data flows
+store → bridge only.
+
+Migration publishes into the store first, then updates references, and never
+deletes anything in the old location. A failure leaves the old reference
+working. It runs once, recorded in the manifest.
+
+An asset whose original source is gone but which is present in the store stays
+usable and is served from the store. One missing from both is reported as
+missing rather than silently cleared.
+
+`scripts/clean.py` keeps `--user-assets` for the regenerable bridge and gains a
+separate, explicit flag for the managed store that says it destroys imported
+files. Neither the default run nor `--all` touches the store.
+
+### R04 — a native Metal scene backend that actually draws
+
+`src/Scene/MetalRender/` is a real Metal renderer, not a route to one. It
+builds `MTLRenderPipelineState` objects from the author's own shaders,
+translated to MSL, and issues `drawPrimitives` / `drawIndexedPrimitives` from an
+`MTLRenderCommandEncoder`. Pipelines and libraries are built in the prepare
+step, never inside a frame; frames are bounded by a `dispatch_semaphore` with a
+completion handler, and there is no `waitUntilCompleted` on the per-frame path.
+
+**MSL comes from the existing compiler, not a new one.** `crates/shader` already
+parsed author GLSL with naga and emitted SPIR-V; it now also emits MSL from the
+same validated module. Bindings are explicit — `fake_missing_bindings` is off,
+and a resource the map cannot cover fails the compile instead of silently
+inventing a slot. Entry points are read from the emitted metadata because naga
+renames `main` to `main_`. The program cache key includes the target, so a
+SPIR-V entry can never be served for an MSL request.
+
+**No clip-space flip is applied, in either direction.** The Vulkan path uses a
+negative-height viewport, which is not an extra transform: it is what makes
+Vulkan's +Y-down NDC behave like Metal's +Y-up NDC against a top-left-origin
+target. Both produce the same window mapping, so the fold matrix is the
+identity. It is derived from both viewport conventions rather than hardcoded,
+and the test compares full author-space → window-pixel mappings, so it fails if
+someone adds a flip *and* if someone deletes the derivation. Cull mode is set to
+none explicitly, with the reason written down: a future "optimisation" that
+enabled back-face culling would interact with any flip that was ever added.
+
+**What it draws, proven by pixels.** `metal_scene_draw_smoke` parses a real
+project, translates its shaders, compiles them with `newLibraryWithSource:`,
+draws three frames and reads the target back, asserting the target holds pixels
+only the author's fragment shader could have produced. Suppressing the draw call
+fails it — checked by doing exactly that.
+
+v1 draws 2D image layers, layer order, translate/scale/rotate/opacity, the five
+blend modes, basic texture sampling, the author canvas with fit/fill/crop, and
+internal renderScale. Particles, puppets, video textures, sprite sheets,
+feedback passes, unrecognised pass kinds and shaders that fail translation fall
+back — as a whole scene, with a specific reason the settings pane shows
+verbatim. A pipeline that fails to build does so later, when the render graph
+is compiled; that also falls back to the compatibility backend and records the
+failure against the scene so it cannot flip-flop. The boundary is what the code implements, never a
+wallpaper-ID list.
+
+**Routing is in the production path.** The surface always starts on the
+compatibility backend, because the backend choice needs the parsed scene and
+that does not exist at init. Once the scene arrives, `SelectSceneBackend`
+decides, and `SceneRendererHandle` switches by destroying one renderer before
+creating the other — a layer has exactly one drawable producer, so holding one
+backend means not holding the other, structurally rather than by convention. A
+prepare failure is recorded against that scene so it cannot flip-flop, and the
+compatibility backend is re-established rather than leaving the surface with no
+renderer. Scaling, flip, playback rate and pause are re-applied after a switch:
+a wallpaper the user paused must not start playing because they changed a
+renderer preference.
+
+The Metal backend reports its update demand in the same vocabulary as the
+Vulkan one, so a static Metal scene participates in on-demand updating. A
+tautological assertion was found there — `EXPECT_TRUE(reasons != 0 || true)`,
+under a comment promising a check that was not being made — and replaced. To be
+precise about what that did and did not find: the original derivation was
+**not** shown to be wrong. It reported zero for the test fixture, and zero is
+the correct answer for that fixture, whose shader binds no frame-varying
+uniform. The replacement is a hardening, not a caught defect: demand is now
+derived from the Metal backend's own pass descriptions rather than from render-
+graph pass objects, and a compiled graph that yields no shader pass reports
+`UnknownInput` instead of zero. The test now asserts the property that would
+catch the dangerous case — an unanalysed renderer must report `UnknownInput`,
+never a value a caller could read as "nothing changes".
+
+### What is not done
+
+- **No Metal frame has ever been presented to a screen.** The evidence is an
+  offscreen readback in a test. Visual correctness on a real wallpaper, on a
+  real display, is unobserved, and the production switch path compiles and is
+  reasoned but has never run on a desktop.
+- No power comparison between the two backends was measured. Nothing here is a
+  power claim.
+- **Metal-backed scenes produce no desktop poster.** `wants_poster` /
+  `poster_ready` are polled only by the Vulkan draw path, and the Metal
+  `MetalRenderInitInfo` does not carry them, so a scene routed native leaves the
+  desktop poster stale. The backend and fallback text in the settings pane must
+  not be read as implying parity here.
+- The lock-screen extension keeps the compatibility backend.
+- Web wallpapers have no lock-screen support and this round did not add any.
+  That combination is reported as not applicable, never as failed.
+- No scene was observed stopping its clock on a real wallpaper: there is no
+  desktop session here. No power measurement was taken and no saving is
+  claimed. On-demand updating removes work; whether that is visible on a power
+  meter is the user's to measure.
+- Deadline-driven updating (`WaitingForDeadline`) is plumbed end to end but
+  nothing registers a deadline yet; a bound text layer keeps the scene
+  continuous rather than waking on the minute.
+
 ## Round 6 — scene optimisation, web audio/media, user files
 
 Same scope discipline as round 5: implement, wire to the UI, keep it building,
@@ -183,6 +395,12 @@ selections are hard-linked (copied across volumes) into
 by `python3 scripts/clean.py --user-assets`. No authored wallpaper file and no
 user original is ever modified. A read-only project folder surfaces a specific
 reason rather than failing silently.
+
+Round 7 changed where the bytes live without changing any of the measured
+facts above: the app's own copy is now the canonical one, under
+`<support>/UserAssets/`, and `<project>/.mwe-user-assets/` became a derived
+bridge onto it that exists only to satisfy the read-access rule. See
+`docs/features/web-wallpapers.md`.
 
 The value handed to a page is the staged absolute path with its leading `/`
 removed and only `%`, `#` and `?` escaped, so the page's own

@@ -1,4 +1,6 @@
 #include "SceneWallpaper.hpp"
+#include "SceneRendererHandle.hpp"
+#include "MetalRender/MetalBackendRouter.hpp"
 #include "SceneWallpaperSurface.hpp"
 #include "SceneSourceResolver.hpp"
 #include "Project/ProjectProperties.hpp"
@@ -439,7 +441,7 @@ public:
     };
     MainHandler& main_handler;
     RenderHandler(MainHandler& m)
-        : main_handler(m), m_render(std::make_unique<vulkan::VulkanRender>()) {
+        : main_handler(m), m_render(std::make_unique<SceneRendererHandle>()) {
         // Installed before anything can tick: the frame clock and the renderer
         // only ever read this pointer, and the counters outlive both.
         frame_timer.SetCounters(&counters);
@@ -474,11 +476,31 @@ public:
                 CASE_CMD(FINISH_SURFACE_RECONFIGURE);
             default: break;
             }
+            // Every command except the draw itself is an event that may have
+            // changed what the next frame should show, so an idle scene takes
+            // one. Doing this once here rather than at each call site is
+            // deliberate: a command added later wakes the scene by default,
+            // and the failure mode of forgetting is a redundant frame rather
+            // than a wallpaper that stops responding.
+            //
+            // The request is dropped when the clock is stopped, so this cannot
+            // resume a paused wallpaper, and it coalesces with any frame
+            // already pending.
+            if (cmd != CMD::CMD_DRAW) requestFrame();
         }
     }
 
-    ExSwapchain* exSwapchain() const { return m_render->exSwapchain(); }
-    int          takeLastFrameSyncFd() { return m_render->takeLastFrameSyncFd(); }
+    // Vulkan-only: these export a swapchain and a sync fd, which the Metal
+    // backend has no equivalent of. Null while Metal is driving, which is what
+    // the offscreen export path already treats as "not available".
+    ExSwapchain* exSwapchain() const {
+        auto* vulkan = m_render->vulkanOnly();
+        return vulkan != nullptr ? vulkan->exSwapchain() : nullptr;
+    }
+    int takeLastFrameSyncFd() {
+        auto* vulkan = m_render->vulkanOnly();
+        return vulkan != nullptr ? vulkan->takeLastFrameSyncFd() : -1;
+    }
 
     bool renderInited() const { return m_render->inited(); }
 
@@ -524,8 +546,172 @@ public:
                     std::chrono::duration<double>(period_seconds));
             }
         }
+
+        const SceneUpdateDemand update = evaluateSceneUpdateDemand();
+        m_scene_demand_reasons.store(update.reasons, std::memory_order_relaxed);
+        // Recorded even while the scene is continuous, so the flag is already
+        // correct the instant it becomes idle rather than one frame late.
+        m_scene_wants_pointer.store(
+            renderInited() &&
+                SceneShaderInputsUsePointer(m_render->ShaderUpdateDemandReasons()),
+            std::memory_order_relaxed);
+        switch (update.kind) {
+        case SceneUpdateDemand::Kind::WaitingForEvent:
+            demand.kind = FrameTimer::FrameDemand::Kind::Idle;
+            break;
+        case SceneUpdateDemand::Kind::WaitingForDeadline:
+            demand.kind     = FrameTimer::FrameDemand::Kind::Timed;
+            demand.deadline = update.deadline;
+            break;
+        case SceneUpdateDemand::Kind::Continuous:
+            demand.kind = FrameTimer::FrameDemand::Kind::Continuous;
+            break;
+        }
+        m_scene_update_kind.store(update.kind, std::memory_order_relaxed);
         frame_timer.SetFrameDemand(demand);
     }
+
+    /// Whether this scene still needs the clock, and why.
+    ///
+    /// Runs on the render thread after a frame, when the runtime's registries
+    /// and the renderer's compiled graph both describe the state the next frame
+    /// would start from. Every path that cannot prove stillness returns
+    /// `Continuous`, including every early return: the switch being off, no
+    /// scene, no renderer, and a scene that has not yet presented a frame.
+    [[nodiscard]] SceneUpdateDemand evaluateSceneUpdateDemand() const {
+        SceneUpdateDemand demand {};
+        demand.kind = SceneUpdateDemand::Kind::Continuous;
+
+        if (! SceneOnDemandEnabled()) {
+            demand.reasons = 0;
+            return demand;
+        }
+        if (m_scene == nullptr || ! renderInited() || m_rg == nullptr) {
+            demand.reasons = static_cast<uint32_t>(SceneDemandReason::UnknownInput);
+            return demand;
+        }
+        // Idling before the first good frame would leave whatever was on the
+        // surface before this wallpaper started.
+        if (! m_scene->first_frame_ok) {
+            demand.reasons = static_cast<uint32_t>(SceneDemandReason::NoFrameYet);
+            return demand;
+        }
+
+        uint32_t reasons =
+            SceneDemandReasonsFromShaderInputs(m_render->ShaderUpdateDemandReasons());
+
+        if (m_scene->runtime != nullptr) {
+            reasons |= m_scene->runtime->DescribeTimeAdvancingWork();
+        } else {
+            // A scene with no runtime is not a scene with nothing to do; it is
+            // a scene this analysis cannot describe.
+            reasons |= SceneDemandReason::UnknownInput;
+        }
+
+        if (m_scene->paritileSys != nullptr && m_scene->paritileSys->HasEmitters()) {
+            reasons |= SceneDemandReason::Particles;
+        }
+
+        demand.reasons = reasons;
+        if (reasons == 0) demand.kind = SceneUpdateDemand::Kind::WaitingForEvent;
+        return demand;
+    }
+
+    /// Chooses which renderer draws this scene, and switches if it must.
+    ///
+    /// Runs once per scene, after the scene is parsed and before its graph is
+    /// built, because the choice depends on what the scene contains. A surface
+    /// always starts on the compatibility backend, so a failure anywhere here
+    /// leaves a renderer that already works rather than none at all.
+    void selectSceneBackend() {
+        if (m_scene == nullptr || m_render_init_info == nullptr) return;
+
+        const auto selection = metal::SelectSceneBackend(*m_scene);
+        setSceneBackendSelection(selection);
+
+        if (selection.backend == SceneBackend::LegacyVulkan) {
+            if (m_render->backend() == SceneBackend::NativeMetal) {
+                // Back to compatibility: rebuild the Vulkan renderer on the
+                // same layer it was created from.
+                m_render->releaseMetal();
+                if (! m_render->init(*m_render_init_info)) {
+                    suspendRendering();
+                    return;
+                }
+                reapplySurfaceState();
+            }
+            return;
+        }
+        if (m_render->backend() == SceneBackend::NativeMetal) return;
+
+        metal::MetalRenderInitInfo info;
+        info.metal_layer         = m_render_init_info->metal_layer;
+        info.width               = m_render_init_info->width;
+        info.height              = m_render_init_info->height;
+        info.render_width        = m_render_init_info->render_width;
+        info.render_height       = m_render_init_info->render_height;
+        info.display_scale_factor = m_render_init_info->display_scale_factor;
+        info.redraw_callback     = m_render_init_info->redraw_callback;
+
+        std::string error;
+        if (m_render->adoptMetal(info, error)) {
+            reapplySurfaceState();
+            return;
+        }
+        // Prepare failed. Remember it against this scene so the next reconcile
+        // does not try again and produce a native/legacy flip-flop, then
+        // re-establish the compatibility backend the handle rebuilt for us.
+        if (error.empty()) error = "the native renderer could not be prepared";
+        metal::RecordMetalPrepareFailure(*m_scene, error);
+        setSceneBackendSelection(SceneBackendSelection { SceneBackend::LegacyVulkan, error });
+        if (! m_render->init(*m_render_init_info)) {
+            suspendRendering();
+            return;
+        }
+        reapplySurfaceState();
+    }
+
+    /// Abandons the native backend for this scene and re-establishes the
+    /// compatibility one on the same surface.
+    ///
+    /// The failure is remembered against the scene so the next reconcile does
+    /// not try native again and produce a native/legacy flip-flop. Returns
+    /// false only when the compatibility backend could not be re-established
+    /// either, which is the one case that genuinely has no renderer left.
+    bool fallBackToCompatibility() {
+        if (m_render->backend() != SceneBackend::NativeMetal) return false;
+        auto reason = m_render->lastError();
+        if (reason.empty()) reason = "the native renderer could not draw this scene";
+        if (m_scene != nullptr) metal::RecordMetalPrepareFailure(*m_scene, reason);
+        m_render->releaseMetal();
+        setSceneBackendSelection(SceneBackendSelection { SceneBackend::LegacyVulkan, reason });
+        if (m_render_init_info == nullptr || ! m_render->init(*m_render_init_info)) return false;
+        reapplySurfaceState();
+        return true;
+    }
+
+    /// Re-applies the surface state a newly created renderer does not inherit.
+    ///
+    /// A backend switch replaces the object that held scaling, flip, playback
+    /// rate and pause, so every one of them has to be pushed again. Pause in
+    /// particular: a wallpaper the user paused must not start playing because
+    /// they changed a renderer preference.
+    void reapplySurfaceState() {
+        m_render->SetCounters(&counters);
+        m_render->SetWallpaperScalingMode(m_scalingmode);
+        m_render->SetWallpaperScalingFactor(m_scalingfactor);
+        m_render->SetWallpaperHorizontalFlip(m_horizontal_flip);
+        m_render->SetVideoPlaybackRate(m_speed);
+        m_render->SetVideoPlaybackPaused(! frame_timer.Running() || m_render_blocked);
+    }
+
+    /// Asks for one frame because something outside the clock changed.
+    ///
+    /// Coalescing is inherent: the clock holds at most one pending request and
+    /// at most one draw in flight, so a burst of property writes produces one
+    /// frame, not one frame each. Whether the clock keeps running afterwards is
+    /// decided by that frame's own demand, not here.
+    void requestFrame() { frame_timer.RequestFrame(); }
 
     /// Why this surface is not presenting, as independent bits. Recomputed on
     /// every transition that can change one of them, so a stopped surface can
@@ -549,28 +735,48 @@ public:
             std::clamp(static_cast<float>(x), 0.0f, 1.0f),
             std::clamp(static_cast<float>(y), 0.0f, 1.0f),
         });
+        wakeForPointer();
+    }
+
+    /// Pointer movement is the one event that never passes through the looper,
+    /// so an idle scene has to be woken here explicitly.
+    ///
+    /// Gated on the scene actually consuming the pointer. Waking on every
+    /// mouse move regardless would give a still wallpaper a frame rate equal
+    /// to the pointer sample rate, which is worse than not idling at all.
+    /// Scenes whose scripts read the cursor are never idle in the first place,
+    /// because a script is itself a reason to keep ticking.
+    void wakeForPointer() {
+        if (! m_scene_wants_pointer.load(std::memory_order_relaxed)) return;
+        requestFrame();
     }
     void setMouseButton(int button, bool pressed) {
         if (button < 0 || button > 31) return;
         const uint32_t   mask = 1u << static_cast<uint32_t>(button);
-        std::scoped_lock lock(m_mouse_buttons_mutex);
-        if (pressed) {
-            if ((m_mouse_buttons.down & mask) == 0) {
-                m_mouse_buttons.down |= mask;
-                m_mouse_buttons.pressed |= mask;
+        {
+            std::scoped_lock lock(m_mouse_buttons_mutex);
+            if (pressed) {
+                if ((m_mouse_buttons.down & mask) == 0) {
+                    m_mouse_buttons.down |= mask;
+                    m_mouse_buttons.pressed |= mask;
+                }
+            } else if ((m_mouse_buttons.down & mask) != 0) {
+                m_mouse_buttons.down &= ~mask;
+                m_mouse_buttons.released |= mask;
             }
-            return;
         }
-        if ((m_mouse_buttons.down & mask) != 0) {
-            m_mouse_buttons.down &= ~mask;
-            m_mouse_buttons.released |= mask;
-        }
+        // A press and a release are each consumed by exactly one frame, so an
+        // idle scene has to run one or the event is never delivered.
+        wakeForPointer();
     }
     void setMouseButtonBaseline(uint32_t down) {
         std::scoped_lock lock(m_mouse_buttons_mutex);
         m_mouse_buttons.down = down;
     }
-    void setMouseInWindow(bool entered) { m_cursor_in_window.store(entered); }
+    void setMouseInWindow(bool entered) {
+        m_cursor_in_window.store(entered);
+        wakeForPointer();
+    }
 
 private:
 #ifdef WESCENE_BUILD_TESTS
@@ -605,8 +811,18 @@ private:
 
         if (main_handler.isGenGraphviz()) m_rg->ToGraphviz("graph.dot");
         if (! m_render->compileRenderGraph(*m_scene, *m_rg)) {
-            suspendRendering();
-            return false;
+            // Shader libraries and pipeline states are created here, not at
+            // init, so this is where a scene that passed the capability gate
+            // actually trips the Metal compiler. Suspending would leave that
+            // wallpaper black; the compatibility backend draws it.
+            if (! fallBackToCompatibility()) {
+                suspendRendering();
+                return false;
+            }
+            if (! m_render->compileRenderGraph(*m_scene, *m_rg)) {
+                suspendRendering();
+                return false;
+            }
         }
         m_render->SetWallpaperScalingMode(m_scalingmode);
         m_render->SetWallpaperScalingFactor(m_scalingfactor);
@@ -841,6 +1057,7 @@ private:
             if (m_scene != nullptr && m_scene->runtime != nullptr) {
                 m_scene->runtime->SetMediaIntegrationEnabled(m_media_integration_enabled);
             }
+            selectSceneBackend();
             if (m_pending_system_media_artwork.has_value() &&
                 applySystemMediaArtworkPayload(*m_pending_system_media_artwork)) {
                 m_pending_system_media_artwork.reset();
@@ -864,7 +1081,12 @@ private:
                 suspendRendering();
                 return;
             }
-            m_render_blocked = false;
+            // Retained because choosing a backend needs the parsed scene, which
+            // does not exist yet: the switch happens after the scene arrives,
+            // and either direction has to be able to re-create a renderer on
+            // this same surface.
+            m_render_init_info = info;
+            m_render_blocked   = false;
             m_render->SetWallpaperScalingMode(m_scalingmode);
             m_render->SetWallpaperScalingFactor(m_scalingfactor);
             m_render->SetWallpaperHorizontalFlip(m_horizontal_flip);
@@ -905,7 +1127,16 @@ private:
             return;
         }
         try {
-            const bool ok = m_render->resetSurface(*info) && rebuildRenderGraph();
+            // A display change replaces the CAMetalLayer, so the retained info
+            // has to be replaced with it: a later fallback re-inits from this,
+            // and the old layer is gone.
+            m_render_init_info = info;
+            // A Metal surface that cannot take the new layer falls back here
+            // rather than inside the holder, so the backend change is recorded
+            // and published exactly once, by the routine that owns it.
+            bool surface_ok = m_render->resetSurface(*info);
+            if (! surface_ok) surface_ok = fallBackToCompatibility();
+            const bool ok = surface_ok && rebuildRenderGraph();
             if (ok) {
                 m_render_blocked = false;
                 m_render->SetVideoPlaybackPaused(false);
@@ -929,11 +1160,37 @@ public:
     /// writer outlives it.
     RendererCounters counters;
 
+    /// Live update mode and the reasons behind it.
+    ///
+    /// Pull-only and always available: this is state a settings pane shows, so
+    /// it must not depend on diagnostic counting being switched on. Reports
+    /// `Continuous` with no reasons while on-demand updating is off, because
+    /// that is then the literal truth rather than a placeholder.
+    [[nodiscard]] SceneUpdateDemand::Kind sceneUpdateKind() const {
+        return m_scene_update_kind.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] uint32_t sceneDemandReasons() const {
+        return m_scene_demand_reasons.load(std::memory_order_relaxed);
+    }
+
+    /// Which renderer drew this scene. Set once, when the renderer is created.
+    [[nodiscard]] SceneBackendSelection sceneBackendSelection() const {
+        std::scoped_lock lock(m_backend_selection_mutex);
+        return m_backend_selection;
+    }
+    void setSceneBackendSelection(SceneBackendSelection selection) {
+        std::scoped_lock lock(m_backend_selection_mutex);
+        m_backend_selection = std::move(selection);
+    }
+
 private:
     std::shared_ptr<Scene> m_scene { nullptr };
     float                  m_speed { 1.0f };
 
-    std::unique_ptr<vulkan::VulkanRender> m_render;
+    std::unique_ptr<SceneRendererHandle> m_render;
+    /// Retained from `INIT_VULKAN` so either backend can be re-created on the
+    /// same surface when the choice changes.
+    std::shared_ptr<RenderInitInfo>      m_render_init_info;
     std::unique_ptr<rg::RenderGraph>      m_rg { nullptr };
     bool                                m_render_blocked { false };
 
@@ -954,6 +1211,20 @@ private:
     MouseButtonSnapshot               m_mouse_buttons {};
     std::atomic<bool>                 m_cursor_in_window { false };
     bool                              m_cursor_was_in_window { false };
+    /// Published for the host without enabling diagnostic counting: these are
+    /// live state a settings pane reads, not instrumentation. Written on the
+    /// render thread, read from whichever thread asks.
+    std::atomic<SceneUpdateDemand::Kind> m_scene_update_kind {
+        SceneUpdateDemand::Kind::Continuous
+    };
+    std::atomic<uint32_t> m_scene_demand_reasons { 0 };
+    /// Whether any pass samples the pointer. Starts true so a scene whose
+    /// graph has not been analysed still receives pointer events.
+    std::atomic<bool>     m_scene_wants_pointer { true };
+    /// Guards the backend selection, which holds a string and so cannot be an
+    /// atomic. Written once at renderer creation, read by whoever asks.
+    mutable std::mutex    m_backend_selection_mutex;
+    SceneBackendSelection m_backend_selection {};
 };
 } // namespace wallpaper
 
@@ -1080,6 +1351,27 @@ void SceneWallpaper::mouseButtonBaseline(uint32_t down) {
 
 void SceneWallpaper::mouseEnter(bool entered) {
     m_main_handler->renderHandler()->setMouseInWindow(entered);
+}
+
+SceneUpdateDemand::Kind SceneWallpaper::sceneUpdateKind() const {
+    if (m_main_handler == nullptr) return SceneUpdateDemand::Kind::Continuous;
+    auto handler = m_main_handler->renderHandler();
+    if (handler == nullptr) return SceneUpdateDemand::Kind::Continuous;
+    return handler->sceneUpdateKind();
+}
+
+SceneBackendSelection SceneWallpaper::sceneBackendSelection() const {
+    if (m_main_handler == nullptr) return SceneBackendSelection {};
+    auto handler = m_main_handler->renderHandler();
+    if (handler == nullptr) return SceneBackendSelection {};
+    return handler->sceneBackendSelection();
+}
+
+uint32_t SceneWallpaper::sceneDemandReasons() const {
+    if (m_main_handler == nullptr) return static_cast<uint32_t>(SceneDemandReason::UnknownInput);
+    auto handler = m_main_handler->renderHandler();
+    if (handler == nullptr) return static_cast<uint32_t>(SceneDemandReason::UnknownInput);
+    return handler->sceneDemandReasons();
 }
 
 void SceneWallpaper::applySystemMediaArtwork(uint32_t width, uint32_t height, const uint8_t* rgba,

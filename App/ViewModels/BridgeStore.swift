@@ -455,6 +455,21 @@ final class BridgeStore {
         apply(bundle)
     }
 
+    /// Whole-scene on-demand updating. Off by default. The bundle carries back the saved
+    /// preference plus `sceneUpdateModes`, which is the live per-scene read-back: the
+    /// preference being on does not mean any scene actually stopped ticking.
+    func setSceneOnDemandEnabledAsync(_ enabled: Bool) async throws {
+        let bundle = try await bridge.setSceneOnDemandEnabled(enabled: enabled)
+        apply(bundle)
+    }
+
+    /// Which renderer draws scene wallpapers. A preference: `sceneRenderers` in the
+    /// returned bundle is what each running scene actually got.
+    func setSceneRendererAsync(_ mode: String) async throws {
+        let bundle = try await bridge.setSceneRenderer(mode: mode)
+        apply(bundle)
+    }
+
     func applyWallpaperOptionsAsync(wallpaperId: String) async throws {
         try requireIdleActivation()
         try requireIdleWallpaperEdits(id: wallpaperId)
@@ -655,6 +670,11 @@ final class BridgeStore {
                 sharedVideoDecodeSessions: 0,
                 sharedVideoDecodeConsumers: 0,
                 sceneOptimizationEnabled: true,
+                sceneOnDemandEnabled: false,
+                sceneRenderer: "compatibility",
+                sceneUpdateModes: [],
+                sceneRenderers: [],
+                userAssetsPath: "",
                 renderScale: 1,
                 preferredRenderScale: 1,
                 batteryProfileEnabled: false,

@@ -6,11 +6,13 @@ use std::{
 };
 
 use super::{
-    RsShaderOwnedBytes, rs_shader_compile_program, rs_shader_last_error,
-    rs_shader_program_cache_key, rs_shader_program_diagnostics_json, rs_shader_program_free,
-    rs_shader_program_metadata_json, rs_shader_program_reflection_json,
-    rs_shader_program_stage_count, rs_shader_program_stage_kind,
-    rs_shader_program_stage_spv_word_count, rs_shader_program_stage_spv_words,
+    RS_SHADER_TARGET_METAL_MSL, RS_SHADER_TARGET_VULKAN_SPIRV, RsShaderOwnedBytes,
+    rs_shader_compile_program, rs_shader_last_error, rs_shader_program_cache_key,
+    rs_shader_program_diagnostics_json, rs_shader_program_free, rs_shader_program_metadata_json,
+    rs_shader_program_reflection_json, rs_shader_program_stage_count,
+    rs_shader_program_stage_kind, rs_shader_program_stage_metal_json,
+    rs_shader_program_stage_msl_source, rs_shader_program_stage_spv_word_count,
+    rs_shader_program_stage_spv_words, rs_shader_program_stage_target,
 };
 
 const SPIRV_MAGIC: u32 = 0x0723_0203;
@@ -168,6 +170,117 @@ fn program_handle_retains_stage_words_and_json_until_free() {
     assert!(reflection.contains("\"descriptor_bindings\""));
     assert!(diagnostics.contains("\"pass\":\"Codegen\""));
     assert!(!cache_key.is_empty());
+
+    // SAFETY: Program was returned by `rs_shader_compile_program` and has not been
+    // freed.
+    unsafe { rs_shader_program_free(program) };
+}
+
+#[test]
+fn unknown_target_string_is_rejected_instead_of_falling_back_to_spirv() {
+    let request = CString::new(ShaderRequestFixture::basic().json_with_target("vulkan_msl"))
+        .expect("request json should not contain nul");
+    let mut program = ptr::null_mut();
+
+    // SAFETY: Request and out pointers are valid.
+    let status = unsafe {
+        rs_shader_compile_program(request.as_ptr(), None, ptr::null_mut(), &raw mut program)
+    };
+
+    assert_ne!(status, 0);
+    assert!(program.is_null());
+    let error = last_error();
+    assert!(error.contains("json request parse failed"), "{error}");
+    assert!(error.contains("vulkan_msl"), "{error}");
+}
+
+#[test]
+fn metal_target_returns_msl_source_binding_map_and_reflection() {
+    let request = CString::new(ShaderRequestFixture::basic().json_with_target("metal_msl"))
+        .expect("request json should not contain nul");
+    let mut program = ptr::null_mut();
+
+    // SAFETY: Request and out pointers are valid.
+    let status = unsafe {
+        rs_shader_compile_program(request.as_ptr(), None, ptr::null_mut(), &raw mut program)
+    };
+    assert_eq!(status, 0, "{}", last_error());
+
+    for stage_index in 0..2 {
+        // SAFETY: Program is a live handle returned by `rs_shader_compile_program`.
+        assert_eq!(
+            unsafe { rs_shader_program_stage_target(program, stage_index) },
+            RS_SHADER_TARGET_METAL_MSL
+        );
+        // SAFETY: Program is a live handle returned by `rs_shader_compile_program`.
+        assert!(unsafe { rs_shader_program_stage_spv_words(program, stage_index) }.is_null());
+        // SAFETY: Program is a live handle returned by `rs_shader_compile_program`.
+        assert_eq!(
+            unsafe { rs_shader_program_stage_spv_word_count(program, stage_index) },
+            0
+        );
+
+        // SAFETY: Program is a live handle returned by `rs_shader_compile_program`.
+        let source = c_str(unsafe { rs_shader_program_stage_msl_source(program, stage_index) });
+        assert!(source.contains("#include <metal_stdlib>"), "{source}");
+
+        // SAFETY: Program is a live handle returned by `rs_shader_compile_program`.
+        let metal = c_str(unsafe { rs_shader_program_stage_metal_json(program, stage_index) });
+        let metal: serde_json::Value =
+            serde_json::from_str(&metal).expect("metal payload should be json");
+        let entry_point = metal["entry_point"]
+            .as_str()
+            .expect("metal payload should name the generated entry point");
+        assert!(
+            source.contains(&format!("{entry_point}(")),
+            "reported entry point `{entry_point}` is absent from:\n{source}"
+        );
+        assert_eq!(metal["language_version"], "2.0");
+        assert_eq!(metal["conventions"]["clip_space_y_flipped"], false);
+        assert_eq!(metal["conventions"]["clip_space_depth_remapped"], false);
+        assert_eq!(metal["conventions"]["texture_origin_flipped"], false);
+        assert!(metal["bindings"].is_array());
+    }
+
+    // SAFETY: Program is a live handle returned by `rs_shader_compile_program`.
+    let reflection = c_str(unsafe { rs_shader_program_reflection_json(program) });
+    assert!(
+        reflection.contains("\"descriptor_bindings\""),
+        "the metal target must return the same reflection payload as the spirv target"
+    );
+    // SAFETY: Program is a live handle returned by `rs_shader_compile_program`.
+    let metadata = c_str(unsafe { rs_shader_program_metadata_json(program) });
+    assert!(metadata.contains("\"active_texture_slots\""));
+
+    // SAFETY: Program was returned by `rs_shader_compile_program` and has not been
+    // freed.
+    unsafe { rs_shader_program_free(program) };
+}
+
+#[test]
+fn spirv_target_exposes_no_metal_payload() {
+    let request = CString::new(ShaderRequestFixture::basic().json())
+        .expect("request json should not contain nul");
+    let mut program = ptr::null_mut();
+
+    // SAFETY: Request and out pointers are valid.
+    let status = unsafe {
+        rs_shader_compile_program(request.as_ptr(), None, ptr::null_mut(), &raw mut program)
+    };
+    assert_eq!(status, 0, "{}", last_error());
+
+    // SAFETY: Program is a live handle returned by `rs_shader_compile_program`.
+    assert_eq!(
+        unsafe { rs_shader_program_stage_target(program, 0) },
+        RS_SHADER_TARGET_VULKAN_SPIRV
+    );
+    // SAFETY: Program is a live handle returned by `rs_shader_compile_program`.
+    assert_eq!(c_str(unsafe { rs_shader_program_stage_msl_source(program, 0) }), "");
+    // SAFETY: Program is a live handle returned by `rs_shader_compile_program`.
+    assert_eq!(
+        c_str(unsafe { rs_shader_program_stage_metal_json(program, 0) }),
+        "{}"
+    );
 
     // SAFETY: Program was returned by `rs_shader_compile_program` and has not been
     // freed.
@@ -536,9 +649,13 @@ impl ShaderRequestFixture {
     }
 
     fn json(self) -> String {
+        self.json_with_target("vulkan_spirv")
+    }
+
+    fn json_with_target(self, target: &str) -> String {
         serde_json::json!({
             "shader_name": self.shader_name,
-            "target": "vulkan_spirv",
+            "target": target,
             "cache_strategy": {"mode": "disabled"},
             "stages": [
                 {

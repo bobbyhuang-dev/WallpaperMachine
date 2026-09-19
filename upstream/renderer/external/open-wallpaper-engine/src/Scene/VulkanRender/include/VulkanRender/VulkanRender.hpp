@@ -57,6 +57,14 @@ public:
     /// when any of them cannot report one. Read on the render thread only.
     [[nodiscard]] double ShortestVideoFramePeriod() const;
 
+    /// Scene-level demand bits the renderer can prove from shader reflection
+    /// and bound resources, for the graph currently compiled.
+    ///
+    /// Reports `UnknownInput` before any graph has been analysed rather than
+    /// reporting nothing, so a caller cannot mistake "not asked yet" for
+    /// "nothing changes".
+    [[nodiscard]] uint32_t ShaderUpdateDemandReasons() const;
+
     /// Counters owned by the scene. Installed once, before any frame; the
     /// renderer and its texture cache only read the pointer.
     void SetCounters(RendererCounters* counters);

@@ -4,6 +4,8 @@ add_library(${LIB_NAME}
 STATIC
 
 Scene.cpp
+SceneBackendSelection.cpp
+SceneUpdateDemand.cpp
 SceneCamera.cpp
 SceneImageEffectLayer.cpp
 SceneIndexArray.cpp

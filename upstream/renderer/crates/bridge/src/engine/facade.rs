@@ -17,6 +17,7 @@ use futures_util::future::{BoxFuture, FutureExt};
 use wallpaper_core::project::SceneTemplate;
 use wallpaper_core::{
     AudioSpectrum128, DisplaySelector, DisplaySnapshotEntry, EngineError, FirstFrameCallback,
+    SceneBackend, SceneDemandReasons, SceneRendererPreference, SceneUpdateMode,
     WallpaperAssignment, WallpaperEngine,
     media::audio::{AudioCaptureController, AudioVolume, PlatformAudioCaptureBackend},
     project::{ScalingMode, SceneDesc, SceneHandle, SceneResult},
@@ -39,6 +40,21 @@ pub struct RendererVideoPipelineState {
     pub shared_video_decode_sessions: u32,
     pub shared_video_decode_consumers: u32,
 }
+
+/// What one open scene is actually doing right now: whether its clock is
+/// running and which backend drew it.
+///
+/// Defined in the core crate and re-exported here so the bridge and the
+/// renderer describe a scene with one type rather than two that need
+/// converting. `update_mode` and `backend` are `Option` on purpose: `None` is
+/// "the renderer could not answer", which is a different fact from any of the
+/// real modes. A running scene that cannot be read must never be reported as
+/// `Continuous`, and it is emitted as a row rather than omitted, so "running
+/// but unreadable" does not collapse into "nothing running".
+///
+/// Pulled on the existing snapshot rebuild; nothing here polls, and reading it
+/// does not switch renderer counting on.
+pub use wallpaper_core::SceneRuntimeReport;
 
 pub trait EngineFacade: Send + Sync + 'static {
     fn reconcile_scenes(&self, scenes: Vec<SceneDesc>) -> EngineFuture<Vec<SceneResult>>;
@@ -129,6 +145,41 @@ pub trait EngineFacade: Send + Sync + 'static {
     fn set_scene_optimization_enabled(&self, enabled: bool) -> Result<(), EngineError> {
         let _ = enabled;
         Ok(())
+    }
+    /// Turns whole-scene on-demand updating on or off for the whole process.
+    /// Off by default.
+    ///
+    /// A scene with no continuing reason to redraw stops its periodic tick and
+    /// wakes on events instead. It is not a frame-rate cap and it does not
+    /// stop scripts, sound or event handling.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the renderer rejects the call.
+    fn set_scene_on_demand_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        let _ = enabled;
+        Ok(())
+    }
+    /// Chooses which renderer draws scene wallpapers, process-wide.
+    /// `Compatibility` by default.
+    ///
+    /// A preference, not a guarantee: a scene the native backend cannot draw
+    /// in full falls back as a whole scene.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the renderer rejects the call.
+    fn set_scene_renderer_preference(
+        &self,
+        preference: SceneRendererPreference,
+    ) -> Result<(), EngineError> {
+        let _ = preference;
+        Ok(())
+    }
+    /// One row per open scene. An empty vector means nothing was observed,
+    /// never that every scene is idle.
+    fn scene_runtime_reports(&self) -> Vec<SceneRuntimeReport> {
+        Vec::new()
     }
     /// The most recent process-wide audio analysis, or `None` when no analysis
     /// has been produced yet.
@@ -278,6 +329,26 @@ impl EngineFacade for RealEngineFacade {
 
     fn set_scene_optimization_enabled(&self, enabled: bool) -> Result<(), EngineError> {
         self.engine.set_scene_optimization_enabled(enabled)
+    }
+
+    fn set_scene_on_demand_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        self.engine.set_scene_on_demand_enabled(enabled)
+    }
+
+    fn set_scene_renderer_preference(
+        &self,
+        preference: SceneRendererPreference,
+    ) -> Result<(), EngineError> {
+        self.engine.set_scene_renderer_preference(preference)
+    }
+
+    fn scene_runtime_reports(&self) -> Vec<SceneRuntimeReport> {
+        // Four pointer reads per open scene on the existing snapshot path: no
+        // counters, no thread, no I/O. A scene the renderer cannot answer for
+        // still produces a row, with `None` where the answer would be, because
+        // dropping it would make an unreadable scene indistinguishable from an
+        // absent one.
+        self.engine.scene_runtime_reports()
     }
 
     fn current_audio_spectrum(&self) -> Result<Option<AudioSpectrum128>, EngineError> {
@@ -609,6 +680,9 @@ pub struct FakeEngineFacade {
     shared_video_decode_enabled: Arc<ArcSwap<bool>>,
     shared_video_decode_counts: Arc<ArcSwap<(u32, u32)>>,
     scene_optimization_calls: Arc<ArcSwap<Vec<bool>>>,
+    scene_on_demand_calls: Arc<ArcSwap<Vec<bool>>>,
+    scene_renderer_calls: Arc<ArcSwap<Vec<SceneRendererPreference>>>,
+    scene_runtime_reports: Arc<ArcSwap<Vec<SceneRuntimeReport>>>,
     audio_spectrum: Arc<ArcSwap<Option<AudioSpectrum128>>>,
     mouse_poll_calls: Arc<ArcSwap<Vec<()>>>,
     mouse_poll_block: Arc<SegQueue<ReconcileBlockGate>>,
@@ -788,6 +862,27 @@ impl FakeEngineFacade {
     #[must_use]
     pub fn scene_optimization_calls(&self) -> Vec<bool> {
         load_log(&self.scene_optimization_calls)
+    }
+
+    /// Every scene on-demand change the bridge pushed, in order. A forward
+    /// that never reaches the engine leaves this empty, which is what makes a
+    /// missing facade delegation a test failure rather than a silent no-op.
+    #[must_use]
+    pub fn scene_on_demand_calls(&self) -> Vec<bool> {
+        load_log(&self.scene_on_demand_calls)
+    }
+
+    /// Every scene renderer preference the bridge pushed, in order.
+    #[must_use]
+    pub fn scene_renderer_calls(&self) -> Vec<SceneRendererPreference> {
+        load_log(&self.scene_renderer_calls)
+    }
+
+    /// What the next [`EngineFacade::scene_runtime_reports`] read returns.
+    /// Left empty the fake reports nothing observed, so a test has to opt in
+    /// to a live state rather than getting one by default.
+    pub fn set_scene_runtime_reports(&self, reports: Vec<SceneRuntimeReport>) {
+        self.scene_runtime_reports.store(Arc::new(reports));
     }
 
     /// Sets what the next spectrum read returns. `None` is "no analysis yet".
@@ -1283,6 +1378,23 @@ impl EngineFacade for FakeEngineFacade {
     fn set_scene_optimization_enabled(&self, enabled: bool) -> Result<(), EngineError> {
         push_log(&self.scene_optimization_calls, enabled);
         Ok(())
+    }
+
+    fn set_scene_on_demand_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        push_log(&self.scene_on_demand_calls, enabled);
+        Ok(())
+    }
+
+    fn set_scene_renderer_preference(
+        &self,
+        preference: SceneRendererPreference,
+    ) -> Result<(), EngineError> {
+        push_log(&self.scene_renderer_calls, preference);
+        Ok(())
+    }
+
+    fn scene_runtime_reports(&self) -> Vec<SceneRuntimeReport> {
+        self.scene_runtime_reports.load().as_ref().clone()
     }
 
     fn current_audio_spectrum(&self) -> Result<Option<AudioSpectrum128>, EngineError> {

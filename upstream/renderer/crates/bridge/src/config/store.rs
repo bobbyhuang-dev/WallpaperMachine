@@ -209,7 +209,7 @@ impl From<std::io::Error> for BridgeError {
 #[cfg(test)]
 mod tests {
     use super::ConfigStore;
-    use crate::config::VideoBackendModeCfg;
+    use crate::config::{SceneRendererModeCfg, VideoBackendModeCfg};
 
     fn load_config(contents: &str) -> crate::config::AppConfig {
         let root = tempfile::tempdir().unwrap();
@@ -247,5 +247,50 @@ mod tests {
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(!written.contains("native_video_backend"), "{written}");
         assert!(written.contains("video_backend = \"native_preferred\""), "{written}");
+    }
+
+    #[test]
+    fn a_config_that_never_heard_of_the_scene_settings_reads_the_shipped_defaults() {
+        let config = load_config("[general]\n");
+
+        assert_eq!(config.scene_renderer, SceneRendererModeCfg::Compatibility);
+        assert!(
+            !config.quality.scene_on_demand_enabled,
+            "stopping a scene's tick is opted into; an older config must not arrive already on"
+        );
+    }
+
+    #[test]
+    fn the_scene_settings_survive_a_save_and_reload() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.toml");
+        let store = ConfigStore::open(root.path().to_path_buf());
+        let mut config = crate::config::AppConfig::default();
+        config.scene_renderer = SceneRendererModeCfg::NativeMetalPreferred;
+        config.quality.scene_on_demand_enabled = true;
+
+        store.save_app_config(&config).expect("config save");
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("scene_renderer = \"native_metal_preferred\""),
+            "the renderer choice is stored under its own key, in snake_case: {written}"
+        );
+        let reloaded = store.load().expect("config load").config;
+        assert_eq!(
+            reloaded.scene_renderer,
+            SceneRendererModeCfg::NativeMetalPreferred
+        );
+        assert!(reloaded.quality.scene_on_demand_enabled);
+    }
+
+    /// The scene renderer is a new setting. Nothing in an older config means
+    /// "prefer native Metal", so no key may be read as an opt-in to it.
+    #[test]
+    fn the_scene_renderer_never_inherits_the_video_backend_choice() {
+        let config = load_config("video_backend = \"native_preferred\"\n");
+
+        assert_eq!(config.video_backend, VideoBackendModeCfg::NativePreferred);
+        assert_eq!(config.scene_renderer, SceneRendererModeCfg::Compatibility);
     }
 }

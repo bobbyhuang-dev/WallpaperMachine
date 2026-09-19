@@ -457,5 +457,191 @@ TEST(FrameTimerTest, RaisingTheTargetFpsInterruptsAPacedWait) {
     EXPECT_LT(waited.count(), 400);
 }
 
+/// A running clock must not be driven past its configured rate by frame
+/// requests.
+///
+/// This is the default path: on-demand updating is off, and the FPS ceiling is
+/// then the only thing bounding how often a scene draws. A pointer-reactive
+/// wallpaper calls `RequestFrame` once per pointer sample, so a request that
+/// jumped the interval would make the mouse set the frame rate.
+TEST(FrameTimerTest, FrameRequestsDoNotPushARunningClockPastItsInterval)
+{
+    std::mutex              mutex;
+    std::condition_variable condition;
+    int                     draws { 0 };
+
+    FrameTimer timer([&]() {
+        {
+            std::scoped_lock lock(mutex);
+            ++draws;
+        }
+        condition.notify_all();
+        timer.FrameEnd();
+    });
+    timer.SetRequiredFps(10); // 100 ms between ticks.
+    timer.Run();
+
+    // Far more requests than the interval could ever honour.
+    const auto started = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - started < 200ms) {
+        timer.RequestFrame();
+        std::this_thread::sleep_for(1ms);
+    }
+    timer.Stop();
+
+    int observed = 0;
+    {
+        std::scoped_lock lock(mutex);
+        observed = draws;
+    }
+    // 200 ms at 10 FPS is two ticks, plus one for the immediate first tick and
+    // one for scheduling slack. Anything near the ~200 requests made would mean
+    // the ceiling was bypassed.
+    EXPECT_LE(observed, 4) << "requests drove " << observed
+                           << " frames in 200ms at a 10 FPS ceiling";
+}
+
+/// A request made while the clock is running is not thrown away: it survives
+/// into idle and produces exactly one frame there.
+///
+/// Without this, closing the rate hole above would reopen the lost-event race
+/// the latch exists to prevent.
+TEST(FrameTimerTest, AFrameRequestMadeWhileRunningSurvivesIntoIdle)
+{
+    std::mutex              mutex;
+    std::condition_variable condition;
+    int                     draws { 0 };
+
+    FrameTimer timer([&]() {
+        {
+            std::scoped_lock lock(mutex);
+            ++draws;
+        }
+        condition.notify_all();
+        timer.FrameEnd();
+    });
+    timer.SetRequiredFps(1); // One tick per second; the test never waits for it.
+    timer.Run();
+
+    // Let the first immediate tick land, then go quiet.
+    WaitFor(
+        mutex, condition, [&]() { return draws > 0; }, 500ms);
+    int before = 0;
+    {
+        std::scoped_lock lock(mutex);
+        before = draws;
+    }
+
+    timer.RequestFrame();
+    timer.SetFrameDemand({ .kind = FrameTimer::FrameDemand::Kind::Idle });
+
+    const auto waited = WaitFor(
+        mutex, condition, [&]() { return draws > before; }, 500ms);
+    timer.Stop();
+
+    int after = 0;
+    {
+        std::scoped_lock lock(mutex);
+        after = draws;
+    }
+    EXPECT_GT(after, before) << "a request made before idling was lost";
+    EXPECT_LT(waited.count(), 400) << "the request waited for a cadence that was stopped";
+}
+
+/// Idle means no ticks at all, not a long interval.
+///
+/// This is the whole point of on-demand updating, and it is the one property
+/// that distinguishes it from simply lowering the frame rate. A "very long
+/// interval" implementation would pass every other test in this file and still
+/// wake the machine forever.
+TEST(FrameTimerTest, AnIdleClockProducesNoTicksUntilOneIsRequested)
+{
+    std::mutex              mutex;
+    std::condition_variable condition;
+    int                     draws { 0 };
+
+    FrameTimer timer([&]() {
+        {
+            std::scoped_lock lock(mutex);
+            ++draws;
+        }
+        condition.notify_all();
+        timer.FrameEnd();
+    });
+    timer.SetRequiredFps(60); // ~17 ms; 300 ms of cadence would be ~18 ticks.
+    timer.Run();
+    WaitFor(
+        mutex, condition, [&]() { return draws > 0; }, 500ms);
+
+    timer.SetFrameDemand({ .kind = FrameTimer::FrameDemand::Kind::Idle });
+    // Let any tick already in flight land before the count is latched.
+    std::this_thread::sleep_for(50ms);
+    int quiescent = 0;
+    {
+        std::scoped_lock lock(mutex);
+        quiescent = draws;
+    }
+
+    std::this_thread::sleep_for(300ms);
+    {
+        std::scoped_lock lock(mutex);
+        EXPECT_EQ(draws, quiescent)
+            << "an idle clock ticked " << (draws - quiescent) << " times in 300ms at 60 FPS";
+    }
+
+    // Still responsive: one request produces exactly one frame.
+    timer.RequestFrame();
+    const auto waited = WaitFor(
+        mutex, condition, [&]() { return draws > quiescent; }, 500ms);
+    EXPECT_LT(waited.count(), 400) << "an idle clock did not answer a frame request";
+
+    std::this_thread::sleep_for(200ms);
+    timer.Stop();
+    {
+        std::scoped_lock lock(mutex);
+        EXPECT_EQ(draws, quiescent + 1)
+            << "one request produced " << (draws - quiescent) << " frames";
+    }
+}
+
+/// A deadline that has already passed is a frame the scene is owed, and it has
+/// to arrive promptly rather than after a full cadence interval.
+TEST(FrameTimerTest, ADeadlineAlreadyPastIsTakenImmediately)
+{
+    std::mutex              mutex;
+    std::condition_variable condition;
+    int                     draws { 0 };
+
+    FrameTimer timer([&]() {
+        {
+            std::scoped_lock lock(mutex);
+            ++draws;
+        }
+        condition.notify_all();
+        timer.FrameEnd();
+    });
+    timer.SetRequiredFps(1); // One second of cadence, far longer than the bound below.
+    timer.Run();
+    WaitFor(
+        mutex, condition, [&]() { return draws > 0; }, 2s);
+    int before = 0;
+    {
+        std::scoped_lock lock(mutex);
+        before = draws;
+    }
+
+    timer.SetFrameDemand({
+        .kind     = FrameTimer::FrameDemand::Kind::Timed,
+        .deadline = std::chrono::steady_clock::now() - 1s,
+    });
+    const auto waited = WaitFor(
+        mutex, condition, [&]() { return draws > before; }, 900ms);
+    timer.Stop();
+
+    EXPECT_GT(draws, before) << "an owed frame never arrived";
+    EXPECT_LT(waited.count(), 500)
+        << "an owed frame waited " << waited.count() << "ms, i.e. for the cadence";
+}
+
 } // namespace
 } // namespace wallpaper

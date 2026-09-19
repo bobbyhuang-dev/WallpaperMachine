@@ -111,6 +111,48 @@ typedef enum owe_renderer_counter {
 } owe_renderer_counter;
 
 /*
+ * How a scene is being updated. Live state, not a counter, and readable
+ * whether or not counting is enabled.
+ */
+typedef enum owe_scene_update_mode {
+    /* The frame clock runs at its configured cadence. */
+    OWE_SCENE_UPDATE_CONTINUOUS = 0,
+    /* The clock is stopped; an event will restart it. */
+    OWE_SCENE_UPDATE_WAITING_FOR_EVENT = 1,
+    /* The clock is stopped until one known instant. */
+    OWE_SCENE_UPDATE_WAITING_FOR_DEADLINE = 2,
+    /* The clock is stopped by a pause decision, not by the content. */
+    OWE_SCENE_UPDATE_CLOCK_STOPPED = 3,
+    /* This wallpaper is not a scene, so the question does not apply. */
+    OWE_SCENE_UPDATE_NOT_APPLICABLE = 4,
+    /* State could not be determined. Never display this as a real mode. */
+    OWE_SCENE_UPDATE_UNKNOWN = 5
+} owe_scene_update_mode;
+
+/*
+ * Why a scene still needs its clock. Independent bits; an empty mask alongside
+ * a continuous mode means the analysis did not run, not that no reason exists.
+ */
+typedef enum owe_scene_demand_reason {
+    OWE_SCENE_DEMAND_NONE = 0,
+    OWE_SCENE_DEMAND_SCRIPT = 1 << 0,
+    OWE_SCENE_DEMAND_ANIMATION = 1 << 1,
+    OWE_SCENE_DEMAND_PARTICLES = 1 << 2,
+    OWE_SCENE_DEMAND_VIDEO = 1 << 3,
+    OWE_SCENE_DEMAND_AUDIO_RESPONSE = 1 << 4,
+    OWE_SCENE_DEMAND_TIME_UNIFORM = 1 << 5,
+    OWE_SCENE_DEMAND_ANIMATED_SPRITE = 1 << 6,
+    OWE_SCENE_DEMAND_DYNAMIC_MESH = 1 << 7,
+    OWE_SCENE_DEMAND_PUPPET = 1 << 8,
+    OWE_SCENE_DEMAND_FEEDBACK = 1 << 9,
+    OWE_SCENE_DEMAND_TEXT_BINDING = 1 << 10,
+    OWE_SCENE_DEMAND_SOUND = 1 << 11,
+    OWE_SCENE_DEMAND_NODE_BINDING = 1 << 12,
+    OWE_SCENE_DEMAND_UNKNOWN_INPUT = 1 << 13,
+    OWE_SCENE_DEMAND_NO_FRAME_YET = 1 << 14
+} owe_scene_demand_reason;
+
+/*
  * Why a surface is not presenting. Reasons are independent bits: clearing one
  * never clears another.
  */

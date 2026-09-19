@@ -129,9 +129,7 @@ where
         cache_builder.push("shader-pipeline-cache-v1");
         cache_builder.push_u64(self.pipeline.revision.value());
         cache_builder.push(request.shader_name().as_str());
-        cache_builder.push(match request.target() {
-            crate::ShaderTarget::VulkanSpirv => "vulkan_spirv",
-        });
+        cache_builder.push(request.target().as_str());
         cache_builder.push_cache_strategy(request.compact_cache_strategy());
         for combo in request.combos() {
             cache_builder.push("combo");
@@ -154,6 +152,7 @@ where
                 metadata_module: &input.metadata_module,
                 interface_layout: program_interface.layout_for_stage(input.stage.kind()),
                 resource_layout: program_resources.stage_layout(),
+                target: request.target(),
                 compiler: &self.pipeline.compiler,
                 reflector: &self.pipeline.reflector,
                 textures: request.textures(),

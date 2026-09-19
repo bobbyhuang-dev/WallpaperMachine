@@ -14,6 +14,7 @@ use crate::{
     BridgeDirectoryMode, BridgeFileFilter, BridgePropertyKind, BridgePropertyValue,
     api::{BridgeBuilder, WallpaperBridge},
     engine::FakeEngineFacade,
+    paths::BridgePaths,
 };
 
 const PROJECT: &str = r#"{
@@ -43,10 +44,15 @@ fn display_snapshot(display_id: u32) -> DisplaySnapshotEntry {
 }
 
 async fn bridge_with_project() -> WallpaperBridge {
+    bridge_with_paths(BridgePaths::new()).await
+}
+
+async fn bridge_with_paths(paths: BridgePaths) -> WallpaperBridge {
     let engine = FakeEngineFacade::default();
     engine.set_snapshot(vec![display_snapshot(7)]);
     let bridge = BridgeBuilder::new(engine)
         .with_state(crate::actor::state::BridgeActorState::default())
+        .with_paths(paths)
         .build()
         .expect("tokio runtime and config load for wallpaper bridge");
     bridge
@@ -213,4 +219,77 @@ async fn a_path_is_refused_for_a_property_that_is_not_a_file_or_directory() {
     assert_eq!(missing.kind(), crate::BridgeErrorKind::InvalidInput);
 
     assert_eq!(page_properties(&bridge).await["backdrop"]["value"], "");
+}
+
+/// What the inspector renders beside a `file`/`directory` control: whether the app
+/// holds its own copy, whether the selection has gone missing, and the user's own
+/// path to show. A texture picker names a file inside the package and must never be
+/// reported as a missing user asset.
+#[tokio::test]
+async fn the_editor_is_told_whether_a_picked_asset_is_managed_or_missing() {
+    async fn property(bridge: &WallpaperBridge, id: &str) -> crate::BridgePropertyDescriptor {
+        bridge
+            .wallpaper_options_snapshot("300".into())
+            .await
+            .unwrap()
+            .properties
+            .iter()
+            .find(|property| property.id == id)
+            .unwrap_or_else(|| panic!("{id} must be offered to the editor"))
+            .clone()
+    }
+
+    // A private home rather than a process-wide environment variable: these tests run
+    // in parallel in one process, and a global override would leak between them.
+    let home = tempfile::tempdir().expect("home");
+    let paths = BridgePaths::for_home(home.path());
+    let store = paths.user_assets_root();
+    let bridge = bridge_with_paths(BridgePaths::for_home(home.path())).await;
+
+    let unset = property(&bridge, "clip").await;
+    assert!(!unset.asset_managed);
+    assert!(
+        !unset.asset_missing,
+        "a property the user never set is unset, not missing"
+    );
+    assert_eq!(unset.asset_source_path, None);
+
+    bridge
+        .set_property_path("300".into(), "clip".into(), Some("/gone/a b+c.webm".into()))
+        .await
+        .unwrap();
+    let gone = property(&bridge, "clip").await;
+    assert!(!gone.asset_managed);
+    assert!(
+        gone.asset_missing,
+        "a selection that resolves nowhere has to be reported, not silently cleared"
+    );
+    assert_eq!(gone.asset_source_path.as_deref(), Some("/gone/a b+c.webm"));
+
+    // The app copied it in and recorded that. Same unreachable original, but the
+    // wallpaper still works, so the inspector must not call it missing.
+    let asset = store.join("300").join("clip").join("abc123");
+    std::fs::create_dir_all(&asset).expect("managed asset directory");
+    std::fs::write(asset.join("a b+c.webm"), b"bytes").expect("managed asset");
+    std::fs::write(
+        store.join("300").join("manifest.json"),
+        r#"{"version":1,"wallpaperId":"300","properties":{"clip":{"kind":"file","sourcePath":"/gone/a b+c.webm","truncated":false,"migratedLegacyPaths":[],"assets":[{"assetId":"abc123","fileName":"a b+c.webm","sourcePath":"/gone/a b+c.webm","size":5,"modified":"2024-01-01T00:00:00Z","digest":"abc123"}]}}}"#,
+    )
+    .expect("manifest");
+
+    let managed = property(&bridge, "clip").await;
+    assert!(managed.asset_managed);
+    assert!(!managed.asset_missing);
+    assert_eq!(
+        managed.asset_source_path.as_deref(),
+        Some("/gone/a b+c.webm"),
+        "the path shown is the user's own, not the app's copy"
+    );
+
+    let backdrop = property(&bridge, "backdrop").await;
+    assert!(!backdrop.asset_managed);
+    assert!(
+        !backdrop.asset_missing,
+        "a scene texture names a file inside the package; it is not a user asset"
+    );
 }

@@ -249,6 +249,15 @@ extension WebPanelController {
         try await store.setSharedVideoDecodeEnabledAsync(try request.boolean("value"))
       case "sceneOptimization":
         try await store.setSceneOptimizationEnabledAsync(try request.boolean("value"))
+      case "sceneOnDemand":
+        try await store.setSceneOnDemandEnabledAsync(try request.boolean("value"))
+      case "sceneRenderer":
+        let mode = try request.string("value")
+        // Same refusal as videoBackend: substituting Compatibility for an
+        // unrecognised name would leave the page showing a choice that was
+        // never applied. The two names match the Rust side exactly.
+        guard Self.sceneRendererModes.contains(mode) else { throw WebPanelRequest.invalid }
+        try await store.setSceneRendererAsync(mode)
       case "batteryProfileEnabled", "batteryRenderScale", "batteryTargetFps":
         try await setBatteryQualityProfile(key: key, request: request)
       default: throw WebPanelRequest.invalid
@@ -285,6 +294,23 @@ extension WebPanelController {
         button: "Clear Logs")
       {
         try store.clearLogsAsync()
+      }
+    case "revealUserAssets":
+      UserAssetStorage.revealManagedDirectory()
+    case "purgeUnreferencedUserAssets":
+      // Named for what it does: the manifest's files are user-imported
+      // originals that nothing can regenerate, so the confirmation says what
+      // is kept, not only what goes.
+      if await confirm(
+        "Clear unused caches?",
+        detail:
+          "This removes only regenerable caches under the managed assets folder. Files you imported for a wallpaper's settings are kept.",
+        button: "Clear Caches")
+      {
+        let released = try UserAssetStorage.purgeUnreferencedDerivedCaches()
+        // A negative figure would be a bug in the accounting, not a real
+        // amount, so it is reported as nothing released rather than wrapped.
+        userAssetsReleasedBytes = UInt64(max(0, released))
       }
     case "setupInstall":
       let exists = FileManager.default.fileExists(atPath: ClientPaths.managedSteamCMDURL.path)
@@ -691,6 +717,10 @@ extension WebPanelController {
   }
 
   static let videoBackendModes = ["compatibility", "native_preferred"]
+  /// The only two scene renderer names. Must stay identical to the Rust
+  /// `set_scene_renderer` match arms: a name accepted here and rejected there
+  /// would surface as a bridge error the user cannot act on.
+  static let sceneRendererModes = ["compatibility", "native_metal_preferred"]
   static let renderScaleRange: ClosedRange<Double> = 0.25...1
   static let batteryTargetFpsRange: ClosedRange<Double> = 1...240
 

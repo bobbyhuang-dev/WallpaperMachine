@@ -16,7 +16,8 @@ pub use types::{
     BridgeNativeVideoWallpaper,
     BridgeMonitorInformationSnapshot, BridgePlaybackState, BridgePropertyDescriptor,
     BridgePropertyKind, BridgePropertyValue, BridgeRendererCountersReport,
-    BridgeRendererSurfaceCounters, BridgeScalingMode, BridgeSettingsSnapshot,
+    BridgeRendererSurfaceCounters, BridgeScalingMode, BridgeSceneBackendReport,
+    BridgeSceneUpdateModeReport, BridgeSettingsSnapshot,
     BridgeSliderMetadata, BridgeSnapshotBundle, BridgeStorageStatus, BridgeVideoBackendReport,
     BridgeWallpaperEntry,
     BridgeWallpaperKind, BridgeWallpaperMutationBundle, BridgeWallpaperOptionsSnapshot,
@@ -54,13 +55,13 @@ use crate::{
             SetBatteryQualityProfile, SetContentPacingEnabled, SetMediaIntegrationEnabled,
             SetPauseOnBatteryPower, SetPresentationSuspended, SetPropertyPath, SetRenderScale,
             SetRendererCountersEnabled, SetScalingFactor, SetScalingMode,
-            SetSceneOptimizationEnabled,
+            SetSceneOnDemandEnabled, SetSceneOptimizationEnabled, SetSceneRenderer,
             SetSharedVideoDecodeEnabled, SetTargetFps, SetVideoBackend, SetVolume,
             SetWebAudioSubscribed, Shutdown,
         },
         state::BridgeActorState,
     },
-    config::{ConfigStore, VideoBackendModeCfg},
+    config::{ConfigStore, SceneRendererModeCfg, VideoBackendModeCfg},
     engine::{EngineFacade, RealEngineFacade},
     login::LaunchAtLoginController,
     media::SystemMediaStore,
@@ -478,6 +479,24 @@ impl EngineFacade for ArcEngineFacade {
         enabled: bool,
     ) -> Result<(), wallpaper_core::EngineError> {
         self.0.set_scene_optimization_enabled(enabled)
+    }
+
+    fn set_scene_on_demand_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<(), wallpaper_core::EngineError> {
+        self.0.set_scene_on_demand_enabled(enabled)
+    }
+
+    fn set_scene_renderer_preference(
+        &self,
+        preference: wallpaper_core::SceneRendererPreference,
+    ) -> Result<(), wallpaper_core::EngineError> {
+        self.0.set_scene_renderer_preference(preference)
+    }
+
+    fn scene_runtime_reports(&self) -> Vec<crate::engine::SceneRuntimeReport> {
+        self.0.scene_runtime_reports()
     }
 
     fn current_audio_spectrum(
@@ -1289,6 +1308,58 @@ impl WallpaperBridge {
         enabled: bool,
     ) -> Result<BridgeSnapshotBundle, BridgeError> {
         self.actor.ask(SetSceneOptimizationEnabled { enabled }).await
+    }
+
+    /// Turns whole-scene on-demand updating on or off for the renderer
+    /// process.
+    ///
+    /// Off by default. With it on, a scene the renderer can prove has no
+    /// continuing reason to redraw stops its periodic tick and wakes on
+    /// events; a scene it cannot prove that about keeps running. It is not a
+    /// frame-rate cap, and it is not the scene optimisation setting: that one
+    /// changes how a frame is built, this one changes whether one is built at
+    /// all. The snapshot's `scene_update_modes` reports what each running
+    /// scene actually settled on.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the setting cannot be saved or the renderer
+    /// rejects the call.
+    pub async fn set_scene_on_demand_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<BridgeSnapshotBundle, BridgeError> {
+        self.actor.ask(SetSceneOnDemandEnabled { enabled }).await
+    }
+
+    /// Chooses which renderer draws scene wallpapers.
+    ///
+    /// `"compatibility"` keeps every scene on the established Vulkan/MoltenVK
+    /// path. `"native_metal_preferred"` asks for the native Metal backend
+    /// where the whole scene falls inside the subset it can draw, and falls
+    /// back as a whole scene otherwise. Independent of the video backend: a
+    /// scene is not a plain video. The snapshot's `scene_renderers` reports
+    /// what each display actually got.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `mode` is not one of the two names, or when the
+    /// scene list cannot be rebuilt for the new routing, in which case the
+    /// previous renderer keeps running.
+    pub async fn set_scene_renderer(
+        &self,
+        mode: String,
+    ) -> Result<BridgeSnapshotBundle, BridgeError> {
+        let mode = match mode.as_str() {
+            "compatibility" => SceneRendererModeCfg::Compatibility,
+            "native_metal_preferred" => SceneRendererModeCfg::NativeMetalPreferred,
+            other => {
+                return Err(BridgeError::invalid_input(format!(
+                    "unknown scene renderer mode {other}"
+                )));
+            }
+        };
+        self.actor.ask(SetSceneRenderer { mode }).await
     }
 
     /// The most recent process-wide audio analysis, or `None` when none has

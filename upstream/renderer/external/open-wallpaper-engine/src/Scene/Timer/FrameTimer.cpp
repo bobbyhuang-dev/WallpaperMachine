@@ -85,9 +85,53 @@ void FrameTimer::SetRequiredFps(u16 value) {
 void FrameTimer::SetFrameDemand(FrameDemand demand) {
     const auto period = demand.content_period > microseconds::zero() ? demand.content_period
                                                                      : microseconds::zero();
-    if (m_content_period.exchange(period) == period) return;
-    m_timer.SetInterval(ResolveInterval());
+    const auto previous_kind   = m_demand_kind.exchange(demand.kind);
+    const bool period_changed  = m_content_period.exchange(period) != period;
+    const bool kind_changed    = previous_kind != demand.kind;
+
+    switch (demand.kind) {
+    case FrameDemand::Kind::Idle:
+        // The interval is left as it was: leaving idle has to restore a
+        // cadence, and recomputing it from a stale ideal frame time at the
+        // moment of the wake would make the first frame after a long sleep
+        // arrive at the wrong rate.
+        m_timer.SetIdle(true);
+        break;
+    case FrameDemand::Kind::Timed: {
+        const auto deadline = demand.deadline;
+        m_demand_deadline.store(deadline);
+        const auto now = steady_clock::now();
+        if (deadline <= now) {
+            // A deadline already past is a frame that is owed, not a very long
+            // wait. It has to be taken through the idle path: a one-shot
+            // request is honoured immediately only while idle, so leaving the
+            // clock running would defer this owed frame by a full cadence
+            // interval instead of taking it now. After that frame runs, its own
+            // demand decides what happens next.
+            m_timer.SetIdle(true);
+            m_timer.WakeOnce();
+            break;
+        }
+        m_timer.SetIdle(true);
+        m_timer.WakeAt(deadline);
+        break;
+    }
+    case FrameDemand::Kind::Continuous:
+        m_timer.SetIdle(false);
+        if (period_changed || kind_changed) m_timer.SetInterval(ResolveInterval());
+        break;
+    }
 }
+
+void FrameTimer::RequestFrame() {
+    // A stopped clock stays stopped. Waking a paused wallpaper because a
+    // property changed would override the user's own decision; the frame is
+    // taken when the clock is next run.
+    if (! Running()) return;
+    m_timer.WakeOnce();
+}
+
+bool FrameTimer::Idle() const { return m_timer.Idle(); }
 
 std::chrono::microseconds FrameTimer::TickInterval() const { return m_tick_interval.load(); }
 

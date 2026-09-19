@@ -148,6 +148,22 @@ final class ControlPanelLayoutTests: XCTestCase {
             summary,
           };
           """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+      let contracts = try await web.callAsyncJavaScript(
+        """
+        const {t, setLanguage} = await import('./i18n.js');
+        const cases = [['zh-CN','zh-Hans'], ['zh-Hans-TW','zh-Hans'], ['zh','zh-Hans'],
+          ['zh-TW','en'], ['zh-Hant','en'], ['en-CN','en'], ['fr','en'], ['zhgarbage','en']];
+        const resolved = cases.every(([tag, expected]) => setLanguage(tag) === expected);
+        setLanguage('zh-Hans');
+        const payload = '<img src=x onerror=alert(1)> {count} $&';
+        const interpolated = t('Select: {title}', {title: payload});
+        const safeSubstitution = interpolated.includes(payload);
+        const fallback = t('Uncatalogued {value}', {value: 'value'}) === 'Uncatalogued value';
+        const missing = t('Select: {title}').includes('{title}');
+        setLanguage(window.__appLanguage);
+        return resolved && safeSubstitution && fallback && missing;
+        """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+      XCTAssertEqual(contracts, true, "Language fallback and literal interpolation must stay predictable")
       XCTAssertNil(web.window, "This regression must not open a desktop window")
     }
     let english = try XCTUnwrap(rendered["en"])

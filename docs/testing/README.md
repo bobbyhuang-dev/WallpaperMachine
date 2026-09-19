@@ -152,7 +152,11 @@ Swift tests cover, without starting the app:
   window width without forcing a taller window; an offscreen `WKWebView`
   regression that loads the bundled interface under its custom scheme, waits for
   the native reply bridge, routes a `navigate` message to Settings, and rejects
-  a non-allowlisted external URL; an About-updates regression that checks,
+  a non-allowlisted external URL; an English/Simplified Chinese regression that
+  checks the injected language, rendered navigation/accessibility labels, settings
+  and result summary, plus locale fallback and literal placeholder substitution.
+  Python catalog checks reject duplicate/empty entries, missing direct-call and
+  static-markup translations, and placeholder mismatches; an About-updates regression that checks,
   downloads, and refuses to install without a window, plus a snapshot mapping of
   idle/available/ready actions; a `dismissError` regression where a
   library-refresh failure and a download failure raised through the real

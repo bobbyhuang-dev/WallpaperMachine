@@ -59,9 +59,14 @@ Adding a new target, source directory, resource or build setting means editing
 - **Errors are typed values, not strings**: a small struct conforming to
   `LocalizedError`, or a coded issue such as `AppUpdateIssue(code:detail:)`.
   Report failures; never swallow them into a silent no-op.
-- **User-facing text is localized** with `String(localized:)` and lives in
-  `App/Resources/Localizable.xcstrings` / `InfoPlist.xcstrings`. No hardcoded
-  English in new UI strings.
+- **User-facing text is localized**: native strings use `String(localized:)` and
+  `App/Resources/Localizable.xcstrings` / `InfoPlist.xcstrings`. WebUI strings use
+  `t(source, params)` and the Simplified Chinese catalog in `WebUI/i18n.js`;
+  static HTML uses `data-i18n` / `data-i18n-label`. Translate labels, never action
+  identifiers, option values, paths or third-party content. Escape translated
+  text and interpolated values at the HTML boundary; use named placeholders
+  instead of assembling sentences from English fragments. Missing keys fall
+  back to their English source. No hardcoded English in new UI strings.
 - **Log through `AppLog`** (`trace`/`debug`/`info`/`warn`/`error`), which routes
   into the in-app log view. Do not add `print` to app code.
 - **Paths come from `ClientPaths`.** Never hardcode `~/Library/Application

@@ -171,6 +171,71 @@ Not verified, and not claimed:
   configuration was run. Whether an archive written on one Mac is usable on
   another is Metal's decision; the failure mode either way is a normal compile.
 
+## 2026-09-19 — Simplified Chinese control panel: verification and delivery
+
+The WebUI now translates its shell, filters, inspector, download/sign-in guidance,
+settings and accessibility labels using `WebUI/i18n.js`. Native injects the app's
+preferred localization; English remains the fallback. Filter/action values and
+third-party content are not translated. Native interface-recovery alerts use the
+existing string catalog. Final refinements distinguish “No scaling” from filter
+“None”, remove a duplicate key and resolve language scripts with `Intl.Locale`.
+
+- `python3 scripts/test.py` — passed: 70 Python tests, XcodeGen, native suite
+  **491 passed / 9 skipped / 0 failed** (500 total). The nine skips are opt-in
+  media/device integration, not passing asset checks. The new offscreen language
+  test verifies English/Chinese navigation, accessibility, settings and summaries,
+  locale fallback and non-recursive placeholder substitution. Three Python catalog
+  tests check duplicate/empty entries, placeholder parity and direct-call/static
+  markup translation coverage.
+- Earlier runs found a settings helper shadowed by a local `options` variable;
+  renamed it `localizedOptions`. A later run had 490 passes and one unrelated
+  corner-mark timeout; the other session fixed its offscreen animation wait. The
+  fresh full-suite run above passes both regressions and supersedes those failures.
+- `node --check` on `WebUI/i18n.js`, `WebUI/panel.js`, `WebUI/settings.js` — passed.
+  Impeccable detector on those files and `WebUI/index.html` returned no findings;
+  this is not visual verification. `git diff --check`, owning-doc local links and
+  the relative `CLAUDE.md` symlink check passed.
+- `python3 scripts/build.py --swift-only --configuration Release` —
+  **BUILD SUCCEEDED**. The delivered bundle at
+  `build/Build/Products/Release/MacWallpaperEngine.app` contains byte-identical
+  copies of all four localized WebUI files and native `zh-Hans` strings.
+- No renderer changes were made for localization; renderer/corpus checks were
+  not run. No desktop interaction, app launch/restart, screenshot, permission
+  prompt or live Steam login was performed. Running-window Chinese layout and
+  the System Settings per-app language workflow remain manually unverified.
+  Quit/reopen the built app to load the changes. Concurrent workspace changes
+  were preserved.
+
+## 2026-09-19 — Favorite and Approved thumbnail marks: final verification and delivery
+
+Verified the integrated Installed/Discover corner marks: pink favorite hearts,
+green Approved trophies, Discover's existing-library check, and coexistence with
+Installed's selection check and Active badge. Added the behavior and metadata
+limits to `docs/features/control-panel.md`. Favorites are app-local; Installed
+approval depends on the local manifest, while Discover uses Steam's tag. Missing
+local approval metadata is not fetched from Steam.
+
+- `python3 scripts/test.py` — passed: Python tests and XcodeGen; native suite
+  491 passed / 9 skipped / 0 failed (500 total). The skips are the opt-in
+  media/device integration tests, not passes. Both
+  `testTilesWearApprovedAndFavoriteMarksWithoutWindow` and
+  `testReadsStaffApprovalFromTheManifest` passed.
+- Earlier attempts in this session failed to bring up the offscreen panel, and
+  the corner-mark fixture's later offscreen animation wait was fixed as recorded
+  below. The fresh full-suite run above supersedes those failures; no claim is
+  made that the earlier tree passed.
+- `node --check WebUI/panel.js` and `node --check WebUI/icons.js` — passed.
+- Impeccable mechanical detector on `WebUI/panel.js`, `WebUI/panel.css` and
+  `WebUI/icons.js` — no findings. This is not visual verification.
+- `python3 scripts/build.py --swift-only --configuration Release` —
+  **BUILD SUCCEEDED**. The delivered bundle's `panel.js` and `panel.css` compare
+  byte-for-byte with the sources. No renderer or bridge change was needed for
+  these marks, so renderer/corpus checks were not run for this task.
+- No app launch, restart, screenshots, desktop test or live Steam login was
+  performed. Visual presentation remains unverified; quit/reopen the Release app
+  to load the changes. Concurrent localization edits in the shared workspace
+  were preserved.
+
 ## 2026-09-19 — Tile-mark test hung offscreen; whole tree committed
 
 `ControlPanelLayoutTests/testTilesWearApprovedAndFavoriteMarksWithoutWindow`

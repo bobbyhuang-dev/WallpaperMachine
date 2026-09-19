@@ -6,6 +6,24 @@ by [`App/Views/ControlPanel/`](../../App/Views/ControlPanel). Menus, windows,
 file pickers and security confirmations stay native — the web layer never draws
 a system dialog and renderer content is never loaded into the web view.
 
+## Language
+
+The control panel supports English and Simplified Chinese, including navigation,
+filters, wallpaper options, download/sign-in guidance, settings and accessibility
+labels. It follows the app language selected by macOS, not Steam's language.
+To use Chinese without changing the system language, add MacWallpaperEngine in
+**System Settings → General → Language & Region → Applications** and choose
+**Simplified Chinese**, then quit and reopen the app. There is no separate
+in-app language switch.
+
+Swift injects the bundle's preferred localization before the page loads; the
+bundled [`i18n.js`](../../WebUI/i18n.js) catalog translates the WebUI. Unsupported
+languages and missing keys fall back to English. Native menus and dialogs use
+`App/Resources/Localizable.xcstrings`. Wallpaper titles, descriptions, creator
+names, custom property labels and upstream diagnostic details remain as supplied;
+this does not translate third-party wallpaper content. Steam filter values and
+bridge action identifiers remain unchanged when labels are translated.
+
 ## Layout
 
 | Region | Contents |
@@ -49,6 +67,26 @@ filter disclosure or popover.
   **About** is where in-app updates live: **Check for Updates** reads the latest
   GitHub Release, and download / restart-install happen only after confirmation.
   The application menu item **Check for Updates…** opens this section.
+
+## Thumbnail corner marks
+
+Installed and Discover show status marks at the thumbnail's upper-left corner:
+
+- A pink heart identifies a local favorite, including the same item when it
+  appears in Discover. Use the heart button on an Installed tile (visible on
+  hover or keyboard focus), or the inspector's favorite action, to toggle it.
+  This is the app's saved favorite list, not Steam-account favorites.
+- A green trophy identifies **Approved** wallpapers. Discover uses Steam's
+  `Approved` tag. Installed reads `approved: true` or an `Approved` tag from the
+  local `project.json`, off the snapshot thread; wallpapers without that local
+  metadata have no trophy. The app does not fetch missing approval metadata for
+  imported wallpapers.
+- Discover also retains a check for items already in the library.
+
+Multiple marks stack vertically. On Installed they move aside when the
+multi-select check appears, and the Active badge sits alongside rather than
+covering them. Tile accessibility labels announce the marks; overlay colors stay
+readable against artwork in both light and dark appearance.
 
 ## Selection versus apply
 

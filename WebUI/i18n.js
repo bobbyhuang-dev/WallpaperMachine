@@ -395,7 +395,6 @@ const catalogs = {
     'Up to {slots} downloads run at once and share your saved sign-in; the rest wait in order. Steam may still ask you to approve a sign-in.': '最多同时进行 {slots} 项下载并共用已保存的登录，其余按顺序等待。Steam 仍可能要求你批准登录。',
     'Downloads run one at a time; the rest wait in order. Steam may still ask you to approve a sign-in.': '下载逐项进行，其余按顺序等待。Steam 仍可能要求你批准登录。',
     'Remove {title} from downloads': '从下载中移除 {title}',
-    'Import wallpapers': '导入壁纸',
     'Close import': '关闭导入',
     'Choose wallpaper folders or files. Imports copy the source files into your library and leave the originals untouched.': '选择壁纸文件夹或文件。导入会将源文件复制到壁纸库，原文件保持不变。',
     'If a wallpaper already exists': '壁纸已存在时',
@@ -562,6 +561,7 @@ const catalogs = {
     'Playback & scaling': '播放与缩放',
     'Choose a wallpaper to adjust playback.': '选择壁纸后即可调整播放。',
     'Scaling': '缩放',
+    'No scaling': '不缩放',
     'Match': '匹配',
     'Mute audio': '静音',
     'No displays connected.': '未连接显示器。',
@@ -643,18 +643,15 @@ const catalogs = {
 
 const supported = Object.keys(catalogs);
 
-// "zh-Hans", "zh-Hans-CN", "zh-CN" and "zh" all resolve to the Simplified Chinese
-// catalog; traditional variants are left English rather than shown a wrong script.
+// Respect an explicit script before the region (zh-Hans-TW is still Simplified).
+// Traditional Chinese and unsupported or malformed tags fall back to English.
 function resolve(tag) {
   const value = String(tag || '').trim();
-  if (!value) return '';
   if (supported.includes(value)) return value;
-  const lower = value.toLowerCase();
-  if (lower.startsWith('zh')) {
-    if (/hant|tw|hk|mo/.test(lower)) return '';
-    return 'zh-Hans';
-  }
-  return '';
+  try {
+    const locale = new Intl.Locale(value).maximize();
+    return locale.language === 'zh' && locale.script === 'Hans' ? 'zh-Hans' : '';
+  } catch { return ''; }
 }
 
 let active = '';

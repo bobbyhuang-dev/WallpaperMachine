@@ -56,7 +56,8 @@ use crate::{
             SetPauseOnBatteryPower, SetPresentationSuspended, SetPropertyPath, SetRenderScale,
             SetRendererCountersEnabled, SetScalingFactor, SetScalingMode,
             SetSceneOnDemandEnabled, SetSceneOptimizationEnabled, SetSceneRenderer,
-            SetSharedVideoDecodeEnabled, SetTargetFps, SetVideoBackend, SetVolume,
+            SetSceneVideoPlaneSamplingEnabled, SetSharedVideoDecodeEnabled, SetTargetFps,
+            SetVideoBackend, SetVolume,
             SetWebAudioSubscribed, Shutdown,
         },
         state::BridgeActorState,
@@ -486,6 +487,13 @@ impl EngineFacade for ArcEngineFacade {
         enabled: bool,
     ) -> Result<(), wallpaper_core::EngineError> {
         self.0.set_scene_on_demand_enabled(enabled)
+    }
+
+    fn set_scene_video_plane_sampling_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<(), wallpaper_core::EngineError> {
+        self.0.set_scene_video_plane_sampling_enabled(enabled)
     }
 
     fn set_scene_renderer_preference(
@@ -1330,6 +1338,30 @@ impl WallpaperBridge {
         enabled: bool,
     ) -> Result<BridgeSnapshotBundle, BridgeError> {
         self.actor.ask(SetSceneOnDemandEnabled { enabled }).await
+    }
+
+    /// Lets a native Metal scene's materials sample a video's NV12 planes
+    /// directly instead of one pre-converted colour image.
+    ///
+    /// Off by default, and experimental. It selects between two programs that
+    /// were both compiled with the scene's graph, so a running scene picks it
+    /// up at its next frame boundary without being reparsed or restarted. A
+    /// material with no usable plane variant, and any frame that is not 8-bit
+    /// NV12, keeps converting whatever this says; nothing here changes which
+    /// backend draws a scene. The snapshot's `scene_renderers` reports the
+    /// path each running scene's video textures actually took.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the setting cannot be saved or the renderer
+    /// rejects the call.
+    pub async fn set_scene_video_plane_sampling_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<BridgeSnapshotBundle, BridgeError> {
+        self.actor
+            .ask(SetSceneVideoPlaneSamplingEnabled { enabled })
+            .await
     }
 
     /// Chooses which renderer draws scene wallpapers.

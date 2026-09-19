@@ -99,6 +99,38 @@ final class WebPanelPerformanceSettingsTests: XCTestCase {
     XCTAssertTrue(context.bridge.sceneOptimization.isEmpty)
   }
 
+  func testDirectVideoPlaneSamplingDefaultsOffAndRoundTripsThroughTheEngine() async throws {
+    let context = try Context()
+    defer { context.tearDown() }
+    context.store.settingsSnapshot = BridgeSnapshotFixtures.settings()
+
+    let shipped = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])
+    XCTAssertEqual(
+      shipped["sceneVideoPlaneSampling"] as? Bool, false,
+      "A sampling path whose equivalence is bounded rather than total ships off")
+
+    try await context.controller.perform(
+      "setting", body: ["key": "sceneVideoPlaneSampling", "value": true])
+
+    XCTAssertEqual(context.bridge.sceneVideoPlaneSampling, [true])
+    let on = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])
+    XCTAssertEqual(
+      on["sceneVideoPlaneSampling"] as? Bool, true,
+      "The page must re-render from the snapshot the engine returned, not from the click")
+  }
+
+  func testNonBooleanVideoPlaneSamplingValueIsRefused() async throws {
+    let context = try Context()
+    defer { context.tearDown() }
+
+    do {
+      try await context.controller.perform(
+        "setting", body: ["key": "sceneVideoPlaneSampling", "value": "on"])
+      XCTFail("A string value must not be accepted for a switch")
+    } catch {}
+    XCTAssertTrue(context.bridge.sceneVideoPlaneSampling.isEmpty)
+  }
+
   func testSnapshotPublishesPerformanceSettingsUnderTheDocumentedKeys() throws {
     let context = try Context()
     defer { context.tearDown() }
@@ -195,6 +227,7 @@ private final class RecordingBridge: WallpaperBridge {
   @MainActor var videoBackends: [String] = []
   @MainActor var batteryProfiles: [Profile] = []
   @MainActor var sceneOptimization: [Bool] = []
+  @MainActor var sceneVideoPlaneSampling: [Bool] = []
 
   override func setRenderScale(scale: Float) async throws -> BridgeSnapshotBundle {
     await record { $0.renderScales.append(scale) }
@@ -210,6 +243,14 @@ private final class RecordingBridge: WallpaperBridge {
   override func setSceneOptimizationEnabled(enabled: Bool) async throws -> BridgeSnapshotBundle {
     var bundle = await record { $0.sceneOptimization.append(enabled) }
     bundle.settings.sceneOptimizationEnabled = enabled
+    return bundle
+  }
+
+  override func setSceneVideoPlaneSamplingEnabled(enabled: Bool) async throws
+    -> BridgeSnapshotBundle
+  {
+    var bundle = await record { $0.sceneVideoPlaneSampling.append(enabled) }
+    bundle.settings.sceneVideoPlaneSamplingEnabled = enabled
     return bundle
   }
 

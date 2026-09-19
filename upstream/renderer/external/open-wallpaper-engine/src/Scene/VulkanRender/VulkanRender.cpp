@@ -121,6 +121,9 @@ struct VulkanRender::Impl {
     void computeShaderDynamicReasons(Scene&);
     /// Gives every pinned target back to the reuse pool.
     void releaseStaticCache();
+    /// Waits for submitted work before prepared pass state is destroyed.
+    /// A no-op while no graph is loaded, which is the compile path.
+    bool quiesceForPassRebuild();
     /// Per frame: samples the varying inputs and marks reusable passes.
     void planStaticSkips(Scene&);
     void UpdateCameraFillMode(Scene&, wallpaper::FillMode);
@@ -201,6 +204,10 @@ struct VulkanRender::Impl {
     /// costs GPU work rather than memory.
     uint64_t m_static_cache_budget_bytes { 192ULL * 1024ULL * 1024ULL };
     uint64_t m_static_pinned_bytes { 0 };
+    /// The setting value the current copy plan and reuse table were built for.
+    /// A change is applied at a frame boundary rather than at the next graph
+    /// compile.
+    bool     m_scene_optimization_applied { false };
     /// Owned by the scene that created this renderer; may be null in tests and
     /// standalone tools. Only read on the render thread.
     RendererCounters* m_counters { nullptr };
@@ -226,6 +233,9 @@ bool VulkanRender::drawFrame(Scene& scene) { return pImpl->drawFrame(scene); }
 bool VulkanRender::clearLastRenderGraph() { return pImpl->clearLastRenderGraph(); }
 bool VulkanRender::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
     return pImpl->compileRenderGraph(scene, rg);
+}
+bool VulkanRender::ApplySceneOptimization(Scene& scene, rg::RenderGraph& rg) {
+    return pImpl->applySceneOptimization(scene, rg);
 }
 bool VulkanRender::ApplyRenderScale(Scene& scene, rg::RenderGraph& rg, double scale) {
     return pImpl->applyRenderScale(scene, rg, scale);
@@ -1158,6 +1168,29 @@ bool VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
     return true;
 };
 
+bool VulkanRender::Impl::quiesceForPassRebuild() {
+    // Destroying prepared pass state and dropping render targets is exactly
+    // what `applyRenderScale` does, and it is only safe once no submitted
+    // frame can still be reading them. During a compile nothing has been
+    // submitted for this graph, so the wait is skipped there; at a frame
+    // boundary it is not optional, and it is a one-time cost paid when the
+    // user changes a setting rather than per frame.
+    if (! m_pass_loaded) return true;
+    if (quiesceFrame() != VK_SUCCESS) return false;
+    std::string error;
+    if (! m_device->tex_cache().WaitForPendingUploads(&error)) {
+        LOG_ERROR("cannot rebuild passes with pending uploads: %s", error.c_str());
+        return failFrame(VK_ERROR_UNKNOWN);
+    }
+    for (auto* command : { &m_render_cmd, &m_upload_cmd }) {
+        if (*command) {
+            const auto result = command->Reset();
+            if (result != VK_SUCCESS) return failFrame(result);
+        }
+    }
+    return true;
+}
+
 bool VulkanRender::Impl::applySceneOptimization(Scene& scene, rg::RenderGraph& rg) {
     releaseStaticCache();
     m_static_cache.Reset();
@@ -1169,7 +1202,35 @@ bool VulkanRender::Impl::applySceneOptimization(Scene& scene, rg::RenderGraph& r
     // reuse switch would make turning reuse off silently make every scene look
     // dynamic.
     computeShaderDynamicReasons(scene);
-    if (! SceneOptimizationEnabled()) return true;
+    m_scene_optimization_applied = SceneOptimizationEnabled();
+    if (! m_scene_optimization_applied) {
+        // Copies the last plan removed have to come back, or switching the
+        // setting off would leave their destinations holding whatever the
+        // elision decided they could share. Only a plan that really removed
+        // something needs the passes rebuilt.
+        bool restored = false;
+        for (auto* pass : m_passes) {
+            auto* copy = dynamic_cast<CopyPass*>(pass);
+            if (copy == nullptr || copy->desc().elision == CopyElision::None) continue;
+            copy->desc().elision = CopyElision::None;
+            restored             = true;
+        }
+        if (restored) {
+            if (! quiesceForPassRebuild()) return false;
+            for (auto* pass : m_passes) {
+                if (pass != nullptr) pass->destory(*m_device, m_rendering_resources);
+            }
+            std::string error;
+            if (! m_device->tex_cache().ClearRenderTargets(&error)) {
+                LOG_ERROR("cannot drop render targets for copy elision: %s", error.c_str());
+                return failFrame(VK_ERROR_UNKNOWN);
+            }
+            setRenderTargetSize(scene, rg);
+            if (! preparePasses(scene)) return false;
+        }
+        RecordElidedCopies(0);
+        return true;
+    }
 
     // Copy elimination first: it changes which targets exist and who reads
     // them, so the reuse analysis must see the list the renderer will run.
@@ -1216,6 +1277,7 @@ bool VulkanRender::Impl::applySceneOptimization(Scene& scene, rg::RenderGraph& r
     if (changed) {
         // The copies decided above change what each pass queries, so their
         // prepared state has to be rebuilt against the new plan.
+        if (! quiesceForPassRebuild()) return false;
         for (auto* pass : m_passes) {
             if (pass != nullptr) pass->destory(*m_device, m_rendering_resources);
         }

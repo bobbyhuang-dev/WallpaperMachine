@@ -64,6 +64,44 @@ pub enum TextureFormatHint {
     Rgba8,
 }
 
+/// Plane layout a video texture slot is sampled through.
+///
+/// `None` is what every ordinary texture carries, and it is what keeps the
+/// generated program identical to the one this compiler produced before this
+/// option existed: nothing is declared, nothing is rewritten and the cache key
+/// gains no term. A slot marked `Nv12Biplanar` is instead compiled as a second
+/// variant of the same author shader, sampling the decoder's luma and chroma
+/// planes directly, so the renderer needs no full-frame colour conversion to
+/// feed it.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+pub enum VideoPlaneLayout {
+    /// One sampled image, exactly as the slot has always been compiled.
+    #[default]
+    None,
+    /// Two planes: full-resolution 8-bit luma and half-resolution `RG8` chroma,
+    /// converted to RGB inside the shader.
+    Nv12Biplanar,
+}
+
+impl VideoPlaneLayout {
+    /// Returns the stable cache-key and diagnostics spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Nv12Biplanar => "nv12_biplanar",
+        }
+    }
+
+    /// Returns whether this slot is sampled as separate planes.
+    #[must_use]
+    pub const fn is_planar(self) -> bool {
+        matches!(self, Self::Nv12Biplanar)
+    }
+}
+
 /// Texture information used by shader request planning.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -80,6 +118,9 @@ pub struct ShaderTextureInfo {
     /// Enabled state for RGB components used by material combo planning.
     #[cfg_attr(feature = "serde", serde(default))]
     components: [TextureComponentState; 3],
+    /// Plane layout this slot is sampled through.
+    #[cfg_attr(feature = "serde", serde(default))]
+    video_planes: VideoPlaneLayout,
 }
 
 impl ShaderTextureInfo {
@@ -92,6 +133,7 @@ impl ShaderTextureInfo {
             is_enabled,
             format,
             components: [TextureComponentState::disabled(); 3],
+            video_planes: VideoPlaneLayout::None,
         }
     }
 
@@ -109,6 +151,7 @@ impl ShaderTextureInfo {
             is_enabled,
             format,
             components,
+            video_planes: VideoPlaneLayout::None,
         }
     }
 
@@ -127,7 +170,15 @@ impl ShaderTextureInfo {
             is_enabled,
             format,
             components,
+            video_planes: VideoPlaneLayout::None,
         }
+    }
+
+    /// Returns this texture information with an explicit plane layout.
+    #[must_use]
+    pub const fn with_video_planes(mut self, video_planes: VideoPlaneLayout) -> Self {
+        self.video_planes = video_planes;
+        self
     }
 
     /// Returns the texture slot.
@@ -158,6 +209,12 @@ impl ShaderTextureInfo {
     #[must_use]
     pub const fn components(&self) -> &[TextureComponentState; 3] {
         &self.components
+    }
+
+    /// Returns the plane layout this slot is sampled through.
+    #[must_use]
+    pub const fn video_planes(&self) -> VideoPlaneLayout {
+        self.video_planes
     }
 }
 

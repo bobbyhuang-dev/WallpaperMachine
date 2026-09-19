@@ -118,13 +118,16 @@ final class WebPanelSceneSettingsTests: XCTestCase {
       sceneRenderers: [
         BridgeSceneBackendReport(
           displayId: 1, displayName: "Display 1", wallpaperId: "forest", wallpaperTitle: "Forest",
-          backend: "native_metal", fallbackReason: nil),
+          backend: "native_metal", fallbackReason: nil, videoPath: "none",
+          optimizationApplied: true),
         BridgeSceneBackendReport(
           displayId: 2, displayName: "Display 2", wallpaperId: "rain", wallpaperTitle: "Rain",
-          backend: "legacy_vulkan", fallbackReason: "the scene uses a puppet"),
+          backend: "legacy_vulkan", fallbackReason: "the scene uses a puppet", videoPath: "none",
+          optimizationApplied: true),
         BridgeSceneBackendReport(
           displayId: 3, displayName: "Display 3", wallpaperId: "sea", wallpaperTitle: "Sea",
-          backend: "unknown", fallbackReason: nil),
+          backend: "unknown", fallbackReason: nil, videoPath: "none",
+          optimizationApplied: true),
       ])
 
     let settings = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])
@@ -144,6 +147,48 @@ final class WebPanelSceneSettingsTests: XCTestCase {
       "Reporting the preference as the backend in use would make a preference look like evidence")
   }
 
+  /// The path a scene's video textures took is a read-back, and so is whether
+  /// the scene optimisation setting has actually reached that scene. Both have
+  /// to arrive as their own values: reporting the saved preference in their
+  /// place is what would make a preference look like evidence.
+  func testSceneRendererReportCarriesTheVideoPathAndTheAppliedSetting() throws {
+    let context = try Context()
+    defer { context.tearDown() }
+    context.store.settingsSnapshot = BridgeSnapshotFixtures.settings(
+      sceneOptimizationEnabled: true,
+      sceneRenderer: "native_metal_preferred",
+      sceneRenderers: [
+        BridgeSceneBackendReport(
+          displayId: 1, displayName: "Display 1", wallpaperId: "forest", wallpaperTitle: "Forest",
+          backend: "native_metal", fallbackReason: nil, videoPath: "nv12_direct",
+          optimizationApplied: true),
+        BridgeSceneBackendReport(
+          displayId: 2, displayName: "Display 2", wallpaperId: "rain", wallpaperTitle: "Rain",
+          backend: "native_metal", fallbackReason: nil, videoPath: "nv12_converted",
+          optimizationApplied: false),
+        BridgeSceneBackendReport(
+          displayId: 3, displayName: "Display 3", wallpaperId: "sea", wallpaperTitle: "Sea",
+          backend: "legacy_vulkan", fallbackReason: "the scene uses a puppet", videoPath: "none",
+          optimizationApplied: nil),
+      ])
+
+    let settings = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])
+    let rows = try XCTUnwrap(settings["sceneRenderers"] as? [[String: Any]])
+
+    XCTAssertEqual(rows[0]["videoPath"] as? String, "nv12_direct")
+    XCTAssertEqual(rows[1]["videoPath"] as? String, "nv12_converted")
+    XCTAssertEqual(
+      rows[2]["videoPath"] as? String, "none",
+      "A scene with no video says none rather than reporting a path it never took")
+    XCTAssertEqual(rows[0]["optimizationApplied"] as? Bool, true)
+    XCTAssertEqual(
+      rows[1]["optimizationApplied"] as? Bool, false,
+      "A change that has not reached a scene yet must be visible as not yet applied")
+    XCTAssertNil(
+      rows[2]["optimizationApplied"] as? Bool,
+      "A scene the renderer could not answer for is unknown, which is not the same as applied")
+  }
+
   /// No GPU backend exists until the scene has been read and one has been
   /// chosen, so a report without a backend is a phase the user can see rather
   /// than a reading that failed. It must reach the page as its own value,
@@ -158,13 +203,16 @@ final class WebPanelSceneSettingsTests: XCTestCase {
       sceneRenderers: [
         BridgeSceneBackendReport(
           displayId: 1, displayName: "Display 1", wallpaperId: "sea", wallpaperTitle: "Sea",
-          backend: "unknown", fallbackReason: nil),
+          backend: "unknown", fallbackReason: nil, videoPath: "none",
+          optimizationApplied: true),
         BridgeSceneBackendReport(
           displayId: 2, displayName: "Display 2", wallpaperId: "rain", wallpaperTitle: "Rain",
-          backend: "legacy_vulkan", fallbackReason: "the scene uses a puppet"),
+          backend: "legacy_vulkan", fallbackReason: "the scene uses a puppet", videoPath: "none",
+          optimizationApplied: true),
         BridgeSceneBackendReport(
           displayId: 3, displayName: "Display 3", wallpaperId: "dunes", wallpaperTitle: "Dunes",
-          backend: "legacy_vulkan", fallbackReason: nil),
+          backend: "legacy_vulkan", fallbackReason: nil, videoPath: "none",
+          optimizationApplied: true),
       ])
 
     let settings = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])

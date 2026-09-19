@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -61,6 +62,30 @@ struct SceneMetalStage
 /// first is what every scene looks like when the user has not selected the
 /// native renderer, and reporting it as a translation failure would accuse the
 /// author's shader of a fault it does not have.
+/// The same author program, translated to sample one video slot as NV12 luma
+/// and chroma planes instead of one pre-converted image.
+///
+/// This is a second program, not an edit of the first: it has its own stages,
+/// its own reflection and its own resource layout, and the renderer selects
+/// between the two per frame from the format the decoder actually produced. It
+/// is produced only where the translation is exact; `error` records why it was
+/// not, and a scene whose variant failed simply keeps converting, which is the
+/// behaviour every Metal scene had before this existed.
+struct SceneMetalVideoPlaneVariant
+{
+    std::vector<SceneMetalStage> stages;
+    std::string                  reflection_json;
+    /// Material texture slot this variant samples as planes.
+    uint32_t                     slot { 0 };
+    /// Non-empty when the variant was attempted and could not be produced.
+    std::string                  error;
+
+    [[nodiscard]] bool ok() const
+    {
+        return error.empty() && ! stages.empty() && ! reflection_json.empty();
+    }
+};
+
 struct SceneMetalProgram
 {
     std::vector<SceneMetalStage> stages;
@@ -71,6 +96,10 @@ struct SceneMetalProgram
     /// Non-empty when translation was attempted and failed. The scene still
     /// loads and still draws; only the native backend is refused.
     std::string error;
+    /// The direct plane-sampling variant, when the material had exactly one
+    /// candidate video slot. Null means no variant was ever attempted, which
+    /// is a different answer from one that was attempted and refused.
+    std::shared_ptr<const SceneMetalVideoPlaneVariant> video_planes;
 
     [[nodiscard]] bool ok() const
     {

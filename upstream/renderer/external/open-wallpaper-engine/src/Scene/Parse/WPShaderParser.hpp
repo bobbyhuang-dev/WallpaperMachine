@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <span>
 #include "Scene/Scene.h"
 #include "Scene/SceneShader.h"
@@ -82,10 +83,18 @@ public:
     // Compiles the same units through the same include/combo/cache path as
     // `CompileToSpvRust`, but emits Metal Shading Language instead of SPIR-V.
     // `reflection_json` carries the identical reflection payload either way.
+    //
+    // `nv12_plane_slot`, when given, asks for the variant of the same author
+    // program that samples that material texture slot as NV12 luma and chroma
+    // planes instead of one converted image. It is a different program with a
+    // different cache key, never a rewrite of the one above, and a shader that
+    // reads the slot in a way the translation cannot reproduce fails this call
+    // and keeps the ordinary program.
     static bool CompileToMslRust(std::string_view scene_id, std::string_view shader_name,
                                  std::span<WPShaderUnit>,
                                  std::vector<shader::RustShaderMetalStage>& stages, fs::VFS&,
                                  WPShaderInfo*, std::span<const WPShaderTexInfo>,
-                                 std::string* reflection_json = nullptr);
+                                 std::string* reflection_json = nullptr,
+                                 std::optional<uint32_t> nv12_plane_slot = std::nullopt);
 };
 } // namespace wallpaper

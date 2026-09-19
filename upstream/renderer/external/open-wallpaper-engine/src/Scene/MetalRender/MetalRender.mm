@@ -10,6 +10,7 @@
 
 #include "MetalRender/MetalBlend.hpp"
 #include "MetalRender/MetalCapability.hpp"
+#include "MetalRender/MetalVideoSupport.hpp"
 #include "MetalRender/MetalProjection.hpp"
 #include "MetalRender/MetalShaderReflection.hpp"
 #include "MetalRender/SceneMetalProgram.hpp"
@@ -33,9 +34,13 @@
 #include <Eigen/Dense>
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstring>
+#include <map>
+#include <optional>
 #include <span>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -240,6 +245,150 @@ bool ToMetalImageFormat(TextureFormat format, MTLPixelFormat& out, uint32_t& byt
     return false;
 }
 
+/// Reads the material texture slot out of a generated chroma-plane resource
+/// name. `std::nullopt` for anything else, including the material's own
+/// `g_TextureN` names, which have their own reader.
+std::optional<std::size_t> VideoChromaSlot(std::string_view name, std::string_view prefix)
+{
+    if (! name.starts_with(prefix)) return std::nullopt;
+    name.remove_prefix(prefix.size());
+    if (name.empty()) return std::nullopt;
+    if (name.size() > 1 && name.front() == '0') return std::nullopt;
+    std::size_t  slot   = 0;
+    const auto   result = std::from_chars(name.data(), name.data() + name.size(), slot);
+    if (result.ec != std::errc {} || result.ptr != name.data() + name.size()) return std::nullopt;
+    return slot;
+}
+
+std::optional<std::size_t> VideoChromaTextureSlot(std::string_view name)
+{
+    return VideoChromaSlot(name, "_we_VideoChroma");
+}
+
+std::optional<std::size_t> VideoChromaSamplerSlot(std::string_view name)
+{
+    return VideoChromaSlot(name, "_we_Sampler__we_VideoChroma");
+}
+
+std::string VideoRangeUniformName(std::size_t slot)
+{
+    return "_we_VideoRange" + std::to_string(slot);
+}
+
+std::string VideoMatrixUniformName(std::size_t slot)
+{
+    return "_we_VideoMatrix" + std::to_string(slot);
+}
+
+/// Where one material texture slot's texture and sampler go in Metal's
+/// per-stage argument tables. A negative index means that stage does not bind
+/// it at all.
+struct MetalRenderTextureSlotBinding
+{
+    int vertex_texture { -1 };
+    int fragment_texture { -1 };
+    int vertex_sampler { -1 };
+    int fragment_sampler { -1 };
+
+    [[nodiscard]] bool bound() const { return vertex_texture >= 0 || fragment_texture >= 0; }
+};
+
+/// One program's resource bindings, matched on the original GLSL names.
+struct MetalResourcePlan
+{
+    int                                                  vertex_uniform_slot { -1 };
+    int                                                  fragment_uniform_slot { -1 };
+    std::vector<MetalRenderTextureSlotBinding>           texture_slots;
+    MetalRenderTextureSlotBinding                        chroma {};
+    bool                                                 has_chroma { false };
+    /// Material texture slot the chroma plane belongs to.
+    std::size_t                                          chroma_slot { 0 };
+};
+
+/// Builds the binding plan for one translated program. Returns an empty string
+/// on success and the reason otherwise; both the ordinary program and the plane
+/// variant go through this, so the two cannot disagree about how a resource
+/// name becomes a slot.
+std::string BuildMetalResourcePlan(const std::vector<SceneMetalStage>& stages,
+                                   const MetalUniformBlock*            uniform_block,
+                                   std::size_t                         texture_count,
+                                   MetalResourcePlan&                  out)
+{
+    out.texture_slots.assign(texture_count, MetalRenderTextureSlotBinding {});
+    for (const auto& stage : stages) {
+        const bool vertex_stage = stage.kind == SceneMetalStageKind::Vertex;
+        for (const auto& binding : stage.bindings) {
+            if (binding.set != 0) {
+                return "a shader binds a resource outside descriptor set 0";
+            }
+            if (uniform_block != nullptr && binding.name == uniform_block->name) {
+                if (binding.slot_kind != SceneMetalSlotKind::Buffer) {
+                    return "a shader binds its uniform block as something other than a buffer";
+                }
+                (vertex_stage ? out.vertex_uniform_slot : out.fragment_uniform_slot) =
+                    static_cast<int>(binding.slot);
+                continue;
+            }
+            if (const auto chroma = VideoChromaTextureSlot(binding.name); chroma.has_value()) {
+                if (binding.slot_kind != SceneMetalSlotKind::Texture) {
+                    return "a shader binds a video plane as something other than a texture";
+                }
+                if (out.has_chroma && out.chroma_slot != *chroma) {
+                    return "a shader binds more than one video plane";
+                }
+                out.has_chroma  = true;
+                out.chroma_slot = *chroma;
+                (vertex_stage ? out.chroma.vertex_texture : out.chroma.fragment_texture) =
+                    static_cast<int>(binding.slot);
+                continue;
+            }
+            if (const auto chroma = VideoChromaSamplerSlot(binding.name); chroma.has_value()) {
+                if (binding.slot_kind != SceneMetalSlotKind::Sampler) {
+                    return "a shader binds a video plane sampler as something else";
+                }
+                if (out.has_chroma && out.chroma_slot != *chroma) {
+                    return "a shader binds more than one video plane";
+                }
+                out.has_chroma  = true;
+                out.chroma_slot = *chroma;
+                (vertex_stage ? out.chroma.vertex_sampler : out.chroma.fragment_sampler) =
+                    static_cast<int>(binding.slot);
+                continue;
+            }
+            const auto texture_slot = vulkan::detail::CustomShaderTextureSlot(binding.name);
+            if (texture_slot.has_value()) {
+                if (*texture_slot >= out.texture_slots.size()) {
+                    return "a shader samples a texture slot the material does not have";
+                }
+                auto& slot = out.texture_slots[*texture_slot];
+                if (binding.slot_kind == SceneMetalSlotKind::Texture) {
+                    (vertex_stage ? slot.vertex_texture : slot.fragment_texture) =
+                        static_cast<int>(binding.slot);
+                } else if (binding.slot_kind == SceneMetalSlotKind::Sampler) {
+                    (vertex_stage ? slot.vertex_sampler : slot.fragment_sampler) =
+                        static_cast<int>(binding.slot);
+                } else {
+                    return "a shader binds a texture as a buffer";
+                }
+                continue;
+            }
+            const auto sampler_slot = vulkan::detail::CustomShaderSamplerSlot(binding.name);
+            if (sampler_slot.has_value()) {
+                if (*sampler_slot >= out.texture_slots.size()) {
+                    return "a shader samples a texture slot the material does not have";
+                }
+                auto& slot = out.texture_slots[*sampler_slot];
+                (vertex_stage ? slot.vertex_sampler : slot.fragment_sampler) =
+                    static_cast<int>(binding.slot);
+                continue;
+            }
+            return "a shader binds a resource the native renderer does not recognise: " +
+                   binding.name;
+        }
+    }
+    return {};
+}
+
 /// Matrices the Metal backend has to carry through its clip-space fold.
 /// `MetalClipSpaceFold` is the identity on every convention pair this renderer
 /// has met, but the fold is applied rather than skipped so that a future change
@@ -312,17 +461,33 @@ struct MetalRender::Impl
     uint32_t             raster_height { 0 };
 
     // ---- compiled graph
-    struct TextureSlotBinding
-    {
-        int vertex_texture { -1 };
-        int fragment_texture { -1 };
-        int vertex_sampler { -1 };
-        int fragment_sampler { -1 };
+    using TextureSlotBinding = MetalRenderTextureSlotBinding;
 
-        [[nodiscard]] bool bound() const
-        {
-            return vertex_texture >= 0 || fragment_texture >= 0;
-        }
+    /// One material's second program: the same author shader translated to
+    /// sample a video slot's NV12 planes instead of one pre-converted image.
+    ///
+    /// Everything here is built with the graph, never inside a frame. `ready`
+    /// false means this material keeps converting, which is exactly what it did
+    /// before the variant existed and is never a reason to fail a draw.
+    struct VideoPlaneDraw
+    {
+        bool                            ready { false };
+        /// Material texture slot the variant samples as planes.
+        std::size_t                     slot { 0 };
+        id<MTLRenderPipelineState>      pipeline { nil };
+        MetalShaderReflection           reflection;
+        int                             vertex_uniform_slot { -1 };
+        int                             fragment_uniform_slot { -1 };
+        uint32_t                        uniform_size { 0 };
+        std::vector<TextureSlotBinding> texture_slots;
+        /// Where the chroma plane and its own sampler go.
+        TextureSlotBinding              chroma;
+        /// Linear-filtered, with the author's own wrap modes: the chroma plane
+        /// is half resolution and the pre-converted path upsamples it linearly,
+        /// so reproducing that filter is what keeps the two paths comparable.
+        id<MTLSamplerState>             chroma_sampler { nil };
+        std::string                     range_uniform;
+        std::string                     matrix_uniform;
     };
 
     struct PreparedPass
@@ -338,6 +503,8 @@ struct MetalRender::Impl
         uint32_t                           uniform_size { 0 };
         uint32_t                           uniform_offset { 0 };
         std::vector<TextureSlotBinding>    texture_slots;
+        /// The plane-sampling variant of this pass, when one was produced.
+        VideoPlaneDraw                     video_planes;
         std::vector<id<MTLSamplerState>>   samplers;
         std::vector<id<MTLBuffer>>         vertex_buffers;
         std::vector<NSUInteger>            vertex_buffer_slots;
@@ -380,6 +547,11 @@ struct MetalRender::Impl
     std::vector<ScenePassDescription>                   descriptions;
     std::vector<PreparedPass>                           prepared;
     std::unordered_map<std::string, id<MTLTexture>>     targets;
+    /// Target keys holding a texture of their own, as opposed to sharing one
+    /// with the source a copy was folded onto. Tracked because re-applying the
+    /// copy plan at runtime has to know which images to give back and which to
+    /// allocate again.
+    std::unordered_set<std::string>                     owned_targets;
     /// Every slot of an imported image, in file order. A plain image has one;
     /// a sprite sheet spread over several images has one per sheet, and the
     /// frame's `imageId` chooses between them.
@@ -394,6 +566,16 @@ struct MetalRender::Impl
     uint32_t                   demand_reasons {
         static_cast<uint32_t>(vulkan::DynamicReason::UnknownInput)
     };
+
+    // ---- direct NV12 plane sampling
+    /// The setting the current demand plan was built for. A change is applied
+    /// at a frame boundary, before anything is imported, because the demand is
+    /// what decides whether a conversion is encoded at all.
+    bool                       video_planes_applied { false };
+    /// Per prepared pass, whether it draws with its plane variant this frame.
+    /// Filled after the frame's import, because it depends on the format the
+    /// decoder actually produced.
+    std::vector<uint8_t>       video_plane_active;
 
     // ---- scene optimisation
     /// The same analysis the compatibility backend runs, over this backend's
@@ -415,6 +597,10 @@ struct MetalRender::Impl
     /// pixels when the setting is turned on, because nothing sized or pinned
     /// its targets.
     bool                                  optimization_compiled { false };
+    /// The setting value the current copy plan, target table and reuse table
+    /// were built for. A change is applied on the next frame, at its boundary,
+    /// rather than waiting for the scene's graph to be compiled again.
+    bool                                  optimization_applied { false };
 
     bool fail(std::string message)
     {
@@ -439,11 +625,25 @@ struct MetalRender::Impl
     void planCopyElision(Scene& scene);
     void compileStaticCache(Scene& scene);
     void releaseSceneOptimization();
+    /// Rebuilds the copy plan, the target table and the reuse table for the
+    /// current setting, at a frame boundary. Clears for targets that regain an
+    /// image of their own are encoded into `command`, so nothing waits.
+    bool applySceneOptimizationSetting(Scene& scene, id<MTLCommandBuffer> command);
     vulkan::StaticPassSample frameSample(Scene& scene, std::size_t index) const;
     /// Fills `static_skip` for this frame. False means nothing may be skipped.
     bool planStaticSkips(Scene& scene);
     bool clearTargetsOnce();
     bool prepareDraw(Scene& scene, std::size_t index, PreparedPass& out);
+    /// Builds the plane-sampling variant of one prepared pass. Never fails the
+    /// pass: a variant that cannot be built is simply not offered.
+    void prepareVideoPlaneDraw(Scene& scene, std::size_t index, PreparedPass& out,
+                               const SceneMetalProgram& program,
+                               MTLVertexDescriptor* vertex_descriptor, uint64_t layout_id);
+    /// Publishes what each video texture's consumers can use, before the next
+    /// frame is imported.
+    void updateVideoDemand(bool planes_enabled);
+    /// Decides, per pass, whether this frame is drawn with the plane variant.
+    void selectVideoPlaneDraws(bool planes_enabled);
     /// Copies this frame's simulated geometry into the slot the frame owns.
     /// False means the mesh no longer matches what the pipeline was built for,
     /// which fails the frame rather than drawing it against a stale layout.
@@ -454,12 +654,15 @@ struct MetalRender::Impl
     id<MTLTexture> resolveTexture(Scene& scene, const std::string& key,
                                   id<MTLSamplerState>* sampler_out, int image_slot = -1);
     id<MTLSamplerState> samplerFor(const TextureSample& sample);
+    /// The same wrap modes with linear filtering, for the chroma plane.
+    id<MTLSamplerState> chromaSamplerFor(const TextureSample& sample);
     id<MTLRenderPipelineState> pipelineFor(const MetalPipelineKey& key,
-                                           const SceneMetalProgram& program,
+                                           const std::vector<SceneMetalStage>& stages,
                                            MTLVertexDescriptor* vertex_descriptor);
     id<MTLLibrary> libraryFor(const SceneMetalStage& stage);
     void computeDemandReasons(Scene& scene, rg::RenderGraph& graph);
     void writeUniforms(Scene& scene, const ScenePassDescription& desc, const PreparedPass& pass,
+                       const MetalShaderReflection& reflection, bool planes_active,
                        uint8_t* destination);
     WallpaperScalingLayout scalingLayout(const Scene& scene, uint32_t width,
                                          uint32_t height) const;
@@ -693,6 +896,18 @@ id<MTLSamplerState> MetalRender::Impl::samplerFor(const TextureSample& sample)
     return state;
 }
 
+id<MTLSamplerState> MetalRender::Impl::chromaSamplerFor(const TextureSample& sample)
+{
+    // The author's wrap modes with linear filtering. The pre-converted path
+    // upsamples chroma linearly for every consumer, whatever filter the author
+    // asked for on the colour image, so reproducing that here is what keeps a
+    // one-to-one sample of either path landing on the same colour.
+    TextureSample chroma = sample;
+    chroma.magFilter     = TextureFilter::LINEAR;
+    chroma.minFilter     = TextureFilter::LINEAR;
+    return samplerFor(chroma);
+}
+
 id<MTLTexture> MetalRender::Impl::resolveTexture(Scene& scene, const std::string& key,
                                                  id<MTLSamplerState>* sampler_out, int image_slot)
 {
@@ -821,15 +1036,15 @@ id<MTLLibrary> MetalRender::Impl::libraryFor(const SceneMetalStage& stage)
     return library;
 }
 
-id<MTLRenderPipelineState> MetalRender::Impl::pipelineFor(const MetalPipelineKey& key,
-                                                          const SceneMetalProgram& program,
-                                                          MTLVertexDescriptor* vertex_descriptor)
+id<MTLRenderPipelineState> MetalRender::Impl::pipelineFor(
+    const MetalPipelineKey& key, const std::vector<SceneMetalStage>& stages,
+    MTLVertexDescriptor* vertex_descriptor)
 {
     if (auto found = pipelines.find(key); found != pipelines.end()) return found->second;
 
     id<MTLFunction> vertex_function   = nil;
     id<MTLFunction> fragment_function = nil;
-    for (const auto& stage : program.stages) {
+    for (const auto& stage : stages) {
         id<MTLLibrary> library = libraryFor(stage);
         if (library == nil) return nil;
         NSString* name = [NSString stringWithUTF8String:stage.entry_point.c_str()];
@@ -933,6 +1148,7 @@ void MetalRender::Impl::resolveTargetSizes(Scene& scene)
 bool MetalRender::Impl::prepareTargets(Scene& scene)
 {
     targets.clear();
+    owned_targets.clear();
     for (const auto& [name, target] : scene.renderTargets) {
         if (target.width <= 0 || target.height <= 0) continue;
         // An aliased destination shares its source's texture, so it must not
@@ -957,6 +1173,7 @@ bool MetalRender::Impl::prepareTargets(Scene& scene)
         }
         texture.label = [NSString stringWithUTF8String:name.c_str()];
         targets.emplace(name, texture);
+        owned_targets.insert(name);
     }
     // Alias chains are resolved by walking to a key that is not itself an
     // alias. The walk is bounded by the number of aliases, so a cycle the
@@ -1037,57 +1254,21 @@ bool MetalRender::Impl::prepareDraw(Scene& scene, std::size_t index, PreparedPas
     }
 
     // ---- resource slots, matched on the original GLSL names.
-    out.texture_slots.assign(desc.texture_keys.size(), TextureSlotBinding {});
     out.samplers.assign(desc.texture_keys.size(), nil);
     const auto* uniform_block = out.reflection.uniformBlock();
     out.uniform_size          = uniform_block != nullptr ? uniform_block->size : 0;
-
-    for (const auto& stage : program->stages) {
-        const bool vertex_stage = stage.kind == SceneMetalStageKind::Vertex;
-        for (const auto& binding : stage.bindings) {
-            if (binding.set != 0) {
-                return fail("a shader binds a resource outside descriptor set 0");
-            }
-            if (uniform_block != nullptr && binding.name == uniform_block->name) {
-                if (binding.slot_kind != SceneMetalSlotKind::Buffer) {
-                    return fail("a shader binds its uniform block as something other than a "
-                                "buffer");
-                }
-                (vertex_stage ? out.vertex_uniform_slot : out.fragment_uniform_slot) =
-                    static_cast<int>(binding.slot);
-                continue;
-            }
-            const auto texture_slot = vulkan::detail::CustomShaderTextureSlot(binding.name);
-            if (texture_slot.has_value()) {
-                if (*texture_slot >= out.texture_slots.size()) {
-                    return fail("a shader samples a texture slot the material does not have");
-                }
-                auto& slot = out.texture_slots[*texture_slot];
-                if (binding.slot_kind == SceneMetalSlotKind::Texture) {
-                    (vertex_stage ? slot.vertex_texture : slot.fragment_texture) =
-                        static_cast<int>(binding.slot);
-                } else if (binding.slot_kind == SceneMetalSlotKind::Sampler) {
-                    (vertex_stage ? slot.vertex_sampler : slot.fragment_sampler) =
-                        static_cast<int>(binding.slot);
-                } else {
-                    return fail("a shader binds a texture as a buffer");
-                }
-                continue;
-            }
-            const auto sampler_slot = vulkan::detail::CustomShaderSamplerSlot(binding.name);
-            if (sampler_slot.has_value()) {
-                if (*sampler_slot >= out.texture_slots.size()) {
-                    return fail("a shader samples a texture slot the material does not have");
-                }
-                auto& slot = out.texture_slots[*sampler_slot];
-                (vertex_stage ? slot.vertex_sampler : slot.fragment_sampler) =
-                    static_cast<int>(binding.slot);
-                continue;
-            }
-            return fail("a shader binds a resource the native renderer does not recognise: " +
-                        binding.name);
-        }
+    MetalResourcePlan plan;
+    if (auto plan_error = BuildMetalResourcePlan(program->stages, uniform_block,
+                                                 desc.texture_keys.size(), plan);
+        ! plan_error.empty()) {
+        return fail(std::move(plan_error));
     }
+    if (plan.has_chroma) {
+        return fail("a shader binds a video plane the ordinary program has no use for");
+    }
+    out.texture_slots        = std::move(plan.texture_slots);
+    out.vertex_uniform_slot  = plan.vertex_uniform_slot;
+    out.fragment_uniform_slot = plan.fragment_uniform_slot;
 
     // ---- sprite sheets
     // The same rule `SceneToRenderGraph`'s `CheckAndSetSprite` applies: a
@@ -1275,10 +1456,15 @@ bool MetalRender::Impl::prepareDraw(Scene& scene, std::size_t index, PreparedPas
         .sample_count     = 1,
         .write_alpha      = desc.write_alpha,
     };
-    out.pipeline = pipelineFor(key, *program, vertex_descriptor);
+    out.pipeline = pipelineFor(key, program->stages, vertex_descriptor);
     if (out.pipeline == nil) return fail(last_error.empty() ? "a shader pipeline could not be "
                                                              "created"
                                                             : last_error);
+
+    // ---- the plane-sampling variant of the same material
+    // Built with the graph, beside the ordinary pipeline, so the frame path
+    // never waits for a compile and never creates a pipeline of its own.
+    prepareVideoPlaneDraw(scene, index, out, *program, vertex_descriptor, layout_id);
 
     // ---- uniform initial state
     auto* updater = scene.shaderValueUpdater.get();
@@ -1287,6 +1473,161 @@ bool MetalRender::Impl::prepareDraw(Scene& scene, std::size_t index, PreparedPas
         updater->InitUniforms(desc.node, desc.material_slot, exists_op);
     }
     return true;
+}
+
+void MetalRender::Impl::prepareVideoPlaneDraw(Scene& scene, std::size_t index,
+                                             PreparedPass& out, const SceneMetalProgram& program,
+                                             MTLVertexDescriptor* vertex_descriptor,
+                                             uint64_t layout_id)
+{
+    out.video_planes = VideoPlaneDraw {};
+    const auto* variant = program.video_planes.get();
+    if (variant == nullptr || ! variant->ok()) return;
+
+    const auto& desc = descriptions[index];
+    const auto  slot = static_cast<std::size_t>(variant->slot);
+    // Everything below refuses rather than substitutes: a variant that does not
+    // line up with this pass leaves the material converting, which is what it
+    // did before the variant existed.
+    const auto refuse = [&](const std::string& reason) {
+        LOG_INFO("metal video plane variant unused for pass %zu: %s", index, reason.c_str());
+        out.video_planes = VideoPlaneDraw {};
+    };
+
+    if (slot >= desc.texture_keys.size() || desc.texture_keys[slot].empty()) {
+        refuse("the variant names a texture slot this pass does not bind");
+        return;
+    }
+    if (! video.owns(desc.texture_keys[slot])) {
+        refuse("the slot the variant samples is not a video this backend plays");
+        return;
+    }
+
+    VideoPlaneDraw draw;
+    draw.slot = slot;
+    std::string reflection_error;
+    if (! ParseMetalShaderReflection(variant->reflection_json, draw.reflection,
+                                     &reflection_error)) {
+        refuse(reflection_error);
+        return;
+    }
+    const auto* uniform_block = draw.reflection.uniformBlock();
+    draw.uniform_size         = uniform_block != nullptr ? uniform_block->size : 0;
+
+    MetalResourcePlan plan;
+    if (auto plan_error = BuildMetalResourcePlan(variant->stages, uniform_block,
+                                                 desc.texture_keys.size(), plan);
+        ! plan_error.empty()) {
+        refuse(plan_error);
+        return;
+    }
+    if (! plan.has_chroma || plan.chroma_slot != slot) {
+        refuse("the variant declares no chroma plane for the slot it was built for");
+        return;
+    }
+    if (! plan.texture_slots[slot].bound()) {
+        refuse("the variant does not bind the luma plane");
+        return;
+    }
+    draw.texture_slots         = std::move(plan.texture_slots);
+    draw.chroma                = plan.chroma;
+    draw.vertex_uniform_slot   = plan.vertex_uniform_slot;
+    draw.fragment_uniform_slot = plan.fragment_uniform_slot;
+
+    // The colour constants are written per frame from the decoded frame's own
+    // colorimetry, so a variant whose block does not carry them would sample
+    // planes and convert them with zeroes.
+    draw.range_uniform  = VideoRangeUniformName(slot);
+    draw.matrix_uniform = VideoMatrixUniformName(slot);
+    if (! draw.reflection.hasMember(draw.range_uniform) ||
+        ! draw.reflection.hasMember(draw.matrix_uniform)) {
+        refuse("the variant carries no colour constants for the plane it samples");
+        return;
+    }
+
+    const auto texture = scene.textures.find(desc.texture_keys[slot]);
+    draw.chroma_sampler =
+        chromaSamplerFor(texture != scene.textures.end() ? texture->second.sample
+                                                         : TextureSample {});
+    if (draw.chroma_sampler == nil) {
+        refuse("a chroma sampler could not be created");
+        return;
+    }
+
+    const auto target = targets.find(desc.target_key);
+    if (target == targets.end()) {
+        refuse("the pass targets an image that does not exist");
+        return;
+    }
+    MetalPipelineKey key {
+        .program_id       = reinterpret_cast<uint64_t>(variant),
+        .vertex_layout_id = layout_id,
+        .blend            = ToMetalBlendState(desc.blend),
+        .color_format     = static_cast<MetalPixelFormat>(target->second.pixelFormat),
+        .sample_count     = 1,
+        .write_alpha      = desc.write_alpha,
+    };
+    draw.pipeline = pipelineFor(key, variant->stages, vertex_descriptor);
+    if (draw.pipeline == nil) {
+        // The ordinary pipeline is already built and unaffected; only the
+        // variant is dropped, and `last_error` must not be left describing a
+        // failure the caller is not failing on.
+        refuse(last_error.empty() ? "the variant pipeline could not be created" : last_error);
+        last_error.clear();
+        return;
+    }
+
+    draw.ready       = true;
+    out.video_planes = std::move(draw);
+}
+
+void MetalRender::Impl::updateVideoDemand(bool planes_enabled)
+{
+    video_planes_applied = planes_enabled;
+    if (video.empty()) {
+        video.setDemand({});
+        return;
+    }
+    // Accumulated over every consumer of every key: one conversion serves all
+    // the consumers that need an image, and no conversion is encoded when none
+    // of them does.
+    std::map<std::string, VideoConsumerDemand> demand;
+    for (std::size_t i = 0; i < descriptions.size() && i < prepared.size(); ++i) {
+        const auto& desc = descriptions[i];
+        if (desc.kind != MetalPassKind::CustomShader) continue;
+        const auto& pass = prepared[i];
+        for (std::size_t t = 0; t < desc.texture_keys.size(); ++t) {
+            const auto& key = desc.texture_keys[t];
+            if (key.empty() || ! video.owns(key)) continue;
+            const bool direct =
+                planes_enabled && pass.video_planes.ready && pass.video_planes.slot == t;
+            auto [entry, inserted] = demand.try_emplace(key, VideoConsumerDemand { false, false });
+            (void)inserted;
+            if (direct) {
+                entry->second.planes = true;
+            } else {
+                entry->second.rgb = true;
+            }
+        }
+    }
+    video.setDemand(std::move(demand));
+}
+
+void MetalRender::Impl::selectVideoPlaneDraws(bool planes_enabled)
+{
+    video_plane_active.assign(prepared.size(), uint8_t { 0 });
+    if (! planes_enabled || video.empty()) return;
+    for (std::size_t i = 0; i < prepared.size() && i < descriptions.size(); ++i) {
+        const auto& pass = prepared[i];
+        if (! pass.video_planes.ready) continue;
+        const auto& desc = descriptions[i];
+        if (pass.video_planes.slot >= desc.texture_keys.size()) continue;
+        // The frame the decoder actually produced decides, every frame: the
+        // same file is BGRA under software decode and NV12 under VideoToolbox,
+        // and either can take over without the scene being reparsed.
+        if (! video.planes(desc.texture_keys[pass.video_planes.slot]).valid()) continue;
+        video_plane_active[i] = 1;
+    }
 }
 
 bool MetalRender::Impl::uploadDynamicMesh(PreparedPass& pass, const ScenePassDescription& desc,
@@ -1358,13 +1699,15 @@ bool MetalRender::Impl::uploadDynamicMesh(PreparedPass& pass, const ScenePassDes
 }
 
 void MetalRender::Impl::writeUniforms(Scene& scene, const ScenePassDescription& desc,
-                                      const PreparedPass& pass, uint8_t* destination)
+                                      const PreparedPass& pass,
+                                      const MetalShaderReflection& reflection, bool planes_active,
+                                      uint8_t* destination)
 {
-    const auto* block = pass.reflection.uniformBlock();
+    const auto* block = reflection.uniformBlock();
     if (block == nullptr || destination == nullptr) return;
 
     const auto write = [&](std::string_view name, const ShaderValue& value) {
-        const auto* member = pass.reflection.member(name);
+        const auto* member = reflection.member(name);
         if (member == nullptr) return;
 
         // The fold is applied to every matrix that carries clip space, so a
@@ -1415,6 +1758,33 @@ void MetalRender::Impl::writeUniforms(Scene& scene, const ScenePassDescription& 
     }
     for (const auto& [name, value] : material->customShader.constValues) write(name, value);
 
+    // Before the value updater is consulted, because a scene without one still
+    // must not sample planes through zeroed constants. Read from the frame the
+    // decoder produced rather than from anything assumed: the same eight
+    // numbers the pre-converted path's kernel is given, so the two cannot
+    // disagree about range or matrix.
+    if (planes_active && pass.video_planes.ready) {
+        const auto planes = video.planes(desc.texture_keys[pass.video_planes.slot]);
+        if (planes.valid()) {
+            const std::array<float, 4> range {
+                planes.params.y_offset,
+                planes.params.y_scale,
+                planes.params.chroma_offset,
+                planes.params.chroma_scale,
+            };
+            const std::array<float, 4> matrix {
+                planes.params.r_cr,
+                planes.params.g_cb,
+                planes.params.g_cr,
+                planes.params.b_cb,
+            };
+            write(pass.video_planes.range_uniform,
+                  ShaderValue(std::span<const float>(range.data(), range.size())));
+            write(pass.video_planes.matrix_uniform,
+                  ShaderValue(std::span<const float>(matrix.data(), matrix.size())));
+        }
+    }
+
     auto* updater = scene.shaderValueUpdater.get();
     if (updater == nullptr) return;
 
@@ -1432,20 +1802,24 @@ void MetalRender::Impl::writeUniforms(Scene& scene, const ScenePassDescription& 
     // Last, so it overrides the parser's constant. The shared value updater
     // reports render-target sizes; a video slot's real size is the decoded
     // frame's, and a shader that taps neighbours at the placeholder's step
-    // would sample the wrong texels.
+    // would sample the wrong texels. Read from the frame rather than from a
+    // texture, because on the direct path there is no single colour image to
+    // ask.
     for (std::size_t i = 0;
          i < desc.texture_keys.size() && i < WE_GLTEX_RESOLUTION_NAMES.size(); ++i) {
         const auto& key = desc.texture_keys[i];
         if (key.empty() || ! video.owns(key)) continue;
-        id<MTLTexture> frame = video.texture(key);
-        if (frame == nil) continue;
+        uint32_t width  = 0;
+        uint32_t height = 0;
+        if (! video.frameSize(key, &width, &height)) continue;
         const std::array<float, 4> resolution {
-            static_cast<float>(frame.width), static_cast<float>(frame.height),
-            static_cast<float>(frame.width), static_cast<float>(frame.height),
+            static_cast<float>(width), static_cast<float>(height),
+            static_cast<float>(width), static_cast<float>(height),
         };
         write(WE_GLTEX_RESOLUTION_NAMES[i],
               ShaderValue(std::span<const float>(resolution.data(), resolution.size())));
     }
+
 }
 
 void MetalRender::Impl::computeDemandReasons(Scene& scene, rg::RenderGraph& graph)
@@ -1612,12 +1986,105 @@ void MetalRender::Impl::planCopyElision(Scene& scene)
 /// texture actually being one this renderer keeps: nothing here is pooled, and
 /// an aliased destination shares its source's image, so pinning is the budget
 /// decision alone.
+/// Resolves an alias chain to the key that is not itself an alias.
+///
+/// The walk is bounded by the number of aliases, so a cycle the planner could
+/// never produce still cannot hang a frame.
+static std::string ResolveAliasRoot(const std::unordered_map<std::string, std::string>& aliases,
+                                    const std::string&                                  key)
+{
+    std::string root = key;
+    for (std::size_t step = 0; step <= aliases.size(); ++step) {
+        const auto next = aliases.find(root);
+        if (next == aliases.end()) break;
+        root = next->second;
+    }
+    return root;
+}
+
+bool MetalRender::Impl::applySceneOptimizationSetting(Scene& scene, id<MTLCommandBuffer> command)
+{
+    const bool enabled = vulkan::SceneOptimizationEnabled();
+    if (enabled == optimization_applied) return true;
+    if (! graph_ready) {
+        optimization_applied = enabled;
+        return true;
+    }
+
+    // The whole plan, not just the flag: the copy plan decides which targets
+    // exist at all, so turning the setting back on with only `enabled = true`
+    // would leave elided copies unexecuted and aliased images unallocated.
+    releaseSceneOptimization();
+    planCopyElision(scene);
+
+    // Targets first. A destination the plan has just folded onto its source
+    // gives up its own image; one the plan no longer folds gets a fresh image
+    // and starts from a defined state rather than from whatever the driver
+    // last left there.
+    std::vector<id<MTLTexture>> cleared;
+    for (const auto& [name, target] : scene.renderTargets) {
+        if (target.width <= 0 || target.height <= 0) continue;
+        if (target_aliases.count(name) != 0) {
+            const auto root  = ResolveAliasRoot(target_aliases, target_aliases.at(name));
+            const auto found = targets.find(root);
+            if (found == targets.end()) continue;
+            targets[name] = found->second;
+            owned_targets.erase(name);
+            continue;
+        }
+        if (owned_targets.count(name) != 0 && targets.count(name) != 0) continue;
+
+        const NSUInteger levels = std::max<uint32_t>(1, target.mipmap_level);
+        MTLTextureDescriptor* descriptor = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:kSceneTargetFormat
+                                         width:(NSUInteger)target.width
+                                        height:(NSUInteger)target.height
+                                     mipmapped:levels > 1];
+        descriptor.mipmapLevelCount = levels;
+        descriptor.usage            = kRenderTargetUsage;
+        descriptor.storageMode      = MTLStorageModePrivate;
+        id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
+        if (texture == nil) return fail("a render target could not be reallocated");
+        texture.label = [NSString stringWithUTF8String:name.c_str()];
+        targets[name] = texture;
+        owned_targets.insert(name);
+        cleared.push_back(texture);
+    }
+
+    // Encoded into this frame's own command buffer, ahead of every pass in it.
+    // Nothing waits on the GPU for a setting change.
+    for (id<MTLTexture> texture : cleared) {
+        MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor renderPassDescriptor];
+        descriptor.colorAttachments[0].texture     = texture;
+        descriptor.colorAttachments[0].loadAction  = MTLLoadActionClear;
+        descriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+        descriptor.colorAttachments[0].clearColor  = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
+        id<MTLRenderCommandEncoder> encoder =
+            [command renderCommandEncoderWithDescriptor:descriptor];
+        if (encoder == nil) return fail("a reallocated render target could not be cleared");
+        [encoder endEncoding];
+    }
+
+    // Last, because reuse is decided over the targets that now exist. A fresh
+    // table has rendered nothing, so the first frame after the change redraws
+    // everything instead of trusting pixels an earlier plan produced.
+    compileStaticCache(scene);
+    optimization_applied = enabled;
+    return true;
+}
+
 void MetalRender::Impl::compileStaticCache(Scene& scene)
 {
     static_cache.Reset();
     static_samples.clear();
     static_skip.assign(descriptions.size(), uint8_t { 0 });
-    static_pinned_bytes   = 0;
+    // Given back rather than forgotten: this runs again whenever the setting
+    // changes, and a total that is only ever zeroed here would count the same
+    // pixels into the process-wide budget once per change.
+    if (static_pinned_bytes != 0) {
+        vulkan::AdjustSceneOptimizationPinnedBytes(-static_cast<int64_t>(static_pinned_bytes));
+        static_pinned_bytes = 0;
+    }
     optimization_compiled = false;
     if (! vulkan::SceneOptimizationEnabled()) return;
 
@@ -1865,9 +2332,15 @@ bool MetalRender::Impl::compile(Scene& scene, rg::RenderGraph& graph)
 
     for (std::size_t i = 0; i < descriptions.size(); ++i) {
         if (descriptions[i].kind != MetalPassKind::Copy) continue;
-        if (copy_elision[i] != vulkan::CopyElision::None) continue;
         const auto target = targets.find(descriptions[i].target_key);
-        if (target == targets.end()) return fail("a copy step targets an image that does not exist");
+        // An elided copy has no image of its own yet still needs its pipeline
+        // built here: the setting can be switched back off while the scene
+        // runs, and the copy would then execute in a frame that must not stop
+        // to compile anything.
+        if (target == targets.end()) {
+            if (copy_elision[i] != vulkan::CopyElision::None) continue;
+            return fail("a copy step targets an image that does not exist");
+        }
         if (! ensurePresentPipeline(target->second.pixelFormat)) return false;
     }
 
@@ -1902,12 +2375,18 @@ bool MetalRender::Impl::compile(Scene& scene, rg::RenderGraph& graph)
         pass.description_index = i;
         if (pass.kind != MetalPassKind::CustomShader) continue;
         if (! prepareDraw(scene, i, pass)) return false;
-        if (pass.uniform_size > 0) {
+        // The larger of the two variants' blocks: both are written into the
+        // same ring slot, and the plane variant's block carries the colour
+        // constants the ordinary one has no member for.
+        const uint32_t reserved =
+            std::max(pass.uniform_size,
+                     pass.video_planes.ready ? pass.video_planes.uniform_size : 0u);
+        if (reserved > 0) {
             // Metal requires a 256-byte aligned buffer offset for constant
             // buffers on macOS.
             uniform_cursor       = (uniform_cursor + 255u) & ~255u;
             pass.uniform_offset  = uniform_cursor;
-            uniform_cursor      += pass.uniform_size;
+            uniform_cursor      += reserved;
         }
     }
 
@@ -1931,9 +2410,13 @@ bool MetalRender::Impl::compile(Scene& scene, rg::RenderGraph& graph)
     }
 
     computeDemandReasons(scene, graph);
+    // After the passes are prepared, because what a video's consumers can use
+    // is a property of the variants those passes ended up with.
+    updateVideoDemand(MetalVideoPlaneSamplingEnabled());
     // Last: it reads the prepared passes' sprite maps and the allocated
     // targets, so both have to exist before a target can be called reusable.
     compileStaticCache(scene);
+    optimization_applied = vulkan::SceneOptimizationEnabled();
     graph_ready = true;
     last_error.clear();
     return true;
@@ -2112,6 +2595,8 @@ void MetalRender::SetVideoPlaybackRate(float rate)
     pImpl->video.setRate(rate);
 }
 
+VideoFramePath MetalRender::VideoPath() const { return pImpl->video.path(); }
+
 double MetalRender::ShortestVideoFramePeriod() const
 {
     return pImpl->video.shortestFramePeriod();
@@ -2172,6 +2657,22 @@ bool MetalRender::drawFrame(Scene& scene)
             return impl.fail("a Metal command buffer could not be created");
         }
 
+        // At the frame boundary, before anything else in this buffer: the copy
+        // plan and the target table are what the setting really controls, and
+        // both have to be in their new shape before any pass is encoded.
+        if (! impl.applySceneOptimizationSetting(scene, command)) {
+            dispatch_semaphore_signal(impl.inflight);
+            return false;
+        }
+
+        // Before anything is imported: what a video's consumers can use decides
+        // whether a colour conversion is encoded for it at all, so a setting
+        // that changed has to reach the import ahead of it rather than after.
+        const bool planes_enabled = MetalVideoPlaneSamplingEnabled();
+        if (planes_enabled != impl.video_planes_applied) {
+            impl.updateVideoDemand(planes_enabled);
+        }
+
         // Before any pass: a decoded frame taken here is the one every pass in
         // this command buffer samples, and its conversion is encoded ahead of
         // them. A failure here is a failed frame, not a black one drawn as if
@@ -2181,6 +2682,9 @@ bool MetalRender::drawFrame(Scene& scene)
             dispatch_semaphore_signal(impl.inflight);
             return impl.fail(std::move(video_error));
         }
+        // After the import, because the frame's real pixel format is what
+        // decides which of a material's two programs draws it.
+        impl.selectVideoPlaneDraws(planes_enabled);
 
         id<MTLBuffer> uniforms = impl.uniform_rings[impl.frame_slot];
         auto*         uniform_base = static_cast<uint8_t*>(uniforms.contents);
@@ -2189,8 +2693,16 @@ bool MetalRender::drawFrame(Scene& scene)
         for (std::size_t i = 0; i < impl.prepared.size(); ++i) {
             auto&       pass = impl.prepared[i];
             const auto& desc = impl.descriptions[i];
-            if (pass.kind != MetalPassKind::CustomShader || pass.uniform_size == 0) continue;
-            impl.writeUniforms(scene, desc, pass, uniform_base + pass.uniform_offset);
+            if (pass.kind != MetalPassKind::CustomShader) continue;
+            const bool planes_active =
+                i < impl.video_plane_active.size() && impl.video_plane_active[i] != 0;
+            const auto& reflection =
+                planes_active ? pass.video_planes.reflection : pass.reflection;
+            const uint32_t size =
+                planes_active ? pass.video_planes.uniform_size : pass.uniform_size;
+            if (size == 0) continue;
+            impl.writeUniforms(scene, desc, pass, reflection, planes_active,
+                               uniform_base + pass.uniform_offset);
         }
         if (scene.shaderValueUpdater != nullptr) scene.shaderValueUpdater->FrameEnd();
 
@@ -2316,7 +2828,12 @@ bool MetalRender::drawFrame(Scene& scene)
             // Enabling back-face culling here would silently drop half of every
             // scene the moment the fold stops being the identity.
             [encoder setCullMode:static_cast<MTLCullMode>(kSceneCullMode)];
-            [encoder setRenderPipelineState:pass.pipeline];
+            // One of the material's two programs, chosen from the format the
+            // decoder produced for this frame. Both were built with the graph.
+            const bool planes_active =
+                i < impl.video_plane_active.size() && impl.video_plane_active[i] != 0;
+            [encoder setRenderPipelineState:planes_active ? pass.video_planes.pipeline
+                                                          : pass.pipeline];
 
             const std::size_t geometry_slot =
                 static_cast<std::size_t>(impl.frame_slot) % kFramesInFlight;
@@ -2333,21 +2850,60 @@ bool MetalRender::drawFrame(Scene& scene)
                                      atIndex:pass.vertex_buffer_slots[v]];
                 }
             }
-            if (pass.uniform_size > 0) {
-                if (pass.vertex_uniform_slot >= 0) {
+            const auto& active_slots =
+                planes_active ? pass.video_planes.texture_slots : pass.texture_slots;
+            const int uniform_vertex_slot =
+                planes_active ? pass.video_planes.vertex_uniform_slot : pass.vertex_uniform_slot;
+            const int uniform_fragment_slot = planes_active
+                                                  ? pass.video_planes.fragment_uniform_slot
+                                                  : pass.fragment_uniform_slot;
+            const uint32_t uniform_size =
+                planes_active ? pass.video_planes.uniform_size : pass.uniform_size;
+            if (uniform_size > 0) {
+                if (uniform_vertex_slot >= 0) {
                     [encoder setVertexBuffer:uniforms
                                       offset:pass.uniform_offset
-                                     atIndex:(NSUInteger)pass.vertex_uniform_slot];
+                                     atIndex:(NSUInteger)uniform_vertex_slot];
                 }
-                if (pass.fragment_uniform_slot >= 0) {
+                if (uniform_fragment_slot >= 0) {
                     [encoder setFragmentBuffer:uniforms
                                         offset:pass.uniform_offset
-                                       atIndex:(NSUInteger)pass.fragment_uniform_slot];
+                                       atIndex:(NSUInteger)uniform_fragment_slot];
                 }
             }
-            for (std::size_t t = 0; t < pass.texture_slots.size(); ++t) {
-                const auto& slot = pass.texture_slots[t];
+            const auto bind_texture = [&encoder](const Impl::TextureSlotBinding& slot,
+                                                  id<MTLTexture>                 texture,
+                                                  id<MTLSamplerState>            sampler) {
+                if (texture == nil) return;
+                if (slot.vertex_texture >= 0) {
+                    [encoder setVertexTexture:texture atIndex:(NSUInteger)slot.vertex_texture];
+                }
+                if (slot.fragment_texture >= 0) {
+                    [encoder setFragmentTexture:texture atIndex:(NSUInteger)slot.fragment_texture];
+                }
+                if (sampler == nil) return;
+                if (slot.vertex_sampler >= 0) {
+                    [encoder setVertexSamplerState:sampler atIndex:(NSUInteger)slot.vertex_sampler];
+                }
+                if (slot.fragment_sampler >= 0) {
+                    [encoder setFragmentSamplerState:sampler
+                                             atIndex:(NSUInteger)slot.fragment_sampler];
+                }
+            };
+            for (std::size_t t = 0; t < active_slots.size(); ++t) {
+                const auto& slot = active_slots[t];
                 if (! slot.bound()) continue;
+                // The video slot on the direct path binds the decoder's own two
+                // planes, through the same binding plan reflection produced, in
+                // place of the one image the other program samples.
+                if (planes_active && t == pass.video_planes.slot) {
+                    const auto planes = impl.video.planes(desc.texture_keys[t]);
+                    if (! planes.valid()) continue;
+                    bind_texture(slot, planes.luma, pass.samplers[t]);
+                    bind_texture(pass.video_planes.chroma, planes.chroma,
+                                 pass.video_planes.chroma_sampler);
+                    continue;
+                }
                 // A sprite sheet's current frame decides which uploaded image
                 // is bound; its rectangle inside that image arrives through the
                 // rotation and translation uniforms written above.
@@ -2356,25 +2912,9 @@ bool MetalRender::drawFrame(Scene& scene)
                     sprite != pass.sprites.end() && sprite->second.numFrames() > 0) {
                     image_slot = sprite->second.GetCurFrame().imageId;
                 }
-                id<MTLTexture> texture =
-                    impl.resolveTexture(scene, desc.texture_keys[t], nullptr, image_slot);
-                if (texture == nil) continue;
-                if (slot.vertex_texture >= 0) {
-                    [encoder setVertexTexture:texture atIndex:(NSUInteger)slot.vertex_texture];
-                }
-                if (slot.fragment_texture >= 0) {
-                    [encoder setFragmentTexture:texture atIndex:(NSUInteger)slot.fragment_texture];
-                }
-                if (pass.samplers[t] != nil) {
-                    if (slot.vertex_sampler >= 0) {
-                        [encoder setVertexSamplerState:pass.samplers[t]
-                                               atIndex:(NSUInteger)slot.vertex_sampler];
-                    }
-                    if (slot.fragment_sampler >= 0) {
-                        [encoder setFragmentSamplerState:pass.samplers[t]
-                                                 atIndex:(NSUInteger)slot.fragment_sampler];
-                    }
-                }
+                bind_texture(slot,
+                             impl.resolveTexture(scene, desc.texture_keys[t], nullptr, image_slot),
+                             pass.samplers[t]);
             }
 
             id<MTLBuffer> index_buffer =

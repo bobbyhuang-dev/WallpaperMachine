@@ -260,6 +260,58 @@ pub struct SceneRuntimeReport {
     pub backend: Option<SceneBackend>,
     /// Why the active backend is not the preferred one, when it is not.
     pub fallback_reason: Option<String>,
+    /// How this scene's video textures reached the shaders sampling them on the
+    /// last frame it drew.
+    pub video_path: SceneVideoPath,
+    /// Whether this scene's compiled graph is running under the current scene
+    /// optimisation setting. `None` when the renderer could not say.
+    pub optimization_applied: Option<bool>,
+}
+
+/// How a scene's video textures reached the shaders that sample them.
+///
+/// A report, never a request. `None` covers a scene with no video, one that has
+/// drawn nothing yet, and one on a backend with only a single video path.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SceneVideoPath {
+    /// Nothing observed.
+    #[default]
+    None,
+    /// A BGRA frame, imported zero-copy and sampled as one image.
+    Bgra,
+    /// NV12 planes, sampled directly, with no colour conversion produced.
+    Nv12Direct,
+    /// NV12 converted once into one image every consumer samples.
+    Nv12Converted,
+    /// Both, for one scene whose consumers or textures differ.
+    Nv12Mixed,
+}
+
+impl SceneVideoPath {
+    /// Maps the renderer's own enumerator. An unknown value reads as `None`
+    /// rather than as a path this build happens to know.
+    #[must_use]
+    pub const fn from_raw(value: i32) -> Self {
+        match value {
+            1 => Self::Bgra,
+            2 => Self::Nv12Direct,
+            3 => Self::Nv12Converted,
+            4 => Self::Nv12Mixed,
+            _ => Self::None,
+        }
+    }
+
+    /// The stable name the settings surface shows.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Bgra => "bgra",
+            Self::Nv12Direct => "nv12_direct",
+            Self::Nv12Converted => "nv12_converted",
+            Self::Nv12Mixed => "nv12_mixed",
+        }
+    }
 }
 
 #[cfg(test)]

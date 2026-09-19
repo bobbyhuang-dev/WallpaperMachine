@@ -2,8 +2,29 @@
 
 #include "Scene/Scene.h"
 
+#include <atomic>
+
 namespace wallpaper::metal
 {
+namespace
+{
+
+/// Off by default: the pre-converted path is what every Metal scene has been
+/// drawing, and a new sampling path becomes the default only once someone has
+/// looked at real wallpapers through it.
+std::atomic<bool> g_video_plane_sampling_enabled { false };
+
+} // namespace
+
+void SetMetalVideoPlaneSamplingEnabled(bool enabled)
+{
+    g_video_plane_sampling_enabled.store(enabled, std::memory_order_relaxed);
+}
+
+bool MetalVideoPlaneSamplingEnabled()
+{
+    return g_video_plane_sampling_enabled.load(std::memory_order_relaxed);
+}
 
 std::string MetalVideoTextureRejection(const Scene& scene, const std::string& texture_name)
 {

@@ -292,6 +292,52 @@ int    owe_scene_wallpaper_backend(void* scene);
 size_t owe_scene_wallpaper_backend_fallback_reason(void* scene, char* out, size_t out_len);
 
 /*
+ * Direct NV12 plane sampling inside native Metal scenes, process-wide. Off by
+ * default.
+ *
+ * A material whose shader could be translated to sample the decoder's luma and
+ * chroma planes then does so, and no full-frame colour conversion is produced
+ * for it. Both programs are compiled with the scene's graph, so this selects
+ * between them and never triggers a compile inside a frame. A material with no
+ * usable variant, and any frame that is not 8-bit NV12, keeps the existing
+ * conversion whatever this says; nothing here falls back to the compatibility
+ * backend.
+ */
+void owe_set_scene_video_plane_sampling_enabled(bool enabled);
+bool owe_scene_video_plane_sampling_enabled(void);
+
+/*
+ * How each of a scene's video textures reached the shaders sampling it, as of
+ * the last frame it drew. Reported, never requested: it says what the frame's
+ * real pixel format and the material's own program allowed.
+ */
+typedef enum owe_scene_video_path {
+    OWE_SCENE_VIDEO_PATH_NONE = 0,
+    OWE_SCENE_VIDEO_PATH_BGRA = 1,
+    OWE_SCENE_VIDEO_PATH_NV12_DIRECT = 2,
+    OWE_SCENE_VIDEO_PATH_NV12_CONVERTED = 3,
+    OWE_SCENE_VIDEO_PATH_NV12_MIXED = 4
+} owe_scene_video_path;
+
+/*
+ * The path shared by this scene's video textures, or
+ * `OWE_SCENE_VIDEO_PATH_NONE` when it has none, has drawn no frame yet, or is
+ * not on the native backend. Textures on different paths report the mixed
+ * value, which is the honest answer for a scene whose materials differ.
+ */
+int owe_scene_wallpaper_video_path(void* scene);
+
+/*
+ * Whether this scene's compiled graph is running under the current scene
+ * optimisation setting, rather than still carrying the plan the previous value
+ * produced. 1 applied, 0 still applying, -1 no scene.
+ *
+ * This is the read-back the settings surface needs to tell a saved preference
+ * apart from one that is actually in force.
+ */
+int owe_scene_wallpaper_scene_optimization_applied(void* scene);
+
+/*
  * Renderer work counters.
  *
  * Counting is off by default and costs one relaxed atomic load per counted

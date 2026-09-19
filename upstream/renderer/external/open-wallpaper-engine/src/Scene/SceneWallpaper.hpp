@@ -7,6 +7,7 @@
 #include <string_view>
 #include "Type.hpp"
 #include "Scene/include/Scene/SceneBackendSelection.hpp"
+#include "Scene/include/Scene/SceneVideoPath.hpp"
 #include "Scene/include/Scene/SceneUpdateDemand.hpp"
 #include "Swapchain/ExSwapchain.hpp"
 
@@ -111,6 +112,14 @@ public:
     /// Reports the backend in use, never the preference: a scene that fell
     /// back has to look like it fell back.
     [[nodiscard]] SceneBackendSelection sceneBackendSelection() const;
+    /// How this scene's video textures reached the shaders sampling them on the
+    /// last frame drawn.
+    [[nodiscard]] SceneVideoPath sceneVideoPath() const;
+    /// Whether this wallpaper's compiled graph is running under the current
+    /// scene optimisation setting. False while a change is still waiting for
+    /// the next frame, which is what distinguishes a saved preference from one
+    /// that is really in force.
+    [[nodiscard]] bool sceneOptimizationApplied() const;
 
     void setPropertyBool(std::string_view, bool);
     void setPropertyInt32(std::string_view, int32_t);

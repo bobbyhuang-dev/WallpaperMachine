@@ -663,6 +663,8 @@ impl BridgeActorState {
                     }
                     .to_string(),
                     fallback_reason: report.fallback_reason.clone(),
+                    video_path: report.video_path.name().to_string(),
+                    optimization_applied: report.optimization_applied,
                 }
             })
             .collect();
@@ -711,6 +713,10 @@ impl BridgeActorState {
             shared_video_decode_consumers: renderer.shared_video_decode_consumers,
             scene_optimization_enabled: self.app_config.quality.scene_optimization_enabled,
             scene_on_demand_enabled: self.app_config.quality.scene_on_demand_enabled,
+            scene_video_plane_sampling_enabled: self
+                .app_config
+                .experimental
+                .scene_video_plane_sampling,
             scene_renderer: match self.app_config.scene_renderer {
                 SceneRendererModeCfg::Compatibility => SCENE_RENDERER_COMPATIBILITY.to_string(),
                 SceneRendererModeCfg::NativeMetalPreferred => {

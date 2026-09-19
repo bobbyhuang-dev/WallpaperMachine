@@ -39,5 +39,7 @@ pub use stage::{
     CompactShaderCacheStrategy, ShaderCacheStrategy, ShaderStageKind, ShaderStageSource,
     ShaderTarget,
 };
-pub use texture::{ShaderTextureInfo, TextureComponentState, TextureFormatHint, TextureSlot};
+pub use texture::{
+    ShaderTextureInfo, TextureComponentState, TextureFormatHint, TextureSlot, VideoPlaneLayout,
+};
 pub use traits::{ShaderCompiler, ShaderReflector};

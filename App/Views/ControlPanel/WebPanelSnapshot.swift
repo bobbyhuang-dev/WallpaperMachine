@@ -317,6 +317,8 @@ extension WebPanelController {
         "wallpaperId": report.wallpaperId, "wallpaperTitle": report.wallpaperTitle,
         "backend": report.backend,
         "fallbackReason": report.fallbackReason as Any? ?? null,
+        "videoPath": report.videoPath,
+        "optimizationApplied": report.optimizationApplied as Any? ?? null,
       ]
     }
     return [
@@ -353,6 +355,7 @@ extension WebPanelController {
         "sharedVideoDecode": settings.sharedVideoDecodeEnabled,
         "sceneOptimization": settings.sceneOptimizationEnabled,
         "sceneOnDemand": settings.sceneOnDemandEnabled,
+        "sceneVideoPlaneSampling": settings.sceneVideoPlaneSamplingEnabled,
         "sceneUpdateModes": sceneUpdateModes,
         "sceneRenderer": settings.sceneRenderer, "sceneRenderers": sceneRenderers,
         "sharedVideoDecodeSessions": Int(settings.sharedVideoDecodeSessions),

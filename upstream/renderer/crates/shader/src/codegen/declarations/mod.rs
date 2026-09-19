@@ -13,13 +13,13 @@ pub(crate) use interface::{
     InterfaceDirection, StageInterfaceInitializer, StageInterfaceLayout,
     StageInterfaceLayoutBinding, SynthesizedStageInterface,
 };
-pub(crate) use layout::StageResourceLayout;
+pub(crate) use layout::{StageResourceLayout, VideoPlaneResource};
 pub(crate) use resources::{FragmentOutput, SamplerType, UniformMember};
 use smol_str::SmolStr;
 pub(crate) use types::LegacyTypeName;
 
 use self::{
-    functions::CompatibilityFunctionRequests,
+    functions::{CompatibilityFunctionRequests, VideoSamplingFunctionRequests},
     interface::{MacroAliasedPositionDeclaration, StageInterface},
     resources::{TextureDeclaration, TextureSampler, UniformBlock},
 };
@@ -41,6 +41,8 @@ pub(crate) struct DeclarationPlan<'src> {
     pub fragment_output: bool,
     /// Compatibility helper functions requested by source references.
     pub compatibility_functions: CompatibilityFunctionRequests,
+    /// Video plane sampling helpers requested by rewritten sampling calls.
+    pub video_sampling_functions: VideoSamplingFunctionRequests,
     /// Program-level stage interface edits supplied by pipeline assembly.
     pub interface_layout: StageInterfaceLayout,
     /// Program-level resource layout edits supplied by pipeline assembly.
@@ -287,6 +289,38 @@ impl<'src> DeclarationPlan<'src> {
                 binding: texture.sampler_binding?,
             })
         })
+    }
+
+    /// Returns the chroma-plane resource for a source texture this stage
+    /// declares, or `None` when the slot is not compiled as planes.
+    #[must_use]
+    pub(crate) fn video_plane_for_texture(&self, name: &str) -> Option<&VideoPlaneResource> {
+        self.resource_layout.video_plane_for_texture(name)
+    }
+
+    /// Requests the generated chroma declarations and sampling helper for one
+    /// plane resource.
+    pub(crate) fn require_video_plane(&mut self, slot: u8) {
+        self.video_sampling_functions.require(slot);
+    }
+
+    /// Iterates the chroma-plane resources this stage actually samples.
+    pub(crate) fn requested_video_planes(&self) -> impl Iterator<Item = &VideoPlaneResource> {
+        self.resource_layout
+            .video_planes()
+            .filter(|plane| self.video_sampling_functions.contains(plane.slot))
+    }
+
+    /// Returns whether any chroma-plane resource is emitted for this stage.
+    #[must_use]
+    pub(crate) fn has_video_planes(&self) -> bool {
+        self.requested_video_planes().next().is_some()
+    }
+
+    /// Emits the requested video plane sampling helpers.
+    pub(crate) fn emit_video_sampling_functions(&self, output: &mut String) -> ShaderResult<()> {
+        self.video_sampling_functions
+            .emit(output, self.resource_layout.video_planes())
     }
 
     /// Returns the generated sampler name for a source texture declaration.

@@ -2,8 +2,77 @@
 
 use smol_str::SmolStr;
 
-use super::resources::{TextureDeclaration, UniformMember};
+use std::fmt::Write as _;
+
+use super::{
+    super::emission::SourceEmitter,
+    resources::{TextureDeclaration, UniformMember},
+};
 use crate::{ShaderError, ShaderResult, ShaderStageKind, layout::DescriptorBinding};
+
+/// Chroma-plane resource attached to one video texture slot.
+///
+/// The names are fixed by this type rather than by whatever emitted them, so
+/// the renderer's reflection lookup and the generated GLSL cannot disagree
+/// about what a plane is called.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct VideoPlaneResource {
+    /// Material texture slot the author shader samples.
+    pub slot: u8,
+    /// Source texture variable name carrying the luma plane.
+    pub base_name: SmolStr,
+    /// Generated chroma texture variable name.
+    pub chroma_name: SmolStr,
+    /// Descriptor binding assigned to the generated chroma texture.
+    pub chroma_texture_binding: u32,
+    /// Descriptor binding assigned to the generated chroma sampler.
+    pub chroma_sampler_binding: u32,
+}
+
+impl VideoPlaneResource {
+    /// Prefix for generated chroma texture declarations.
+    ///
+    /// Deliberately not `g_Texture`: that prefix is how both the reflector and
+    /// the renderer read a material texture slot out of a resource name, and a
+    /// plane the renderer supplies is not a slot the material has.
+    pub(crate) const CHROMA_PREFIX: &'static str = "_we_VideoChroma";
+
+    /// Returns the generated `vec4` uniform holding luma and chroma range.
+    #[must_use]
+    pub(crate) fn range_uniform_name(slot: u8) -> SmolStr {
+        SmolStr::new(format!("_we_VideoRange{slot}"))
+    }
+
+    /// Returns the generated `vec4` uniform holding the YCbCr matrix.
+    #[must_use]
+    pub(crate) fn matrix_uniform_name(slot: u8) -> SmolStr {
+        SmolStr::new(format!("_we_VideoMatrix{slot}"))
+    }
+
+    /// Returns the generated sampling helper name for this slot.
+    #[must_use]
+    pub(crate) fn helper_name(slot: u8) -> String {
+        format!("_we_SampleVideoNv12_{slot}")
+    }
+
+    /// Emits the chroma texture and its paired sampler.
+    pub(crate) fn emit_chroma_declarations(&self, output: &mut String) -> ShaderResult<()> {
+        writeln!(
+            output,
+            "layout(set = 0, binding = {}) uniform texture2D {};",
+            self.chroma_texture_binding, self.chroma_name
+        )
+        .map_err(SourceEmitter::write_error)?;
+        writeln!(
+            output,
+            "layout(set = 0, binding = {}) uniform sampler {}{};",
+            self.chroma_sampler_binding,
+            TextureDeclaration::SAMPLER_PREFIX,
+            self.chroma_name
+        )
+        .map_err(SourceEmitter::write_error)
+    }
+}
 
 /// Program-level descriptor resource layout edits.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -16,6 +85,8 @@ pub(crate) struct StageResourceLayout {
     texture_bindings: Vec<StageTextureResourceBinding>,
     /// Program-wide uniform members emitted by every stage.
     pub uniform_members: Vec<UniformMember>,
+    /// Program-wide chroma-plane resources for video slots compiled as planes.
+    video_planes: Vec<VideoPlaneResource>,
 }
 
 impl StageResourceLayout {
@@ -36,6 +107,24 @@ impl StageResourceLayout {
         });
     }
 
+    /// Adds a program-level chroma-plane resource.
+    pub(crate) fn push_video_plane(&mut self, plane: VideoPlaneResource) {
+        self.video_planes.push(plane);
+    }
+
+    /// Returns the chroma-plane resource attached to a source texture name.
+    #[must_use]
+    pub(crate) fn video_plane_for_texture(&self, name: &str) -> Option<&VideoPlaneResource> {
+        self.video_planes
+            .iter()
+            .find(|plane| plane.base_name == name)
+    }
+
+    /// Iterates every program chroma-plane resource.
+    pub(crate) fn video_planes(&self) -> impl Iterator<Item = &VideoPlaneResource> {
+        self.video_planes.iter()
+    }
+
     /// Builds a resource allocator from program-level reservations.
     #[must_use]
     pub(crate) fn build_resource_layout_plan(&self) -> ResourceLayoutPlan {
@@ -50,6 +139,13 @@ impl StageResourceLayout {
             .texture_bindings
             .iter()
             .flat_map(|binding| [binding.texture_binding, binding.sampler_binding])
+        {
+            plan.reserve_available_binding(binding);
+        }
+        for binding in self
+            .video_planes
+            .iter()
+            .flat_map(|plane| [plane.chroma_texture_binding, plane.chroma_sampler_binding])
         {
             plan.reserve_available_binding(binding);
         }

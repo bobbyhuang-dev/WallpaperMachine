@@ -47,6 +47,12 @@ public:
     /// Keeps the parsed scene, the render graph, uploaded images and live video
     /// decoders; only render targets and the passes that attach them are rebuilt.
     bool ApplyRenderScale(Scene&, rg::RenderGraph&, double scale);
+    /// Rebuilds the copy plan and the reuse table for the current scene
+    /// optimisation setting, without reparsing the project, reopening a video
+    /// or resetting a timeline. Called at a frame boundary when the setting
+    /// changed, so turning the setting back on takes effect on the next frame
+    /// rather than on the next graph compile.
+    bool ApplySceneOptimization(Scene&, rg::RenderGraph&);
     void UpdateCameraFillMode(Scene&, wallpaper::FillMode);
     void SetWallpaperScalingMode(wallpaper::WallpaperScalingMode);
     void SetWallpaperScalingFactor(double);

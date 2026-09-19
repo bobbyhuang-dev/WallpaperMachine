@@ -62,6 +62,13 @@ impl CacheKeyBuilder {
         for component in texture.components() {
             self.push(if component.is_enabled() { "1" } else { "0" });
         }
+        // Only a slot that really is sampled as planes contributes a term, so
+        // the key of an ordinary texture is the one this compiler has always
+        // produced and the two variants of one video material never collide.
+        if texture.video_planes().is_planar() {
+            self.push("video_planes");
+            self.push(texture.video_planes().as_str());
+        }
     }
 
     /// Adds one project property value.

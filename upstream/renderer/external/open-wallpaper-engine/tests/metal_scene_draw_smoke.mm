@@ -16,6 +16,7 @@
 #include "MetalRender/MetalBackendRouter.hpp"
 #include "MetalRender/MetalCapability.hpp"
 #include "MetalRender/MetalRender.hpp"
+#include "MetalRender/MetalVideoSupport.hpp"
 #include "MetalRender/SceneMetalProgram.hpp"
 
 #include "Audio/SoundManager.h"
@@ -37,6 +38,7 @@
 #include "VulkanRender/SceneToRenderGraph.hpp"
 #include "VulkanRender/StaticSubgraphCache.hpp"
 #include "WPSceneParser.hpp"
+#include "synthetic_video.hpp"
 
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
@@ -380,16 +382,16 @@ TEST_F(MetalSceneDraw, AnIntermediateTargetIsDrawnCopiedAndResampledInOneFrame)
         CAMetalLayer* layer   = [CAMetalLayer layer];
         layer.device          = device;
         layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
-        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.drawableSize    = CGSizeMake(640, 360);
         layer.framebufferOnly = NO;
 
         MetalRender         render;
         MetalRenderInitInfo info {
             .metal_layer          = (__bridge void*)layer,
-            .width                = 384,
-            .height               = 256,
-            .render_width         = 384,
-            .render_height        = 256,
+            .width                = 640,
+            .height               = 360,
+            .render_width         = 640,
+            .render_height        = 360,
             .display_scale_factor = 1.0,
         };
         ASSERT_TRUE(render.init(info)) << render.lastError();
@@ -526,16 +528,16 @@ TEST_F(MetalSceneDraw, AnUnchangedTargetIsReusedAndProducesTheSamePixels)
         CAMetalLayer* layer   = [CAMetalLayer layer];
         layer.device          = device;
         layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
-        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.drawableSize    = CGSizeMake(640, 360);
         layer.framebufferOnly = NO;
 
         MetalRender         render;
         MetalRenderInitInfo info {
             .metal_layer          = (__bridge void*)layer,
-            .width                = 384,
-            .height               = 256,
-            .render_width         = 384,
-            .render_height        = 256,
+            .width                = 640,
+            .height               = 360,
+            .render_width         = 640,
+            .render_height        = 360,
             .display_scale_factor = 1.0,
         };
         ASSERT_TRUE(render.init(info)) << render.lastError();
@@ -584,16 +586,16 @@ TEST_F(MetalSceneDraw, TurningTheOptimisationOffDrawsEveryPassAgain)
         CAMetalLayer* layer   = [CAMetalLayer layer];
         layer.device          = device;
         layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
-        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.drawableSize    = CGSizeMake(640, 360);
         layer.framebufferOnly = NO;
 
         MetalRender         render;
         MetalRenderInitInfo info {
             .metal_layer          = (__bridge void*)layer,
-            .width                = 384,
-            .height               = 256,
-            .render_width         = 384,
-            .render_height        = 256,
+            .width                = 640,
+            .height               = 360,
+            .render_width         = 640,
+            .render_height        = 360,
             .display_scale_factor = 1.0,
         };
         ASSERT_TRUE(render.init(info)) << render.lastError();
@@ -654,16 +656,16 @@ TEST_F(MetalSceneDraw, GeometryRebuiltEveryFrameIsUploadedAndDrawnFromItsOwnSlot
         CAMetalLayer* layer   = [CAMetalLayer layer];
         layer.device          = device;
         layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
-        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.drawableSize    = CGSizeMake(640, 360);
         layer.framebufferOnly = NO;
 
         MetalRender         render;
         MetalRenderInitInfo info {
             .metal_layer          = (__bridge void*)layer,
-            .width                = 384,
-            .height               = 256,
-            .render_width         = 384,
-            .render_height        = 256,
+            .width                = 640,
+            .height               = 360,
+            .render_width         = 640,
+            .render_height        = 360,
             .display_scale_factor = 1.0,
         };
         ASSERT_TRUE(render.init(info)) << render.lastError();
@@ -752,16 +754,16 @@ TEST_F(MetalSceneDraw, ASpriteSheetAdvancesOnItsOwnClockAndRedrawsOnlyWhenTheFra
         CAMetalLayer* layer   = [CAMetalLayer layer];
         layer.device          = device;
         layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
-        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.drawableSize    = CGSizeMake(640, 360);
         layer.framebufferOnly = NO;
 
         MetalRender         render;
         MetalRenderInitInfo info {
             .metal_layer          = (__bridge void*)layer,
-            .width                = 384,
-            .height               = 256,
-            .render_width         = 384,
-            .render_height        = 256,
+            .width                = 640,
+            .height               = 360,
+            .render_width         = 640,
+            .render_height        = 360,
             .display_scale_factor = 1.0,
         };
         ASSERT_TRUE(render.init(info)) << render.lastError();
@@ -825,16 +827,16 @@ TEST_F(MetalSceneDraw, TurningTheOptimisationBackOnDoesNotReuseAFrameDrawnWhileI
         CAMetalLayer* layer   = [CAMetalLayer layer];
         layer.device          = device;
         layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
-        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.drawableSize    = CGSizeMake(640, 360);
         layer.framebufferOnly = NO;
 
         MetalRender         render;
         MetalRenderInitInfo info {
             .metal_layer          = (__bridge void*)layer,
-            .width                = 384,
-            .height               = 256,
-            .render_width         = 384,
-            .render_height        = 256,
+            .width                = 640,
+            .height               = 360,
+            .render_width         = 640,
+            .render_height        = 360,
             .display_scale_factor = 1.0,
         };
         ASSERT_TRUE(render.init(info)) << render.lastError();
@@ -875,4 +877,533 @@ TEST_F(MetalSceneDraw, TurningTheOptimisationBackOnDoesNotReuseAFrameDrawnWhileI
 
         render.destroy();
     }
+}
+
+TEST_F(MetalSceneDraw, AGraphCompiledWithTheOptimisationOffStartsReusingWhenItIsTurnedOn)
+{
+    // The asymmetry this removes: the reuse table, the copy plan and the target
+    // table are all built while the graph is compiled, so a graph compiled with
+    // the setting off used to carry no plan at all and turning the setting back
+    // on did nothing until the wallpaper, the render scale or the app changed.
+    // Nothing here recompiles the graph; the change is applied at a frame
+    // boundary over the graph that is already running.
+    wallpaper::vulkan::SetSceneOptimizationEnabled(false);
+    const auto  project = WriteFixture(root_ / "project");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "cache", loaded, error)) << error;
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(640, 360);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 640,
+            .height               = 360,
+            .render_width         = 640,
+            .render_height        = 360,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        // Compiled with the setting off: no reuse table exists at this point.
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        DrawOneFrame(render, *loaded.scene);
+        EXPECT_EQ(DrawOneFrame(render, *loaded.scene).skipped, 0u)
+            << "pixels were reused although the graph was compiled with the setting off";
+        const auto drawn = ReadOutput(render, *loaded.scene);
+        ASSERT_FALSE(drawn.empty());
+
+        wallpaper::vulkan::SetSceneOptimizationEnabled(true);
+        // The first frame after the change redraws: a table that has recorded
+        // nothing cannot call anything unchanged, which is what stops stale
+        // pixels being adopted.
+        EXPECT_EQ(DrawOneFrame(render, *loaded.scene).skipped, 0u)
+            << "the first frame after re-enabling reused pixels no plan had recorded";
+        EXPECT_EQ(ReadOutput(render, *loaded.scene), drawn)
+            << "re-applying the setting changed the picture";
+        // And from there it reuses, without the graph having been compiled
+        // again.
+        EXPECT_GT(DrawOneFrame(render, *loaded.scene).skipped, 0u)
+            << "re-enabling never produced a reuse plan for the running graph";
+
+        render.destroy();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A real video layer, through the whole path.
+//
+// This is what makes the direct plane path more than a compiler feature: an
+// ordinary author project whose material samples `g_Texture0`, a real decoded
+// video behind that slot, the second program compiled by the parser from the
+// same inputs as the first, the planes bound through the binding plan
+// reflection produced, and the picture read back off the GPU. Nothing here is a
+// test-only shader: the fragment source below is what the author wrote and it
+// is what draws.
+
+namespace
+{
+
+/// The media the fixtures name. 640x360, because the comparison below has to be
+/// able to ask for a one-to-one mapping between video texels and output pixels.
+constexpr uint32_t kVideoWidth  = 640;
+constexpr uint32_t kVideoHeight = 360;
+
+/// The same fixture shape as the cases above, with one video texture on slot 0
+/// and a material that samples it the way an ordinary image layer does.
+///
+/// `canvas` sizes both the orthographic projection and the layer, so a fixture
+/// at the media's own size maps one video texel onto one output pixel and a
+/// smaller one exercises the scaled case.
+std::filesystem::path WriteVideoFixture(const std::filesystem::path& root, uint32_t canvas_width,
+                                        uint32_t canvas_height)
+{
+    const std::string vertex =
+        "uniform mat4 g_ModelViewProjectionMatrix;\n"
+        "attribute vec3 a_Position;\n"
+        "attribute vec2 a_TexCoord;\n"
+        "varying vec2 v_TexCoord;\n"
+        "void main() {\n"
+        "  gl_Position = g_ModelViewProjectionMatrix * vec4(a_Position, 1.0);\n"
+        "  v_TexCoord = a_TexCoord;\n"
+        "}\n";
+    // A plain sample of the layer's own texture, which is what the large
+    // majority of image-layer shaders do.
+    const std::string fragment =
+        "uniform sampler2D g_Texture0;\n"
+        "varying vec2 v_TexCoord;\n"
+        "void main() {\n"
+        "  gl_FragColor = texture2D(g_Texture0, v_TexCoord);\n"
+        "}\n";
+
+    const std::string width  = std::to_string(canvas_width);
+    const std::string height = std::to_string(canvas_height);
+    const std::string origin_x = std::to_string(canvas_width / 2);
+    const std::string origin_y = std::to_string(canvas_height / 2);
+
+    const std::map<std::string, std::string> files {
+        { "project.json",
+          R"({"title":"Metal video draw","type":"scene","file":"layout.json","general":{"properties":{}}})" },
+        { "models/tile.json",
+          R"({"width":)" + width + R"(,"height":)" + height +
+              R"(,"material":"materials/tile.json"})" },
+        { "materials/tile.json",
+          R"({"passes":[{"shader":"metal_video","blending":"normal","cullmode":"nocull",)"
+          R"("depthtest":"disabled","depthwrite":"disabled","textures":["clip"]}]})" },
+        { "shaders/metal_video.vert", vertex },
+        { "shaders/metal_video.frag", fragment },
+        { "layout.json",
+          R"({"camera":{"center":[0,0,0],"eye":[0,0,1],"up":[0,1,0]},)"
+          R"("general":{"ambientcolor":[0,0,0],"skylightcolor":[0,0,0],"clearcolor":[0.0,0.0,0.0],)"
+          R"("cameraparallax":false,"orthogonalprojection":{"width":)" +
+              width + R"(,"height":)" + height + R"(}},)"
+          R"("objects":[{"id":1,"name":"tile","image":"models/tile.json","origin":[)" +
+              origin_x + "," + origin_y + R"(,0],)"
+          R"("scale":[1,1,1],"angles":[0,0,0],"visible":true}]})" },
+    };
+
+    for (const auto& [name, contents] : files) {
+        const auto path = root / name;
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream(path) << contents;
+    }
+    // The media the material's texture slot names, encoded here rather than
+    // shipped. `clip.mp4` is what the loose-asset resolver finds for "clip".
+    std::filesystem::create_directories(root / "materials");
+    if (! video::testing_media::WriteSyntheticVideo(root / "materials" / "clip.mp4", 1,
+                                                    "metal-video-draw")) {
+        return {};
+    }
+    return root / "project.json";
+}
+
+/// One offscreen native renderer over a compiled graph, at `width`x`height`.
+struct VideoScene {
+    LoadedScene     loaded;
+    CAMetalLayer*   layer { nil };
+    MetalRender     render;
+    std::unique_ptr<rg::RenderGraph> graph;
+
+    bool Draw() { return render.drawFrame(*loaded.scene); }
+
+    std::vector<uint8_t> Read()
+    {
+        std::vector<uint8_t> pixels;
+        uint32_t             width  = 0;
+        uint32_t             height = 0;
+        if (! render.ReadRenderTargetForTests(
+                loaded.scene->ResolveRenderTargetName(SpecTex_Default), pixels, width, height)) {
+            ADD_FAILURE() << "the scene output could not be read back";
+        }
+        return pixels;
+    }
+};
+
+} // namespace
+
+/// Restores the process-wide switch however a test leaves.
+namespace
+{
+struct ScopedPlaneSampling {
+    explicit ScopedPlaneSampling(bool enabled) { SetMetalVideoPlaneSamplingEnabled(enabled); }
+    ~ScopedPlaneSampling() { SetMetalVideoPlaneSamplingEnabled(false); }
+};
+} // namespace
+
+TEST_F(MetalSceneDraw, AVideoLayerSamplesTheDecoderPlanesThroughItsOwnShader)
+{
+    const auto project = WriteVideoFixture(root_ / "video-project", kVideoWidth, kVideoHeight);
+    if (project.empty()) {
+        GTEST_SKIP() << "no hardware H.264 encoder here, so no decodable media to parse";
+    }
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "video-cache", loaded, error)) << error;
+
+    auto* material = FirstMaterial(loaded.scene->sceneGraph.get());
+    ASSERT_NE(material, nullptr);
+    ASSERT_NE(material->customShader.shader, nullptr);
+    const auto* program = material->customShader.shader->metal_program.get();
+    ASSERT_NE(program, nullptr);
+    ASSERT_TRUE(program->error.empty()) << program->error;
+
+    // ---- 1. the parser produced the second program from the same inputs
+    const auto* variant = program->video_planes.get();
+    ASSERT_NE(variant, nullptr) << "no plane variant was attempted for a single-video material";
+    ASSERT_TRUE(variant->ok()) << "plane variant refused: " << variant->error;
+    EXPECT_EQ(variant->slot, 0u);
+    ASSERT_FALSE(variant->stages.empty());
+    // A translation of the author's program, not a substitute for it.
+    EXPECT_NE(variant->stages.front().source, program->stages.front().source);
+
+    const auto selection = SelectSceneBackend(*loaded.scene);
+    ASSERT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+
+    // ---- 2. a real frame, drawn through the variant
+    ScopedPlaneSampling sampling(true);
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(kVideoWidth, kVideoHeight);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = kVideoWidth,
+            .height               = kVideoHeight,
+            .render_width         = kVideoWidth,
+            .render_height        = kVideoHeight,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        for (int frame = 0; frame < 3; ++frame) {
+            ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+            loaded.scene->PassFrameTime(1.0 / 60.0);
+        }
+
+        // ---- 3. the path the frame really took
+        const auto path = render.VideoPath();
+        if (path != SceneVideoPath::Nv12Direct) {
+            // Software decode hands back BGRA, and the direct path is then not
+            // applicable rather than broken. Reported rather than asserted
+            // away, because a machine without VideoToolbox is a real one.
+            GTEST_SKIP() << "the decoder produced " << SceneVideoPathName(path)
+                         << " rather than NV12, so the direct path was not exercised";
+        }
+
+        std::vector<uint8_t> pixels;
+        uint32_t             width  = 0;
+        uint32_t             height = 0;
+        ASSERT_TRUE(render.ReadRenderTargetForTests(
+            loaded.scene->ResolveRenderTargetName(SpecTex_Default), pixels, width, height));
+        ASSERT_EQ(pixels.size(), width * height * 4u);
+
+        // The scene clears to black, so a frame carrying colour is a frame the
+        // plane sample produced.
+        std::size_t coloured = 0;
+        for (std::size_t i = 0; i < pixels.size(); i += 4) {
+            if (pixels[i] > 8 || pixels[i + 1] > 8 || pixels[i + 2] > 8) ++coloured;
+        }
+        EXPECT_GT(coloured, 1000u)
+            << "the output holds nothing the plane sample could have produced";
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, AVideoLayerKeepsConvertingWhileTheSettingIsOff)
+{
+    const auto project = WriteVideoFixture(root_ / "video-off-project", kVideoWidth, kVideoHeight);
+    if (project.empty()) {
+        GTEST_SKIP() << "no hardware H.264 encoder here, so no decodable media to parse";
+    }
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "video-off-cache", loaded, error)) << error;
+
+    // Default state, asserted rather than assumed: the variant exists and is
+    // simply not selected, which is what makes the switch a selection.
+    ScopedPlaneSampling sampling(false);
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(kVideoWidth, kVideoHeight);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = kVideoWidth,
+            .height               = kVideoHeight,
+            .render_width         = kVideoWidth,
+            .render_height        = kVideoHeight,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+        ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+
+        const auto path = render.VideoPath();
+        EXPECT_NE(path, SceneVideoPath::Nv12Direct)
+            << "the switch is off and a material still sampled planes";
+        EXPECT_NE(path, SceneVideoPath::Nv12Mixed);
+
+        // And switching it on reaches a scene that is already running, without
+        // the graph being compiled again.
+        SetMetalVideoPlaneSamplingEnabled(true);
+        ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+        if (path == SceneVideoPath::Nv12Converted) {
+            EXPECT_EQ(render.VideoPath(), SceneVideoPath::Nv12Direct)
+                << "a running scene did not pick the setting up at its next frame";
+        }
+
+        render.destroy();
+    }
+}
+
+namespace
+{
+
+/// Draws one decoded frame twice -- once pre-converted, once sampled directly --
+/// and returns the per-channel differences.
+///
+/// The frame is held by pausing playback, and the hold is proved rather than
+/// assumed: two draws on the same path must reproduce each other before the
+/// two paths are compared at all.
+struct PathComparison {
+    bool                 ran { false };
+    std::string          skip_reason;
+    std::vector<uint8_t> converted;
+    std::vector<uint8_t> direct;
+};
+
+PathComparison CompareVideoPaths(const std::filesystem::path& project,
+                                 const std::filesystem::path& cache, uint32_t canvas_width,
+                                 uint32_t canvas_height)
+{
+    PathComparison result;
+    LoadedScene    loaded;
+    std::string    error;
+    if (! LoadScene(project, cache, loaded, error)) {
+        result.skip_reason = error;
+        return result;
+    }
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(canvas_width, canvas_height);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = static_cast<uint16_t>(canvas_width),
+            .height               = static_cast<uint16_t>(canvas_height),
+            .render_width         = static_cast<uint16_t>(canvas_width),
+            .render_height        = static_cast<uint16_t>(canvas_height),
+            .display_scale_factor = 1.0,
+        };
+        if (! render.init(info)) {
+            result.skip_reason = render.lastError();
+            return result;
+        }
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        if (graph == nullptr || ! render.compileRenderGraph(*loaded.scene, *graph)) {
+            result.skip_reason = render.lastError();
+            return result;
+        }
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        const auto output = loaded.scene->ResolveRenderTargetName(SpecTex_Default);
+        const auto read   = [&]() {
+            std::vector<uint8_t> pixels;
+            uint32_t             width  = 0;
+            uint32_t             height = 0;
+            render.ReadRenderTargetForTests(output, pixels, width, height);
+            return pixels;
+        };
+
+        SetMetalVideoPlaneSamplingEnabled(false);
+        for (int frame = 0; frame < 2; ++frame) {
+            if (! render.drawFrame(*loaded.scene)) {
+                result.skip_reason = render.lastError();
+                return result;
+            }
+            loaded.scene->PassFrameTime(1.0 / 60.0);
+        }
+        render.SetVideoPlaybackPaused(true);
+        // Pausing stops the clock, but frames the decoder had already produced
+        // still become current one at a time. The hold is therefore waited for
+        // and then proved, rather than assumed after a fixed number of frames:
+        // two consecutive draws reproducing each other exactly is the only
+        // evidence that what follows compares one frame.
+        std::vector<uint8_t> previous;
+        bool                 held = false;
+        for (int settle = 0; settle < 16 && ! held; ++settle) {
+            if (! render.drawFrame(*loaded.scene)) {
+                result.skip_reason = render.lastError();
+                return result;
+            }
+            auto current = read();
+            held         = ! previous.empty() && current == previous;
+            previous     = std::move(current);
+        }
+        if (! held) {
+            result.skip_reason = "the decoded frame never stopped advancing while paused";
+            return result;
+        }
+        if (render.VideoPath() != SceneVideoPath::Nv12Converted) {
+            result.skip_reason = std::string("the decoder produced ") +
+                                 SceneVideoPathName(render.VideoPath()) +
+                                 ", so there is no conversion to compare against";
+            return result;
+        }
+        result.converted = std::move(previous);
+
+        SetMetalVideoPlaneSamplingEnabled(true);
+        if (! render.drawFrame(*loaded.scene)) {
+            result.skip_reason = render.lastError();
+            return result;
+        }
+        if (render.VideoPath() != SceneVideoPath::Nv12Direct) {
+            result.skip_reason = "the running scene did not take the direct path";
+            return result;
+        }
+        result.direct = read();
+        result.ran    = result.converted.size() == result.direct.size() &&
+                     ! result.converted.empty();
+        render.destroy();
+    }
+    return result;
+}
+
+} // namespace
+
+TEST_F(MetalSceneDraw, OneToOneSamplingProducesTheSamePictureOnBothPaths)
+{
+    // The equivalence claim, measured rather than asserted in prose: one decoded
+    // frame, held still, drawn by the pre-converting program and then by the
+    // plane-sampling one, at a size where one video texel maps to one output
+    // pixel.
+    //
+    // One code value is the intermediate's own 8-bit quantisation, which the
+    // direct path does not perform. Anything larger would be a real difference
+    // in the picture.
+    const auto project =
+        WriteVideoFixture(root_ / "video-1to1-project", kVideoWidth, kVideoHeight);
+    if (project.empty()) {
+        GTEST_SKIP() << "no hardware H.264 encoder here, so no decodable media to parse";
+    }
+    ScopedPlaneSampling sampling(false);
+    const auto comparison =
+        CompareVideoPaths(project, root_ / "video-1to1-cache", kVideoWidth, kVideoHeight);
+    if (! comparison.ran) GTEST_SKIP() << comparison.skip_reason;
+
+    int worst = 0;
+    for (std::size_t i = 0; i < comparison.converted.size(); ++i) {
+        worst = std::max(worst, std::abs(static_cast<int>(comparison.converted[i]) -
+                                          static_cast<int>(comparison.direct[i])));
+    }
+    EXPECT_LE(worst, 1) << "the two paths disagree by " << worst
+                        << " code values at a one-to-one mapping";
+}
+
+TEST_F(MetalSceneDraw, ScaledSamplingStaysInsideTheClampExcursionTheStreamImplies)
+{
+    // Where the layer is resampled, the two paths stop being identical, and the
+    // reason is structural rather than numerical. The pre-converting path
+    // clamps each texel to the stream's declared range and quantises it before
+    // the author's sampler filters; the direct path filters first and clamps
+    // the result. The transform between those two clamps is affine, so the two
+    // orders agree exactly wherever the clamp does nothing -- which is every
+    // sample a conforming stream carries.
+    //
+    // Where a stream does carry codes outside the range it declares, the two
+    // orders disagree by at most the excursion the clamp removes. For 8-bit
+    // limited range that is (255 - 235) / 219 * 255 = 23.3 code values at the
+    // top and 16 / 219 * 255 = 18.6 at the bottom, so 24 bounds it. The
+    // synthetic probe below is deliberately the worst case: full-range noise
+    // carried in a stream that declares limited range, so roughly one texel in
+    // seven clamps. Real content does not look like this, which is why the
+    // one-to-one case above is the equivalence claim and this one is a bound.
+    constexpr int kClampExcursionBound = 24;
+
+    const auto project = WriteVideoFixture(root_ / "video-scaled-project", 384, 256);
+    if (project.empty()) {
+        GTEST_SKIP() << "no hardware H.264 encoder here, so no decodable media to parse";
+    }
+    ScopedPlaneSampling sampling(false);
+    const auto comparison = CompareVideoPaths(project, root_ / "video-scaled-cache", 384, 256);
+    if (! comparison.ran) GTEST_SKIP() << comparison.skip_reason;
+
+    int       worst = 0;
+    long long total = 0;
+    for (std::size_t i = 0; i < comparison.converted.size(); ++i) {
+        const int delta = std::abs(static_cast<int>(comparison.converted[i]) -
+                                    static_cast<int>(comparison.direct[i]));
+        worst = std::max(worst, delta);
+        total += delta;
+    }
+    const double mean = static_cast<double>(total) /
+                        static_cast<double>(comparison.converted.size());
+
+    EXPECT_LE(worst, kClampExcursionBound)
+        << "the two paths disagree by " << worst
+        << " code values, which is more than the stream's own clamp can account for";
+    // A colour, binding or coordinate fault would not stay near zero on
+    // average, whatever it did to the worst pixel.
+    EXPECT_LT(mean, 3.0) << "the two paths differ by " << mean
+                         << " code values on average, which is a picture difference rather than "
+                            "a clamp-order effect at the edges";
+    RecordProperty("worst_delta", worst);
 }

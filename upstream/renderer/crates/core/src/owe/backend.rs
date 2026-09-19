@@ -234,6 +234,19 @@ impl OweBackend {
         }
     }
 
+    /// Turns direct NV12 plane sampling on or off inside native Metal scenes,
+    /// process-wide.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if the call unwinds.
+    pub fn set_scene_video_plane_sampling_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        unsafe {
+            UnwindSafeFFI::new("owe_set_scene_video_plane_sampling_enabled")
+                .call(|| sys::owe_set_scene_video_plane_sampling_enabled(enabled))
+        }
+    }
+
     /// Chooses which renderer newly opened scenes prefer.
     ///
     /// # Errors

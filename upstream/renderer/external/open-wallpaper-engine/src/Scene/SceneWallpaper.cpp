@@ -38,6 +38,7 @@
 #include "Runtime/SceneRuntimeContext.hpp"
 #include "Runtime/RuntimeImageSource.hpp"
 #include "VulkanRender/SceneToRenderGraph.hpp"
+#include "VulkanRender/StaticSubgraphCache.hpp"
 #include "VulkanRender/VulkanRender.hpp"
 #include "Runtime/VirtualAssetRegistry.hpp"
 #include <algorithm>
@@ -974,6 +975,28 @@ private:
                 }
             }
 
+            // At the frame boundary, before the frame is drawn: the setting is
+            // process-wide and arrives without a message, so a change is
+            // noticed here rather than waited for until the graph is next
+            // compiled. Nothing is reparsed, no video is reopened and no
+            // timeline is reset; the copy plan, the targets it governs and the
+            // reuse table are rebuilt from the graph that is already compiled.
+            if (frame_ok && m_scene != nullptr && m_rg) {
+                const bool optimization = vulkan::SceneOptimizationEnabled();
+                if (optimization !=
+                    m_scene_optimization_applied.load(std::memory_order_relaxed)) {
+                    if (m_render->ApplySceneOptimization(*m_scene, *m_rg)) {
+                        m_scene_optimization_applied.store(optimization,
+                                                           std::memory_order_relaxed);
+                    } else {
+                        LOG_ERROR("scene optimisation change failed, rebuilding render graph");
+                        frame_ok = rebuildRenderGraph();
+                        m_scene_optimization_applied.store(optimization,
+                                                           std::memory_order_relaxed);
+                    }
+                }
+            }
+
             if (frame_ok) {
                 frame_ok = m_render->drawFrame(*m_scene);
                 // A native frame can fail after the graph compiled -- a video
@@ -988,6 +1011,8 @@ private:
                 }
             }
             if (frame_ok) {
+                m_video_path.store(static_cast<uint8_t>(m_render->VideoPath()),
+                                   std::memory_order_relaxed);
                 m_scene->PassFrameTime(frame_time);
                 counters.Add(OWE_RC_SIMULATION_TICKS);
             } else {
@@ -1283,6 +1308,20 @@ public:
         return m_scene_demand_reasons.load(std::memory_order_relaxed);
     }
 
+    /// Published by the render thread after each drawn frame, read by the host
+    /// without one.
+    [[nodiscard]] SceneVideoPath videoPath() const {
+        return static_cast<SceneVideoPath>(m_video_path.load(std::memory_order_relaxed));
+    }
+
+    /// Whether this wallpaper's compiled graph is running under the current
+    /// scene optimisation setting, as opposed to still carrying the plan the
+    /// previous value produced.
+    [[nodiscard]] bool sceneOptimizationApplied() const {
+        return m_scene_optimization_applied.load(std::memory_order_relaxed) ==
+               vulkan::SceneOptimizationEnabled();
+    }
+
     /// Which renderer drew this scene. Published when the renderer is created,
     /// never before: until then `created` is false and the host reports that it
     /// is still preparing rather than naming a backend.
@@ -1318,6 +1357,17 @@ private:
     /// scales the presented image on the output, this one only changes how many
     /// pixels the scene is drawn with.
     float                                    m_render_scale { 1.0f };
+    /// The path the last drawn frame's video textures took, as the enumerator's
+    /// underlying value so it can live in an atomic.
+    std::atomic<uint8_t>                     m_video_path { 0 };
+    /// The scene optimisation setting the compiled graph was last applied for.
+    /// Starts matching the default so a wallpaper that never sees the setting
+    /// change never rebuilds anything. Atomic because the render thread writes
+    /// it and the host reads it to tell a saved preference apart from one that
+    /// is actually in force.
+    std::atomic<bool>                        m_scene_optimization_applied {
+        vulkan::SceneOptimizationEnabled()
+    };
     bool                                     m_horizontal_flip { false };
     bool                                     m_media_integration_enabled { false };
     std::optional<SystemMediaArtworkPayload> m_pending_system_media_artwork {};
@@ -1481,6 +1531,20 @@ SceneBackendSelection SceneWallpaper::sceneBackendSelection() const {
     auto handler = m_main_handler->renderHandler();
     if (handler == nullptr) return SceneBackendSelection {};
     return handler->sceneBackendSelection();
+}
+
+bool SceneWallpaper::sceneOptimizationApplied() const {
+    if (m_main_handler == nullptr) return false;
+    auto handler = m_main_handler->renderHandler();
+    if (handler == nullptr) return false;
+    return handler->sceneOptimizationApplied();
+}
+
+SceneVideoPath SceneWallpaper::sceneVideoPath() const {
+    if (m_main_handler == nullptr) return SceneVideoPath::None;
+    auto handler = m_main_handler->renderHandler();
+    if (handler == nullptr) return SceneVideoPath::None;
+    return handler->videoPath();
 }
 
 uint32_t SceneWallpaper::sceneDemandReasons() const {

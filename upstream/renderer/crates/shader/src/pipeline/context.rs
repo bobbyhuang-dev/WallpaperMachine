@@ -119,7 +119,8 @@ where
         let stage_global_names = StageGlobalNames::new(stage_inputs.stages());
         let program_interface = ProgramInterface::new(stage_inputs.stages())
             .validate_with_names(&stage_global_names)?;
-        let program_resources = ProgramResourceLayout::build_from_stage_inputs(&stage_inputs)?;
+        let program_resources =
+            ProgramResourceLayout::build_from_stage_inputs(&stage_inputs, request.textures())?;
 
         let mut stages = Vec::with_capacity(preprocessed.stages().len());
         let mut metadata = MetadataMerger::default();

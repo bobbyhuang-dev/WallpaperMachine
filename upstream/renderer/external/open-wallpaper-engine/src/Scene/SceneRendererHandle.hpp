@@ -151,6 +151,26 @@ public:
         OWE_FORWARD(ApplyRenderScale(scene, graph, scale));
         return false;
     }
+    /// How the scene's video textures reached their shaders on the last frame.
+    /// Only the native backend has two paths to report; the compatibility
+    /// backend always pre-converts, and says so rather than saying nothing.
+    [[nodiscard]] SceneVideoPath VideoPath() const {
+        if (m_metal != nullptr) return m_metal->VideoPath();
+        return SceneVideoPath::None;
+    }
+
+    /// Re-applies the scene optimisation setting to an already-compiled graph.
+    ///
+    /// Only the compatibility backend needs to be asked: the native backend
+    /// applies the same change inside `drawFrame`, at the point where it holds
+    /// the command buffer the reallocated targets are cleared into, and
+    /// reports it applied here so the caller's bookkeeping is the same either
+    /// way.
+    bool ApplySceneOptimization(Scene& scene, rg::RenderGraph& graph) {
+        if (m_metal != nullptr) return true;
+        if (m_vulkan != nullptr) return m_vulkan->ApplySceneOptimization(scene, graph);
+        return false;
+    }
     bool drawFrame(Scene& scene) {
         OWE_FORWARD(drawFrame(scene));
         return false;

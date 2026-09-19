@@ -125,12 +125,15 @@ Vulkan-through-MoltenVK path and the default. **Native Metal preferred** asks
 for the native Metal backend, which covers a subset of scene features; a scene
 it cannot draw runs on the compatibility backend and the status line says why.
 
-Native Metal draws image layers, ordinary effect chains and scene
+Native Metal draws image layers, sprite-sheet animation, standard
+two-dimensional sprite particles, ordinary effect chains and scene
 post-processing, layers that read an image another layer produced earlier in
-the same frame, and BGRA or 8-bit NV12 video textures. Particles, puppets,
-perspective 3D, dynamic lighting, sprite sheets, history-feedback effects,
-HDR or 10-bit video, plain video wallpapers and shaders that do not translate
-fall back as a whole scene; an effect is never dropped to keep a scene native.
+the same frame, and BGRA or 8-bit NV12 video textures — the latter either
+converted once per frame or, with **Direct video plane sampling** on, sampled by
+the layer's own shader. Rope particles, particle trails, puppets, perspective
+3D, dynamic lighting, history-feedback effects, HDR or 10-bit video, plain video
+wallpapers and shaders that do not translate fall back as a whole scene; an
+effect is never dropped to keep a scene native.
 Effect and video output has not yet been compared against real wallpapers.
 
 No GPU backend is created until the scene has been parsed and a backend chosen,
@@ -142,24 +145,71 @@ lock-screen extension always uses the compatibility backend.
 Desktop posters work on both backends and need no setting: the native backend
 re-draws its final composition — fit, zoom and flip included — into a texture
 of its own only when a poster is requested, including while the scene is idle
-or paused. **Scene optimisation** applies to the compatibility renderer only;
-the row says so while a scene is running natively.
+or paused. **Scene optimisation** applies to both renderers, and a change to it
+now reaches a running scene on that scene's next frame in either direction: the
+copy plan, the targets it governs and the reuse table are rebuilt over the graph
+that is already compiled, without reparsing the project, reopening a video or
+resetting a timeline. The row beneath the switch reports what each running scene
+is actually under, so a preference that has not reached a scene yet is visible
+as such rather than looking applied.
 
 No power comparison has been measured between the two. Choosing native Metal is
 not a documented saving.
 
 ## Advanced
 
-Both switches are experimental and off by default.
+All three switches are experimental and off by default.
 
 | Setting | Notes |
 | --- | --- |
 | Content pacing | Drives presentation from the content's own frame cadence instead of the display refresh |
 | Shared video decode | Lets equivalent display surfaces showing the same video share one decode session |
+| Direct video plane sampling | Lets a Native Metal scene's own shader read the decoder's two video planes instead of a colour image converted for it each frame |
 
 When shared decode is actually merging work, **Shared decode in use** reports the
 live session and surface counts the engine publishes. Sharing is reported only
 where it genuinely happens: surfaces still submit and present separately.
+
+### Direct video plane sampling
+
+An 8-bit NV12 frame is two planes — full-resolution luma and half-resolution
+chroma — and turning it into one colour image is a full-frame pass the GPU runs
+before any layer samples it. Where a layer's own shader can do that conversion
+while it samples, the pass is not needed at all.
+
+The renderer does not rewrite anything at run time to achieve this. While the
+scene is parsed, a material with exactly one video texture is translated twice
+from the same author source: once as before, and once with that slot's sampling
+calls reading the two planes and applying the same colour transform the
+conversion pass would have applied, from the same eight constants. Both programs
+are compiled with the scene's graph, so the switch selects between them and no
+shader is ever compiled inside a frame.
+
+What each running scene actually did is reported per scene in **Drawn by**:
+sampled directly, converted once per frame, or both, for a scene whose materials
+differ. A material whose shader the translation cannot reproduce — an explicit
+level-of-detail sample, a size query, a texel fetch, two video slots in one
+material — keeps converting and says nothing; so does any frame that is not
+8-bit NV12, which is what a software decoder produces for the same file. Nothing
+here changes which renderer draws a scene.
+
+**Where the two differ.** At a one-to-one mapping between video texels and
+output pixels the two paths produce the same picture, to within the single code
+value the converted intermediate's own 8-bit quantisation can introduce. Where
+the layer is resampled they are not identical, and the reason is structural: the
+converting path clamps each texel to the range the stream declares and quantises
+it before the layer's sampler filters, while the direct path filters first and
+clamps the result. The transform between those two clamps is affine, so the two
+orders agree exactly wherever the clamp does nothing — which is every sample a
+conforming stream carries. Where a stream carries codes outside the range it
+declares, they can differ by up to the excursion that clamp removes, which for
+8-bit limited range is at most 24 code values; a deliberately out-of-range
+synthetic probe measured 19. This is a real difference, not floating-point
+noise, and it is why the setting is opt-in.
+
+No power measurement of any kind has been taken. What is claimed is that a
+conversion is not encoded and its destination is not allocated when nothing asks
+for one — not that this saves a measurable amount of anything.
 
 ## Verification
 

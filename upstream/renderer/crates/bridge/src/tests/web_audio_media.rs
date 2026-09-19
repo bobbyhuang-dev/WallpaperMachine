@@ -363,3 +363,66 @@ async fn scene_optimization_defaults_on_and_survives_a_restart() {
         "a process-wide renderer switch lives in C, so a saved opt-out has to be pushed back in"
     );
 }
+
+#[tokio::test]
+async fn video_plane_sampling_defaults_off_and_survives_a_restart() {
+    // The switch selects between two programs a running scene already holds, so
+    // the properties that matter are: off unless asked for, pushed straight at
+    // the renderer rather than through a rebuild, and pushed back in on the
+    // next launch -- the value lives in C, not in the config the bridge reads.
+    let temp = tempfile::tempdir().unwrap();
+    let store = crate::config::ConfigStore::open(temp.path().to_path_buf());
+    let engine = FakeEngineFacade::default();
+    let bridge = BridgeBuilder::new(engine.clone())
+        .with_config_store(store.clone())
+        .build()
+        .unwrap();
+
+    assert!(
+        !bridge
+            .settings_snapshot()
+            .await
+            .unwrap()
+            .scene_video_plane_sampling_enabled,
+        "a sampling path whose equivalence is bounded rather than total is opted into"
+    );
+
+    let snapshot = bridge
+        .set_scene_video_plane_sampling_enabled(true)
+        .await
+        .unwrap()
+        .settings;
+    assert!(snapshot.scene_video_plane_sampling_enabled);
+    assert_eq!(
+        engine.scene_video_plane_sampling_calls(),
+        vec![true],
+        "the renderer is told directly; both programs were compiled with the graph"
+    );
+    assert!(
+        engine.rendered_scenes().is_empty(),
+        "changing it must not reopen, reparse or restart anything"
+    );
+
+    drop(bridge);
+    let restarted_engine = FakeEngineFacade::default();
+    let restarted = BridgeBuilder::new(restarted_engine.clone())
+        .with_config_store(store)
+        .build()
+        .unwrap();
+    assert!(
+        restarted
+            .settings_snapshot()
+            .await
+            .unwrap()
+            .scene_video_plane_sampling_enabled
+    );
+    restarted.bootstrap().await.unwrap();
+    assert_eq!(
+        restarted_engine
+            .scene_video_plane_sampling_calls()
+            .last()
+            .copied(),
+        Some(true),
+        "a process-wide renderer switch lives in C, so a saved opt-in has to be pushed back in"
+    );
+}

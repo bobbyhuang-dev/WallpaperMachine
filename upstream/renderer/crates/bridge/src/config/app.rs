@@ -172,6 +172,13 @@ pub struct ExperimentalCfg {
     /// decoding the file once per surface.
     #[serde(default)]
     pub shared_video_decode: bool,
+    /// Let a native Metal scene's materials sample a video's NV12 planes
+    /// directly instead of one pre-converted colour image. Off by default: the
+    /// pre-converted path is what every Metal scene has been drawing, and the
+    /// two are not unconditionally identical once clamping and the chroma
+    /// resolution are involved.
+    #[serde(default)]
+    pub scene_video_plane_sampling: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

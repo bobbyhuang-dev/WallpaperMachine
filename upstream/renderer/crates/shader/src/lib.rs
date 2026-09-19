@@ -56,7 +56,7 @@ pub use model::{
     ShaderProgramRequest, ShaderProgramRequestBuilder, ShaderReflection, ShaderReflector,
     ShaderStageKind, ShaderStageMask, ShaderStageSource, ShaderSymbolName, ShaderTarget,
     ShaderTextureInfo, ShaderUniformBlock, ShaderUniformMember, ShaderVertexInput,
-    TextureComponentState, TextureFormatHint, TextureSlot, VertexFormat,
+    TextureComponentState, TextureFormatHint, TextureSlot, VertexFormat, VideoPlaneLayout,
 };
 pub use property::{ProjectPropertyBinding, PropertyName, PropertyValue};
 pub use source::{InMemoryShaderSourceProvider, ShaderSourceProvider};

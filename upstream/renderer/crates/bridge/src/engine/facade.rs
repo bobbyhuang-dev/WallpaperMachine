@@ -160,6 +160,19 @@ pub trait EngineFacade: Send + Sync + 'static {
         let _ = enabled;
         Ok(())
     }
+    /// Turns direct NV12 plane sampling on or off inside native Metal scenes,
+    /// process-wide. Off by default.
+    ///
+    /// A material with no usable plane variant, and any frame that is not
+    /// 8-bit NV12, keeps the existing colour conversion whatever this says.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the renderer rejects the call.
+    fn set_scene_video_plane_sampling_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        let _ = enabled;
+        Ok(())
+    }
     /// Chooses which renderer draws scene wallpapers, process-wide.
     /// `Compatibility` by default.
     ///
@@ -333,6 +346,10 @@ impl EngineFacade for RealEngineFacade {
 
     fn set_scene_on_demand_enabled(&self, enabled: bool) -> Result<(), EngineError> {
         self.engine.set_scene_on_demand_enabled(enabled)
+    }
+
+    fn set_scene_video_plane_sampling_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        self.engine.set_scene_video_plane_sampling_enabled(enabled)
     }
 
     fn set_scene_renderer_preference(
@@ -681,6 +698,7 @@ pub struct FakeEngineFacade {
     shared_video_decode_counts: Arc<ArcSwap<(u32, u32)>>,
     scene_optimization_calls: Arc<ArcSwap<Vec<bool>>>,
     scene_on_demand_calls: Arc<ArcSwap<Vec<bool>>>,
+    scene_video_plane_sampling_calls: Arc<ArcSwap<Vec<bool>>>,
     scene_renderer_calls: Arc<ArcSwap<Vec<SceneRendererPreference>>>,
     scene_runtime_reports: Arc<ArcSwap<Vec<SceneRuntimeReport>>>,
     audio_spectrum: Arc<ArcSwap<Option<AudioSpectrum128>>>,
@@ -870,6 +888,12 @@ impl FakeEngineFacade {
     #[must_use]
     pub fn scene_on_demand_calls(&self) -> Vec<bool> {
         load_log(&self.scene_on_demand_calls)
+    }
+
+    /// Every direct-plane-sampling change the bridge pushed, in order.
+    #[must_use]
+    pub fn scene_video_plane_sampling_calls(&self) -> Vec<bool> {
+        load_log(&self.scene_video_plane_sampling_calls)
     }
 
     /// Every scene renderer preference the bridge pushed, in order.
@@ -1382,6 +1406,11 @@ impl EngineFacade for FakeEngineFacade {
 
     fn set_scene_on_demand_enabled(&self, enabled: bool) -> Result<(), EngineError> {
         push_log(&self.scene_on_demand_calls, enabled);
+        Ok(())
+    }
+
+    fn set_scene_video_plane_sampling_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        push_log(&self.scene_video_plane_sampling_calls, enabled);
         Ok(())
     }
 

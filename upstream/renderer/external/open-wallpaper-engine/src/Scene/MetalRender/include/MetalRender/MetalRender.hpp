@@ -2,6 +2,7 @@
 
 #include "Core/RendererCounters.hpp"
 #include "Presentation/WallpaperScaling.hpp"
+#include "MetalRender/MetalVideoSupport.hpp"
 #include "Type.hpp"
 
 #include <cstdint>
@@ -128,6 +129,11 @@ public:
     /// it binds none -- in which case the frame clock keeps its configured
     /// cadence.
     [[nodiscard]] double ShortestVideoFramePeriod() const;
+
+    /// How this scene's video textures reached the shaders that sample them on
+    /// the last frame drawn. A report, not a request: a scene with no video, or
+    /// one that has not drawn yet, says `None`.
+    [[nodiscard]] VideoFramePath VideoPath() const;
 
     /// Scene-level demand bits for the graph currently compiled, in the same
     /// `vulkan::DynamicReason` vocabulary the compatibility backend reports, so

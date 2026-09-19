@@ -11,7 +11,8 @@
 //! could not be read is not evidence that anything is ticking.
 
 use wallpaper_core::{
-    SceneBackend, SceneDemandReasons, SceneRendererPreference, SceneRuntimeReport, SceneUpdateMode,
+    SceneBackend, SceneDemandReasons, SceneRendererPreference, SceneRuntimeReport,
+    SceneUpdateMode, SceneVideoPath,
 };
 
 use crate::{
@@ -28,6 +29,8 @@ fn report(display_id: u32, handle: u64) -> SceneRuntimeReport {
         demand_reasons: SceneDemandReasons::default(),
         backend: Some(SceneBackend::LegacyVulkan),
         fallback_reason: None,
+        video_path: SceneVideoPath::None,
+        optimization_applied: Some(true),
     }
 }
 

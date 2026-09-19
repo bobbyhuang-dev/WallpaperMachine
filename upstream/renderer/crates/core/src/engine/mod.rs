@@ -603,6 +603,20 @@ impl WallpaperEngine {
         self.backend.set_scene_on_demand_enabled(enabled)
     }
 
+    /// Turns direct NV12 plane sampling on or off inside native Metal scenes.
+    ///
+    /// Off by default. A material whose shader could be translated to sample
+    /// the decoder's planes then does so and produces no full-frame colour
+    /// conversion. It is a selection between two programs that were both
+    /// compiled with the scene's graph, never a reason to change backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the renderer rejects the call.
+    pub fn set_scene_video_plane_sampling_enabled(&self, enabled: bool) -> Result<(), EngineError> {
+        self.backend.set_scene_video_plane_sampling_enabled(enabled)
+    }
+
     /// Chooses which renderer new and rebuilt scenes prefer.
     ///
     /// A preference, not a guarantee: a scene the native backend cannot draw

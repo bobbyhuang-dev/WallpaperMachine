@@ -34,6 +34,7 @@
 
 #include "Fs/VFS.h"
 #include "MetalRender/MetalCapability.hpp"
+#include "MetalRender/MetalVideoSupport.hpp"
 #include "MetalRender/SceneMetalProgram.hpp"
 #include "Scene/SceneBackendSelection.hpp"
 #include "Shader/RustShaderBridge.hpp"
@@ -76,6 +77,9 @@ struct PendingMetalTranslation {
     std::vector<WPShaderUnit>         units;
     WPShaderInfo                      shader_info;
     std::vector<WPShaderTexInfo>      texinfos;
+    /// The material's texture keys, in slot order, so the flush can ask the
+    /// scene which slot is a video without re-deriving the list.
+    std::vector<std::string>          texture_keys;
     fs::VFS*                          vfs { nullptr };
 };
 
@@ -87,6 +91,29 @@ bool MetalTranslationRequested() {
     return CurrentSceneRendererPreference() == SceneRendererPreference::NativeMetalPreferred;
 }
 
+/// The one material texture slot a direct NV12 variant could be compiled for,
+/// or nothing.
+///
+/// Exactly one candidate, deliberately: two video slots in one material would
+/// need a variant per combination, and this round compiles one extra program
+/// per material, never a matrix of them. A slot the native video path itself
+/// refuses -- a sprite sheet, a texture with no media -- is not a candidate
+/// either, because that material is not going to reach this backend at all.
+std::optional<uint32_t> ResolveVideoPlaneCandidate(const Scene& scene,
+                                                   const std::vector<std::string>& texture_keys) {
+    std::optional<uint32_t> candidate;
+    for (usize slot = 0; slot < texture_keys.size(); ++slot) {
+        const auto& key = texture_keys[slot];
+        if (key.empty()) continue;
+        const auto found = scene.textures.find(key);
+        if (found == scene.textures.end() || ! found->second.isVideo) continue;
+        if (! metal::MetalVideoTextureRejection(scene, key).empty()) return std::nullopt;
+        if (candidate.has_value()) return std::nullopt;
+        candidate = static_cast<uint32_t>(slot);
+    }
+    return candidate;
+}
+
 SceneMetalSlotKind ToSceneMetalSlotKind(shader::RustShaderMetalSlotKind kind) {
     switch (kind) {
     case shader::RustShaderMetalSlotKind::Texture: return SceneMetalSlotKind::Texture;
@@ -94,6 +121,83 @@ SceneMetalSlotKind ToSceneMetalSlotKind(shader::RustShaderMetalSlotKind kind) {
     case shader::RustShaderMetalSlotKind::Buffer: break;
     }
     return SceneMetalSlotKind::Buffer;
+}
+
+/// Compiles the direct plane-sampling variant of one already-translated
+/// program, if this material has exactly one candidate video slot.
+///
+/// Everything it needs is still here -- the combos, the preprocessed units, the
+/// texture info -- which is the whole reason the variant is produced now rather
+/// than when the first frame reveals the decoder's pixel format. Nothing about
+/// this call can take the material away from the native backend: a refusal is
+/// recorded on the variant and the ordinary program keeps the material.
+void CompileVideoPlaneVariant(Scene& scene, PendingMetalTranslation& request,
+                              SceneMetalProgram& program) {
+    const auto slot = ResolveVideoPlaneCandidate(scene, request.texture_keys);
+    if (! slot.has_value()) return;
+
+    auto variant  = std::make_shared<SceneMetalVideoPlaneVariant>();
+    variant->slot = *slot;
+
+    // Copies, not the originals: this compile merges its own combos, default
+    // textures and preprocessor results into whatever it is handed, and the
+    // ordinary program's inputs have already been consumed once.
+    auto         units       = request.units;
+    WPShaderInfo shader_info = request.shader_info;
+
+    std::vector<shader::RustShaderMetalStage> stages;
+    std::string                               reflection_json;
+    bool                                      compiled = false;
+    try {
+        compiled = WPShaderParser::CompileToMslRust(request.scene_id,
+                                                    request.shader_name,
+                                                    units,
+                                                    stages,
+                                                    *request.vfs,
+                                                    &shader_info,
+                                                    request.texinfos,
+                                                    &reflection_json,
+                                                    slot);
+    } catch (const std::exception& e) {
+        variant->error = e.what();
+    }
+    if (! compiled && variant->error.empty()) {
+        variant->error = shader::LastRustShaderError();
+        if (variant->error.empty()) variant->error = "the shader cannot sample the video as planes";
+    }
+
+    if (compiled) {
+        variant->reflection_json = std::move(reflection_json);
+        for (const auto& stage : stages) {
+            SceneMetalStage out;
+            out.kind             = stage.kind == ShaderType::FRAGMENT
+                                       ? SceneMetalStageKind::Fragment
+                                       : SceneMetalStageKind::Vertex;
+            out.source           = stage.source;
+            out.entry_point      = stage.entry_point;
+            out.language_version = stage.language_version;
+            out.bindings.reserve(stage.bindings.size());
+            for (const auto& binding : stage.bindings) {
+                out.bindings.push_back(SceneMetalBinding {
+                    .name      = binding.name,
+                    .set       = binding.set,
+                    .binding   = binding.binding,
+                    .slot_kind = ToSceneMetalSlotKind(binding.slot_kind),
+                    .slot      = binding.slot,
+                });
+            }
+            variant->stages.push_back(std::move(out));
+        }
+        if (variant->stages.empty() || variant->reflection_json.empty()) {
+            variant->error = "the plane variant produced no usable shader";
+        }
+    }
+    if (! variant->error.empty()) {
+        LOG_INFO("metal video plane variant of '%s' not used: %s",
+                 request.shader_name.c_str(),
+                 variant->error.c_str());
+    }
+    program.video_planes = std::move(variant);
 }
 
 /// Runs the queued translations, if the scene is still a candidate.
@@ -162,6 +266,9 @@ void FlushPendingMetalTranslations(Scene& scene) {
             LOG_ERROR("metal translation of '%s' failed: %s",
                       request.shader_name.c_str(),
                       program->error.c_str());
+        }
+        if (compiled) {
+            CompileVideoPlaneVariant(scene, request, *program);
         }
         // Stored either way: a recorded failure is what distinguishes "tried
         // and could not" from "never tried", and only the first is a fault in
@@ -1226,6 +1333,7 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::WPMaterial& wpmat, Scene* pScene,
             pending.units.assign(sd_units.begin(), sd_units.end());
             pending.shader_info = *pWPShaderInfo;
             pending.texinfos.assign(texinfos.begin(), texinfos.end());
+            pending.texture_keys = textures;
             pending.vfs = &vfs;
             if (! g_pending_metal_translations.empty() &&
                 g_pending_metal_translations.back().shader == shader) {

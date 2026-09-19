@@ -11,6 +11,88 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-19 — Round 10: NV12 direct plane sampling, runtime scene optimisation
+
+A video material is now translated twice while the scene is parsed — once as
+before, once sampling the decoder's NV12 planes — and the renderer chooses per
+frame from the format the decoder actually produced, converting only when some
+consumer still needs one colour image. The scene optimisation setting is applied
+at a frame boundary on both backends instead of waiting for the next graph
+compile. Direct plane sampling is off by default; Compatibility is still the
+default renderer.
+
+- `python3 scripts/check_renderer.py` — exit 0, re-run after the last source
+  change so it describes the delivered tree. All 10 golden cases
+  `pixels_equal=True`, 0 diagnostics, 8 projects × 2 reload cycles clean, every
+  test binary exit 0. Evidence bundle under `artifacts/renderer/` (disposable).
+- Inside that run, on a real Metal device with private textures and an offscreen
+  layer only: `metal_video_texture_test` 14 passed (6 new: a planes-only demand
+  encodes no conversion and offers no single image, a mixed demand converts
+  exactly once and still publishes the planes, the direct path receives the same
+  eight colour constants as the conversion kernel, a demand change re-imports
+  the generation that is current, a BGRA frame ignores a plane demand, and a
+  format flip mid-stream switches path without losing the picture);
+  `metal_scene_draw_smoke` 13 passed (5 new: an ordinary parsed author material
+  over real decoded H.264 the test encodes takes the direct path and draws; the
+  same material keeps converting while the switch is off and takes the direct
+  path on the next frame when it is turned on; the two paths agree to one code
+  value at a one-to-one texel-to-pixel mapping; the scaled case stays inside the
+  clamp excursion the stream implies; a graph compiled with the optimisation off
+  starts reusing when it is turned on); `metal_backend_test` 20,
+  `metal_poster_capture_test` 7, `static_subgraph_cache_test` 24 and the rest all
+  exit 0.
+- Picture comparison, measured rather than asserted in prose: at a one-to-one
+  mapping the pre-converting and plane-sampling programs agree to **1 code
+  value** (the converted intermediate's own 8-bit quantisation). Resampled, they
+  disagree by up to the excursion the stream's declared-range clamp removes —
+  **19 code values measured, 24 the derived bound** — on a probe that is
+  deliberately the worst case: full-range noise carried in a stream declaring
+  limited range. The mechanism is clamp order around the author's filter, not
+  floating-point error. The synthetic media carries neutral chroma, so that
+  comparison is exact over luma and does not exercise chroma varying inside a
+  chroma texel.
+- `cargo test --workspace --release` in `upstream/renderer` — 22 test binaries,
+  all green, including the new `crates/shader/tests/video_planes.rs` (9 cases:
+  the ordinary program is unchanged by the option existing; the variant
+  translates the author's expression, declares the chroma plane and the colour
+  constants, reaches Metal with its own binding plan, keeps the plane out of the
+  material's active slots and gets a different cache key; an explicit-LOD
+  sample, a size query and a size query inside a macro each refuse it) and the
+  new `wallpaper-bridge` case for the setting's default, both facade halves and
+  a restart. `wallpaper-bridge` 312 passed.
+- `python3 scripts/test.py` — 486 XCTest cases, 476 passed, 9 skipped, 1 failed:
+  `ControlPanelLayoutTests/testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes`,
+  the same overflow-52 failure recorded in earlier rounds. The Discover grid was
+  not touched this round; recorded as pre-existing, not fixed and not
+  investigated. Re-run after the last source change so it describes the
+  delivered tree, with the same counts and the same single failure both times.
+  The first attempt of each run failed at CodeSign with the known extended
+  attribute rejection and succeeded after `xattr -cr` on the built products.
+- `python3 scripts/build.py --configuration Release` — **BUILD SUCCEEDED** on the
+  second attempt; the first failed at CodeSign with the same extended attribute
+  rejection and succeeded after `xattr -cr` on the Release products. The
+  delivered binary contains this round's strings (`_we_VideoChroma`,
+  `_we_SampleVideoNv12_`, `nv12_direct`, `cannot be sampled as planes`) and the
+  bundled `WebUI/settings.js` contains the new switch, its explainer and the
+  scene optimisation **In force now** row. Delivered at
+  `build/Build/Products/Release/MacWallpaperEngine.app`.
+- One environment trap worth recording: `metal_scene_draw_smoke` needs FFmpeg to
+  encode its media, and this machine has a second FFmpeg under
+  `/opt/homebrew/include` whose headers are two major versions older than the
+  `ffmpeg@8` libraries on the link line. The mismatch did not fail the build; it
+  produced garbage struct fields and an encoder that silently refused. The test
+  target now puts the pinned prefix first with `target_include_directories(...
+  BEFORE ...)`.
+- `tex_schema_tests` does not build here (`lz4.h` not found). It is outside
+  `check_renderer.py`'s target list and was not built or run in earlier rounds
+  either; recorded as a pre-existing environment gap, not a regression.
+- Not run, not authorized: any desktop session, wallpaper apply, screenshot,
+  lock screen, `scripts/test.py --ui`, power sampling. No wallpaper of any kind
+  has been seen on a display this round, nothing has been compared against the
+  compatibility backend on real content, and **no power measurement of any kind
+  was taken** — reduced work is reported as a conversion not encoded and a
+  destination not allocated, never as a saving.
+
 ## 2026-09-19 — Round 9: scene optimisation on Metal, sprites, 2D particles
 
 Scene optimisation (target reuse + copy elision) now runs on the Native Metal

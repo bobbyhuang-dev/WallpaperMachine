@@ -19,7 +19,7 @@ use std::{
 
 use super::{
     scene_demand::{
-        SceneBackend, SceneDemandReasons, SceneRuntimeReport, SceneUpdateMode,
+        SceneBackend, SceneDemandReasons, SceneRuntimeReport, SceneUpdateMode, SceneVideoPath,
     },
     sys,
 };
@@ -94,12 +94,14 @@ impl SceneRegistry {
                 // SAFETY: the entry is alive for as long as this lock is held,
                 // and each of these reads is a relaxed atomic load in the
                 // renderer with no further locking.
-                let (mode, reasons, backend, fallback) = unsafe {
+                let (mode, reasons, backend, fallback, video_path, optimization_applied) = unsafe {
                     (
                         sys::owe_scene_wallpaper_update_mode(raw),
                         sys::owe_scene_wallpaper_demand_reasons(raw),
                         sys::owe_scene_wallpaper_backend(raw),
                         read_fallback_reason(raw),
+                        sys::owe_scene_wallpaper_video_path(raw),
+                        sys::owe_scene_wallpaper_scene_optimization_applied(raw),
                     )
                 };
                 SceneRuntimeReport {
@@ -109,6 +111,14 @@ impl SceneRegistry {
                     demand_reasons: SceneDemandReasons::from_raw(reasons),
                     backend: SceneBackend::from_raw(backend),
                     fallback_reason: fallback,
+                    video_path: SceneVideoPath::from_raw(video_path),
+                    // Anything the renderer cannot answer stays unknown rather
+                    // than becoming "applied", which would read as evidence.
+                    optimization_applied: match optimization_applied {
+                        0 => Some(false),
+                        1 => Some(true),
+                        _ => None,
+                    },
                 }
             })
             .collect()

@@ -204,7 +204,8 @@ bool CompileProgramRust(std::string_view scene_id, std::string_view shader_name,
                         std::span<WPShaderUnit> units, wallpaper::shader::RustShaderTarget target,
                         wallpaper::shader::RustShaderOutput& output, fs::VFS& vfs,
                         WPShaderInfo* shader_info, std::span<const WPShaderTexInfo> texs,
-                        std::string* reflection_json) {
+                        std::string* reflection_json,
+                        std::optional<uint32_t> nv12_plane_slot = std::nullopt) {
     if (shader_info == nullptr) return false;
 
     wallpaper::shader::RustShaderRequest request {
@@ -229,6 +230,10 @@ bool CompileProgramRust(std::string_view scene_id, std::string_view shader_name,
             .enabled    = texs[slot].enabled,
             .format     = RustTextureFormat(texs[slot].format),
             .components = texs[slot].composEnabled,
+            .video_planes =
+                nv12_plane_slot.has_value() && *nv12_plane_slot == static_cast<uint32_t>(slot)
+                    ? wallpaper::shader::RustShaderVideoPlanes::Nv12Biplanar
+                    : wallpaper::shader::RustShaderVideoPlanes::None,
         });
     }
 
@@ -367,11 +372,12 @@ bool WPShaderParser::CompileToMslRust(std::string_view scene_id, std::string_vie
                                       std::vector<wallpaper::shader::RustShaderMetalStage>& stages,
                                       fs::VFS& vfs, WPShaderInfo* shader_info,
                                       std::span<const WPShaderTexInfo> texs,
-                                      std::string* reflection_json) {
+                                      std::string* reflection_json,
+                                      std::optional<uint32_t> nv12_plane_slot) {
     wallpaper::shader::RustShaderOutput output;
     if (! CompileProgramRust(scene_id, shader_name, units,
                              wallpaper::shader::RustShaderTarget::MetalMsl, output, vfs,
-                             shader_info, texs, reflection_json)) {
+                             shader_info, texs, reflection_json, nv12_plane_slot)) {
         return false;
     }
     if (output.metal_stages.size() != units.size()) {

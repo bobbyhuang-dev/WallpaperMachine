@@ -3,6 +3,15 @@ const sections = [['general', 'General'], ['appearance', 'Appearance'], ['perfor
 const renderScales = [[1, '100% (native)'], [0.75, '75%'], [0.5, '50%']];
 const videoBackends = [['compatibility', 'Compatibility'], ['native_preferred', 'Native video preferred (falls back automatically)']];
 const sceneRenderers = [['compatibility', 'Compatibility'], ['native_metal_preferred', 'Native Metal preferred (falls back automatically)']];
+// How a scene's video textures reached the shaders sampling them, as the
+// renderer reported it. `none` is deliberately absent: a scene with no video
+// has nothing to say, and naming it would read as a failure.
+const videoPaths = {
+  bgra: 'sampled directly, no conversion',
+  nv12_direct: 'planes sampled directly, no conversion',
+  nv12_converted: 'converted once per frame',
+  nv12_mixed: 'planes sampled directly, plus one shared conversion',
+};
 // The renderer's own words for why a scene is still updating. `unknown_input`
 // is deliberately not folded into a generic phrase: it means the renderer found
 // an input it could not account for and kept the scene running, which is the
@@ -144,13 +153,30 @@ function draw(view) {
     // so it is reported verbatim instead of being folded into preparing.
     const backend = sceneBackends[report.backend] || report.backend;
     const fellBack = report.backend === 'legacy_vulkan' && settings.sceneRenderer === 'native_metal_preferred';
-    return `${where}: ${backend}${fellBack && report.fallbackReason ? ` (fell back: ${report.fallbackReason})` : ''}`;
+    // Only ever named when the renderer observed one: a scene with no video,
+    // or one that has not drawn yet, reports `none` and says nothing here.
+    const video = videoPaths[report.videoPath];
+    return `${where}: ${backend}${fellBack && report.fallbackReason ? ` (fell back: ${report.fallbackReason})` : ''}${video ? ` — video: ${video}` : ''}`;
   };
   const sceneModeReport = (settings.sceneUpdateModes || []).map(report => `<li>${e(sceneModeLine(report))}</li>`).join('');
   const sceneBackendReport = (settings.sceneRenderers || []).map(report => `<li>${e(sceneRendererLine(report))}</li>`).join('');
   // Read from what actually drew a scene, not from the preference: the note it
   // gates is only true of a surface that really is on the native backend.
   const nativeSceneRunning = (settings.sceneRenderers || []).some(report => report.backend === 'native_metal');
+  // The saved preference and what is running are different facts. A scene the
+  // renderer could not answer for is counted as unknown rather than as applied,
+  // because "we could not tell" is not evidence that the setting took.
+  const sceneOptimizationRows = (settings.sceneRenderers || []).filter(report => report.backend && report.backend !== 'unknown');
+  const applied = sceneOptimizationRows.filter(report => report.optimizationApplied === true).length;
+  const pending = sceneOptimizationRows.filter(report => report.optimizationApplied === false).length;
+  const unknownApplied = sceneOptimizationRows.length - applied - pending;
+  const sceneOptimizationStatus = sceneOptimizationRows.length === 0
+    ? ''
+    : pending > 0
+      ? `Saved${settings.sceneOptimization ? ' on' : ' off'}; applying to ${pending} of ${sceneOptimizationRows.length} running scenes on their next frame.`
+      : unknownApplied > 0
+        ? `Saved${settings.sceneOptimization ? ' on' : ' off'}; ${applied} of ${sceneOptimizationRows.length} running scenes confirmed, the rest could not be read.`
+        : `Saved${settings.sceneOptimization ? ' on' : ' off'} and in force on ${applied === 1 ? 'the running scene' : `all ${applied} running scenes`}.`;
   const performance = `<h3>Video backend</h3>`
     + row('video-backend', 'Video playback', select('videoBackend', 'Video playback backend', draft('videoBackend', settings.videoBackend), videoBackends, 'data-setting="videoBackend"', busy || unavailable), 'Native uses the system video path where a wallpaper qualifies, and returns to Compatibility on its own where it does not.')
     + row('video-backend-report', 'In use now', backendReport ? `<ul class="settings-list">${backendReport}</ul>` : '<span class="settings-status" role="status">No video wallpaper is running.</span>')
@@ -163,7 +189,8 @@ function draw(view) {
       + row('battery-fps', 'Frame rate on battery', `<input class="settings-number" data-key="batteryTargetFps" type="number" inputmode="numeric" aria-label="Frame rate on battery" min="1" max="240" step="1" value="${e(draft('batteryTargetFps', settings.batteryTargetFps))}" data-setting="batteryTargetFps"${disabled(busy || unavailable)}><span class="settings-unit">fps</span>`)
       + row('battery-state', 'Power source', `<span class="settings-status" role="status">${e(batteryActive ? `On battery — the battery profile is supplying the effective quality shown above.` : settings.onBatteryPower ? 'On battery' : 'Plugged in — your saved quality is in use.')}</span>`) : '')
     + `<div class="settings-group-gap"></div><h3>Scene wallpapers</h3>`
-    + settingToggle('sceneOptimization', 'Scene render optimisation', false, `On by default. Reuses the result of scene subgraphs whose inputs have not changed and removes render passes proven redundant. It applies to scene wallpapers on both renderers — Compatibility and Native Metal — and changes neither resolution, frame rate nor animation speed. Turn it off to compare.${nativeSceneRunning ? ' Which targets qualify depends on the scene, so a scene with nothing still in it saves nothing on either renderer.' : ''}`)
+    + settingToggle('sceneOptimization', 'Scene render optimisation', false, `On by default. Reuses the result of scene subgraphs whose inputs have not changed and removes render passes proven redundant. It applies to scene wallpapers on both renderers — Compatibility and Native Metal — and takes effect on the next frame in both directions, changing neither resolution, frame rate nor animation speed. Turn it off to compare.${nativeSceneRunning ? ' Which targets qualify depends on the scene, so a scene with nothing still in it saves nothing on either renderer.' : ''}`)
+    + (sceneOptimizationStatus ? row('scene-optimization-state', 'In force now', `<span class="settings-status" role="status">${e(sceneOptimizationStatus)}</span>`) : '')
     + settingToggle('sceneOnDemand', 'Update only when the scene changes', false, 'Off unless you turn it on. A scene the renderer can prove has nothing left to update stops its repeating frame timer and wakes on events instead; anything it cannot prove keeps running normally. It is not a frame-rate limit, and scripts, sound and input keep working. No power saving is measured or promised.')
     + row('scene-update-report', 'Updating now', sceneModeReport ? `<ul class="settings-list">${sceneModeReport}</ul>` : '<span class="settings-status" role="status">No scene wallpaper is running.</span>')
     + row('scene-renderer', 'Scene renderer', select('sceneRenderer', 'Scene renderer', draft('sceneRenderer', settings.sceneRenderer), sceneRenderers, 'data-setting="sceneRenderer"', busy || unavailable), 'Native Metal draws only scenes it can draw in full: image layers, sprite-sheet animation, standard two-dimensional sprite particles, ordinary effect chains and post-processing, same-frame layer links, and BGRA or 8-bit NV12 video textures. Anything else — rope and trail particles, puppets, 3D, dynamic lighting, history-feedback effects, HDR video and the rest — falls back to Compatibility as a whole scene, and this applies to desktop wallpapers only, the lock screen staying on Compatibility.')
@@ -171,8 +198,9 @@ function draw(view) {
     + `<div class="settings-group-gap"></div><h3>Advanced</h3>`
     + settingToggle('contentPacing', 'Content pacing', false, 'Experimental, off by default. Drives presentation from the content’s own frame cadence instead of the display refresh.')
     + settingToggle('sharedVideoDecode', 'Shared video decode', false, 'Experimental, off by default. Lets equivalent display surfaces showing the same video share one decode session.')
+    + settingToggle('sceneVideoPlaneSampling', 'Direct video plane sampling', false, 'Experimental, off by default. Inside a scene drawn by Native Metal, lets a layer\u2019s own shader read the decoder\u2019s two video planes instead of a colour image converted for it each frame. Only materials whose shader could be translated for it take part, and only while the decoder produces 8-bit NV12; everything else keeps converting, and nothing here changes which renderer draws a scene. The list above names the path each running scene actually took. No power saving is measured or promised.')
     + (sessions || consumers ? row('shared-decode-report', 'Shared decode in use', `<span class="settings-status" role="status">${e(`${plural(sessions, 'session')} serving ${plural(consumers, 'surface')}`)}</span>`) : '')
-    + disclosure('performance-context', 'What these settings change', '<p>Video playback selects a backend per wallpaper. Native is only used where the wallpaper qualifies; anything else keeps playing on Compatibility, and the list above names the backend each running wallpaper actually got.</p><p>Internal render scale is a quality tier, not a window or wallpaper size. It changes how many pixels are rasterized before the result is drawn into the same area, so text and detail soften as the scale drops.</p><p>Scene render optimisation reuses work inside a scene’s own render graph. It is not a quality tier: the same pixels are produced, and nothing outside scene wallpapers is affected. Both scene renderers implement it, and neither reports a power saving — only that some passes were not run. This control reports the saved preference, not a reading taken from the renderer.</p><p>Content pacing and shared video decode are experimental and stay off until you enable them. Shared decode only merges work that is genuinely shared; surfaces still submit and present separately.</p>');
+    + disclosure('performance-context', 'What these settings change', '<p>Video playback selects a backend per wallpaper. Native is only used where the wallpaper qualifies; anything else keeps playing on Compatibility, and the list above names the backend each running wallpaper actually got.</p><p>Internal render scale is a quality tier, not a window or wallpaper size. It changes how many pixels are rasterized before the result is drawn into the same area, so text and detail soften as the scale drops.</p><p>Scene render optimisation reuses work inside a scene’s own render graph. It is not a quality tier: the same pixels are produced, and nothing outside scene wallpapers is affected. Both scene renderers implement it, and neither reports a power saving — only that some passes were not run. The toggle is the saved preference; the line beneath it is read back from each running scene, so a change that has not reached a scene yet is visible as such instead of looking applied.</p><p>Content pacing, shared video decode and direct video plane sampling are experimental and stay off until you enable them. Shared decode only merges work that is genuinely shared; surfaces still submit and present separately. Direct plane sampling removes a per-frame colour conversion where a layer\u2019s own shader can do the conversion while it samples; where it cannot, the conversion stays and the picture is produced exactly as before.</p>');
 
   // Theme preferences live natively and stay usable even when renderer settings are unavailable.
   const theme = { mode: 'system', accent: '#80bbff', tone: 'neutral', ...(window.__appTheme || {}), ...(state.theme || {}) };

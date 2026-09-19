@@ -6,6 +6,7 @@
 #include "SceneWallpaperSurface.hpp"
 #include "Utils/Logging.h"
 #include "MetalRender/MetalBackendRouter.hpp"
+#include "MetalRender/MetalVideoSupport.hpp"
 #include "VulkanRender/StaticSubgraphCache.hpp"
 #include "Video/SharedVideoSession.hpp"
 #include "Video/VideoFramePacing.hpp"
@@ -858,6 +859,37 @@ extern "C" int owe_scene_wallpaper_backend(void* scene)
     case wallpaper::SceneBackend::LegacyVulkan: break;
     }
     return OWE_SCENE_BACKEND_LEGACY_VULKAN;
+}
+
+extern "C" void owe_set_scene_video_plane_sampling_enabled(bool enabled)
+{
+    wallpaper::metal::SetMetalVideoPlaneSamplingEnabled(enabled);
+}
+
+extern "C" bool owe_scene_video_plane_sampling_enabled(void)
+{
+    return wallpaper::metal::MetalVideoPlaneSamplingEnabled();
+}
+
+extern "C" int owe_scene_wallpaper_video_path(void* scene)
+{
+    auto* wallpaper_scene = static_cast<wallpaper::SceneWallpaper*>(scene);
+    if (wallpaper_scene == nullptr) return OWE_SCENE_VIDEO_PATH_NONE;
+    switch (wallpaper_scene->sceneVideoPath()) {
+    case wallpaper::SceneVideoPath::Bgra: return OWE_SCENE_VIDEO_PATH_BGRA;
+    case wallpaper::SceneVideoPath::Nv12Direct: return OWE_SCENE_VIDEO_PATH_NV12_DIRECT;
+    case wallpaper::SceneVideoPath::Nv12Converted: return OWE_SCENE_VIDEO_PATH_NV12_CONVERTED;
+    case wallpaper::SceneVideoPath::Nv12Mixed: return OWE_SCENE_VIDEO_PATH_NV12_MIXED;
+    case wallpaper::SceneVideoPath::None: break;
+    }
+    return OWE_SCENE_VIDEO_PATH_NONE;
+}
+
+extern "C" int owe_scene_wallpaper_scene_optimization_applied(void* scene)
+{
+    auto* wallpaper_scene = static_cast<wallpaper::SceneWallpaper*>(scene);
+    if (wallpaper_scene == nullptr) return -1;
+    return wallpaper_scene->sceneOptimizationApplied() ? 1 : 0;
 }
 
 extern "C" size_t owe_scene_wallpaper_backend_fallback_reason(void* scene, char* out,

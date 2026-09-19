@@ -251,6 +251,8 @@ extension WebPanelController {
         try await store.setSceneOptimizationEnabledAsync(try request.boolean("value"))
       case "sceneOnDemand":
         try await store.setSceneOnDemandEnabledAsync(try request.boolean("value"))
+      case "sceneVideoPlaneSampling":
+        try await store.setSceneVideoPlaneSamplingEnabledAsync(try request.boolean("value"))
       case "sceneRenderer":
         let mode = try request.string("value")
         // Same refusal as videoBackend: substituting Compatibility for an

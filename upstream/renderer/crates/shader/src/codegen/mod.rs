@@ -14,7 +14,7 @@ pub(crate) use declarations::{
     DeclarationEntry, DeclarationPlan, FragmentOutput, FunctionEntry, InterfaceDirection,
     LegacyTypeName, PlannedDeclarationSource, SamplerType, StageInterfaceInitializer,
     StageInterfaceLayout, StageInterfaceLayoutBinding, StageResourceLayout,
-    SynthesizedStageInterface, UniformMember,
+    SynthesizedStageInterface, UniformMember, VideoPlaneResource,
 };
 pub(crate) use declarators::{
     DeclaratorInitializer, FunctionParameterQualifier, LocalDeclaration, ScopedDeclarationFacts,
@@ -90,6 +90,8 @@ impl Codegen {
             fragment_output: false,
             compatibility_functions:
                 declarations::functions::CompatibilityFunctionRequests::default(),
+            video_sampling_functions:
+                declarations::functions::VideoSamplingFunctionRequests::default(),
             interface_layout,
             resource_layout,
         };

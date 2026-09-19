@@ -45,7 +45,7 @@ use crate::{
             SetRenderScale,
             SetRendererCountersEnabled, SetScalingFactor, SetScalingMode,
             SetSceneOnDemandEnabled, SetSceneOptimizationEnabled, SetSceneRenderer,
-            SetSharedVideoDecodeEnabled, SetTargetFps,
+            SetSceneVideoPlaneSamplingEnabled, SetSharedVideoDecodeEnabled, SetTargetFps,
             SetVideoBackend, SetVolume, SetWebAudioSubscribed,
             Shutdown,
         },
@@ -1822,6 +1822,12 @@ impl<E: EngineFacade + Clone> Message<Bootstrap> for BridgeActor<E> {
         }
         if let Err(error) = self
             .engine
+            .set_scene_video_plane_sampling_enabled(experimental.scene_video_plane_sampling)
+        {
+            self.state.errors.push(error.to_string());
+        }
+        if let Err(error) = self
+            .engine
             .set_scene_renderer_preference(scene_renderer_preference(
                 self.state.app_config.scene_renderer,
             ))
@@ -3011,6 +3017,33 @@ impl<E: EngineFacade + Clone> Message<SetSceneOnDemandEnabled> for BridgeActor<E
         // wallpaper, and a pause the user asked for is untouched.
         self.engine
             .set_scene_on_demand_enabled(msg.enabled)
+            .map_err(|error| BridgeError::engine(error.to_string()))?;
+        self.bump_generation();
+        Ok(self.all_snapshots())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<SetSceneVideoPlaneSamplingEnabled> for BridgeActor<E> {
+    type Reply = messages::SetSceneVideoPlaneSamplingEnabledReply;
+
+    async fn handle(
+        &mut self,
+        msg: SetSceneVideoPlaneSamplingEnabled,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.state
+            .app_config
+            .experimental
+            .scene_video_plane_sampling = msg.enabled;
+        if let Some(store) = &self.config_store {
+            store.save_app_config(&self.state.app_config)?;
+        }
+        // Which of two already-compiled programs draws a video material, not
+        // what a scene is: a running scene picks the change up at its next
+        // frame boundary, so nothing here rebuilds, reparses or reopens
+        // anything.
+        self.engine
+            .set_scene_video_plane_sampling_enabled(msg.enabled)
             .map_err(|error| BridgeError::engine(error.to_string()))?;
         self.bump_generation();
         Ok(self.all_snapshots())

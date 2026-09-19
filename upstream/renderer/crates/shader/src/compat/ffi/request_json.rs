@@ -4,6 +4,7 @@ use crate::{
     ComboName, ProjectPropertyBinding, PropertyName, PropertyValue, ShaderCacheStrategy,
     ShaderComboValue, ShaderName, ShaderProgramRequest, ShaderStageKind, ShaderStageSource,
     ShaderTarget, ShaderTextureInfo, TextureComponentState, TextureFormatHint, TextureSlot,
+    VideoPlaneLayout,
 };
 
 /// Bridge request DTO.
@@ -170,6 +171,9 @@ struct TextureDto {
     /// Component state.
     #[serde(default)]
     components: TextureComponentsDto,
+    /// Plane layout this slot is sampled through.
+    #[serde(default)]
+    video_planes: VideoPlanesDto,
 }
 
 impl TextureDto {
@@ -181,13 +185,38 @@ impl TextureDto {
             self.is_enabled,
             self.format.into(),
             self.components.into(),
-        ))
+        )
+        .with_video_planes(self.video_planes.into()))
     }
 }
 
 /// Default material texture presence for older bridge JSON.
 const fn default_texture_present() -> bool {
     true
+}
+
+/// Video plane layout DTO.
+///
+/// Absent in every request that predates direct plane sampling, and absent in
+/// every request for an ordinary texture, which is what keeps those programs
+/// byte-identical.
+#[derive(Clone, Copy, Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum VideoPlanesDto {
+    /// One sampled image.
+    #[default]
+    None,
+    /// Biplanar 8-bit NV12 luma and chroma.
+    Nv12Biplanar,
+}
+
+impl From<VideoPlanesDto> for VideoPlaneLayout {
+    fn from(planes: VideoPlanesDto) -> Self {
+        match planes {
+            VideoPlanesDto::None => Self::None,
+            VideoPlanesDto::Nv12Biplanar => Self::Nv12Biplanar,
+        }
+    }
 }
 
 /// Texture format DTO.

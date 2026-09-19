@@ -3,8 +3,10 @@ use std::collections::BTreeMap;
 use smol_str::SmolStr;
 
 use crate::{
-    ShaderError, ShaderResult, ShaderStageKind,
-    legalize::{LegacyTypeName, SamplerType, StageResourceLayout, UniformMember},
+    ShaderError, ShaderResult, ShaderStageKind, ShaderTextureInfo, VideoPlaneLayout,
+    legalize::{
+        LegacyTypeName, SamplerType, StageResourceLayout, UniformMember, VideoPlaneResource,
+    },
     pipeline::inputs::ProgramStageInputs,
     preprocess::{MacroTable, PreprocessedStage},
     syntax::{DeclarationArraySize, DeclarationArraySuffix, SyntaxItem, TopLevelQualifier},
@@ -22,6 +24,8 @@ pub(super) struct ProgramResourceLayout {
     texture_bindings: ProgramTextureResourceBindings,
     /// Program-wide members for generated `GlobalUniforms`.
     uniform_members: Vec<UniformMember>,
+    /// Program-wide chroma-plane resources for video slots compiled as planes.
+    video_planes: Vec<ProgramVideoPlaneBinding>,
 }
 
 impl ProgramResourceLayout {
@@ -29,6 +33,7 @@ impl ProgramResourceLayout {
     /// declarations.
     pub(super) fn build_from_stage_inputs(
         stage_inputs: &ProgramStageInputs<'_>,
+        request_textures: &[ShaderTextureInfo],
     ) -> ShaderResult<Self> {
         let stages = stage_inputs.stages();
         let mut reservations = ProgramBindingReservations::default();
@@ -114,12 +119,22 @@ impl ProgramResourceLayout {
         let texture_bindings = ProgramTextureResourceBindings {
             assignments: allocator.assign_textures(textures)?,
         };
+        // After the author's own resources, never before them: a plane the
+        // renderer adds must not move a binding the shader already encodes in
+        // its `g_TextureN` name.
+        let video_planes =
+            allocator.assign_video_planes(&texture_bindings.assignments, request_textures);
+        for plane in &video_planes {
+            uniform_members.push(plane.uniform_member_a());
+            uniform_members.push(plane.uniform_member_b());
+        }
 
         Ok(Self {
             uniform_block_binding,
             reserved_bindings,
             texture_bindings,
             uniform_members,
+            video_planes,
         })
     }
 }
@@ -130,7 +145,7 @@ impl Default for ProgramResourceLayout {
 
         let inputs =
             ProgramStageInputs::parse(EMPTY_STAGES.as_slice()).expect("empty stage inputs parse");
-        Self::build_from_stage_inputs(&inputs).expect("empty resource layout builds")
+        Self::build_from_stage_inputs(&inputs, &[]).expect("empty resource layout builds")
     }
 }
 
@@ -149,6 +164,9 @@ impl ProgramResourceLayout {
                 assignment.sampler_binding,
             );
         }
+        for plane in &self.video_planes {
+            layout.push_video_plane(plane.resource());
+        }
         layout
     }
 }
@@ -161,8 +179,8 @@ mod tests {
     fn resource_layout_constructor_accepts_empty_stage_inputs() {
         let stages = Vec::<PreprocessedStage>::new();
         let inputs = ProgramStageInputs::parse(stages.as_slice()).expect("empty inputs parse");
-        let layout =
-            ProgramResourceLayout::build_from_stage_inputs(&inputs).expect("empty layout builds");
+        let layout = ProgramResourceLayout::build_from_stage_inputs(&inputs, &[])
+            .expect("empty layout builds");
 
         assert_eq!(layout, ProgramResourceLayout::default());
     }
@@ -195,6 +213,56 @@ struct ProgramTextureResourceBinding {
     texture_binding: u32,
     /// Descriptor binding assigned to the generated sampler.
     sampler_binding: u32,
+}
+
+/// Program-level chroma-plane resource assignment for one video slot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProgramVideoPlaneBinding {
+    /// Material texture slot the author shader samples.
+    slot: u8,
+    /// Source texture variable name carrying the luma plane.
+    base_name: SmolStr,
+    /// Generated chroma texture variable name.
+    chroma_name: SmolStr,
+    /// Descriptor binding assigned to the generated chroma texture.
+    chroma_texture_binding: u32,
+    /// Descriptor binding assigned to the generated chroma sampler.
+    chroma_sampler_binding: u32,
+}
+
+impl ProgramVideoPlaneBinding {
+    /// Returns the legalizer-facing plane resource.
+    fn resource(&self) -> VideoPlaneResource {
+        VideoPlaneResource {
+            slot: self.slot,
+            base_name: self.base_name.clone(),
+            chroma_name: self.chroma_name.clone(),
+            chroma_texture_binding: self.chroma_texture_binding,
+            chroma_sampler_binding: self.chroma_sampler_binding,
+        }
+    }
+
+    /// Returns the generated offset/scale uniform member for this plane.
+    fn uniform_member_a(&self) -> UniformMember {
+        UniformMember {
+            ty: SmolStr::new_static("vec4"),
+            name: VideoPlaneResource::range_uniform_name(self.slot),
+            array_suffix: None,
+            explicit_binding: None,
+            binding: None,
+        }
+    }
+
+    /// Returns the generated matrix-coefficient uniform member for this plane.
+    fn uniform_member_b(&self) -> UniformMember {
+        UniformMember {
+            ty: SmolStr::new_static("vec4"),
+            name: VideoPlaneResource::matrix_uniform_name(self.slot),
+            array_suffix: None,
+            explicit_binding: None,
+            binding: None,
+        }
+    }
 }
 
 /// Program-wide descriptor binding allocator for generated resources.
@@ -261,6 +329,53 @@ impl ProgramResourceAllocator {
             texture_binding,
             sampler_binding,
         })
+    }
+
+    /// Assigns the chroma texture and sampler bindings for every video slot
+    /// the request asked to compile as planes.
+    ///
+    /// A slot whose `g_TextureN` declaration does not exist in this program
+    /// gets nothing: the flag describes what the renderer can supply, not what
+    /// the shader actually samples.
+    fn assign_video_planes(
+        &mut self,
+        assignments: &[ProgramTextureResourceBinding],
+        request_textures: &[ShaderTextureInfo],
+    ) -> Vec<ProgramVideoPlaneBinding> {
+        let mut planes = Vec::<ProgramVideoPlaneBinding>::new();
+        for texture in request_textures {
+            if texture.video_planes() != VideoPlaneLayout::Nv12Biplanar {
+                continue;
+            }
+            let slot = texture.slot().index();
+            let base_name = SmolStr::new(format!("g_Texture{slot}"));
+            if !assignments
+                .iter()
+                .any(|assignment| assignment.name == base_name)
+            {
+                continue;
+            }
+            if planes.iter().any(|plane| plane.base_name == base_name) {
+                continue;
+            }
+            let chroma_name = SmolStr::new(format!("{}{slot}", VideoPlaneResource::CHROMA_PREFIX));
+            let chroma_texture_binding = self.allocate(ProgramBindingReservation {
+                name: chroma_name.clone(),
+                kind: ProgramBindingReservationKind::GeneratedTexture,
+            });
+            let chroma_sampler_binding = self.allocate(ProgramBindingReservation {
+                name: chroma_name.clone(),
+                kind: ProgramBindingReservationKind::GeneratedSampler,
+            });
+            planes.push(ProgramVideoPlaneBinding {
+                slot,
+                base_name,
+                chroma_name,
+                chroma_texture_binding,
+                chroma_sampler_binding,
+            });
+        }
+        planes
     }
 
     /// Allocates the lowest unoccupied binding.

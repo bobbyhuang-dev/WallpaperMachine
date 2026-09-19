@@ -280,7 +280,7 @@ nlohmann::json BuildRustShaderRequestJson(const RustShaderRequest& request)
 
     nlohmann::json textures = nlohmann::json::array();
     for (const auto& texture : request.textures) {
-        textures.push_back({
+        nlohmann::json entry {
             { "slot", texture.slot },
             { "present", texture.present },
             { "enabled", texture.enabled },
@@ -293,7 +293,14 @@ nlohmann::json BuildRustShaderRequestJson(const RustShaderRequest& request)
                     { "compo3", texture.components[2] },
                 },
             },
-        });
+        };
+        // Written only when a slot really is compiled as planes, so an
+        // ordinary texture's request JSON -- and the program cache key derived
+        // from it -- is byte for byte the one this bridge always produced.
+        if (texture.video_planes == RustShaderVideoPlanes::Nv12Biplanar) {
+            entry["video_planes"] = "nv12_biplanar";
+        }
+        textures.push_back(std::move(entry));
     }
 
     nlohmann::json properties = nlohmann::json::array();

@@ -51,7 +51,7 @@ live under `testing/`.
 | [features/web-wallpapers.md](features/web-wallpapers.md) | HTML/JS wallpapers hosted in a web view, host protocol, limits |
 | [features/lock-screen.md](features/lock-screen.md) | Experimental animated lock screen |
 | [features/appearance.md](features/appearance.md) | Theme and appearance customization |
-| [features/performance.md](features/performance.md) | Video backend, render scale, battery quality profile, experimental pacing and shared decode |
+| [features/performance.md](features/performance.md) | Video backend, render scale, battery quality profile, scene renderer and optimisation, experimental pacing, shared decode and direct video plane sampling |
 
 ## Maintaining these docs
 

@@ -55,6 +55,10 @@ impl SourceEmitter<'_, '_> {
         self.emit_generated_declarations(&mut output, &leading_defines)?;
         self.declarations
             .emit_compatibility_functions(&mut output)?;
+        // After the textures, the samplers and the uniform block, because the
+        // helper reads all three.
+        self.declarations
+            .emit_video_sampling_functions(&mut output)?;
         self.emit_original_with_fixups(&mut output)?;
         if !output.ends_with('\n') {
             output.push('\n');
@@ -74,7 +78,13 @@ impl SourceEmitter<'_, '_> {
         for sampler in self.declarations.texture_samplers() {
             sampler.emit(output)?;
         }
-        if self.declarations.has_textures() {
+        // Emitted beside the author's own textures, through the same
+        // declaration and sampler shapes, so the plane arrives in reflection
+        // exactly as any other generated resource does.
+        for plane in self.declarations.requested_video_planes() {
+            plane.emit_chroma_declarations(output)?;
+        }
+        if self.declarations.has_textures() || self.declarations.has_video_planes() {
             writeln!(output).map_err(Self::write_error)?;
         }
 

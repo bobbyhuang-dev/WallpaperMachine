@@ -427,3 +427,159 @@ TEST(MetalVideoTextureRejection, AcceptsAPlainVideoTextureAndRejectsASpriteSheet
 }
 
 } // namespace
+
+// ---------------------------------------------------------------------------
+// Consumption is decided before anything is imported.
+//
+// The point of the direct path is not that a shader *can* sample planes; it is
+// that nothing converts a frame no consumer asked to have converted. These
+// assert the negative -- no conversion encoded, no destination allocated --
+// because a path that samples planes and still converts every frame has saved
+// nothing at all.
+
+TEST_F(MetalVideoTexture, PlanesOnlyDemandEncodesNoConversion)
+{
+    auto source = std::make_shared<FakeVideoSource>(16, 16);
+    source->produce(126, 128, 160);
+
+    std::string error;
+    ASSERT_TRUE(textures->prepareForTests("video", source, &error)) << error;
+    textures->setDemand({ { "video", metal::VideoConsumerDemand { true, false } } });
+    ASSERT_TRUE(RunFrame(&error)) << error;
+
+    EXPECT_EQ(textures->conversionsEncodedForTests(), 0u);
+    EXPECT_EQ(textures->path("video"), metal::VideoFramePath::Nv12Direct);
+    // No single colour image exists, and that is the point rather than an
+    // omission: asking for one has to come back empty.
+    EXPECT_EQ(textures->texture("video"), nil);
+
+    const auto planes = textures->planes("video");
+    ASSERT_TRUE(planes.valid());
+    EXPECT_EQ(planes.luma.width, 16u);
+    EXPECT_EQ(planes.luma.height, 16u);
+    EXPECT_EQ(planes.chroma.width, 8u);
+    EXPECT_EQ(planes.chroma.height, 8u);
+    EXPECT_EQ(planes.luma.pixelFormat, MTLPixelFormatR8Unorm);
+    EXPECT_EQ(planes.chroma.pixelFormat, MTLPixelFormatRG8Unorm);
+
+    uint32_t width  = 0;
+    uint32_t height = 0;
+    EXPECT_TRUE(textures->frameSize("video", &width, &height));
+    EXPECT_EQ(width, 16u);
+    EXPECT_EQ(height, 16u);
+}
+
+TEST_F(MetalVideoTexture, MixedDemandConvertsOnceAndStillPublishesThePlanes)
+{
+    auto source = std::make_shared<FakeVideoSource>(16, 16);
+    source->produce(126, 128, 160);
+
+    std::string error;
+    ASSERT_TRUE(textures->prepareForTests("video", source, &error)) << error;
+    textures->setDemand({ { "video", metal::VideoConsumerDemand { true, true } } });
+    ASSERT_TRUE(RunFrame(&error)) << error;
+
+    // One conversion for every consumer that needs an image, however many
+    // passes that is -- not one per pass, and not none.
+    EXPECT_EQ(textures->conversionsEncodedForTests(), 1u);
+    EXPECT_EQ(textures->path("video"), metal::VideoFramePath::Nv12Mixed);
+    EXPECT_NE(textures->texture("video"), nil);
+    EXPECT_TRUE(textures->planes("video").valid());
+}
+
+TEST_F(MetalVideoTexture, DirectlySampledPlanesCarryTheSameColourConstantsAsTheKernel)
+{
+    auto source = std::make_shared<FakeVideoSource>(16, 16);
+    source->produce(126, 128, 160, kCVImageBufferYCbCrMatrix_ITU_R_709_2);
+
+    std::string error;
+    ASSERT_TRUE(textures->prepareForTests("video", source, &error)) << error;
+    textures->setDemand({ { "video", metal::VideoConsumerDemand { true, false } } });
+    ASSERT_TRUE(RunFrame(&error)) << error;
+
+    video::YuvColorDescription description {};
+    description.matrix = video::YuvMatrix::Bt709;
+    description.range  = video::YuvRange::Limited;
+    const auto expected = video::MakeYuvColorParams(description);
+    const auto actual   = textures->planes("video").params;
+
+    // The direct path hands these to the author's shader and the converting
+    // path hands the same eight to the kernel. A difference here is the two
+    // paths disagreeing about colour, which is the failure this exists to
+    // catch.
+    EXPECT_FLOAT_EQ(actual.y_offset, expected.y_offset);
+    EXPECT_FLOAT_EQ(actual.y_scale, expected.y_scale);
+    EXPECT_FLOAT_EQ(actual.chroma_offset, expected.chroma_offset);
+    EXPECT_FLOAT_EQ(actual.chroma_scale, expected.chroma_scale);
+    EXPECT_FLOAT_EQ(actual.r_cr, expected.r_cr);
+    EXPECT_FLOAT_EQ(actual.g_cb, expected.g_cb);
+    EXPECT_FLOAT_EQ(actual.g_cr, expected.g_cr);
+    EXPECT_FLOAT_EQ(actual.b_cb, expected.b_cb);
+}
+
+TEST_F(MetalVideoTexture, ADemandChangeReImportsTheSameGenerationInsteadOfWaiting)
+{
+    auto source = std::make_shared<FakeVideoSource>(16, 16);
+    source->produce(126, 128, 160);
+
+    std::string error;
+    ASSERT_TRUE(textures->prepareForTests("video", source, &error)) << error;
+    textures->setDemand({ { "video", metal::VideoConsumerDemand { true, false } } });
+    ASSERT_TRUE(RunFrame(&error)) << error;
+    ASSERT_EQ(textures->conversionsEncodedForTests(), 0u);
+
+    // The setting was switched off while this generation is still the current
+    // one. Waiting for the next decoded frame would leave the consumer with no
+    // image to sample at all.
+    textures->setDemand({ { "video", metal::VideoConsumerDemand { false, true } } });
+    ASSERT_TRUE(RunFrame(&error)) << error;
+
+    EXPECT_EQ(textures->conversionsEncodedForTests(), 1u);
+    EXPECT_EQ(textures->path("video"), metal::VideoFramePath::Nv12Converted);
+    EXPECT_NE(textures->texture("video"), nil);
+}
+
+TEST_F(MetalVideoTexture, ABgraFrameIgnoresAPlaneDemand)
+{
+    auto source = std::make_shared<FakeVideoSource>(16, 16, kCVPixelFormatType_32BGRA);
+    source->produce(20, 140, 220);
+
+    std::string error;
+    ASSERT_TRUE(textures->prepareForTests("video", source, &error)) << error;
+    // The consumer asked for planes, but software decode produced BGRA. The
+    // frame's real format decides, not the request.
+    textures->setDemand({ { "video", metal::VideoConsumerDemand { true, false } } });
+    ASSERT_TRUE(RunFrame(&error)) << error;
+
+    EXPECT_EQ(textures->conversionsEncodedForTests(), 0u);
+    EXPECT_EQ(textures->path("video"), metal::VideoFramePath::Bgra);
+    EXPECT_NE(textures->texture("video"), nil);
+    EXPECT_FALSE(textures->planes("video").valid());
+}
+
+TEST_F(MetalVideoTexture, AFormatChangeSwitchesPathWithoutLosingTheTexture)
+{
+    auto source = std::make_shared<FakeVideoSource>(16, 16);
+    source->produce(126, 128, 160);
+
+    std::string error;
+    ASSERT_TRUE(textures->prepareForTests("video", source, &error)) << error;
+    textures->setDemand({ { "video", metal::VideoConsumerDemand { true, false } } });
+    ASSERT_TRUE(RunFrame(&error)) << error;
+    ASSERT_EQ(textures->path("video"), metal::VideoFramePath::Nv12Direct);
+
+    // Hardware decode dropped out mid-playback and the same file now arrives as
+    // BGRA. Nothing is reparsed and no timeline is reset; the next frame is
+    // simply read as what it is.
+    source->resize(16, 16, kCVPixelFormatType_32BGRA);
+    source->produce(20, 140, 220);
+    ASSERT_TRUE(RunFrame(&error)) << error;
+
+    EXPECT_EQ(textures->path("video"), metal::VideoFramePath::Bgra);
+    ASSERT_NE(textures->texture("video"), nil);
+    EXPECT_FALSE(textures->planes("video").valid());
+    const auto pixel = ReadPixel(textures->texture("video"), 8, 8);
+    EXPECT_EQ(pixel[0], 20);
+    EXPECT_EQ(pixel[1], 140);
+    EXPECT_EQ(pixel[2], 220);
+}

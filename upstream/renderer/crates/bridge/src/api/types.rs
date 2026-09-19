@@ -366,6 +366,16 @@ pub struct BridgeSceneBackendReport {
     pub wallpaper_title: String,
     pub backend: String,
     pub fallback_reason: Option<String>,
+    /// How this scene's video textures reached the shaders that sample them on
+    /// the last frame it drew: `"none"`, `"bgra"`, `"nv12_direct"`,
+    /// `"nv12_converted"` or `"nv12_mixed"`. A read-back, not a preference: a
+    /// scene with no video, or one still starting, reports `"none"`.
+    pub video_path: String,
+    /// Whether this scene is really running under the saved
+    /// `scene_optimization_enabled` value, rather than still carrying the plan
+    /// the previous value produced. `None` means the renderer could not say,
+    /// which is not the same as "yes".
+    pub optimization_applied: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, uniffi::Record)]
@@ -399,6 +409,11 @@ pub struct BridgeSettingsSnapshot {
     /// default. A preference, not a read-back: `scene_update_modes` is where
     /// what actually happened shows up.
     pub scene_on_demand_enabled: bool,
+    /// The saved preference for direct NV12 plane sampling inside native Metal
+    /// scenes. Off by default, experimental. A preference, not a read-back:
+    /// the `video_path` of each `scene_renderers` row is what actually
+    /// happened.
+    pub scene_video_plane_sampling_enabled: bool,
     /// `"compatibility"` or `"native_metal_preferred"`: the user's choice,
     /// which for a given scene may or may not be what `scene_renderers`
     /// reports. A saved preference, not a read-back.

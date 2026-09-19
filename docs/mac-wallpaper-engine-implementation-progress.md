@@ -80,6 +80,223 @@ recorded as blocked rather than failed:
 **No power number, watt figure or saving percentage is reported anywhere in this
 document.** Counters and unit tests bound what is claimed.
 
+## Round 10 — NV12 direct plane sampling, scene optimisation applied at runtime
+
+Feature round, same discipline as rounds 5–9: implement, wire to production,
+keep it building, fix what this round broke. Native Metal stays a manual choice
+and Compatibility stays the default; direct plane sampling is a new opt-in on
+top of it. Visual output on real wallpapers, desktop behaviour and power are the
+user's to accept. **No power measurement of any kind was taken and no saving is
+claimed anywhere below.**
+
+| Feature | State | Default |
+|---|---|---|
+| NV12 direct plane sampling in Metal scenes | Implemented end to end: parsed material → second program → bound → drawn | Off; new experimental switch |
+| Conversion decided by what consumers need | Implemented; a planes-only frame allocates and writes no BGRA destination | Follows the switch |
+| Scene optimisation applied at a frame boundary | Implemented on both backends, both directions | Follows the existing switch, on |
+| Per-scene video path and applied-setting read-back | Implemented, reported in the settings panel | Always on, no setting |
+
+### One material, two programs, chosen per frame
+
+The blocker round 9 recorded was an ordering one: the decoded pixel format is
+not known when a shader is translated. This round takes the controlled form of
+option (a) from that entry — both variants are produced while the parser still
+holds the translation inputs, and the choice is made per frame from the format
+the decoder actually produced. Option (b), retaining the inputs past parse and
+re-translating at the first frame, was not implemented.
+
+`WPSceneParser` already queues one Metal translation per material with the
+combos, preprocessed units and texture info the SPIR-V compile settled on. It now
+also records that material's texture keys, and after the ordinary translation
+succeeds it compiles a second program from **copies** of the same inputs — copies
+because `CompileProgramRust` merges combos, default textures and preprocessor
+results into whatever it is handed, and the originals have already been consumed
+once. A material qualifies when exactly one of its slots is a video the native
+video path accepts; two video slots, a sprite-sheet video or a slot with no media
+disqualifies it, because a variant per combination is a matrix this round does
+not build.
+
+Inside `crates/shader` the second program is a real translation, not an edit of
+the first:
+
+- `ShaderTextureInfo` carries `VideoPlaneLayout`, defaulting to `None`. The
+  bridge writes `video_planes` into the request JSON only when it is set and the
+  cache key gains a term only when it is set, so an ordinary texture's program
+  and its cache identity are exactly what they were.
+- `ProgramResourceLayout` allocates a chroma texture, its sampler and two `vec4`
+  `GlobalUniforms` members per flagged slot — **after** the author's own
+  resources, so a binding a shader encodes in a `g_TextureN` name never moves.
+  The chroma global is named `_we_VideoChroma<N>`, deliberately not `g_Texture…`:
+  that prefix is how both the reflector and the renderer read a material slot out
+  of a resource name, and a plane the renderer supplies is not a slot the
+  material has. `active_texture_slots` still reports only the material's own.
+- The existing `texture_sampling` codegen strategy rewrites that slot's
+  implicit-LOD samples into a generated helper that reads both planes and applies
+  the colour transform. The author's coordinate expression is left exactly as
+  written, so every later coercion still applies to it, and macro bodies are
+  rewritten on the same terms as ordinary source.
+- Any other reference to the slot — an explicit-LOD sample, a size query, a texel
+  fetch, passing the sampler on — **refuses the variant** before a single fixup is
+  emitted. A refusal is recorded on the variant and never on the program: the
+  material keeps converting, which is what it did before the variant existed.
+
+The pipeline revision went 4 → 5, so every cached program is recompiled once.
+
+### The renderer asks before it converts
+
+The point of the fast path is not that a shader *can* read planes; it is that
+nothing converts a frame no consumer asked to have converted. `MetalVideoTextures`
+now takes a per-key demand — does anything sample the planes, does anything need
+one colour image — **before** anything is imported:
+
+- BGRA frame: imported zero-copy and sampled as one image, as before.
+- NV12 with no consumer needing an image: both plane views are vended, no
+  destination is acquired, none is allocated, and no conversion is encoded.
+- NV12 with a mixed set of consumers: the planes plus exactly one conversion,
+  however many passes read it.
+- The format is read from every frame, not from the first: the same file is BGRA
+  under software decode and NV12 under VideoToolbox, and either can take over
+  mid-playback without the scene being reparsed or a timeline reset.
+- A demand change — the switch toggled, a variant becoming usable — re-imports the
+  generation that is current rather than waiting for the next one, so a consumer
+  is never left with nothing to sample.
+
+One lifetime rule changed while doing this, and it is a fix rather than a
+consequence: the bundle a frame is sampled from is now retained into **every**
+command buffer that reads it, not only the one that imported it. A paused source
+keeps one bundle current across many frames, and dropping it while a later
+command buffer still held its vended texture was a Core Video wrapper released
+under a live read.
+
+### Binding, and where the two programs meet
+
+`MetalRender` builds both programs' binding plans through one
+`BuildMetalResourcePlan`, so the two cannot disagree about how a resource name
+becomes a slot. The variant's plan must contain a chroma plane for the slot it
+was built for and must bind the luma plane, or it is refused and logged. Both
+pipelines are created while the graph is compiled — **synchronously, beside the
+ordinary one**; this is not an asynchronous compile. Nothing is compiled inside a
+frame, and the first frame is not blocked by it because the graph compile
+precedes every frame.
+
+Per frame: the uniform ring reserves the larger of the two blocks, the colour
+constants are written from the decoded frame's own colorimetry, `g_TextureNResolution`
+is read from the frame rather than from a texture that may not exist on the direct
+path, the luma plane is bound with the author's own sampler and the chroma plane
+with a linear-filtered copy of it. Chroma is filtered linearly whatever the author
+asked for on the colour image, because that is what the conversion pass does to it,
+and reproducing that is what makes the two paths comparable rather than merely
+similar.
+
+### What the two paths actually produce
+
+Measured, not asserted in prose. One decoded frame, held still and proved held,
+drawn by both programs and read back off the GPU:
+
+- **At a one-to-one mapping between video texels and output pixels the two paths
+  agree to within one code value** — the converted intermediate's own 8-bit
+  quantisation, which the direct path does not perform.
+- **Under resampling they are not identical.** The converting path clamps each
+  texel to the range the stream declares and quantises it before the layer's
+  sampler filters; the direct path filters first and clamps the result. The
+  transform between those two clamps is affine, so the orders agree exactly
+  wherever the clamp does nothing — every sample a conforming stream carries.
+  Where a stream carries codes outside its declared range they differ by up to
+  the excursion that clamp removes: at most 24 code values for 8-bit limited
+  range, and 19 measured on a deliberately out-of-range synthetic probe
+  (full-range noise in a stream declaring limited range, ~1 texel in 7 clamping).
+
+This is a real difference with a named mechanism, not floating-point error, and
+it is why the switch is opt-in rather than on. It was found by the test, not
+reasoned about afterwards: the first version of the comparison failed at 149 code
+values, which turned out to be the test comparing two different decoded frames.
+
+### Scene optimisation, applied where it is changed
+
+Round 9 recorded the asymmetry: turning the setting off took effect on the next
+frame, turning it back on waited for the graph to be compiled again. Both
+backends now apply it at a frame boundary over the graph already compiled.
+Nothing is reparsed, no video is reopened and no timeline is reset.
+
+- Metal: `applySceneOptimizationSetting` runs at the top of `drawFrame`, before
+  anything is imported or encoded. It re-plans copy elision, reconciles the
+  target table — a destination the plan has just folded onto its source gives up
+  its image, one the plan no longer folds gets a fresh one — clears the fresh
+  ones **into that frame's own command buffer**, and recompiles the reuse table.
+  Nothing waits on the GPU.
+- Vulkan: `ApplySceneOptimization` is called from `SceneWallpaper`'s frame loop.
+  Where the copy plan really changed it destroys prepared pass state and drops
+  render targets, which is what `applyRenderScale` does for the same reason — and
+  like `applyRenderScale` it now quiesces first. That is a one-time device wait
+  paid when the user changes a setting, never per frame. Turning the setting off
+  also restores the copies a previous plan removed, which it did not before.
+- Two bugs found while doing this: `compileStaticCache` zeroed its pinned-byte
+  total without giving it back to the process-wide budget, which double-counted
+  on every re-apply; and `compile()` built a present pipeline only for copies the
+  plan had kept, so un-eliding one at run time would have compiled a pipeline
+  inside a frame. Both fixed.
+- The first frame after re-enabling redraws rather than reusing, because a table
+  that has recorded nothing cannot call anything unchanged.
+
+### Interface
+
+Two existing rows carry the round, plus one new experimental switch:
+
+- **Scene render optimisation** — now says it takes effect on the next frame in
+  both directions, and carries a new **In force now** line read back from each
+  running scene. That distinguishes the saved preference from one that has
+  actually reached a scene; a scene the renderer could not answer for is counted
+  as unknown rather than as applied.
+- **Drawn by** — each running scene now also names the path its video textures
+  took: sampled directly, converted once per frame, or both. A scene with no
+  video says nothing rather than reporting a failure.
+- **Direct video plane sampling** (Advanced, experimental, off) — the new switch.
+  Off leaves the existing conversion in place; on but not applicable stays on
+  Metal's conversion and never falls back to Compatibility; no environment
+  variable is needed, and there is no per-matrix or per-plane control.
+
+### Tests added
+
+- `crates/shader/tests/video_planes.rs`: 9 cases. The ordinary variant is
+  unchanged by the option existing; the plane variant translates the author's own
+  expression rather than replacing it, declares the chroma plane and the colour
+  constants, reaches Metal with its own binding plan, keeps the chroma plane out
+  of the material's active slots, and gets a different cache key. An explicit-LOD
+  sample, a size query and a size query inside a macro each refuse it; a macro
+  that plainly samples the slot is translated; a flag for a slot the shader never
+  declares changes nothing.
+- `metal_video_texture_test.mm`: 6 new cases. Planes-only demand encodes no
+  conversion and offers no single image; mixed demand converts exactly once and
+  still publishes the planes; the direct path receives the same eight colour
+  constants as the kernel; a demand change re-imports the current generation; a
+  BGRA frame ignores a plane demand; a format flip mid-stream switches path
+  without losing the picture. 14 cases total, all green.
+- `metal_scene_draw_smoke.mm`: 5 new cases. An ordinary parsed author material
+  over real decoded media takes the direct path and draws; the same material
+  keeps converting while the switch is off and takes the direct path on the next
+  frame when it is turned on; the two paths agree at one-to-one; the scaled case
+  stays inside the clamp excursion its stream implies; a graph compiled with the
+  optimisation off starts reusing when it is turned on. 13 cases total, all green.
+- `crates/bridge`: the new setting defaults off, reaches the engine through both
+  facade halves, reopens nothing, and is pushed back in after a restart.
+
+### Not verified
+
+- No real wallpaper has been drawn on a display and nothing has been seen by a
+  human. The end-to-end video case draws synthetic H.264 media the test encodes.
+- The synthetic media carries neutral chroma, so the picture comparison above is
+  exact over luma and over the conversion arithmetic and does **not** exercise a
+  difference that only appears where chroma varies within a chroma texel. What
+  bounds that case is the constants check, not a picture.
+- No power measurement. What is claimed is that a conversion is not encoded and
+  its destination not allocated when nothing asks for one — never that this saves
+  a measurable amount of anything.
+- `AVideoLayerKeepsConvertingWhileTheSettingIsOff` asserts the off→on transition
+  only when the machine's decoder produced NV12. It did here; on a machine
+  without VideoToolbox that assertion does not run.
+- Multi-video materials, explicit-LOD and mipmapped video sampling, 10-bit and
+  HDR formats are all still pre-converted or refused, unchanged.
+
 ## Round 9 — scene optimisation on Metal, sprite sheets, 2D sprite particles
 
 Feature round, same discipline as rounds 5–8: implement, wire to production,
@@ -306,6 +523,9 @@ on Compatibility.
 
 ### NV12 dual-plane direct sampling — not done, and why
 
+*Done in round 10, as the controlled form of option (a) below. The rest of this
+section is round 9's record of why it was not attempted then.*
+
 The pre-conversion path from round 8 (NV12 → BGRA intermediate → author shader)
 is unchanged and remains the only Metal video path.
 
@@ -361,6 +581,7 @@ No new experimental switches. The three existing rows carry it:
   **on** takes effect when that scene's graph is next compiled — a wallpaper
   change, a render-scale change or a restart. This round did not change that
   behaviour; the Metal implementation matches the compatibility one exactly.
+  *Round 10 removed this asymmetry on both backends.*
 - **Update only when the scene changes** — unchanged.
 
 The per-wallpaper "Drawn by" list still reports the backend each running

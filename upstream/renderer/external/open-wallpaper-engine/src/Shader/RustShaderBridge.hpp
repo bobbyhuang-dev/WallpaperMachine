@@ -36,12 +36,22 @@ struct RustShaderStageSource {
     std::string source;
 };
 
+// Plane layout one texture slot is compiled to sample through. `None` is what
+// every ordinary texture carries and what keeps the generated program, and its
+// cache key, identical to the one this compiler produced before the option
+// existed.
+enum class RustShaderVideoPlanes {
+    None,
+    Nv12Biplanar,
+};
+
 struct RustShaderTextureInfo {
-    uint32_t            slot { 0 };
-    bool                present { true };
-    bool                enabled { false };
-    std::string         format { "rgba8" };
-    std::array<bool, 3> components { false, false, false };
+    uint32_t              slot { 0 };
+    bool                  present { true };
+    bool                  enabled { false };
+    std::string           format { "rgba8" };
+    std::array<bool, 3>   components { false, false, false };
+    RustShaderVideoPlanes video_planes { RustShaderVideoPlanes::None };
 };
 
 struct RustShaderPropertyValue {

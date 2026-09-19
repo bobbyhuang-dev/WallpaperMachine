@@ -492,10 +492,21 @@ if(APPLE)
   add_executable(metal_scene_draw_smoke metal_scene_draw_smoke.mm)
   target_link_libraries(metal_scene_draw_smoke PRIVATE
       ${PROJECT_NAME} wpMetalRender wpVulkanRender wpVulkan wpScene wpRGraph
-      wpParticle wpAudio wpFs nlohmann_json::nlohmann_json GTest::gtest_main)
+      wpParticle wpAudio wpFs nlohmann_json::nlohmann_json GTest::gtest_main
+      # The video-layer case needs a real decodable file, which the test
+      # encodes for itself rather than shipping one.
+      PkgConfig::TEST_AVFORMAT PkgConfig::TEST_AVCODEC PkgConfig::TEST_AVUTIL)
   target_include_directories(metal_scene_draw_smoke PRIVATE
       . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/MetalRender/include
       ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender)
+  # BEFORE, and deliberately: this target also pulls in `/opt/homebrew/include`
+  # through another dependency, and a machine with a second FFmpeg installed
+  # there would compile these sources against headers that do not match the
+  # libraries on the link line. The symptom is not a build failure but garbage
+  # struct fields at runtime, so the pinned prefix has to win the search order.
+  target_include_directories(metal_scene_draw_smoke BEFORE PRIVATE
+      ${TEST_AVFORMAT_INCLUDE_DIRS} ${TEST_AVCODEC_INCLUDE_DIRS}
+      ${TEST_AVUTIL_INCLUDE_DIRS})
   target_compile_features(metal_scene_draw_smoke PRIVATE cxx_std_20)
   set_target_properties(metal_scene_draw_smoke PROPERTIES
       OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES)

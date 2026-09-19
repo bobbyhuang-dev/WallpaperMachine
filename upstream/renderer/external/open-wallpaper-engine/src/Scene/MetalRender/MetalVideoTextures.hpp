@@ -7,9 +7,13 @@
 #import <Metal/Metal.h>
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
+
+#include "MetalRender/MetalVideoSupport.hpp"
+#include "Video/VideoColorConversion.hpp"
 
 namespace wallpaper
 {
@@ -23,6 +27,31 @@ class VideoTextureSource;
 
 namespace metal
 {
+
+/// What one video texture's consumers need from each frame.
+///
+/// This is asked before anything is imported, which is the whole point: a frame
+/// whose consumers all sample planes must not be converted first and then have
+/// the conversion thrown away.
+struct VideoConsumerDemand
+{
+    /// At least one consumer samples the decoder's planes directly.
+    bool planes { false };
+    /// At least one consumer needs one colour image.
+    bool rgb { true };
+};
+
+/// The decoder's two planes and the constants that turn them into colour.
+struct VideoFramePlanes
+{
+    id<MTLTexture>          luma { nil };
+    id<MTLTexture>          chroma { nil };
+    video::YuvColorParams   params {};
+    std::uint32_t           width { 0 };
+    std::uint32_t           height { 0 };
+
+    [[nodiscard]] bool valid() const { return luma != nil && chroma != nil; }
+};
 
 /// The scene's video textures, as ordinary sampled `MTLTexture`s.
 ///
@@ -62,6 +91,11 @@ public:
     void setRate(float rate);
     void setCounters(RendererCounters* counters);
 
+    /// Declares what each key's consumers can use, before the next frame is
+    /// imported. Keys not named keep the default, which is "needs one colour
+    /// image" -- the behaviour every consumer had before planes existed.
+    void setDemand(std::map<std::string, VideoConsumerDemand> demand);
+
     /// Shortest frame period among the sources, in seconds, or 0 when any of
     /// them cannot say — pacing on the others would skip its changes.
     [[nodiscard]] double shortestFramePeriod() const;
@@ -75,9 +109,26 @@ public:
     /// the passes that sample them comes from the command buffer itself.
     bool beginFrame(Scene& scene, id<MTLCommandBuffer> command, std::string* error);
 
-    /// Last valid frame for `key`, at the decoded frame's own size. Nil only
-    /// when no frame was ever produced for it.
+    /// Last valid frame for `key`, at the decoded frame's own size. Nil when no
+    /// frame was ever produced for it, and also when every consumer samples the
+    /// planes directly -- there is then no single colour image, by design.
     [[nodiscard]] id<MTLTexture> texture(const std::string& key) const;
+
+    /// The planes of `key`'s current frame, valid only while the current frame
+    /// really is NV12 and the planes were published for it.
+    [[nodiscard]] VideoFramePlanes planes(const std::string& key) const;
+
+    /// How `key`'s current frame reached its consumers.
+    [[nodiscard]] VideoFramePath path(const std::string& key) const;
+
+    /// The path this scene's video textures share, or the mixed value when
+    /// they differ. `None` when nothing has been imported.
+    [[nodiscard]] VideoFramePath path() const;
+
+    /// The decoded size of `key`'s current frame. False when there is none, in
+    /// which case `width` and `height` are untouched.
+    [[nodiscard]] bool frameSize(const std::string& key, std::uint32_t* width,
+                                 std::uint32_t* height) const;
 
 #ifdef WESCENE_BUILD_TESTS
     /// Registers a source directly, so the import, the conversion and the

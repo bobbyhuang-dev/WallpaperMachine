@@ -141,10 +141,17 @@ namespace video_detail
 struct FrameBundle {
     video::VideoTextureFrame frame {};
     CVMetalTextureRef        wrappers[2] { nullptr, nullptr };
-    /// What author shaders sample: the vended BGRA texture, or the conversion
-    /// destination the NV12 kernel wrote.
+    /// What author shaders sample as one image: the vended BGRA texture, or
+    /// the conversion destination the NV12 kernel wrote. Nil when every
+    /// consumer reads the planes and nothing needed one image.
     id<MTLTexture>           sampled { nil };
     id<MTLTexture>           destination { nil };
+    /// The decoder's own planes, vended from `wrappers`. Held here because a
+    /// shader that samples them directly depends on the wrappers and the pixel
+    /// buffer staying alive exactly as long as the vended texture does.
+    id<MTLTexture>           luma { nil };
+    id<MTLTexture>           chroma { nil };
+    video::YuvColorParams    color {};
     /// Cleared when this bundle dies, which is after the command buffer that
     /// read `destination` completed. Until then the slot is not offered again.
     std::shared_ptr<std::atomic<bool>> slot_busy;
@@ -186,8 +193,18 @@ struct VideoSourceEntry {
     id<MTLTexture>                             texture { nil };
     std::uint64_t                              imported_generation { 0 };
     bool                                       has_import { false };
+    /// Destination-slot shape, which is the conversion's, not the frame's.
     std::uint32_t                              width { 0 };
     std::uint32_t                              height { 0 };
+    /// The decoded size of the frame `current` holds.
+    std::uint32_t                              frame_width { 0 };
+    std::uint32_t                              frame_height { 0 };
+    /// How the frame `current` holds reached its consumers.
+    VideoFramePath                             path { VideoFramePath::None };
+    /// What the import that produced `current` was asked for. A demand that
+    /// changes -- the setting toggled, a material's variant became usable --
+    /// re-imports the same generation rather than waiting for the next one.
+    VideoConsumerDemand                        satisfied {};
     std::array<DestinationSlot, kDestinationSlots> slots {};
     /// What the last `syncPlayback` actually asked for, which is what decides
     /// whether this source still changes on its own.
@@ -210,6 +227,7 @@ struct MetalVideoTextures::State {
     std::string                 pipeline_error;
 
     std::map<std::string, VideoSourceEntry> sources;
+    std::map<std::string, VideoConsumerDemand> demand;
     RendererCounters*                       counters { nullptr };
     bool                                    paused { false };
     float                                   rate { 1.0f };
@@ -487,6 +505,7 @@ void MetalVideoTextures::release()
     // Sources and slot textures go; anything a command buffer is still reading
     // is owned by that command buffer's pending block and outlives this call.
     m_state->sources.clear();
+    m_state->demand.clear();
     if (m_state->texture_cache != nullptr) CVMetalTextureCacheFlush(m_state->texture_cache, 0);
 }
 
@@ -504,6 +523,11 @@ void MetalVideoTextures::setRate(float rate) { m_state->rate = rate; }
 void MetalVideoTextures::setCounters(RendererCounters* counters)
 {
     m_state->counters = counters;
+}
+
+void MetalVideoTextures::setDemand(std::map<std::string, VideoConsumerDemand> demand)
+{
+    m_state->demand = std::move(demand);
 }
 
 double MetalVideoTextures::shortestFramePeriod() const
@@ -534,6 +558,55 @@ id<MTLTexture> MetalVideoTextures::texture(const std::string& key) const
 {
     const auto iterator = m_state->sources.find(key);
     return iterator == m_state->sources.end() ? nil : iterator->second.texture;
+}
+
+VideoFramePlanes MetalVideoTextures::planes(const std::string& key) const
+{
+    const auto iterator = m_state->sources.find(key);
+    if (iterator == m_state->sources.end() || ! iterator->second.current) return {};
+    const auto& bundle = *iterator->second.current;
+    if (bundle.luma == nil || bundle.chroma == nil) return {};
+    return VideoFramePlanes {
+        .luma   = bundle.luma,
+        .chroma = bundle.chroma,
+        .params = bundle.color,
+        .width  = iterator->second.frame_width,
+        .height = iterator->second.frame_height,
+    };
+}
+
+VideoFramePath MetalVideoTextures::path(const std::string& key) const
+{
+    const auto iterator = m_state->sources.find(key);
+    return iterator == m_state->sources.end() ? VideoFramePath::None : iterator->second.path;
+}
+
+VideoFramePath MetalVideoTextures::path() const
+{
+    VideoFramePath shared = VideoFramePath::None;
+    for (const auto& [key, entry] : m_state->sources) {
+        (void)key;
+        if (entry.path == VideoFramePath::None) continue;
+        if (shared == VideoFramePath::None) {
+            shared = entry.path;
+            continue;
+        }
+        // Two textures on different paths is a mixed scene, which is the
+        // honest answer rather than whichever one came first.
+        if (shared != entry.path) return VideoFramePath::Nv12Mixed;
+    }
+    return shared;
+}
+
+bool MetalVideoTextures::frameSize(const std::string& key, std::uint32_t* width,
+                                   std::uint32_t* height) const
+{
+    const auto iterator = m_state->sources.find(key);
+    if (iterator == m_state->sources.end() || ! iterator->second.has_import) return false;
+    if (iterator->second.frame_width == 0 || iterator->second.frame_height == 0) return false;
+    if (width != nullptr) *width = iterator->second.frame_width;
+    if (height != nullptr) *height = iterator->second.frame_height;
+    return true;
 }
 
 bool MetalVideoTextures::beginFrame(Scene& scene, id<MTLCommandBuffer> command, std::string* error)
@@ -572,10 +645,28 @@ bool MetalVideoTextures::beginFrame(Scene& scene, id<MTLCommandBuffer> command, 
                 return SetError(error, "video texture \"" + key + "\" has no frame to display");
             }
             state.reportSourceWork(entry, current.generation);
-            // A generation already imported is already on screen. Passes that
-            // sample it several times share this one texture; nothing is
-            // converted twice, and a paused or suspended source lands here.
-            if (entry.has_import && entry.imported_generation == current.generation) continue;
+
+            // Asked before anything is imported: a frame every consumer samples
+            // as planes must not be converted first. An unnamed key keeps the
+            // default, which is the single-image behaviour this class had
+            // before planes existed.
+            const auto demanded = state.demand.find(key);
+            const VideoConsumerDemand demand =
+                demanded == state.demand.end() ? VideoConsumerDemand {} : demanded->second;
+
+            // A generation already imported is already on screen, unless what
+            // its consumers need has changed since -- the setting was toggled,
+            // or a material's variant became usable. Passes that sample it
+            // several times share this one import; nothing is converted twice.
+            if (entry.has_import && entry.imported_generation == current.generation &&
+                entry.satisfied.planes == demand.planes && entry.satisfied.rgb == demand.rgb) {
+                // Retained into this command buffer even though nothing was
+                // imported for it: the plane and image textures this frame
+                // samples are vended from that bundle's Core Video wrappers,
+                // and the wrappers have to outlive the commands that read them.
+                if (entry.current) pending->bundles.push_back(entry.current);
+                continue;
+            }
 
             auto bundle = std::make_shared<FrameBundle>();
             // Retained under the producer's own lock where the source can do
@@ -603,6 +694,11 @@ bool MetalVideoTextures::beginFrame(Scene& scene, id<MTLCommandBuffer> command, 
                                                            "buffer");
             }
 
+            // Decided per frame from the format the decoder really produced,
+            // never from the first frame's: software decode hands back BGRA and
+            // VideoToolbox hands back NV12 for the same file, and either can
+            // take over mid-playback.
+            VideoFramePath path = VideoFramePath::None;
             if (! is_nv12) {
                 const CVReturn result =
                     CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault,
@@ -625,14 +721,10 @@ bool MetalVideoTextures::beginFrame(Scene& scene, id<MTLCommandBuffer> command, 
                                     "Core Video returned no texture for video texture \"" + key +
                                         "\"");
                 }
+                path = VideoFramePath::Bgra;
             } else {
-                if (state.nv12_pipeline == nil) {
-                    return SetError(error,
-                                    state.pipeline_error.empty()
-                                        ? std::string("no NV12 conversion pipeline for video "
-                                                      "textures")
-                                        : state.pipeline_error);
-                }
+                // Both planes, whichever path the consumers take: the direct
+                // one samples them and the conversion reads them.
                 const CVReturn luma_result =
                     CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault,
                                                               state.texture_cache,
@@ -659,53 +751,72 @@ bool MetalVideoTextures::beginFrame(Scene& scene, id<MTLCommandBuffer> command, 
                                     "failed to import the NV12 planes of video texture \"" + key +
                                         "\"");
                 }
-                id<MTLTexture> luma   = CVMetalTextureGetTexture(bundle->wrappers[0]);
-                id<MTLTexture> chroma = CVMetalTextureGetTexture(bundle->wrappers[1]);
-                if (luma == nil || chroma == nil) {
+                bundle->luma   = CVMetalTextureGetTexture(bundle->wrappers[0]);
+                bundle->chroma = CVMetalTextureGetTexture(bundle->wrappers[1]);
+                if (bundle->luma == nil || bundle->chroma == nil) {
                     return SetError(error,
                                     "Core Video returned no plane textures for video texture \"" +
                                         key + "\"");
                 }
+                bundle->color = video::AppleVideoFrameColorParams(frame);
 
-                DestinationSlot* slot = nullptr;
-                id<MTLTexture>   destination =
-                    state.acquireDestination(entry, frame.width, frame.height, &slot);
-                if (destination == nil) {
-                    // Either every destination is still being read, or Metal
-                    // refused one. Neither is a reason to fail the scene: the
-                    // frame already on screen stays there.
-                    continue;
-                }
-                bundle->destination = destination;
-                bundle->sampled     = destination;
-                bundle->slot_busy   = slot->busy;
-
-                if (encoder == nil) {
-                    encoder = [command computeCommandEncoder];
-                    if (encoder == nil) {
+                if (! demand.rgb) {
+                    // Nothing asked for one image, so no destination is
+                    // acquired, none is allocated and no conversion is encoded.
+                    path = VideoFramePath::Nv12Direct;
+                } else {
+                    if (state.nv12_pipeline == nil) {
                         return SetError(error,
-                                        "failed to create a compute encoder for video texture "
-                                        "conversion");
+                                        state.pipeline_error.empty()
+                                            ? std::string("no NV12 conversion pipeline for video "
+                                                          "textures")
+                                            : state.pipeline_error);
                     }
-                    encoder.label = @"owe video texture conversion";
-                }
-                const video::YuvColorParams params = video::AppleVideoFrameColorParams(frame);
-                [encoder setComputePipelineState:state.nv12_pipeline];
-                [encoder setTexture:luma atIndex:0];
-                [encoder setTexture:chroma atIndex:1];
-                [encoder setTexture:destination atIndex:2];
-                [encoder setBytes:&params length:sizeof(params) atIndex:0];
-                const NSUInteger thread_width =
-                    std::min<NSUInteger>(16u, state.nv12_pipeline.threadExecutionWidth);
-                const NSUInteger thread_height = std::max<NSUInteger>(
-                    1u, state.nv12_pipeline.maxTotalThreadsPerThreadgroup / thread_width);
-                const MTLSize threads_per_group =
-                    MTLSizeMake(thread_width, std::min<NSUInteger>(16u, thread_height), 1u);
-                [encoder dispatchThreads:MTLSizeMake(frame.width, frame.height, 1u)
-                    threadsPerThreadgroup:threads_per_group];
-                ++state.conversions_encoded;
-                if (state.counters != nullptr) {
-                    state.counters->Set(OWE_RC_VIDEO_CONVERSIONS, state.conversions_encoded);
+                    DestinationSlot* slot = nullptr;
+                    id<MTLTexture>   destination =
+                        state.acquireDestination(entry, frame.width, frame.height, &slot);
+                    if (destination == nil) {
+                        // Either every destination is still being read, or Metal
+                        // refused one. Neither is a reason to fail the scene: the
+                        // frame already on screen stays there, planes and all.
+                        if (entry.current) pending->bundles.push_back(entry.current);
+                        continue;
+                    }
+                    bundle->destination = destination;
+                    bundle->sampled     = destination;
+                    bundle->slot_busy   = slot->busy;
+
+                    if (encoder == nil) {
+                        encoder = [command computeCommandEncoder];
+                        if (encoder == nil) {
+                            return SetError(error,
+                                            "failed to create a compute encoder for video texture "
+                                            "conversion");
+                        }
+                        encoder.label = @"owe video texture conversion";
+                    }
+                    const video::YuvColorParams params = bundle->color;
+                    [encoder setComputePipelineState:state.nv12_pipeline];
+                    [encoder setTexture:bundle->luma atIndex:0];
+                    [encoder setTexture:bundle->chroma atIndex:1];
+                    [encoder setTexture:destination atIndex:2];
+                    [encoder setBytes:&params length:sizeof(params) atIndex:0];
+                    const NSUInteger thread_width =
+                        std::min<NSUInteger>(16u, state.nv12_pipeline.threadExecutionWidth);
+                    const NSUInteger thread_height = std::max<NSUInteger>(
+                        1u, state.nv12_pipeline.maxTotalThreadsPerThreadgroup / thread_width);
+                    const MTLSize threads_per_group =
+                        MTLSizeMake(thread_width, std::min<NSUInteger>(16u, thread_height), 1u);
+                    [encoder dispatchThreads:MTLSizeMake(frame.width, frame.height, 1u)
+                        threadsPerThreadgroup:threads_per_group];
+                    ++state.conversions_encoded;
+                    if (state.counters != nullptr) {
+                        state.counters->Set(OWE_RC_VIDEO_CONVERSIONS, state.conversions_encoded);
+                    }
+                    // One conversion serves every consumer that needs an image,
+                    // however many passes that is.
+                    path = demand.planes ? VideoFramePath::Nv12Mixed
+                                         : VideoFramePath::Nv12Converted;
                 }
             }
 
@@ -716,6 +827,10 @@ bool MetalVideoTextures::beginFrame(Scene& scene, id<MTLCommandBuffer> command, 
             entry.texture             = bundle->sampled;
             entry.imported_generation = frame.generation;
             entry.has_import          = true;
+            entry.frame_width         = frame.width;
+            entry.frame_height        = frame.height;
+            entry.path                = path;
+            entry.satisfied           = demand;
             // The previous bundle is dropped here, which frees its slot unless
             // a command buffer still holds it through `pending`.
             entry.current = bundle;

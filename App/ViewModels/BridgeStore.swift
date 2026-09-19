@@ -463,6 +463,14 @@ final class BridgeStore {
         apply(bundle)
     }
 
+    /// Direct NV12 plane sampling inside native Metal scenes. Off by default and
+    /// experimental. A preference: the `videoPath` of each `sceneRenderers` row is
+    /// what each running scene's video textures actually did.
+    func setSceneVideoPlaneSamplingEnabledAsync(_ enabled: Bool) async throws {
+        let bundle = try await bridge.setSceneVideoPlaneSamplingEnabled(enabled: enabled)
+        apply(bundle)
+    }
+
     /// Which renderer draws scene wallpapers. A preference: `sceneRenderers` in the
     /// returned bundle is what each running scene actually got.
     func setSceneRendererAsync(_ mode: String) async throws {
@@ -671,6 +679,7 @@ final class BridgeStore {
                 sharedVideoDecodeConsumers: 0,
                 sceneOptimizationEnabled: true,
                 sceneOnDemandEnabled: false,
+                sceneVideoPlaneSamplingEnabled: false,
                 sceneRenderer: "compatibility",
                 sceneUpdateModes: [],
                 sceneRenderers: [],

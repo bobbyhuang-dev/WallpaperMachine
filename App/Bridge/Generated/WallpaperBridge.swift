@@ -1038,6 +1038,25 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func setSceneRenderer(mode: String) async throws  -> BridgeSnapshotBundle
     
     /**
+     * Lets a native Metal scene's materials sample a video's NV12 planes
+     * directly instead of one pre-converted colour image.
+     *
+     * Off by default, and experimental. It selects between two programs that
+     * were both compiled with the scene's graph, so a running scene picks it
+     * up at its next frame boundary without being reparsed or restarted. A
+     * material with no usable plane variant, and any frame that is not 8-bit
+     * NV12, keeps converting whatever this says; nothing here changes which
+     * backend draws a scene. The snapshot's `scene_renderers` reports the
+     * path each running scene's video textures actually took.
+     *
+     * # Errors
+     *
+     * Returns an error when the setting cannot be saved or the renderer
+     * rejects the call.
+     */
+    func setSceneVideoPlaneSamplingEnabled(enabled: Bool) async throws  -> BridgeSnapshotBundle
+    
+    /**
      * Turns shared video decoding on or off for the renderer process.
      *
      * Off by default. Turning it on permits sharing; it does not by itself
@@ -2504,6 +2523,40 @@ open func setSceneRenderer(mode: String)async throws  -> BridgeSnapshotBundle {
                 uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_scene_renderer(
                     self.uniffiClonePointer(),
                     FfiConverterString.lower(mode)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBridgeSnapshotBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Lets a native Metal scene's materials sample a video's NV12 planes
+     * directly instead of one pre-converted colour image.
+     *
+     * Off by default, and experimental. It selects between two programs that
+     * were both compiled with the scene's graph, so a running scene picks it
+     * up at its next frame boundary without being reparsed or restarted. A
+     * material with no usable plane variant, and any frame that is not 8-bit
+     * NV12, keeps converting whatever this says; nothing here changes which
+     * backend draws a scene. The snapshot's `scene_renderers` reports the
+     * path each running scene's video textures actually took.
+     *
+     * # Errors
+     *
+     * Returns an error when the setting cannot be saved or the renderer
+     * rejects the call.
+     */
+open func setSceneVideoPlaneSamplingEnabled(enabled: Bool)async throws  -> BridgeSnapshotBundle {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_set_scene_video_plane_sampling_enabled(
+                    self.uniffiClonePointer(),
+                    FfiConverterBool.lower(enabled)
                 )
             },
             pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
@@ -4998,16 +5051,44 @@ public struct BridgeSceneBackendReport {
     public var wallpaperTitle: String
     public var backend: String
     public var fallbackReason: String?
+    /**
+     * How this scene's video textures reached the shaders that sample them on
+     * the last frame it drew: `"none"`, `"bgra"`, `"nv12_direct"`,
+     * `"nv12_converted"` or `"nv12_mixed"`. A read-back, not a preference: a
+     * scene with no video, or one still starting, reports `"none"`.
+     */
+    public var videoPath: String
+    /**
+     * Whether this scene is really running under the saved
+     * `scene_optimization_enabled` value, rather than still carrying the plan
+     * the previous value produced. `None` means the renderer could not say,
+     * which is not the same as "yes".
+     */
+    public var optimizationApplied: Bool?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(displayId: UInt32, displayName: String, wallpaperId: String, wallpaperTitle: String, backend: String, fallbackReason: String?) {
+    public init(displayId: UInt32, displayName: String, wallpaperId: String, wallpaperTitle: String, backend: String, fallbackReason: String?, 
+        /**
+         * How this scene's video textures reached the shaders that sample them on
+         * the last frame it drew: `"none"`, `"bgra"`, `"nv12_direct"`,
+         * `"nv12_converted"` or `"nv12_mixed"`. A read-back, not a preference: a
+         * scene with no video, or one still starting, reports `"none"`.
+         */videoPath: String, 
+        /**
+         * Whether this scene is really running under the saved
+         * `scene_optimization_enabled` value, rather than still carrying the plan
+         * the previous value produced. `None` means the renderer could not say,
+         * which is not the same as "yes".
+         */optimizationApplied: Bool?) {
         self.displayId = displayId
         self.displayName = displayName
         self.wallpaperId = wallpaperId
         self.wallpaperTitle = wallpaperTitle
         self.backend = backend
         self.fallbackReason = fallbackReason
+        self.videoPath = videoPath
+        self.optimizationApplied = optimizationApplied
     }
 }
 
@@ -5033,6 +5114,12 @@ extension BridgeSceneBackendReport: Equatable, Hashable {
         if lhs.fallbackReason != rhs.fallbackReason {
             return false
         }
+        if lhs.videoPath != rhs.videoPath {
+            return false
+        }
+        if lhs.optimizationApplied != rhs.optimizationApplied {
+            return false
+        }
         return true
     }
 
@@ -5043,6 +5130,8 @@ extension BridgeSceneBackendReport: Equatable, Hashable {
         hasher.combine(wallpaperTitle)
         hasher.combine(backend)
         hasher.combine(fallbackReason)
+        hasher.combine(videoPath)
+        hasher.combine(optimizationApplied)
     }
 }
 
@@ -5059,7 +5148,9 @@ public struct FfiConverterTypeBridgeSceneBackendReport: FfiConverterRustBuffer {
                 wallpaperId: FfiConverterString.read(from: &buf), 
                 wallpaperTitle: FfiConverterString.read(from: &buf), 
                 backend: FfiConverterString.read(from: &buf), 
-                fallbackReason: FfiConverterOptionString.read(from: &buf)
+                fallbackReason: FfiConverterOptionString.read(from: &buf), 
+                videoPath: FfiConverterString.read(from: &buf), 
+                optimizationApplied: FfiConverterOptionBool.read(from: &buf)
         )
     }
 
@@ -5070,6 +5161,8 @@ public struct FfiConverterTypeBridgeSceneBackendReport: FfiConverterRustBuffer {
         FfiConverterString.write(value.wallpaperTitle, into: &buf)
         FfiConverterString.write(value.backend, into: &buf)
         FfiConverterOptionString.write(value.fallbackReason, into: &buf)
+        FfiConverterString.write(value.videoPath, into: &buf)
+        FfiConverterOptionBool.write(value.optimizationApplied, into: &buf)
     }
 }
 
@@ -5242,6 +5335,13 @@ public struct BridgeSettingsSnapshot {
      */
     public var sceneOnDemandEnabled: Bool
     /**
+     * The saved preference for direct NV12 plane sampling inside native Metal
+     * scenes. Off by default, experimental. A preference, not a read-back:
+     * the `video_path` of each `scene_renderers` row is what actually
+     * happened.
+     */
+    public var sceneVideoPlaneSamplingEnabled: Bool
+    /**
      * `"compatibility"` or `"native_metal_preferred"`: the user's choice,
      * which for a given scene may or may not be what `scene_renderers`
      * reports. A saved preference, not a read-back.
@@ -5305,6 +5405,12 @@ public struct BridgeSettingsSnapshot {
          * what actually happened shows up.
          */sceneOnDemandEnabled: Bool, 
         /**
+         * The saved preference for direct NV12 plane sampling inside native Metal
+         * scenes. Off by default, experimental. A preference, not a read-back:
+         * the `video_path` of each `scene_renderers` row is what actually
+         * happened.
+         */sceneVideoPlaneSamplingEnabled: Bool, 
+        /**
          * `"compatibility"` or `"native_metal_preferred"`: the user's choice,
          * which for a given scene may or may not be what `scene_renderers`
          * reports. A saved preference, not a read-back.
@@ -5347,6 +5453,7 @@ public struct BridgeSettingsSnapshot {
         self.sharedVideoDecodeConsumers = sharedVideoDecodeConsumers
         self.sceneOptimizationEnabled = sceneOptimizationEnabled
         self.sceneOnDemandEnabled = sceneOnDemandEnabled
+        self.sceneVideoPlaneSamplingEnabled = sceneVideoPlaneSamplingEnabled
         self.sceneRenderer = sceneRenderer
         self.sceneUpdateModes = sceneUpdateModes
         self.sceneRenderers = sceneRenderers
@@ -5416,6 +5523,9 @@ extension BridgeSettingsSnapshot: Equatable, Hashable {
         if lhs.sceneOnDemandEnabled != rhs.sceneOnDemandEnabled {
             return false
         }
+        if lhs.sceneVideoPlaneSamplingEnabled != rhs.sceneVideoPlaneSamplingEnabled {
+            return false
+        }
         if lhs.sceneRenderer != rhs.sceneRenderer {
             return false
         }
@@ -5470,6 +5580,7 @@ extension BridgeSettingsSnapshot: Equatable, Hashable {
         hasher.combine(sharedVideoDecodeConsumers)
         hasher.combine(sceneOptimizationEnabled)
         hasher.combine(sceneOnDemandEnabled)
+        hasher.combine(sceneVideoPlaneSamplingEnabled)
         hasher.combine(sceneRenderer)
         hasher.combine(sceneUpdateModes)
         hasher.combine(sceneRenderers)
@@ -5509,6 +5620,7 @@ public struct FfiConverterTypeBridgeSettingsSnapshot: FfiConverterRustBuffer {
                 sharedVideoDecodeConsumers: FfiConverterUInt32.read(from: &buf), 
                 sceneOptimizationEnabled: FfiConverterBool.read(from: &buf), 
                 sceneOnDemandEnabled: FfiConverterBool.read(from: &buf), 
+                sceneVideoPlaneSamplingEnabled: FfiConverterBool.read(from: &buf), 
                 sceneRenderer: FfiConverterString.read(from: &buf), 
                 sceneUpdateModes: FfiConverterSequenceTypeBridgeSceneUpdateModeReport.read(from: &buf), 
                 sceneRenderers: FfiConverterSequenceTypeBridgeSceneBackendReport.read(from: &buf), 
@@ -5541,6 +5653,7 @@ public struct FfiConverterTypeBridgeSettingsSnapshot: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value.sharedVideoDecodeConsumers, into: &buf)
         FfiConverterBool.write(value.sceneOptimizationEnabled, into: &buf)
         FfiConverterBool.write(value.sceneOnDemandEnabled, into: &buf)
+        FfiConverterBool.write(value.sceneVideoPlaneSamplingEnabled, into: &buf)
         FfiConverterString.write(value.sceneRenderer, into: &buf)
         FfiConverterSequenceTypeBridgeSceneUpdateModeReport.write(value.sceneUpdateModes, into: &buf)
         FfiConverterSequenceTypeBridgeSceneBackendReport.write(value.sceneRenderers, into: &buf)
@@ -7331,6 +7444,30 @@ extension BridgeWallpaperKind: Equatable, Hashable {}
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionBool: FfiConverterRustBuffer {
+    typealias SwiftType = Bool?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterBool.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterBool.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -8068,6 +8205,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_scene_renderer() != 23711) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_scene_video_plane_sampling_enabled() != 19099) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_set_shared_video_decode_enabled() != 19328) {

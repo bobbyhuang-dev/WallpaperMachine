@@ -26,7 +26,10 @@ namespace
 {
 
 /// Uniform whose presence means the shader is driven by skeletal transforms.
-/// Read from reflection, never from shader source text.
+/// Read from reflection, never from shader source text. Presence is not a
+/// refusal: the runtime writes one 4x4 float matrix (64 bytes) per bone
+/// through the reflected array stride, and only a layout that cannot hold
+/// that is rejected.
 constexpr std::string_view kBonesUniform { "g_Bones" };
 
 /// Whether the camera the scene actually renders through is a perspective one.
@@ -75,16 +78,28 @@ bool IsDynamicCardMesh(const SceneMesh& mesh)
     return vertices.CapacitySize() / vertices.OneSize() == 4;
 }
 
+/// Name and type together: a puppet's blend indices occupy the same slot a
+/// float4 would, and a rope's `a_TexCoordVec3C2` is stored as a float4.
+bool HasAttribute(const SceneVertexArray& vertices, std::string_view name, VertexType type)
+{
+    for (const auto& attribute : vertices.Attributes()) {
+        if (attribute.name == name && attribute.type == type) return true;
+    }
+    return false;
+}
+
 /// Whether a mesh the runtime rewrites every frame is one this backend knows
 /// how to feed, and why not when it is not.
 ///
-/// The discriminator is the geometry's own contract, not the particle count and
-/// not "it is two-dimensional": a rope or trail renderer reads attributes that
-/// mean something different from a sprite particle's, and accepting one because
-/// it happens to arrive as quads would draw the right number of triangles with
-/// the wrong geometry. A text layer's card is accepted because its shape is
-/// checked above and the dynamic upload path writes exactly it; everything else
-/// that rebuilds its geometry per frame is still refused.
+/// A text layer's card is accepted first: its shape is checked above and the
+/// dynamic upload path writes exactly it. Everything else must be one material,
+/// one submesh, one vertex stream and one index stream. Sprite and rope are
+/// exclusive; a rope-trail flag without both rope and trail is not a layout
+/// this path fills. A sprite trail is the thick sprite-particle mesh, stretched
+/// from the velocity in `a_TexCoordVec4C1`. A rope -- and a rope trail, which
+/// is always thick -- must carry the vertex layout `SetRopeParticleMesh` writes.
+/// Capacity, not current size, decides whether there is anywhere to put a
+/// frame. Anything else that rebuilds its geometry per frame is still refused.
 std::string RejectDynamicMesh(SceneMesh& mesh)
 {
     constexpr std::string_view kNotParticles = "the scene rebuilds mesh geometry every frame";
@@ -93,9 +108,6 @@ std::string RejectDynamicMesh(SceneMesh& mesh)
 
     const auto* material = mesh.MaterialForSlot(0);
     if (material == nullptr) return std::string(kNotParticles);
-    if (material->name.rfind("genericrope", 0) == 0) {
-        return "the scene draws rope particles";
-    }
     if (mesh.MaterialSlots().size() != 1 || mesh.Submeshes().size() != 1) {
         return std::string(kNotParticles);
     }
@@ -106,13 +118,44 @@ std::string RejectDynamicMesh(SceneMesh& mesh)
     if (submesh.VertexCount() != 1 || submesh.IndexCount() != 1) {
         return std::string(kNotParticles);
     }
-    const auto& vertices = submesh.GetVertexArray(0);
-    if (vertices.GetOption(WE_PRENDER_ROPE)) return "the scene draws rope particles";
-    if (vertices.GetOption(WE_PRENDER_TRAIL)) return "the scene draws particle trails";
-    // A positive statement, not the absence of the two above: every other mesh
-    // the runtime rewrites per frame has a layout and an update cadence nothing
-    // here has checked.
-    if (! vertices.GetOption(WE_PRENDER_SPRITE)) return std::string(kNotParticles);
+    const auto& vertices   = submesh.GetVertexArray(0);
+    const bool  sprite     = vertices.GetOption(WE_PRENDER_SPRITE);
+    const bool  rope       = vertices.GetOption(WE_PRENDER_ROPE);
+    const bool  trail      = vertices.GetOption(WE_PRENDER_TRAIL);
+    const bool  rope_trail = vertices.GetOption(WE_PRENDER_ROPETRAIL);
+    const bool  thick      = vertices.GetOption(WE_CB_THICK_FORMAT);
+    if (sprite == rope) return std::string(kNotParticles);
+    if (rope_trail && ! (rope && trail)) return std::string(kNotParticles);
+    if (sprite && trail) {
+        // The author shader stretches the quad from the velocity the thick
+        // sprite record already carries; without it there is nothing to read.
+        if (! thick || ! HasAttribute(vertices, WE_IN_TEXCOORDVEC4C1, VertexType::FLOAT4)) {
+            return "a sprite trail's mesh carries no particle velocity";
+        }
+    }
+    if (rope) {
+        // The shared runtime fills this layout; a sprite-shaped buffer would
+        // draw the right number of triangles with the wrong geometry.
+        bool has_layout =
+            HasAttribute(vertices, WE_IN_POSITIONVEC4, VertexType::FLOAT4) &&
+            HasAttribute(vertices, WE_IN_TEXCOORDVEC4, VertexType::FLOAT4) &&
+            HasAttribute(vertices, WE_IN_TEXCOORDVEC4C1, VertexType::FLOAT4) &&
+            HasAttribute(vertices, WE_IN_COLOR, VertexType::FLOAT4);
+        if (thick) {
+            has_layout = has_layout &&
+                         HasAttribute(vertices, WE_IN_TEXCOORDVEC4C2, VertexType::FLOAT4) &&
+                         HasAttribute(vertices, WE_IN_TEXCOORDVEC4C3, VertexType::FLOAT4) &&
+                         HasAttribute(vertices, WE_IN_TEXCOORDC4, VertexType::FLOAT4);
+        } else {
+            has_layout = has_layout &&
+                         HasAttribute(vertices, WE_IN_TEXCOORDVEC3C2, VertexType::FLOAT4) &&
+                         HasAttribute(vertices, WE_IN_TEXCOORDC3, VertexType::FLOAT4);
+        }
+        // A rope trail's shader is always compiled with the thick format, so a
+        // thin buffer under it would be read two attributes short.
+        if (rope_trail && ! thick) return "a rope trail's mesh is not in the thick rope format";
+        if (! has_layout) return "a rope particle mesh does not have the rope vertex layout";
+    }
     // Capacity, not current size: a particle mesh is legitimately empty until
     // the first emission, and a zero-capacity one has nowhere to put a frame.
     if (vertices.CapacitySizeOf() == 0 || vertices.OneSizeOf() == 0) {
@@ -148,6 +191,38 @@ std::vector<SceneNode*> EffectNodes(const Scene& scene, const SceneNode* node)
         }
     }
     return nodes;
+}
+
+/// The geometry an effect chain's last drawing node ends up with, when `node` is
+/// that node.
+///
+/// A layer under an effect chain is parsed with its real geometry set aside as
+/// the chain's final mesh; `ResolveEffect` moves it onto the last node that
+/// writes the chain's output only when the render graph is built, which is
+/// after this gate has run. A puppet is the case that matters: its skinning
+/// material sits on that last node from the start while the bone weights it
+/// reads are still in the final mesh. The node is found by the same rule
+/// `ResolveEffect` uses, so every other effect node -- which is given the plain
+/// full-target quad -- is still judged by the mesh it has.
+const SceneMesh* ResolvedEffectGeometry(const Scene& scene, const SceneNode* owner,
+                                        const SceneNode* node)
+{
+    const auto* camera = FindCamera(scene, owner->Camera());
+    if (camera == nullptr || ! camera->HasImgEffect()) return nullptr;
+    auto&            layer = *const_cast<SceneCamera*>(camera)->GetImgEffect();
+    const SceneNode* last  = nullptr;
+    for (std::size_t i = 0; i < layer.EffectCount(); ++i) {
+        const auto& effect = layer.GetEffect(i);
+        if (effect == nullptr) continue;
+        for (const auto& effect_node : effect->nodes) {
+            if (effect_node.sceneNode == nullptr) continue;
+            if (effect_node.output.rfind(WE_EFFECT_PPONG_PREFIX_B, 0) == 0 ||
+                effect_node.output == SpecTex_Default) {
+                last = effect_node.sceneNode.get();
+            }
+        }
+    }
+    return last == node ? &layer.FinalMesh() : nullptr;
 }
 
 /// The nodes the scene's post-process chain draws with. Like effect nodes they
@@ -209,12 +284,15 @@ std::string RejectNodes(const Scene& scene, const SceneNode* node)
 }
 
 /// Shader-translation rejection, checked only after the structural ones.
-std::string RejectShaders(const Scene& scene, const SceneNode* node, bool& saw_any_attempt)
+std::string RejectShaders(const Scene& scene, const SceneNode* node, bool& saw_any_attempt,
+                          const SceneMesh* resolved_geometry = nullptr)
 {
     if (node == nullptr) return {};
 
     if (auto* mesh = const_cast<SceneNode*>(node)->Mesh(); mesh != nullptr) {
-        for (const auto& slot : mesh->MaterialSlots()) {
+        const auto& slots = mesh->MaterialSlots();
+        for (std::size_t slot_index = 0; slot_index < slots.size(); ++slot_index) {
+            const auto& slot = slots[slot_index];
             if (slot == nullptr) continue;
             const auto* shader = slot->customShader.shader.get();
             if (shader == nullptr) continue;
@@ -229,14 +307,74 @@ std::string RejectShaders(const Scene& scene, const SceneNode* node, bool& saw_a
             if (! ParseMetalShaderReflection(program->reflection_json, reflection, &error)) {
                 return "a shader could not be translated to Metal";
             }
-            if (reflection.hasMember(kBonesUniform)) {
-                return "the scene animates a puppet skeleton";
+            const auto* bones = reflection.member(kBonesUniform);
+            if (bones != nullptr) {
+                // One 4x4 float matrix is 64 bytes; a tighter stride has nowhere
+                // to write it, and a non-array member is not the `g_Bones[N]`
+                // the author's vertex shader reads.
+                if (bones->array_count == 0 || bones->array_stride < 64) {
+                    return "a puppet shader lays out its bone matrices in a way the native "
+                           "renderer cannot fill";
+                }
+                const MetalVertexInput* blend_indices = nullptr;
+                const MetalVertexInput* blend_weights = nullptr;
+                for (const auto& input : reflection.inputs) {
+                    if (input.name == WE_IN_BLENDINDICES) blend_indices = &input;
+                    if (input.name == WE_IN_BLENDWEIGHTS) blend_weights = &input;
+                }
+                if (blend_indices == nullptr || blend_weights == nullptr) {
+                    return "a puppet shader does not read bone weights";
+                }
+                if (blend_indices->format != "r32g32b32a32_uint" ||
+                    blend_weights->format != "r32g32b32a32_sfloat") {
+                    return "a puppet shader reads bone weights in a format the native renderer "
+                           "does not bind";
+                }
+                // The streams this material will really be drawn with: the
+                // node's own, or the effect chain's final mesh when the node
+                // has not been given it yet.
+                bool has_streams = false;
+                for (const auto& submesh : mesh->Submeshes()) {
+                    has_streams = has_streams || submesh.VertexCount() > 0;
+                }
+                const SceneMesh& geometry =
+                    ! has_streams && resolved_geometry != nullptr ? *resolved_geometry : *mesh;
+                bool matched_slot = false;
+                for (const auto& submesh : geometry.Submeshes()) {
+                    if (submesh.material_slot == slot_index) {
+                        matched_slot = true;
+                        break;
+                    }
+                }
+                bool any_checked = false;
+                for (const auto& submesh : geometry.Submeshes()) {
+                    if (matched_slot && submesh.material_slot != slot_index) continue;
+                    any_checked = true;
+                    bool has_weights = false;
+                    for (std::size_t i = 0; i < submesh.VertexCount(); ++i) {
+                        const auto& vertices = submesh.GetVertexArray(i);
+                        if (HasAttribute(vertices, WE_IN_BLENDINDICES, VertexType::UINT4) &&
+                            HasAttribute(vertices, WE_IN_BLENDWEIGHTS, VertexType::FLOAT4)) {
+                            has_weights = true;
+                            break;
+                        }
+                    }
+                    if (! has_weights) {
+                        return "a puppet shader is bound to a mesh without bone weights";
+                    }
+                }
+                // No vertex stream at all still has nothing to bind the bone
+                // weights against.
+                if (! any_checked) {
+                    return "a puppet shader is bound to a mesh without bone weights";
+                }
             }
         }
     }
 
     for (auto* effect_node : EffectNodes(scene, node)) {
-        auto reason = RejectShaders(scene, effect_node, saw_any_attempt);
+        auto reason = RejectShaders(scene, effect_node, saw_any_attempt,
+                                    ResolvedEffectGeometry(scene, node, effect_node));
         if (! reason.empty()) return reason;
     }
     for (const auto& child : node->GetChildren()) {

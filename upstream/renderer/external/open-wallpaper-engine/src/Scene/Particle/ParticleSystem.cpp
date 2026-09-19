@@ -18,6 +18,7 @@ void ParticleInstance::Refresh() {
     SetNoLiveParticle(false);
     GetBoundedData() = {};
     ParticlesVec().clear();
+    TrailsVec().clear();
 }
 
 bool ParticleInstance::IsDeath() const { return m_is_death; }
@@ -28,6 +29,9 @@ void ParticleInstance::SetNoLiveParticle(bool v) { m_no_live_particle = v; };
 
 std::span<const Particle> ParticleInstance::Particles() const { return m_particles; };
 std::vector<Particle>&    ParticleInstance::ParticlesVec() { return m_particles; };
+
+std::span<const ParticleTrailHistory> ParticleInstance::Trails() const { return m_trails; };
+std::vector<ParticleTrailHistory>&    ParticleInstance::TrailsVec() { return m_trails; };
 
 ParticleInstance::BoundedData& ParticleInstance::GetBoundedData() { return m_bounded_data; }
 
@@ -66,6 +70,20 @@ void ParticleSubSystem::SetRateMultiplier(std::function<double()> rate_multiplie
     m_rate_multiplier = std::move(rate_multiplier);
 }
 
+void ParticleSubSystem::SetRopeSubdivision(u32 subdivision) {
+    m_rope_subdivision = std::max<u32>(1, subdivision);
+}
+
+void ParticleSubSystem::SetTrail(ParticleTrailConfig config) {
+    m_trail       = config;
+    m_trail_timer = 0.0;
+}
+
+float ParticleSubSystem::TrailPeriodFraction() const {
+    if (! m_trail.enabled()) return 0;
+    return static_cast<float>(std::clamp(m_trail_timer / m_trail.period, 0.0, 1.0));
+}
+
 ParticleSubSystem::SpawnType ParticleSubSystem::Type() const { return m_spawn_type; }
 
 u32 ParticleSubSystem::MaxInstanceCount() const { return m_maxcount_instance; };
@@ -80,7 +98,12 @@ float InverseScaleOrIdentity(float scale) {
 
 ParticleRenderScale ParticleSubSystem::RenderScale() const {
     auto owner = m_owner_node.lock();
-    if (! owner) return {};
+    if (! owner) {
+        ParticleRenderScale scale {};
+        scale.rope_subdivision = m_rope_subdivision;
+        scale.trail_fraction   = TrailPeriodFraction();
+        return scale;
+    }
 
     owner->UpdateTrans();
     const auto& transform = owner->RenderTrans();
@@ -91,6 +114,8 @@ ParticleRenderScale ParticleSubSystem::RenderScale() const {
         .inverse_x         = InverseScaleOrIdentity(scale_x),
         .inverse_y         = InverseScaleOrIdentity(scale_y),
         .isotropic_inverse = InverseScaleOrIdentity((scale_x + scale_y) * 0.5f),
+        .rope_subdivision  = m_rope_subdivision,
+        .trail_fraction    = TrailPeriodFraction(),
     };
 }
 
@@ -143,6 +168,14 @@ void ParticleSubSystem::Emitt() {
         m_rate_multiplier ? std::max(0.0, m_rate_multiplier()) : 1.0;
     double particleTime = frameTime * m_rate * rate_multiplier;
     m_time += particleTime;
+    bool record_trail = false;
+    if (m_trail.enabled()) {
+        m_trail_timer += particleTime;
+        if (m_trail_timer >= m_trail.period) {
+            record_trail  = true;
+            m_trail_timer = std::fmod(m_trail_timer, m_trail.period);
+        }
+    }
     UpdateMouseControlpoints();
 
     if (m_spawn_type == SpawnType::STATIC) {
@@ -193,6 +226,7 @@ void ParticleSubSystem::Emitt() {
         // clear when death if follow
         if (inst->IsDeath() && m_spawn_type == SpawnType::EVENT_FOLLOW) {
             inst->ParticlesVec().clear();
+            inst->TrailsVec().clear();
         }
 
         if (! inst->IsDeath()) {
@@ -203,6 +237,11 @@ void ParticleSubSystem::Emitt() {
                         particleTime,
                         m_controlpoints);
             }
+        }
+
+        auto& trails = inst->TrailsVec();
+        if (m_trail.enabled()) {
+            if (trails.size() < inst->ParticlesVec().size()) trails.resize(inst->ParticlesVec().size());
         }
 
         // event_death is always death after emitop
@@ -226,6 +265,10 @@ void ParticleSubSystem::Emitt() {
                     if (child->Type() == SpawnType::EVENT_FOLLOW ||
                         child->Type() == SpawnType::EVENT_SPAWN)
                         spawn_inst(*inst, *child, i);
+                }
+                if (m_trail.enabled() && static_cast<std::size_t>(i) < trails.size()) {
+                    trails[i].Reset(m_trail.samples);
+                    trails[i].Push({ bounded_data.pos + p.position });
                 }
             }
 
@@ -257,11 +300,30 @@ void ParticleSubSystem::Emitt() {
             ParticleModify::MoveByTime(p, particleTime);
             ParticleModify::RotateByTime(p, particleTime);
         }
+
+        if (record_trail) {
+            isize slot = -1;
+            for (auto& p : info.particles) {
+                slot++;
+                if (! ParticleModify::LifetimeOk(p)) continue;
+                if (static_cast<std::size_t>(slot) < trails.size()) {
+                    trails[slot].Push({ bounded_data.pos + p.position });
+                }
+            }
+        }
     }
 
     m_mesh->SetDirty();
 
     m_sys.gener->GenGLData(m_instances, *m_mesh, m_genSpecOp, RenderScale());
+
+    if (m_trail.enabled() && m_mesh->Material() != nullptr) {
+        auto& constValues = m_mesh->Material()->customShader.constValues;
+        auto  it          = constValues.find("g_RenderVar0");
+        if (it != constValues.end() && it->second.size() >= 4) {
+            it->second[2] = TrailPeriodFraction();
+        }
+    }
 
     for (auto& child : m_children) {
         child->Emitt();

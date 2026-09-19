@@ -57,11 +57,15 @@ constexpr std::string_view WE_CB_THICK_FORMAT { "THICKFORMAT" };
 /// geometry in the engine and says nothing about the layout.
 constexpr std::string_view WE_PRENDER_SPRITE { "PRENDER_SPRITE" };
 constexpr std::string_view WE_PRENDER_ROPE { "PRENDER_ROPE" };
-/// Set on a particle mesh drawn by a trail renderer. The vertex data a trail
-/// shader reads is produced by a generator this runtime does not run, so the
-/// flag exists to name the case rather than to let a backend guess it from the
-/// attribute list, which a plain sprite sheet shares.
+/// Set on a particle mesh drawn by a trail renderer, next to the marker of the
+/// generator that fills it: with `WE_PRENDER_SPRITE` it is a sprite trail, whose
+/// stretch the author's vertex shader derives from the velocity the thick
+/// sprite record already carries; with `WE_PRENDER_ROPE` it is a rope trail.
 constexpr std::string_view WE_PRENDER_TRAIL { "PRENDER_TRAIL" };
+/// Set on a rope trail's mesh, together with the two above. Its segments follow
+/// one particle's own recorded path rather than joining neighbouring particles,
+/// so a renderer can name the case without re-reading the project file.
+constexpr std::string_view WE_PRENDER_ROPETRAIL { "PRENDER_ROPETRAIL" };
 
 constexpr std::string_view G_M { "g_ModelMatrix" };
 constexpr std::string_view G_VP { "g_ViewProjectionMatrix" };

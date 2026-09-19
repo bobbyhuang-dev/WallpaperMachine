@@ -43,6 +43,8 @@ public:
     float       length { 0.05f };
     float       maxlength { 10.0f };
     float       subdivision { 3.0f };
+    float       minlength { 0.0f };
+    float       segments { 10.0f };
 };
 
 class Initializer {

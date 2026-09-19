@@ -502,7 +502,7 @@ const catalogs = {
     'not applicable to this wallpaper': '不适用于此壁纸',
     'running — state could not be read': '运行中 — 无法读取状态',
     'Scene renderer': '场景渲染器',
-    'Native Metal draws only scenes it can draw in full: image layers, sprite-sheet animation, standard two-dimensional sprite particles, ordinary effect chains and post-processing, same-frame layer links, and BGRA or 8-bit NV12 video textures. Anything else — rope and trail particles, puppets, 3D, dynamic lighting, history-feedback effects, HDR video and the rest — falls back to Compatibility as a whole scene, and this applies to desktop wallpapers only, the lock screen staying on Compatibility.': '原生 Metal 只绘制它能完整绘制的场景：图像图层、精灵表动画、标准二维精灵粒子、普通效果链和后期处理、同帧图层链接，以及 BGRA 或 8 位 NV12 视频纹理。其他内容（绳索和拖尾粒子、木偶、3D、动态光照、历史反馈效果、HDR 视频等）会使整个场景回退到兼容模式。此设置仅适用于桌面壁纸，锁定屏幕始终使用兼容模式。',
+    'Native Metal draws only scenes it can draw in full: image layers, sprite-sheet animation, two-dimensional puppets deformed by their own skinning shader, two-dimensional sprite, sprite-trail, rope and rope-trail particles, ordinary effect chains and post-processing, same-frame layer links, and BGRA or 8-bit NV12 video textures. Anything else — perspective or lit particles, 3D models, dynamic lighting, history-feedback effects, HDR video and the rest — falls back to Compatibility as a whole scene, and this applies to desktop wallpapers only, the lock screen staying on Compatibility.': '原生 Metal 只绘制它能完整绘制的场景：图像图层、精灵表动画、由自身蒙皮着色器变形的二维木偶、二维精灵粒子、精灵拖尾、绳索与绳索拖尾粒子、普通效果链和后期处理、同帧图层链接，以及 BGRA 或 8 位 NV12 视频纹理。其他内容（透视或受光照的粒子、3D 模型、动态光照、历史反馈效果、HDR 视频等）会使整个场景回退到兼容模式。此设置仅适用于桌面壁纸，锁定屏幕始终使用兼容模式。',
     'Drawn by': '绘制方',
     'preparing — no backend chosen yet': '准备中 — 尚未选择后端',
     '(fell back: {reason})': '（已回退：{reason}）',

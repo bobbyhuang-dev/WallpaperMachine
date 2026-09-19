@@ -16,12 +16,15 @@
 #include "MetalRender/MetalBackendRouter.hpp"
 #include "MetalRender/MetalCapability.hpp"
 #include "MetalRender/MetalRender.hpp"
+#include "MetalRender/MetalShaderReflection.hpp"
 #include "MetalRender/MetalVideoSupport.hpp"
 #include "MetalRender/SceneMetalProgram.hpp"
 
 #include "Audio/SoundManager.h"
+#include "Core/Random.hpp"
 #include "Fs/PhysicalFs.h"
 #include "Fs/VFS.h"
+#include "Particle/ParticleSystem.h"
 #include "Project/ProjectProperties.hpp"
 #include "Runtime/SceneRuntimeContext.hpp"
 #include "Runtime/VirtualAssetRegistry.hpp"
@@ -33,6 +36,7 @@
 #include "Scene/SceneTexture.h"
 #include "SpriteAnimation.hpp"
 #include "SpecTexs.hpp"
+#include "WPShaderValueUpdater.hpp"
 #include "RenderGraph/RenderGraph.hpp"
 #include "VulkanRender/CopyPass.hpp"
 #include "VulkanRender/CustomShaderPass.hpp"
@@ -42,17 +46,27 @@
 #include "Scene/Parse/WPShaderParser.hpp"
 #include "Shader/RustShaderBridge.hpp"
 #include "WPSceneParser.hpp"
+#include "WPPkgFs.hpp"
+#include "SceneSourceResolver.hpp"
 #include "synthetic_video.hpp"
 
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
+#include <array>
+#include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <map>
+#include <span>
 #include <string>
 #include <thread>
 
@@ -2370,5 +2384,1063 @@ TEST_F(MetalSceneDraw, ACaptionChangedWhileHiddenIsNotWorkInFlight)
             << "the layer came back empty";
 
         render.destroy();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Skinning, rope and trail layouts on a real device
+
+namespace
+{
+
+/// Same project as `WriteFixture`, with a named vertex shader of the caller's
+/// choosing. The fragment is the probe that writes `(u, v, 0.25, 1)`.
+std::filesystem::path WriteShaderFixture(const std::filesystem::path& root,
+                                         std::string_view             shader_name,
+                                         std::string_view             vertex_source)
+{
+    const std::string fragment =
+        "varying vec2 v_TexCoord;\n"
+        "void main() {\n"
+        "  gl_FragColor = vec4(v_TexCoord.x, v_TexCoord.y, 0.25, 1.0);\n"
+        "}\n";
+    const std::string shader(shader_name);
+    const std::map<std::string, std::string> files {
+        { "project.json",
+          R"({"title":"Metal draw smoke","type":"scene","file":"layout.json","general":{"properties":{}}})" },
+        { "models/tile.json", R"({"width":256,"height":192,"material":"materials/tile.json"})" },
+        { "materials/tile.json",
+          "{\"passes\":[{\"shader\":\"" + shader +
+              "\",\"blending\":\"translucent\",\"cullmode\":\"nocull\",\"depthtest\":\"disabled\","
+              "\"depthwrite\":\"disabled\"}]}" },
+        { "shaders/" + shader + ".vert", std::string(vertex_source) },
+        { "shaders/" + shader + ".frag", fragment },
+        { "layout.json",
+          R"({"camera":{"center":[0,0,0],"eye":[0,0,1],"up":[0,1,0]},)"
+          R"("general":{"ambientcolor":[0,0,0],"skylightcolor":[0,0,0],"clearcolor":[0.0,0.0,0.0],)"
+          R"("cameraparallax":false,"orthogonalprojection":{"width":384,"height":256}},)"
+          R"("objects":[{"id":1,"name":"tile","image":"models/tile.json","origin":[192,128,0],)"
+          R"("scale":[1,1,1],"angles":[0,0,0],"visible":true}]})" },
+    };
+
+    for (const auto& [name, contents] : files) {
+        const auto path = root / name;
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream(path) << contents;
+    }
+    return root / "project.json";
+}
+
+bool PixelRectEqual(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b, uint32_t width,
+                    uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
+{
+    if (a.size() != b.size() || width == 0 || a.size() % (width * 4u) != 0) return false;
+    const uint32_t height = static_cast<uint32_t>(a.size() / (width * 4u));
+    if (x1 > width || y1 > height || x0 >= x1 || y0 >= y1) return false;
+    for (uint32_t y = y0; y < y1; ++y) {
+        for (uint32_t x = x0; x < x1; ++x) {
+            const std::size_t i = (static_cast<std::size_t>(y) * width + x) * 4u;
+            if (a[i] != b[i] || a[i + 1] != b[i + 1] || a[i + 2] != b[i + 2] ||
+                a[i + 3] != b[i + 3]) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+namespace
+{
+
+/// A two-bone puppet whose second bone slides 80 units along +X over a 0.3 s
+/// loop while the first stays put, with one visible animation layer playing it.
+WPPuppetLayer MakeSlidingPuppetLayer()
+{
+    auto puppet = std::make_shared<WPPuppet>();
+    puppet->bones.emplace_back().name = "root";
+    puppet->bones.emplace_back().name = "shift";
+    auto& anim                        = puppet->anims.emplace_back();
+    anim.id                           = 1;
+    anim.fps                          = 30.0;
+    anim.length                       = 9;
+    anim.mode                         = WPPuppet::PlayMode::Loop;
+    anim.name                         = "slide";
+    auto still_frame                  = []() {
+        WPPuppet::BoneFrame frame;
+        frame.position = Eigen::Vector3f::Zero();
+        frame.angle    = Eigen::Vector3f::Zero();
+        frame.scale    = Eigen::Vector3f::Ones();
+        return frame;
+    };
+    // Sized first: a reference taken from `emplace_back` would dangle as soon as
+    // the second track made the vector grow.
+    anim.bone_tracks.resize(2);
+    auto& track0        = anim.bone_tracks[0];
+    track0.bone_index   = 0;
+    auto& track1        = anim.bone_tracks[1];
+    track1.bone_index   = 1;
+    constexpr int kKeys = 10;
+    for (int i = 0; i < kKeys; ++i) {
+        track0.frames.push_back(still_frame());
+        auto frame          = still_frame();
+        frame.position.x()  = 80.0f * (static_cast<float>(i) / static_cast<float>(kKeys - 1));
+        track1.frames.push_back(frame);
+    }
+    puppet->prepared();
+
+    WPPuppetLayer                  layer(puppet);
+    WPPuppetLayer::AnimationLayer  anim_layer;
+    anim_layer.id      = 1;
+    anim_layer.rate    = 1.0;
+    anim_layer.blend   = 1.0;
+    anim_layer.visible = true;
+    layer.prepared(std::span<WPPuppetLayer::AnimationLayer>(&anim_layer, 1));
+
+    return layer;
+}
+
+/// Two separate quads in the node's local space, the first bound wholly to
+/// bone 0 and the second wholly to bone 1, in the vertex layout the model
+/// parser gives a puppet mesh. The second quad's texture coordinate is (1, 1)
+/// and the first's (0, 0), so the probe fragment shader colours them apart.
+std::shared_ptr<SceneMesh> MakeTwoQuadSkinnedMesh(std::shared_ptr<SceneMaterial> material)
+{
+    auto mesh = std::make_shared<SceneMesh>();
+    std::vector<SceneVertexArray::SceneVertexAttribute> attributes {
+        { std::string(WE_IN_POSITION), VertexType::FLOAT3 },
+        { std::string(WE_IN_BLENDINDICES), VertexType::UINT4 },
+        { std::string(WE_IN_BLENDWEIGHTS), VertexType::FLOAT4 },
+        { std::string(WE_IN_TEXCOORD), VertexType::FLOAT2 },
+    };
+    SceneVertexArray vertices(attributes, 8);
+    auto pack = [](float x, float y, uint32_t bone, float u, float v) {
+        std::array<float, 16> out {};
+        out[0] = x;
+        out[1] = y;
+        // UINT4 lives in the float slots as the raw 32-bit indices, not as floats.
+        const uint32_t indices[4] = { bone, 0, 0, 0 };
+        std::memcpy(out.data() + 4, indices, sizeof(indices));
+        out[8]  = 1.0f;
+        out[12] = u;
+        out[13] = v;
+        return out;
+    };
+    const std::array<std::array<float, 16>, 8> packed {
+        pack(-140.0f, -30.0f, 0, 0.0f, 0.0f), pack(-60.0f, -30.0f, 0, 0.0f, 0.0f),
+        pack(-60.0f, 30.0f, 0, 0.0f, 0.0f),   pack(-140.0f, 30.0f, 0, 0.0f, 0.0f),
+        pack(20.0f, -30.0f, 1, 1.0f, 1.0f),   pack(100.0f, -30.0f, 1, 1.0f, 1.0f),
+        pack(100.0f, 30.0f, 1, 1.0f, 1.0f),   pack(20.0f, 30.0f, 1, 1.0f, 1.0f),
+    };
+    for (std::size_t i = 0; i < packed.size(); ++i) vertices.SetVertexs(i, packed[i]);
+    mesh->AddVertexArray(std::move(vertices));
+    const std::array<uint16_t, 12> triangles { 0, 1, 3, 1, 2, 3, 4, 5, 7, 5, 6, 7 };
+    SceneIndexArray                index_array(4);
+    index_array.AssignHalf(0, triangles);
+    mesh->AddIndexArray(std::move(index_array));
+    mesh->MaterialSlots().push_back(material);
+    return mesh;
+}
+
+} // namespace
+
+TEST_F(MetalSceneDraw, APuppetIsSkinnedByItsOwnShaderFromThePoseTheRuntimeProduces)
+{
+    const std::string vertex =
+        "uniform mat4 g_ModelViewProjectionMatrix;\n"
+        "uniform mat4x3 g_Bones[2];\n"
+        "attribute vec3 a_Position;\n"
+        "attribute uvec4 a_BlendIndices;\n"
+        "attribute vec4 a_BlendWeights;\n"
+        "attribute vec2 a_TexCoord;\n"
+        "varying vec2 v_TexCoord;\n"
+        "void main() {\n"
+        "  vec3 localPos = mul(vec4(a_Position, 1.0), g_Bones[a_BlendIndices.x] * a_BlendWeights.x + "
+        "g_Bones[a_BlendIndices.y] * a_BlendWeights.y + g_Bones[a_BlendIndices.z] * a_BlendWeights.z + "
+        "g_Bones[a_BlendIndices.w] * a_BlendWeights.w);\n"
+        "  gl_Position = mul(vec4(localPos, 1.0), g_ModelViewProjectionMatrix);\n"
+        "  v_TexCoord = a_TexCoord;\n"
+        "}\n";
+    const auto  project = WriteShaderFixture(root_ / "skin-project", "metal_skin_probe", vertex);
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "skin-cache", loaded, error)) << error;
+
+    auto* node = FirstDrawableNode(loaded.scene->sceneGraph.get());
+    ASSERT_NE(node, nullptr);
+    auto* source_mesh = node->Mesh();
+    ASSERT_NE(source_mesh, nullptr);
+    auto material = source_mesh->MaterialSlotPtr(0);
+    ASSERT_NE(material, nullptr);
+    ASSERT_NE(material->customShader.shader, nullptr);
+    const auto* program = material->customShader.shader->metal_program.get();
+    ASSERT_NE(program, nullptr);
+    ASSERT_TRUE(program->error.empty()) << program->error;
+
+    auto layer = MakeSlidingPuppetLayer();
+    node->AddMesh(MakeTwoQuadSkinnedMesh(material));
+
+    ASSERT_NE(loaded.scene->shaderValueUpdater.get(), nullptr);
+    WPShaderValueData data;
+    data.puppet_layer = layer;
+    static_cast<WPShaderValueUpdater*>(loaded.scene->shaderValueUpdater.get())
+        ->SetNodeData(node, data);
+
+    const auto selection = SelectSceneBackend(*loaded.scene);
+    ASSERT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+
+    MetalShaderReflection reflection;
+    std::string           reflection_error;
+    ASSERT_TRUE(ParseMetalShaderReflection(program->reflection_json, reflection, &reflection_error))
+        << reflection_error;
+    const auto* bones = reflection.member("g_Bones");
+    ASSERT_NE(bones, nullptr) << "translated program has no g_Bones member";
+    EXPECT_EQ(bones->array_count, 2u);
+    EXPECT_EQ(bones->array_stride, 64u);
+
+    @autoreleasepool {
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (device == nil) {
+            GTEST_SKIP() << "no Metal device on this machine; the native draw was not exercised";
+        }
+        CAMetalLayer* layer_view  = [CAMetalLayer layer];
+        layer_view.device          = device;
+        layer_view.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer_view.drawableSize    = CGSizeMake(640, 360);
+        layer_view.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer_view,
+            .width                = 640,
+            .height               = 360,
+            .render_width         = 640,
+            .render_height        = 360,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        EXPECT_TRUE(render.ShaderUpdateDemandReasons() &
+                    wallpaper::vulkan::DynamicReason::BoneUniform)
+            << "a skinned puppet was not reported as advancing on its own";
+
+        const auto first = DrawOneFrame(render, *loaded.scene);
+        EXPECT_EQ(first.skipped, 0u);
+        const auto first_pixels = ReadOutput(render, *loaded.scene);
+        ASSERT_FALSE(first_pixels.empty());
+        ASSERT_EQ(first_pixels.size() % 4u, 0u);
+        const uint32_t canvas_w =
+            first_pixels.size() == 640u * 360u * 4u ? 640u : 384u;
+        const uint32_t canvas_h =
+            static_cast<uint32_t>(first_pixels.size() / (canvas_w * 4u));
+        // Bone 0 sits in the left-centre of the 384x256 canvas; mapped into the
+        // output so a Y-flip still covers the same vertically centred band.
+        const uint32_t x0 = canvas_w * 18u / 100u;
+        const uint32_t x1 = canvas_w * 28u / 100u;
+        const uint32_t y0 = canvas_h * 42u / 100u;
+        const uint32_t y1 = canvas_h * 58u / 100u;
+
+        std::vector<std::vector<uint8_t>> frames { first_pixels };
+        loaded.scene->PassFrameTime(0.2);
+        for (int frame = 0; frame < 3; ++frame) {
+            const auto counters = DrawOneFrame(render, *loaded.scene);
+            EXPECT_EQ(counters.skipped, 0u)
+                << "a moving bone reused its target on frame " << frame;
+            auto pixels = ReadOutput(render, *loaded.scene);
+            EXPECT_NE(pixels, first_pixels)
+                << "the skinned pose advanced and the picture did not change";
+            frames.push_back(std::move(pixels));
+            loaded.scene->PassFrameTime(1.0 / 60.0);
+        }
+
+        // Not merely "different": the bone-1 quad must have TRANSLATED. Its
+        // fragment colour is (1, 1, 0.25), so its columns can be told from the
+        // bone-0 quad's and the background in either byte order. The pose at
+        // 0.2 s of a 0.3 s slide over 80 units is two thirds of the quad's own
+        // 80-unit width, whatever scale the output was composed at -- and a
+        // transposed or re-ordered bone matrix shears or scales the quad
+        // instead of moving it, which changes that width.
+        const auto bright_columns = [canvas_w](const std::vector<uint8_t>& rgba) {
+            std::pair<int, int> columns { -1, -1 };
+            for (std::size_t pixel = 0; pixel * 4 + 3 < rgba.size(); ++pixel) {
+                const uint8_t* p = rgba.data() + pixel * 4;
+                if (p[1] < 200 || std::max(p[0], p[2]) < 200 || std::min(p[0], p[2]) > 120) continue;
+                const int x = static_cast<int>(pixel % canvas_w);
+                if (columns.first < 0 || x < columns.first) columns.first = x;
+                if (x > columns.second) columns.second = x;
+            }
+            return columns;
+        };
+        const auto at_rest = bright_columns(frames[0]);
+        const auto slid    = bright_columns(frames[1]);
+        ASSERT_GE(at_rest.first, 0) << "the bone-1 quad was not found in the first frame";
+        ASSERT_GE(slid.first, 0) << "the bone-1 quad was not found after the pose advanced";
+        const double rest_width = at_rest.second - at_rest.first + 1;
+        const double slid_width = slid.second - slid.first + 1;
+        EXPECT_NEAR(slid_width, rest_width, 2.0)
+            << "the skinned quad changed shape instead of moving";
+        EXPECT_NEAR((slid.first - at_rest.first) / rest_width, 2.0 / 3.0, 0.05)
+            << "the skinned quad did not move by the distance its bone did";
+
+        layer.pause(0);
+        loaded.scene->PassFrameTime(0.2);
+        DrawOneFrame(render, *loaded.scene);
+        const auto paused_a = ReadOutput(render, *loaded.scene);
+        loaded.scene->PassFrameTime(0.2);
+        DrawOneFrame(render, *loaded.scene);
+        const auto paused_b = ReadOutput(render, *loaded.scene);
+        EXPECT_EQ(paused_a, paused_b)
+            << "a paused puppet still changed while time passed";
+        frames.push_back(paused_a);
+
+        layer.play(0);
+        loaded.scene->PassFrameTime(0.2);
+        const auto played = DrawOneFrame(render, *loaded.scene);
+        EXPECT_EQ(played.skipped, 0u);
+        const auto played_pixels = ReadOutput(render, *loaded.scene);
+        EXPECT_NE(played_pixels, paused_a)
+            << "play() did not move the skinned picture again";
+        frames.push_back(played_pixels);
+
+        for (std::size_t i = 1; i < frames.size(); ++i) {
+            EXPECT_TRUE(PixelRectEqual(frames[i], frames[0], canvas_w, x0, y0, x1, y1))
+                << "the bone-0 quad moved on frame " << i;
+        }
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, ARopeLayoutMeshReachesTheTarget)
+{
+    const std::string vertex =
+        "uniform mat4 g_ModelViewProjectionMatrix;\n"
+        "attribute vec4 a_PositionVec4;\n"
+        "attribute vec4 a_TexCoordVec4;\n"
+        "attribute vec4 a_TexCoordVec4C1;\n"
+        "attribute vec3 a_TexCoordVec3C2;\n"
+        "attribute vec2 a_TexCoordC3;\n"
+        "attribute vec4 a_Color;\n"
+        "varying vec2 v_TexCoord;\n"
+        "void main() {\n"
+        "  vec3 position = mix(a_PositionVec4.xyz, a_TexCoordVec4.xyz, a_TexCoordC3.y) + "
+        "vec3(0.0, (a_TexCoordC3.x * 2.0 - 1.0) * a_PositionVec4.w, 0.0);\n"
+        "  gl_Position = g_ModelViewProjectionMatrix * vec4(position, 1.0);\n"
+        "  v_TexCoord = a_TexCoordC3;\n"
+        "}\n";
+    const auto  project = WriteShaderFixture(root_ / "rope-project", "metal_rope_probe", vertex);
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "rope-cache", loaded, error)) << error;
+
+    auto* node = FirstDrawableNode(loaded.scene->sceneGraph.get());
+    ASSERT_NE(node, nullptr);
+    auto* source_mesh = node->Mesh();
+    ASSERT_NE(source_mesh, nullptr);
+    auto material = source_mesh->MaterialSlotPtr(0);
+    ASSERT_NE(material, nullptr);
+
+    auto dynamic_mesh = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
+    std::vector<SceneVertexArray::SceneVertexAttribute> attributes {
+        { WE_IN_POSITIONVEC4.data(), VertexType::FLOAT4 },
+        { WE_IN_TEXCOORDVEC4.data(), VertexType::FLOAT4 },
+        { WE_IN_TEXCOORDVEC4C1.data(), VertexType::FLOAT4 },
+        { WE_IN_TEXCOORDVEC3C2.data(), VertexType::FLOAT4 },
+        { WE_IN_TEXCOORDC3.data(), VertexType::FLOAT4 },
+        { WE_IN_COLOR.data(), VertexType::FLOAT4 },
+    };
+    constexpr std::size_t kQuads = 4;
+    dynamic_mesh->AddVertexArray(SceneVertexArray(attributes, kQuads * 4));
+    dynamic_mesh->AddIndexArray(SceneIndexArray(kQuads));
+    dynamic_mesh->GetVertexArray(0).SetOption(WE_PRENDER_ROPE, true);
+    dynamic_mesh->MaterialSlots().push_back(material);
+    node->AddMesh(dynamic_mesh);
+
+    ASSERT_EQ(SelectSceneBackend(*loaded.scene).backend, SceneBackend::NativeMetal)
+        << SelectSceneBackend(*loaded.scene).fallback_reason;
+
+    @autoreleasepool {
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (device == nil) {
+            GTEST_SKIP() << "no Metal device on this machine; the native draw was not exercised";
+        }
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(640, 360);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 640,
+            .height               = 360,
+            .render_width         = 640,
+            .render_height        = 360,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        for (int frame = 0; frame < 3; ++frame) {
+            ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+            loaded.scene->PassFrameTime(1.0 / 60.0);
+        }
+        const auto empty = ReadOutput(render, *loaded.scene);
+        ASSERT_FALSE(empty.empty());
+
+        auto& vertices = dynamic_mesh->GetVertexArray(0);
+        auto& indices  = dynamic_mesh->GetIndexArray(0);
+        const std::array<float, 2> uv[4] { { 0.0f, 1.0f }, { 1.0f, 1.0f }, { 1.0f, 0.0f }, { 0.0f, 0.0f } };
+        std::array<float, 24 * 4>  segment {};
+        for (int i = 0; i < 4; ++i) {
+            float* v = segment.data() + i * 24;
+            v[0]  = -150.0f;
+            v[1]  = 0.0f;
+            v[2]  = 0.0f;
+            v[3]  = 20.0f;
+            v[4]  = 150.0f;
+            v[5]  = 0.0f;
+            v[6]  = 0.0f;
+            v[7]  = 1.0f;
+            v[8]  = -150.0f;
+            v[9]  = 0.0f;
+            v[10] = 0.0f;
+            v[11] = 0.0f;
+            v[12] = 150.0f;
+            v[13] = 0.0f;
+            v[14] = 0.0f;
+            v[15] = 0.0f;
+            v[16] = uv[i][0];
+            v[17] = uv[i][1];
+            v[18] = 0.0f;
+            v[19] = 0.0f;
+            v[20] = 1.0f;
+            v[21] = 1.0f;
+            v[22] = 1.0f;
+            v[23] = 1.0f;
+        }
+        vertices.SetVertexs(0, segment);
+        const std::array<uint16_t, 6> quad_indices { 0, 1, 3, 1, 2, 3 };
+        indices.AssignHalf(0, quad_indices);
+        indices.SetRenderDataCount(3);
+        dynamic_mesh->SetDirty();
+
+        for (int frame = 0; frame < 5; ++frame) {
+            ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+            loaded.scene->PassFrameTime(1.0 / 60.0);
+        }
+        const auto filled = ReadOutput(render, *loaded.scene);
+        EXPECT_NE(filled, empty)
+            << "a rope layout uploaded after the graph was compiled never reached the target";
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, ASpriteTrailMeshReachesTheTarget)
+{
+    const std::string vertex =
+        "uniform mat4 g_ModelViewProjectionMatrix;\n"
+        "attribute vec3 a_Position;\n"
+        "attribute vec4 a_TexCoordVec4;\n"
+        "attribute vec4 a_Color;\n"
+        "attribute vec4 a_TexCoordVec4C1;\n"
+        "attribute vec2 a_TexCoordC2;\n"
+        "varying vec2 v_TexCoord;\n"
+        "void main() {\n"
+        "  vec3 position = a_Position + vec3((a_TexCoordVec4.x - 0.5) * 2.0 * a_TexCoordVec4.w, "
+        "(a_TexCoordVec4.y - 0.5) * 2.0 * a_TexCoordVec4.w, 0.0) + "
+        "a_TexCoordVec4C1.xyz * a_TexCoordVec4.y;\n"
+        "  gl_Position = g_ModelViewProjectionMatrix * vec4(position, 1.0);\n"
+        "  v_TexCoord = a_TexCoordVec4.xy;\n"
+        "}\n";
+    const auto  project = WriteShaderFixture(root_ / "trail-project", "metal_trail_probe", vertex);
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "trail-cache", loaded, error)) << error;
+
+    auto* node = FirstDrawableNode(loaded.scene->sceneGraph.get());
+    ASSERT_NE(node, nullptr);
+    auto* source_mesh = node->Mesh();
+    ASSERT_NE(source_mesh, nullptr);
+    auto material = source_mesh->MaterialSlotPtr(0);
+    ASSERT_NE(material, nullptr);
+
+    auto dynamic_mesh = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
+    std::vector<SceneVertexArray::SceneVertexAttribute> attributes {
+        { WE_IN_POSITION.data(), VertexType::FLOAT3 },
+        { WE_IN_TEXCOORDVEC4.data(), VertexType::FLOAT4 },
+        { WE_IN_COLOR.data(), VertexType::FLOAT4 },
+        { WE_IN_TEXCOORDVEC4C1.data(), VertexType::FLOAT4 },
+        { WE_IN_TEXCOORDC2.data(), VertexType::FLOAT2 },
+    };
+    constexpr std::size_t kQuads = 4;
+    dynamic_mesh->AddVertexArray(SceneVertexArray(attributes, kQuads * 4));
+    dynamic_mesh->AddIndexArray(SceneIndexArray(kQuads));
+    dynamic_mesh->GetVertexArray(0).SetOption(WE_PRENDER_SPRITE, true);
+    dynamic_mesh->GetVertexArray(0).SetOption(WE_PRENDER_TRAIL, true);
+    dynamic_mesh->GetVertexArray(0).SetOption(WE_CB_THICK_FORMAT, true);
+    dynamic_mesh->MaterialSlots().push_back(material);
+    node->AddMesh(dynamic_mesh);
+
+    ASSERT_EQ(SelectSceneBackend(*loaded.scene).backend, SceneBackend::NativeMetal)
+        << SelectSceneBackend(*loaded.scene).fallback_reason;
+
+    @autoreleasepool {
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (device == nil) {
+            GTEST_SKIP() << "no Metal device on this machine; the native draw was not exercised";
+        }
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(640, 360);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 640,
+            .height               = 360,
+            .render_width         = 640,
+            .render_height        = 360,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        for (int frame = 0; frame < 3; ++frame) {
+            ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+            loaded.scene->PassFrameTime(1.0 / 60.0);
+        }
+        const auto empty = ReadOutput(render, *loaded.scene);
+        ASSERT_FALSE(empty.empty());
+
+        auto& vertices = dynamic_mesh->GetVertexArray(0);
+        auto& indices  = dynamic_mesh->GetIndexArray(0);
+        const std::array<float, 2> uv[4] { { 0.0f, 1.0f }, { 1.0f, 1.0f }, { 1.0f, 0.0f }, { 0.0f, 0.0f } };
+        std::array<float, 20 * 4>  particle {};
+        for (int i = 0; i < 4; ++i) {
+            float* v = particle.data() + i * 20;
+            v[0]  = 0.0f;
+            v[1]  = 0.0f;
+            v[2]  = 0.0f;
+            v[4]  = uv[i][0];
+            v[5]  = uv[i][1];
+            v[6]  = 0.0f;
+            v[7]  = 40.0f;
+            v[8]  = 1.0f;
+            v[9]  = 1.0f;
+            v[10] = 1.0f;
+            v[11] = 1.0f;
+            v[12] = 80.0f;
+            v[13] = 0.0f;
+            v[14] = 0.0f;
+            v[15] = 1.0f;
+        }
+        vertices.SetVertexs(0, particle);
+        const std::array<uint16_t, 6> quad_indices { 0, 1, 3, 1, 2, 3 };
+        indices.AssignHalf(0, quad_indices);
+        indices.SetRenderDataCount(3);
+        dynamic_mesh->SetDirty();
+
+        for (int frame = 0; frame < 5; ++frame) {
+            ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+            loaded.scene->PassFrameTime(1.0 / 60.0);
+        }
+        const auto filled = ReadOutput(render, *loaded.scene);
+        EXPECT_NE(filled, empty)
+            << "a sprite-trail layout uploaded after the graph was compiled never reached the target";
+
+        render.destroy();
+    }
+}
+
+namespace
+{
+
+/// Wallpaper Engine's own shipped assets, where the editor's particle renderer
+/// previews live. Resolved from the environment, never from a fixed home
+/// directory; absent on a clean checkout, in which case the test below skips.
+std::filesystem::path LocalSceneAssetsRoot()
+{
+    if (const char* assets = std::getenv("WE_TEST_ASSETS"); assets != nullptr && *assets != '\0') {
+        return assets;
+    }
+    const char* home = std::getenv("HOME");
+    if (home == nullptr || *home == '\0') return {};
+    return std::filesystem::path(home) / "Library/Application Support/mac-wallpaper-engine/SceneAssets";
+}
+
+std::size_t DifferingBytes(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b)
+{
+    if (a.size() != b.size()) return std::max(a.size(), b.size());
+    std::size_t differing = 0;
+    for (std::size_t i = 0; i < a.size(); ++i) differing += a[i] != b[i] ? 1u : 0u;
+    return differing;
+}
+
+} // namespace
+
+TEST_F(MetalSceneDraw, TheShippedRopeAndTrailPreviewScenesAreParsedTranslatedAndDrawnNatively)
+{
+    // The production path end to end, on content this repository does not own:
+    // the real project file, the real particle definition, the author's own
+    // `genericparticle` / `genericropeparticle` shaders through the structured
+    // translation, the shared simulation, and this backend's dynamic upload.
+    // What it proves is that each renderer is accepted and that simulated
+    // geometry reaches the target. It does not judge how the result looks.
+    const auto assets = LocalSceneAssetsRoot();
+    const auto previews = assets / "scenes/particleelementpreviews";
+    if (assets.empty() || ! std::filesystem::is_directory(previews)) {
+        GTEST_SKIP() << "Wallpaper Engine's shipped assets are not installed here; the rope, rope "
+                        "trail and sprite trail renderers were not exercised on real content";
+    }
+
+    for (const std::string name : { "spritetrail", "rope", "ropetrail" }) {
+        SCOPED_TRACE(name);
+        const auto directory = previews / name;
+        const auto project   = directory / "project.json";
+        if (! std::filesystem::is_regular_file(project)) {
+            ADD_FAILURE() << "the shipped assets have no preview scene for this renderer";
+            continue;
+        }
+
+        // The same variable the offscreen probe honours, so one seed makes the
+        // two backends simulate the same particles and their frames comparable.
+        if (const char* seed = std::getenv("WE_TEST_RANDOM_SEED")) {
+            Random::seed(static_cast<uint32_t>(std::strtoul(seed, nullptr, 10)));
+        }
+        LoadedScene loaded;
+        ASSERT_TRUE(loaded.vfs.Mount("/assets", fs::CreatePhysicalFs(assets.string()), "assets"));
+        ASSERT_TRUE(loaded.vfs.Mount("/assets", fs::CreatePhysicalFs(directory.string()), "scene"));
+        ASSERT_TRUE(loaded.vfs.Mount(
+            "/cache", fs::CreatePhysicalFs((root_ / ("cache-" + name)).string(), true), "cache"));
+        InstallVirtualAssets(loaded.vfs);
+        std::string error;
+        ASSERT_TRUE(ParseProjectProperties(project.string(), &loaded.properties, &error)) << error;
+        auto source = loaded.vfs.Open("/assets/scene.json");
+        ASSERT_NE(source, nullptr);
+        WPSceneParser parser;
+        loaded.scene = parser.Parse(SceneParseRequest {
+                                        .scene_id           = "metal-preview-" + name,
+                                        .project_path       = project.string(),
+                                        .project_properties = &loaded.properties,
+                                    },
+                                    source->ReadAllStr(), loaded.vfs, loaded.sound);
+        ASSERT_NE(loaded.scene, nullptr);
+        ASSERT_NE(loaded.scene->paritileSys, nullptr);
+        ASSERT_TRUE(loaded.scene->paritileSys->HasEmitters())
+            << "the preview scene's particle object did not load";
+
+        const auto selection = SelectSceneBackend(*loaded.scene);
+        ASSERT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+
+        @autoreleasepool {
+            id<MTLDevice> device       = MTLCreateSystemDefaultDevice();
+            CAMetalLayer* layer        = [CAMetalLayer layer];
+            layer.device               = device;
+            layer.pixelFormat          = MTLPixelFormatBGRA8Unorm;
+            layer.drawableSize         = CGSizeMake(512, 512);
+            layer.framebufferOnly      = NO;
+
+            MetalRender         render;
+            MetalRenderInitInfo info {
+                .metal_layer          = (__bridge void*)layer,
+                .width                = 512,
+                .height               = 512,
+                .render_width         = 512,
+                .render_height        = 512,
+                .display_scale_factor = 1.0,
+            };
+            ASSERT_TRUE(render.init(info)) << render.lastError();
+            auto graph = sceneToRenderGraph(*loaded.scene);
+            ASSERT_NE(graph, nullptr);
+            ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+            render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+            // Before the first tick nothing has been emitted.
+            ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+            const auto empty = ReadOutput(render, *loaded.scene);
+            ASSERT_FALSE(empty.empty());
+
+            // The wallpaper's own frame order: simulate, tick, draw, pass time.
+            for (int frame = 0; frame < 90; ++frame) {
+                loaded.scene->paritileSys->Emitt();
+                if (loaded.scene->runtime != nullptr) loaded.scene->runtime->Tick(1.0 / 60.0);
+                ASSERT_TRUE(render.drawFrame(*loaded.scene)) << "frame " << frame << ": "
+                                                             << render.lastError();
+                loaded.scene->PassFrameTime(1.0 / 60.0);
+            }
+            const auto simulated = ReadOutput(render, *loaded.scene);
+            EXPECT_GT(DifferingBytes(simulated, empty), 64u)
+                << "a second and a half of simulation drew nothing through the native backend";
+
+            // Opt-in, for looking at the result by hand: the same variable the
+            // offscreen probe writes its frames under. Nothing is written
+            // otherwise, and nothing here reads a display.
+            if (const char* output = std::getenv("WE_TEST_OUTPUT");
+                output != nullptr && *output != '\0' && simulated.size() % 4 == 0) {
+                const std::size_t pixels = simulated.size() / 4;
+                const std::size_t side   = static_cast<std::size_t>(std::sqrt(double(pixels)));
+                if (side * side == pixels) {
+                    std::filesystem::create_directories(output);
+                    std::ofstream image(std::filesystem::path(output) / ("metal-" + name + ".ppm"),
+                                        std::ios::binary);
+                    image << "P6\n" << side << " " << side << "\n255\n";
+                    for (std::size_t i = 0; i < pixels; ++i) {
+                        image.write(reinterpret_cast<const char*>(simulated.data() + i * 4), 3);
+                    }
+                }
+            }
+
+            render.destroy();
+        }
+    }
+}
+
+TEST_F(MetalSceneDraw, TheShippedImageShaderSkinsAPuppetThroughTheNativeBackend)
+{
+    // The probe shader above proves the matrix convention; this proves the
+    // author's own `genericimage2`, compiled with the two combos the model
+    // parser gives a puppet, survives the structured translation with a bone
+    // array the runtime can fill and bone-weight inputs the mesh can feed.
+    const auto assets = LocalSceneAssetsRoot();
+    if (assets.empty() || ! std::filesystem::is_regular_file(assets / "shaders/genericimage2.vert")) {
+        GTEST_SKIP() << "Wallpaper Engine's shipped shaders are not installed here; the real "
+                        "skinning shader was not translated";
+    }
+
+    const auto directory = root_ / "real-skin-project";
+    const std::map<std::string, std::string> files {
+        { "project.json",
+          R"({"title":"Metal puppet probe","type":"scene","file":"scene.json","general":{"properties":{}}})" },
+        { "models/tile.json", R"({"width":256,"height":192,"material":"materials/skin.json"})" },
+        { "materials/skin.json",
+          R"({"passes":[{"shader":"genericimage2","blending":"translucent","cullmode":"nocull",)"
+          R"("depthtest":"disabled","depthwrite":"disabled","textures":["util/white"],)"
+          R"("combos":{"SKINNING":1,"BONECOUNT":2}}]})" },
+        { "scene.json",
+          R"({"camera":{"center":[0,0,0],"eye":[0,0,1],"up":[0,1,0]},)"
+          R"("general":{"ambientcolor":[0,0,0],"skylightcolor":[0,0,0],"clearcolor":[0.0,0.0,0.0],)"
+          R"("cameraparallax":false,"orthogonalprojection":{"width":384,"height":256}},)"
+          R"("objects":[{"id":1,"name":"tile","image":"models/tile.json","origin":[192,128,0],)"
+          R"("scale":[1,1,1],"angles":[0,0,0],"visible":true}]})" },
+    };
+    for (const auto& [name, contents] : files) {
+        const auto path = directory / name;
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream(path) << contents;
+    }
+
+    LoadedScene loaded;
+    ASSERT_TRUE(loaded.vfs.Mount("/assets", fs::CreatePhysicalFs(assets.string()), "assets"));
+    ASSERT_TRUE(loaded.vfs.Mount("/assets", fs::CreatePhysicalFs(directory.string()), "scene"));
+    ASSERT_TRUE(loaded.vfs.Mount(
+        "/cache", fs::CreatePhysicalFs((root_ / "real-skin-cache").string(), true), "cache"));
+    InstallVirtualAssets(loaded.vfs);
+    std::string error;
+    const auto  project = directory / "project.json";
+    ASSERT_TRUE(ParseProjectProperties(project.string(), &loaded.properties, &error)) << error;
+    auto source = loaded.vfs.Open("/assets/scene.json");
+    ASSERT_NE(source, nullptr);
+    WPSceneParser parser;
+    loaded.scene = parser.Parse(SceneParseRequest {
+                                    .scene_id           = "metal-real-skin",
+                                    .project_path       = project.string(),
+                                    .project_properties = &loaded.properties,
+                                },
+                                source->ReadAllStr(), loaded.vfs, loaded.sound);
+    ASSERT_NE(loaded.scene, nullptr);
+
+    auto* node = FirstDrawableNode(loaded.scene->sceneGraph.get());
+    ASSERT_NE(node, nullptr);
+    auto material = node->Mesh()->MaterialSlotPtr(0);
+    ASSERT_NE(material, nullptr);
+    ASSERT_NE(material->customShader.shader, nullptr);
+    const auto* program = material->customShader.shader->metal_program.get();
+    ASSERT_NE(program, nullptr);
+    ASSERT_TRUE(program->ok()) << program->error;
+
+    MetalShaderReflection reflection;
+    std::string           reflection_error;
+    ASSERT_TRUE(ParseMetalShaderReflection(program->reflection_json, reflection, &reflection_error))
+        << reflection_error;
+    const auto* bones = reflection.member("g_Bones");
+    ASSERT_NE(bones, nullptr) << "the skinning combo did not reach the translated program";
+    EXPECT_EQ(bones->array_count, 2u);
+    EXPECT_EQ(bones->array_stride, 64u);
+
+    auto layer = MakeSlidingPuppetLayer();
+    node->AddMesh(MakeTwoQuadSkinnedMesh(material));
+    WPShaderValueData data;
+    data.puppet_layer = layer;
+    static_cast<WPShaderValueUpdater*>(loaded.scene->shaderValueUpdater.get())
+        ->SetNodeData(node, data);
+
+    const auto selection = SelectSceneBackend(*loaded.scene);
+    ASSERT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+
+    @autoreleasepool {
+        id<MTLDevice> device       = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer_view   = [CAMetalLayer layer];
+        layer_view.device          = device;
+        layer_view.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer_view.drawableSize    = CGSizeMake(640, 360);
+        layer_view.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer_view,
+            .width                = 640,
+            .height               = 360,
+            .render_width         = 640,
+            .render_height        = 360,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+        const auto at_rest = ReadOutput(render, *loaded.scene);
+        loaded.scene->PassFrameTime(0.2);
+        ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+        const auto slid = ReadOutput(render, *loaded.scene);
+        EXPECT_NE(slid, at_rest) << "the author's skinning shader drew the same picture for two poses";
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, ARopeTrailTooLargeForItsIndexBudgetIsStillDrawnAsItWasBefore)
+{
+    // Sixteen-bit indices hold 16 383 quads. A rope trail that cannot fit even
+    // without subdivision is not dropped: it is loaded the way every rope trail
+    // was before rope trails existed, as a sprite trail, and the log says so.
+    const auto assets  = LocalSceneAssetsRoot();
+    const auto preview = assets / "scenes/particleelementpreviews/ropetrail";
+    if (assets.empty() || ! std::filesystem::is_regular_file(preview / "project.json")) {
+        GTEST_SKIP() << "Wallpaper Engine's shipped assets are not installed here; the rope trail "
+                        "budget fallback was not exercised";
+    }
+
+    const auto directory = root_ / "big-ropetrail";
+    std::filesystem::create_directories(directory);
+    std::filesystem::copy(preview, directory, std::filesystem::copy_options::recursive);
+    const auto particle_path = directory / "particles/new_particle_system.json";
+    nlohmann::json particle;
+    {
+        std::ifstream input(particle_path);
+        ASSERT_TRUE(input.good());
+        particle = nlohmann::json::parse(input);
+    }
+    // 5000 particles x 10 segments is 50 000 quads at subdivision 1.
+    particle["maxcount"] = 5000;
+    std::ofstream(particle_path) << particle.dump();
+
+    LoadedScene loaded;
+    ASSERT_TRUE(loaded.vfs.Mount("/assets", fs::CreatePhysicalFs(assets.string()), "assets"));
+    ASSERT_TRUE(loaded.vfs.Mount("/assets", fs::CreatePhysicalFs(directory.string()), "scene"));
+    ASSERT_TRUE(loaded.vfs.Mount(
+        "/cache", fs::CreatePhysicalFs((root_ / "big-ropetrail-cache").string(), true), "cache"));
+    InstallVirtualAssets(loaded.vfs);
+    std::string error;
+    const auto  project = directory / "project.json";
+    ASSERT_TRUE(ParseProjectProperties(project.string(), &loaded.properties, &error)) << error;
+    auto source = loaded.vfs.Open("/assets/scene.json");
+    ASSERT_NE(source, nullptr);
+    WPSceneParser parser;
+    loaded.scene = parser.Parse(SceneParseRequest {
+                                    .scene_id           = "metal-big-ropetrail",
+                                    .project_path       = project.string(),
+                                    .project_properties = &loaded.properties,
+                                },
+                                source->ReadAllStr(), loaded.vfs, loaded.sound);
+    ASSERT_NE(loaded.scene, nullptr);
+    ASSERT_TRUE(loaded.scene->paritileSys->HasEmitters())
+        << "the over-budget rope trail was dropped instead of drawn";
+
+    auto* node = FirstDrawableNode(loaded.scene->sceneGraph.get());
+    ASSERT_NE(node, nullptr);
+    ASSERT_GT(node->Mesh()->VertexCount(), 0u);
+    const auto& vertices = node->Mesh()->GetVertexArray(0);
+    EXPECT_TRUE(vertices.GetOption(WE_PRENDER_SPRITE));
+    EXPECT_TRUE(vertices.GetOption(WE_PRENDER_TRAIL));
+    EXPECT_FALSE(vertices.GetOption(WE_PRENDER_ROPE));
+    EXPECT_FALSE(vertices.GetOption(WE_PRENDER_ROPETRAIL));
+
+    const auto selection = SelectSceneBackend(*loaded.scene);
+    EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+}
+
+namespace
+{
+
+uint16_t PackageVersionOf(const std::string& path)
+{
+    std::ifstream file(path, std::ios::binary);
+    uint32_t      length = 0;
+    file.read(reinterpret_cast<char*>(&length), sizeof(length));
+    if (! file || length < 5 || length > 64) return SceneParseRequest::kUnknownPkgVersion;
+    std::string stamp(length, '\0');
+    file.read(stamp.data(), length);
+    if (! file || ! stamp.starts_with("PKGV")) return SceneParseRequest::kUnknownPkgVersion;
+    uint16_t version       = 0;
+    const auto [end, code] = std::from_chars(stamp.data() + 4, stamp.data() + stamp.size(), version);
+    return code == std::errc {} && end == stamp.data() + stamp.size()
+               ? version
+               : SceneParseRequest::kUnknownPkgVersion;
+}
+
+} // namespace
+
+TEST_F(MetalSceneDraw, LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBackend)
+{
+    // For content this repository cannot carry -- a real puppet most of all.
+    // `WE_TEST_METAL_PROJECTS` is a colon-separated list of `project.json`
+    // paths; each is parsed exactly as the wallpaper loads it and its backend
+    // decision is printed. A scene that falls back is reported with its reason
+    // and is not a failure here: what must hold is that an ACCEPTED scene
+    // prepares and draws every frame, because an accepted scene has no other
+    // renderer behind it.
+    const char* listed = std::getenv("WE_TEST_METAL_PROJECTS");
+    const auto  assets = LocalSceneAssetsRoot();
+    if (listed == nullptr || *listed == '\0' || assets.empty() ||
+        ! std::filesystem::is_directory(assets)) {
+        GTEST_SKIP() << "WE_TEST_METAL_PROJECTS names no local project; no real wallpaper was "
+                        "drawn natively";
+    }
+
+    std::vector<std::string> projects;
+    for (std::string_view rest = listed; ! rest.empty();) {
+        const auto colon = rest.find(':');
+        if (colon != 0) projects.emplace_back(rest.substr(0, colon));
+        if (colon == std::string_view::npos) break;
+        rest.remove_prefix(colon + 1);
+    }
+
+    std::size_t index = 0;
+    for (const auto& project : projects) {
+        SCOPED_TRACE(project);
+        const std::string label = "local-" + std::to_string(index++);
+
+        SceneSourcePaths paths;
+        std::string      error;
+        ASSERT_TRUE(ResolveSceneSourcePaths(project, &paths, &error)) << error;
+
+        LoadedScene loaded;
+        ASSERT_TRUE(loaded.vfs.Mount("/assets", fs::CreatePhysicalFs(assets.string()), "assets"));
+        if (std::filesystem::exists(paths.pkg_path)) {
+            ASSERT_TRUE(loaded.vfs.Mount("/assets", fs::WPPkgFs::CreatePkgFs(paths.pkg_path)));
+        } else {
+            ASSERT_TRUE(loaded.vfs.Mount("/assets", fs::CreatePhysicalFs(paths.pkg_dir)));
+        }
+        ASSERT_TRUE(loaded.vfs.Mount(
+            "/cache", fs::CreatePhysicalFs((root_ / ("cache-" + label)).string(), true), "cache"));
+        InstallVirtualAssets(loaded.vfs);
+        ASSERT_TRUE(ParseProjectProperties(project, &loaded.properties, &error)) << error;
+        auto source = loaded.vfs.Open("/assets/" + paths.pkg_entry);
+        ASSERT_NE(source, nullptr);
+        WPSceneParser parser;
+        loaded.scene = parser.Parse(SceneParseRequest {
+                                        .scene_id           = paths.scene_id,
+                                        .project_path       = project,
+                                        .project_properties = &loaded.properties,
+                                        .pkg_version        = PackageVersionOf(paths.pkg_path),
+                                    },
+                                    source->ReadAllStr(), loaded.vfs, loaded.sound);
+        ASSERT_NE(loaded.scene, nullptr);
+
+        const auto selection = SelectSceneBackend(*loaded.scene);
+        if (selection.backend != SceneBackend::NativeMetal) {
+            std::cout << "[ LOCAL    ] " << paths.scene_id << ": Compatibility -- "
+                      << selection.fallback_reason << std::endl;
+            continue;
+        }
+
+        @autoreleasepool {
+            id<MTLDevice> device       = MTLCreateSystemDefaultDevice();
+            CAMetalLayer* layer        = [CAMetalLayer layer];
+            layer.device               = device;
+            layer.pixelFormat          = MTLPixelFormatBGRA8Unorm;
+            layer.drawableSize         = CGSizeMake(960, 540);
+            layer.framebufferOnly      = NO;
+
+            MetalRender         render;
+            MetalRenderInitInfo info {
+                .metal_layer          = (__bridge void*)layer,
+                .width                = 960,
+                .height               = 540,
+                .render_width         = 960,
+                .render_height        = 540,
+                .display_scale_factor = 1.0,
+            };
+            ASSERT_TRUE(render.init(info)) << render.lastError();
+            auto graph = sceneToRenderGraph(*loaded.scene);
+            ASSERT_NE(graph, nullptr);
+            if (! render.compileRenderGraph(*loaded.scene, *graph)) {
+                // The production router treats this as a fallback too, with
+                // this text as the reason.
+                std::cout << "[ LOCAL    ] " << paths.scene_id
+                          << ": Compatibility after prepare -- " << render.lastError() << std::endl;
+                render.destroy();
+                continue;
+            }
+            render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTCROP);
+
+            std::vector<uint8_t> first;
+            for (int frame = 0; frame < 120; ++frame) {
+                loaded.scene->paritileSys->Emitt();
+                if (loaded.scene->runtime != nullptr) {
+                    loaded.scene->runtime->Tick(1.0 / 60.0);
+                    loaded.scene->runtime->PumpTextLayerCache();
+                }
+                ASSERT_TRUE(render.drawFrame(*loaded.scene))
+                    << "frame " << frame << ": " << render.lastError();
+                if (frame == 0) first = ReadOutput(render, *loaded.scene);
+                loaded.scene->PassFrameTime(1.0 / 60.0);
+            }
+            const auto last = ReadOutput(render, *loaded.scene);
+            std::cout << "[ LOCAL    ] " << paths.scene_id << ": Native Metal, 120 frames drawn, "
+                      << DifferingBytes(first, last) << " bytes differ between the first and the last"
+                      << std::endl;
+
+            if (const char* output = std::getenv("WE_TEST_OUTPUT");
+                output != nullptr && *output != '\0' && ! last.empty()) {
+                uint32_t width  = 0;
+                uint32_t height = 0;
+                std::vector<uint8_t> rgba;
+                if (render.ReadRenderTargetForTests(loaded.scene->ResolveRenderTargetName(SpecTex_Default),
+                                                    rgba, width, height) &&
+                    width > 0 && height > 0) {
+                    std::filesystem::create_directories(output);
+                    std::ofstream image(std::filesystem::path(output) / ("metal-" + label + ".ppm"),
+                                        std::ios::binary);
+                    image << "P6\n" << width << " " << height << "\n255\n";
+                    for (std::size_t i = 0; i < std::size_t(width) * height; ++i) {
+                        image.write(reinterpret_cast<const char*>(rgba.data() + i * 4), 3);
+                    }
+                }
+            }
+            render.destroy();
+        }
     }
 }

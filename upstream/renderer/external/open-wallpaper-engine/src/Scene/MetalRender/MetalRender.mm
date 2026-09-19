@@ -48,6 +48,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 // The mirrored enumerators the rest of this library is written against have to
@@ -227,8 +228,12 @@ MTLSamplerMinMagFilter ToMetalFilter(TextureFilter filter)
 /// Uncompressed formats only. Block-compressed source images are rejected
 /// rather than decoded here: silently expanding them would change memory use
 /// and filtering behaviour relative to the compatibility backend.
-bool ToMetalImageFormat(TextureFormat format, MTLPixelFormat& out, uint32_t& bytes_per_pixel)
+/// `block_bytes` is non-zero for a block-compressed format, where a row is
+/// counted in 4x4 blocks rather than pixels and `bytes_per_pixel` means nothing.
+bool ToMetalImageFormat(TextureFormat format, bool block_compression, MTLPixelFormat& out,
+                        uint32_t& bytes_per_pixel, uint32_t& block_bytes)
 {
+    block_bytes = 0;
     switch (format) {
     case TextureFormat::RGBA8:
         out             = MTLPixelFormatRGBA8Unorm;
@@ -242,10 +247,23 @@ bool ToMetalImageFormat(TextureFormat format, MTLPixelFormat& out, uint32_t& byt
         out             = MTLPixelFormatR8Unorm;
         bytes_per_pixel = 1;
         return true;
-    case TextureFormat::RGB8:
+    // The same three formats the compatibility backend hands to the same GPU
+    // through MoltenVK, uploaded as the blocks the file already holds. A device
+    // without them refuses the image, and with it the scene, rather than
+    // decoding on the CPU into a texture four to eight times the size.
     case TextureFormat::BC1:
+        out         = MTLPixelFormatBC1_RGBA;
+        block_bytes = 8;
+        return block_compression;
     case TextureFormat::BC2:
-    case TextureFormat::BC3: return false;
+        out         = MTLPixelFormatBC2_RGBA;
+        block_bytes = 16;
+        return block_compression;
+    case TextureFormat::BC3:
+        out         = MTLPixelFormatBC3_RGBA;
+        block_bytes = 16;
+        return block_compression;
+    case TextureFormat::RGB8: return false;
     }
     return false;
 }
@@ -317,9 +335,17 @@ struct MetalResourcePlan
 std::string BuildMetalResourcePlan(const std::vector<SceneMetalStage>& stages,
                                    const MetalUniformBlock*            uniform_block,
                                    std::size_t                         texture_count,
+                                   const std::vector<uint32_t>&        active_texture_slots,
                                    MetalResourcePlan&                  out)
 {
     out.texture_slots.assign(texture_count, MetalRenderTextureSlotBinding {});
+    // A slot the shader declares but never samples needs no texture behind it:
+    // Metal leaves an unused argument unbound. One it does sample, with nothing
+    // in the material to bind, is a genuine failure and stays one.
+    const auto sampled = [&active_texture_slots](std::size_t slot) {
+        return std::find(active_texture_slots.begin(), active_texture_slots.end(),
+                         static_cast<uint32_t>(slot)) != active_texture_slots.end();
+    };
     for (const auto& stage : stages) {
         const bool vertex_stage = stage.kind == SceneMetalStageKind::Vertex;
         for (const auto& binding : stage.bindings) {
@@ -363,7 +389,9 @@ std::string BuildMetalResourcePlan(const std::vector<SceneMetalStage>& stages,
             const auto texture_slot = vulkan::detail::CustomShaderTextureSlot(binding.name);
             if (texture_slot.has_value()) {
                 if (*texture_slot >= out.texture_slots.size()) {
-                    return "a shader samples a texture slot the material does not have";
+                    if (! sampled(*texture_slot)) continue;
+                    return "a shader samples texture slot " + std::to_string(*texture_slot) +
+                           ", which the material does not have";
                 }
                 auto& slot = out.texture_slots[*texture_slot];
                 if (binding.slot_kind == SceneMetalSlotKind::Texture) {
@@ -380,7 +408,9 @@ std::string BuildMetalResourcePlan(const std::vector<SceneMetalStage>& stages,
             const auto sampler_slot = vulkan::detail::CustomShaderSamplerSlot(binding.name);
             if (sampler_slot.has_value()) {
                 if (*sampler_slot >= out.texture_slots.size()) {
-                    return "a shader samples a texture slot the material does not have";
+                    if (! sampled(*sampler_slot)) continue;
+                    return "a shader samples texture slot " + std::to_string(*sampler_slot) +
+                           ", which the material does not have";
                 }
                 auto& slot = out.texture_slots[*sampler_slot];
                 (vertex_stage ? slot.vertex_sampler : slot.fragment_sampler) =
@@ -1058,6 +1088,10 @@ struct MetalRender::Impl
     NSUInteger            frame_slot { 0 };
     bool                  inited { false };
     std::string           last_error;
+    /// Set while a frame's uniforms are written when a value cannot be placed
+    /// the way its shader laid it out. The frame is then failed rather than
+    /// drawn from a block whose neighbouring members may have been overwritten.
+    std::string           uniform_error;
     /// This surface's regenerable compile cache, set with its scene. Empty
     /// until a host supplies one, and empty means no archive at all.
     std::string           pipeline_archive_root;
@@ -1750,9 +1784,15 @@ void MetalRender::Impl::refreshRuntimeImages(Scene& scene)
         const auto& mipmap = source.mipmaps.front();
         if (mipmap.data == nullptr || mipmap.width <= 0 || mipmap.height <= 0) continue;
 
+        // A runtime image is pixels the runtime rasterised, never blocks, so
+        // block compression is not offered here.
         MTLPixelFormat format {};
         uint32_t       bytes_per_pixel = 0;
-        if (! ToMetalImageFormat(parsed->header.format, format, bytes_per_pixel)) continue;
+        uint32_t       block_bytes     = 0;
+        if (! ToMetalImageFormat(parsed->header.format, false, format, bytes_per_pixel,
+                                 block_bytes)) {
+            continue;
+        }
 
         const auto width  = static_cast<uint32_t>(mipmap.width);
         const auto height = static_cast<uint32_t>(mipmap.height);
@@ -1860,7 +1900,11 @@ id<MTLTexture> MetalRender::Impl::resolveTexture(Scene& scene, const std::string
 
     MTLPixelFormat format {};
     uint32_t       bytes_per_pixel = 0;
-    if (! ToMetalImageFormat(parsed->header.format, format, bytes_per_pixel)) return nil;
+    uint32_t       block_bytes     = 0;
+    if (! ToMetalImageFormat(parsed->header.format, device.supportsBCTextureCompression, format,
+                             bytes_per_pixel, block_bytes)) {
+        return nil;
+    }
 
     // Every slot for a sprite sheet, the first one for anything else. A sheet
     // whose frames are spread over several images names the one it wants
@@ -1891,16 +1935,31 @@ id<MTLTexture> MetalRender::Impl::resolveTexture(Scene& scene, const std::string
 
         id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
         if (texture == nil) break;
+        bool complete = true;
         for (std::size_t level = 0; level < slot.mipmaps.size(); ++level) {
             const auto& mipmap = slot.mipmaps[level];
             if (mipmap.data == nullptr || mipmap.width <= 0 || mipmap.height <= 0) continue;
             MTLRegion region = MTLRegionMake2D(0, 0, (NSUInteger)mipmap.width,
                                                (NSUInteger)mipmap.height);
+            NSUInteger bytes_per_row = (NSUInteger)mipmap.width * bytes_per_pixel;
+            if (block_bytes > 0) {
+                const NSUInteger blocks_wide = ((NSUInteger)mipmap.width + 3) / 4;
+                const NSUInteger blocks_high = ((NSUInteger)mipmap.height + 3) / 4;
+                bytes_per_row                = blocks_wide * block_bytes;
+                // A level shorter than its own block grid would be read past
+                // its end by the copy below.
+                if (mipmap.size < 0 ||
+                    (NSUInteger)mipmap.size < bytes_per_row * blocks_high) {
+                    complete = false;
+                    break;
+                }
+            }
             [texture replaceRegion:region
                        mipmapLevel:level
                          withBytes:mipmap.data.get()
-                       bytesPerRow:(NSUInteger)mipmap.width * bytes_per_pixel];
+                       bytesPerRow:bytes_per_row];
         }
+        if (! complete) break;
         slot_textures.push_back(texture);
     }
     if (slot_textures.empty()) return nil;
@@ -2092,9 +2151,11 @@ bool MetalRender::Impl::prepareDraw(Scene& scene, std::size_t index, PreparedPas
     out.uniform_size          = uniform_block != nullptr ? uniform_block->size : 0;
     MetalResourcePlan plan;
     if (auto plan_error = BuildMetalResourcePlan(program->stages, uniform_block,
-                                                 desc.texture_keys.size(), plan);
+                                                 desc.texture_keys.size(),
+                                                 out.reflection.active_texture_slots, plan);
         ! plan_error.empty()) {
-        return fail(std::move(plan_error));
+        // Named, because "which shader" is the whole diagnosis for an author.
+        return fail(plan_error + " (" + material->name + ")");
     }
     if (plan.has_chroma) {
         return fail("a shader binds a video plane the ordinary program has no use for");
@@ -2215,14 +2276,22 @@ bool MetalRender::Impl::prepareDraw(Scene& scene, std::size_t index, PreparedPas
         // The buffer that actually carries this attribute, falling back to the
         // first one exactly as the compatibility backend does when a shader
         // declares an input the mesh does not provide.
-        std::size_t source = 0;
-        std::size_t offset = 0;
+        std::size_t source   = 0;
+        std::size_t offset   = 0;
+        bool        provided = false;
         for (std::size_t i = 0; i < attribute_maps.size(); ++i) {
             const auto found = attribute_maps[i].find(input.name);
             if (found == attribute_maps[i].end()) continue;
-            source = i;
-            offset = found->second.offset;
+            source   = i;
+            offset   = found->second.offset;
+            provided = true;
             break;
+        }
+        // The fallback below is tolerable for an input a shader never really
+        // uses. Bone indices are not that: read from whatever sits at offset
+        // zero they index the bone array with a position's bit pattern.
+        if (! provided && (input.name == WE_IN_BLENDINDICES || input.name == WE_IN_BLENDWEIGHTS)) {
+            return fail("a puppet shader is bound to a mesh without bone weights");
         }
         vertex_descriptor.attributes[input.location].format      = format;
         vertex_descriptor.attributes[input.location].offset      = offset;
@@ -2349,7 +2418,8 @@ bool MetalRender::Impl::installVideoPlaneDraw(Scene& scene, std::size_t index, P
 
     MetalResourcePlan plan;
     if (auto plan_error = BuildMetalResourcePlan(variant.stages, uniform_block,
-                                                 desc.texture_keys.size(), plan);
+                                                 desc.texture_keys.size(),
+                                                 draw.reflection.active_texture_slots, plan);
         ! plan_error.empty()) {
         return refuse(plan_error);
     }
@@ -2675,6 +2745,21 @@ void MetalRender::Impl::writeUniforms(Scene& scene, const ScenePassDescription& 
         }
 
         const std::size_t bytes = count * sizeof(float);
+        // A pose is one 4x4 matrix per bone, written element by element through
+        // the reflected stride. A pose of a different length than the shader's
+        // `g_Bones[N]`, or a stride it does not fit, has no correct placement:
+        // the contiguous copy below would spill into whatever follows the
+        // array, and drawing a truncated skeleton is not a fallback.
+        if (name == G_BONES) {
+            const std::size_t bone_bytes = 16 * sizeof(float);
+            if (member->array_count == 0 || member->array_stride < bone_bytes ||
+                bytes != member->array_count * bone_bytes) {
+                if (uniform_error.empty()) {
+                    uniform_error = "a puppet's bone count does not match its shader";
+                }
+                return;
+            }
+        }
         if (member->array_count > 0 && member->array_stride > 0 &&
             bytes % member->array_count == 0) {
             const std::size_t element_size = bytes / member->array_count;
@@ -3700,6 +3785,11 @@ bool MetalRender::drawFrame(Scene& scene)
             impl.writeUniforms(scene, desc, pass, reflection, planes_active, destination);
         }
         if (scene.shaderValueUpdater != nullptr) scene.shaderValueUpdater->FrameEnd();
+        if (! impl.uniform_error.empty()) {
+            // Nothing has been encoded or recorded for this frame yet.
+            dispatch_semaphore_signal(impl.inflight);
+            return impl.fail(std::exchange(impl.uniform_error, {}));
+        }
 
         // After the uniform pass, never before it: the sprite clock and the
         // node transforms advance in there, and a sample taken first would

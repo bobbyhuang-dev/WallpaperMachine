@@ -3614,6 +3614,77 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
     auto wppartRenderer = particle_obj.renderers.at(0);
     bool render_rope    = sstart_with(wppartRenderer.name, "rope");
     bool hastrail       = send_with(wppartRenderer.name, "trail");
+    bool rope_trail     = render_rope && hastrail;
+
+    u32 subdivision    = render_rope ? std::max(1u, (u32)std::lround(wppartRenderer.subdivision)) : 1u;
+    u32 trail_segments = rope_trail ? std::max(1u, (u32)std::lround(wppartRenderer.segments)) : 0u;
+
+    u32 maxcount = particle_obj.maxcount;
+    maxcount     = std::min(maxcount, 20000u);
+
+    const u32 mesh_maxcount = maxcount * (u32)child_ptr.max_instancecount;
+    if (mesh_maxcount == 0) {
+        LOG_INFO("skip zero-capacity particle mesh for \"%s\" child type=\"%s\" maxcount=%u "
+                 "instances=%zu",
+                 wppartobj.name.c_str(),
+                 child_data.type.c_str(),
+                 maxcount,
+                 child_ptr.max_instancecount);
+        return;
+    }
+
+    // Indices are 16-bit, so one mesh holds at most this many quads. Decided
+    // here, before the shader is chosen, because a rope trail that cannot fit
+    // is drawn the way it was before rope trails existed rather than dropped.
+    constexpr uint64_t kMaxIndexedQuads = 16383;
+    uint64_t           needed_quads     = mesh_maxcount;
+    if (render_rope) {
+        const auto rope_quads = [&] {
+            return rope_trail ? uint64_t(mesh_maxcount) * trail_segments * subdivision
+                              : uint64_t(mesh_maxcount) * subdivision;
+        };
+        needed_quads                   = rope_quads();
+        const u32  authored_subdivision = subdivision;
+        const auto authored_quads       = needed_quads;
+        // Only smoothness is ever given up to fit: particles and segments are
+        // the author's content, subdivision is how finely it is drawn.
+        while (needed_quads > kMaxIndexedQuads && subdivision > 1) {
+            --subdivision;
+            needed_quads = rope_quads();
+        }
+        if (subdivision != authored_subdivision) {
+            LOG_INFO("rope subdivision reduced for \"%s\": authored=%u used=%u quads=%llu (was %llu)",
+                     wppartobj.name.c_str(),
+                     authored_subdivision,
+                     subdivision,
+                     (unsigned long long)needed_quads,
+                     (unsigned long long)authored_quads);
+        }
+        if (needed_quads > kMaxIndexedQuads && rope_trail) {
+            // What every rope trail was until this round: the sprite trail the
+            // project parser used to rename it to. Still drawn, and said so.
+            LOG_ERROR("rope trail \"%s\" needs %llu quads (limit %llu) even without subdivision; "
+                      "drawing it as a sprite trail",
+                      wppartobj.name.c_str(),
+                      (unsigned long long)needed_quads,
+                      (unsigned long long)kMaxIndexedQuads);
+            render_rope    = false;
+            rope_trail     = false;
+            subdivision    = 1;
+            trail_segments = 0;
+            needed_quads   = mesh_maxcount;
+        } else if (needed_quads > kMaxIndexedQuads) {
+            LOG_ERROR("skip particle mesh for \"%s\" child type=\"%s\" maxcount=%u "
+                      "instances=%zu quads=%llu limit=%llu",
+                      wppartobj.name.c_str(),
+                      child_data.type.c_str(),
+                      maxcount,
+                      child_ptr.max_instancecount,
+                      (unsigned long long)needed_quads,
+                      (unsigned long long)kMaxIndexedQuads);
+            return;
+        }
+    }
 
     if (render_rope) particle_obj.material.shader = "genericropeparticle";
 
@@ -3643,18 +3714,24 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
         1000.0f,
     };
 
-    u32 maxcount = particle_obj.maxcount;
-    maxcount     = std::min(maxcount, 20000u);
+    const u32 samples = rope_trail ? trail_segments * subdivision : 0u;
 
     if (hastrail) {
-        double in_SegmentUVTimeOffset           = 0.0;
-        double in_SegmentMaxCount               = maxcount - 1.0;
-        shaderInfo.baseConstSvs["g_RenderVar0"] = std::array {
-            (float)wppartRenderer.length,
-            (float)wppartRenderer.maxlength,
-            (float)in_SegmentUVTimeOffset,
-            (float)in_SegmentMaxCount,
-        };
+        if (rope_trail) {
+            shaderInfo.baseConstSvs["g_RenderVar0"] = std::array {
+                (float)samples,
+                0.0f,
+                0.0f,
+                (float)samples,
+            };
+        } else {
+            shaderInfo.baseConstSvs["g_RenderVar0"] = std::array {
+                (float)wppartRenderer.length,
+                (float)wppartRenderer.maxlength,
+                (float)wppartRenderer.minlength,
+                (float)(maxcount - 1),
+            };
+        }
         shaderInfo.combos["THICKFORMAT"]   = "1";
         shaderInfo.combos["TRAILRENDERER"] = "1";
     }
@@ -3688,27 +3765,18 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
     bool  hasSprite          = material.hasSprite;
     (void)hasSprite;
 
-    bool      thick_format  = material.hasSprite || hastrail;
-    const u32 mesh_maxcount = maxcount * (u32)child_ptr.max_instancecount;
-    if (mesh_maxcount == 0) {
-        LOG_INFO("skip zero-capacity particle mesh for \"%s\" child type=\"%s\" maxcount=%u "
-                 "instances=%zu",
-                 wppartobj.name.c_str(),
-                 child_data.type.c_str(),
-                 maxcount,
-                 child_ptr.max_instancecount);
-        return;
-    }
+    bool thick_format = material.hasSprite || hastrail;
     {
         if (render_rope)
-            SetRopeParticleMesh(mesh, particle_obj, mesh_maxcount, thick_format);
+            SetRopeParticleMesh(mesh, particle_obj, (u32)needed_quads, thick_format);
         else
             SetParticleMesh(mesh, particle_obj, mesh_maxcount, thick_format);
-        // Recorded next to the mesh it describes, so a renderer can tell a
-        // trail renderer's vertex contract from a plain sprite particle's
-        // without re-deriving it from the combos, which are gone by then.
+        // PRENDER_SPRITE / PRENDER_ROPE name the generator; PRENDER_TRAIL marks
+        // any trail; PRENDER_ROPETRAIL is a rope trail that follows one
+        // particle's recorded path. Combos are gone by the time a renderer runs.
         if (hastrail && mesh.VertexCount() > 0) {
             mesh.GetVertexArray(0).SetOption(WE_PRENDER_TRAIL, true);
+            if (rope_trail) mesh.GetVertexArray(0).SetOption(WE_PRENDER_ROPETRAIL, true);
         }
     }
 
@@ -3733,6 +3801,14 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
                 break;
             }
         });
+    particleSub->SetRopeSubdivision(rope_trail ? 1 : subdivision);
+    if (rope_trail && wppartRenderer.length > 0) {
+        particleSub->SetTrail({ .samples = samples,
+                                .period  = (double)wppartRenderer.length / samples });
+    } else if (rope_trail) {
+        LOG_INFO("rope trail \"%s\" has non-positive length; keeping no history",
+                 wppartobj.name.c_str());
+    }
     particleSub->SetRateMultiplier([override_state] {
         return override_state->enabled ? static_cast<double>(override_state->rate) : 1.0;
     });
@@ -3741,7 +3817,7 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
     LoadEmitter(*particleSub,
                 particle_obj,
                 override_state,
-                render_rope,
+                render_rope && ! hastrail,
                 context.scene.get(),
                 is_child ? child_data.controlpointstartindex : 0,
                 node_world_scale);

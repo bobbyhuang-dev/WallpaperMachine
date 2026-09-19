@@ -1,6 +1,7 @@
 // Explicit diagnostic tool. Renders only imported scene assets to private GPU
 // images: no surface, swapchain, AppKit window, audio device or desktop capture.
 #include "Audio/SoundManager.h"
+#include "Core/Random.hpp"
 #include "Audio/AudioResponseService.h"
 #include "Particle/ParticleSystem.h"
 #include "Fs/PhysicalFs.h"
@@ -183,6 +184,11 @@ int main() {
                       audio_hz >= 0.0 && audio_hz <= 6000.0,
                   "WE_TEST_AUDIO_HZ must be 0..6000");
             audio::ResetAudioResponseServiceForTesting();
+        }
+        // A fixed seed makes a particle scene repeatable, so the same project
+        // can be compared frame for frame with another backend's run.
+        if (const char* seed = std::getenv("WE_TEST_RANDOM_SEED")) {
+            Random::seed(static_cast<uint32_t>(std::strtoul(seed, nullptr, 10)));
         }
         SceneSourcePaths paths;
         std::string error;

@@ -142,16 +142,27 @@ Vulkan-through-MoltenVK path and the default. **Native Metal preferred** asks
 for the native Metal backend, which covers a subset of scene features; a scene
 it cannot draw runs on the compatibility backend and the status line says why.
 
-Native Metal draws image layers, text layers, sprite-sheet animation, standard
-two-dimensional sprite particles, ordinary effect chains and scene
-post-processing, layers that read an image another layer produced earlier in
-the same frame, images the runtime replaces while the scene plays, and BGRA or
-8-bit NV12 video textures — the latter either converted once per frame or, with
-**Direct video plane sampling** on, sampled by the layer's own shader. Rope
-particles, particle trails, puppets, perspective 3D, dynamic lighting,
-history-feedback effects, HDR or 10-bit video, plain video wallpapers and
-shaders that do not translate fall back as a whole scene; an effect is never
-dropped to keep a scene native.
+Native Metal draws image layers, text layers, sprite-sheet animation,
+two-dimensional puppets, two-dimensional sprite, sprite-trail, rope and
+rope-trail particles, ordinary effect chains and scene post-processing, layers
+that read an image another layer produced earlier in the same frame, images the
+runtime replaces while the scene plays, and BGRA or 8-bit NV12 video textures —
+the latter either converted once per frame or, with **Direct video plane
+sampling** on, sampled by the layer's own shader. Perspective or lit particles,
+perspective 3D, dynamic lighting, history-feedback effects, HDR or 10-bit
+video, plain video wallpapers and shaders that do not translate fall back as a
+whole scene; an effect is never dropped to keep a scene native.
+
+A puppet is deformed by its author's own skinning shader on both renderers. The
+pose comes from the one animation system the scene already has — animation
+layers, their play, pause, stop, rate, blend and visibility, and any script or
+user property driving them — and the renderer only uploads the resulting bone
+matrices, so choosing a renderer does not change how a puppet moves. Rope and
+rope-trail geometry is generated once by the shared particle simulation and
+consumed by whichever renderer is active. Not implemented on either renderer:
+the rope renderers' *UV scale*. A puppet model whose animation block the model
+parser cannot read — seen locally with one format-version-23 model — is drawn
+in its bind pose on both renderers, and the log says so when it loads.
 
 A text layer is an ordinary layer here: it takes its place in the layer order
 and carries its transform, opacity, blend, effect chain, camera and the final

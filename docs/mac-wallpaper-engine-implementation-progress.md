@@ -80,6 +80,379 @@ recorded as blocked rather than failed:
 **No power number, watt figure or saving percentage is reported anywhere in this
 document.** Counters and unit tests bound what is claimed.
 
+## Round 13 — two-dimensional puppets, sprite trails, ropes and rope trails on Metal
+
+Feature round, same discipline as rounds 5–12: implement, wire to production,
+keep it building, fix what this round broke. Native Metal stays a manual choice
+and Compatibility stays the default; direct plane sampling and content pacing
+keep their defaults, and nothing here changes a saved setting. Visual output on
+real wallpapers, desktop behaviour and power are the user's to accept. **No
+power measurement of any kind was taken and no saving is claimed anywhere
+below.** A puppet or a trail is more work than the fallback it replaces was for
+this backend, which drew nothing; the point is that the same content now has a
+native option, not that it costs less.
+
+| Feature | State | Default |
+|---|---|---|
+| Two-dimensional puppets, deformed by the author's skinning shader | Implemented; accepted per mesh and per shader, not per label | Follows **Scene renderer** |
+| Puppets under an effect chain | Implemented; judged by the mesh the chain resolves onto its last node | Same |
+| Sprite trail particles | Implemented; the existing sprite geometry, accepted by its vertex layout | Same |
+| Rope particles | Implemented in the **shared** runtime, so on both renderers; consumed natively | Same |
+| Rope trail particles | Implemented in the shared runtime with per-particle path history; consumed natively | Same |
+| Block-compressed (BC1/BC2/BC3) images on Metal | Implemented where the device supports them; a real puppet could not load without it | Always |
+| A declared but never sampled texture slot | No longer a prepare failure on Metal | Always |
+
+### What the tree actually did before this round
+
+Read from the code rather than from earlier sections of this document:
+
+- **Puppets were never a missing data path.** Deformation is, and always was,
+  the author's vertex shader: the model parser compiles `genericimage*` with
+  `SKINNING` and `BONECOUNT`, the mesh carries `a_BlendIndices` as four raw
+  32-bit integers and `a_BlendWeights` as four floats, and
+  `WPShaderValueUpdater` writes `g_Bones` as one 4x4 float matrix per bone
+  through whatever uniform writer the backend gives it. Metal already had that
+  writer, already placed array members by their reflected stride, already kept
+  its uniforms in one buffer per in-flight frame, and already reported a bone
+  uniform as a reason a target cannot be reused. What stood in the way was one
+  line: any shader with a `g_Bones` member refused the whole scene.
+- **Sprite trails were never different geometry.** A `spritetrail` renderer is
+  the thick sprite-particle record; the author's `genericparticle` shader
+  stretches it from the velocity that record already carries and from
+  `g_RenderVar0`. It was refused by its marker alone.
+- **Rope geometry did not exist on either renderer.** `GenRopeParticleData` was
+  present but its call was commented out when the generator moved from a flat
+  particle list to instances, so a rope mesh was filled with sprite-layout
+  records and read by a rope shader. The dormant function also left the first
+  vertex slot unwritten and reported one quad too few.
+- **Rope trails did not exist at all.** The project parser renamed `ropetrail`
+  to `spritetrail` on load, and the simulation kept no per-particle history.
+
+So the round split cleanly in two: for puppets and sprite trails, replace a
+refusal with a statement about the actual mesh and shader; for ropes and rope
+trails, write the geometry once in the shared runtime and let both renderers
+consume it.
+
+### Puppets: where the deformation happens and what Metal consumes
+
+On the GPU, in the author's vertex shader, on both renderers. Nothing is skinned
+on the CPU and nothing is skinned twice. Metal consumes three things:
+
+- **The mesh as parsed**, uploaded once when the graph is compiled: positions,
+  blend indices, blend weights, texture coordinates, 16-bit indices and the
+  per-part draw ranges, per submesh and per material slot, including the mask
+  submeshes that draw into `_rt_puppet_mask`. Indices stay the four integers the
+  model stores and are bound with the integer vertex format the translated
+  shader reflects; weights are neither renormalised nor truncated. Nothing
+  assumes four influences beyond what the author's shader itself declares, and
+  nothing caps the bone count: the array is the size `BONECOUNT` made it.
+- **The pose**, which is `WPPuppetLayer::genFrame`'s output for the scene's
+  current time — the existing hierarchy, bind and inverse-bind spaces, animation
+  layers and their blend, exactly as the compatibility renderer receives it. It
+  is copied, 64 bytes per bone, into the pass's own uniform block inside the
+  frame's uniform buffer. No transpose and no axis flip were added for Metal;
+  the GPU test below is what says that is right rather than an assumption.
+- **The author's program**, through the same structured translation every other
+  shader takes. Its bone array is a member of the pass's uniform block, so the
+  bone data lives in the per-frame `MTLBuffer` and is never passed as inline
+  bytes.
+
+One pose per frame, however many passes use it. `genFrame` caches its result
+against the exact time it was asked for and every copy of a `WPPuppetLayer`
+shares one state, so the layer's own pass, its mask passes, its effect pass and
+its attachments all read one evaluation; what repeats per pass is a `memcpy` into
+that pass's block, which is unavoidable while the array is a member of each
+program's own block. The animation advances once per frame because the scene's
+clock advances once per frame, not because a backend counts.
+
+Pose, frame number and bone matrices are not part of any pipeline key. The key
+is the program's content, the vertex layout, blend, target format and alpha
+write, as before; a puppet adds one pipeline per distinct program, not one per
+frame.
+
+### Puppets: animation control and composition
+
+Nothing was added to the Metal backend for any of this, deliberately: play,
+pause, stop, rate, blend, visible, `getFrame`/`setFrame`, a single-shot layer
+stopping at its end and restarting on `play()`, and the user-property bindings
+for layer settings all act on the shared `WPPuppetLayer` state, and the pose the
+backend uploads is read from that state after the frame's scripts have run. The
+order inside a frame is unchanged — scripts and the runtime tick, then the
+uniform pass that evaluates the pose — so an upload cannot see a pose from
+before a script's write. There is no second playback state to drift.
+
+A puppet is an ordinary layer for everything else: order, transform, opacity,
+blend, the supported effect chain, attachments (updated at `FrameBegin`, which
+the backend already called), `renderScale`, fit/fill/crop, the poster, user
+pause and policy suspension.
+
+Caching. A pass with a bone uniform was already classed as advancing on its own,
+so its target and everything downstream of it is redrawn while an independent
+static background keeps being reused. This round did not try to detect "the
+skeleton has stopped": a scene with a puppet keeps its frame clock, which is the
+conservative behaviour the brief asked for. A paused layer produces identical
+frames; it does not let the scene idle.
+
+### Puppets: the capability rule, and what real content taught it
+
+A `g_Bones` shader is accepted when its reflected array has a stride that holds
+a 4x4 matrix, it reads `a_BlendIndices` as four unsigned integers and
+`a_BlendWeights` as four floats, and the mesh it is drawn with stores exactly
+those. Each failure has its own reason. Two backstops sit behind the gate: a
+frame whose pose length does not equal the shader's bone array fails with "a
+puppet's bone count does not match its shader" instead of spilling into the
+neighbouring uniforms, and preparing a skinning shader against a mesh without
+bone inputs fails rather than reading indices from whatever is at offset zero.
+
+Running locally installed wallpapers through the gate found three things no
+fixture had:
+
+- **A puppet with an effect chain has no geometry when the gate runs.** The
+  parser draws the layer's own pass as a plain card, puts the skinning material
+  on the chain's last node with an empty mesh, and keeps the puppet mesh as the
+  chain's *final mesh* until `ResolveEffect` moves it across while the render
+  graph is built — after backend selection. The first version of the rule
+  therefore refused every puppet that had an effect. The gate now finds the
+  chain's last output node by the same rule `ResolveEffect` uses and judges that
+  node by the final mesh; any other effect node is still judged by what it has.
+- **Puppet sheets are block-compressed.** The Metal importer refused BC1, BC2
+  and BC3 outright, so the first real puppet fell back with "an image a layer
+  needs could not be loaded". They are now uploaded as the blocks the file
+  already contains, when `supportsBCTextureCompression` says the device takes
+  them — the same formats the compatibility renderer hands the same GPU through
+  MoltenVK. A level shorter than its own block grid fails the import rather than
+  being read past its end. RGB8 is still refused.
+- **A shader may declare a texture slot it never samples.** Two workshop effects
+  do, and the resource plan refused them because the material lists no texture
+  there. A slot that the reflection reports as inactive is now left unbound,
+  which is what Metal does with an unused argument; a slot that *is* sampled
+  with nothing behind it still fails, and the message now names the slot and the
+  shader.
+
+### Sprite trail, rope, rope trail: three renderers, three meanings
+
+**Sprite trail** — each particle's image, oriented along its motion and
+stretched by speed. Simulation and geometry are untouched: it is the thick
+sprite record, and the author's shader reads `length`, `maxlength` and — new this
+round — `minlength` from `g_RenderVar0`. The native backend accepts it when the
+mesh really is thick and carries the velocity attribute.
+
+**Rope** — one continuous line through the particles a system has spawned. The
+generator joins the live particles of **one instance** in array order, which for
+a rope is age order because the emitter keeps ropes sorted old-to-new. A particle
+that died during this tick is skipped and its neighbours joined, rather than
+cutting the rope at it for a frame; particles of different instances are never
+joined, so a child system's ropes stay separate. Fewer than two live particles
+draw nothing. `subdivision` is implemented on the CPU: each pair is split into
+that many pieces on a Catmull-Rom curve through the neighbouring particles, with
+size, colour and alpha interpolated, which is what the engine's geometry shader
+does where one exists. Each piece carries control points chosen so the author's
+shader derives the same edge direction on both sides of a joint — a mitred,
+continuous rope rather than overlapping rectangles. Texture V runs the way the
+author's shader defines it, from the trail length and position the generator
+writes. Width follows the sprite path's convention: the owner node's scale is
+divided out of size, as it already is for sprites.
+
+**Rope trail** — a line along the path **each particle** has travelled. This
+needed the one genuinely new piece of state: `ParticleTrailHistory`, a
+fixed-capacity list of positions per particle slot, owned by the simulation and
+advanced inside `Emitt()` with the same time step the particles move by. It is
+geometry history, not a previous frame's pixels — nothing here reads a render
+target from an earlier frame, and history-feedback effects remain unsupported. A
+slot's history is reset when a particle is spawned into it, so a reused slot can
+never join two unrelated paths, and a rope trail's emitter is no longer
+age-sorted, because sorting would move particles away from their histories. A
+recording period of zero simulated time records nothing, so user pause and
+policy suspension stop the trail growing exactly as they stop the particles.
+`segments` and `subdivision` multiply into the number of recorded points, and
+`length` is the simulated time those points span; subdividing a trail by
+sampling its real path more finely, rather than by interpolating, is both more
+faithful and the only form the author's texture-coordinate arithmetic can
+express. The head of a trail is a partial piece from the particle to its newest
+point; when the history is full the oldest piece shrinks by as much as the head
+has grown, so the tail does not vanish a whole piece at a time, and the fraction
+that drives both is written to `g_RenderVar0.z` every tick, which both renderers
+re-read every frame. The whole trail is drawn with the particle's current colour,
+alpha and size, and disappears with its particle.
+
+Degenerate input is handled in the generator, not left to the shader: coincident
+points emit no piece (and no `NaN` from normalising a zero vector) while the
+trail position still advances, so texture coordinates stay where they belong.
+
+Capacity. A rope mesh is sized from the author's numbers — particles ×
+subdivision, or particles × segments × subdivision — against the 16-bit index
+limit of 16 383 quads. Only `subdivision` is ever reduced to fit, and the
+reduction is logged with both counts; particle count, lifetime and segments are
+never reduced. With the defaults (10 segments, subdivision 3) that means
+subdivision 2 above 546 particles per mesh and subdivision 1 above 819. A rope
+trail that does not fit even then — above 1 638 particles at 10 segments — is
+**not dropped**: it is loaded as the sprite trail every rope trail was before
+this round, with an error in the log naming both numbers. That keeps a layer
+that used to draw from vanishing on the default renderer; it is not a rope
+trail, and the log is the only place that says so. A plain rope that cannot fit
+at subdivision 1 (more than 16 383 particles in one mesh) is skipped with an
+error; before this round it drew a rope-layout buffer of sprite records. The
+generator refuses to write past the mesh's capacity and says so; by construction
+it cannot reach it.
+
+**This changes the compatibility renderer's output for rope scenes**, which is
+the intended effect of fixing shared geometry and is stated rather than
+discovered: a rope used to be a rope-layout buffer holding sprite records.
+
+### Dynamic resources: what is reused and what is no longer uploaded
+
+Nothing new was built. Rope, rope-trail and sprite-trail meshes go through the
+dynamic path round 9 added: one vertex buffer and one index buffer per in-flight
+frame, allocated once at the mesh's declared capacity, written only in the slot
+the current frame owns (bounded by the existing in-flight semaphore, so the CPU
+never writes what the GPU is reading), with the uploaded revision tracked per
+slot so an unchanged simulation uploads nothing. The copy covers the vertex
+array's written extent rather than its capacity; that extent only grows, so after
+a burst it stays at the peak instead of following the live count back down —
+round 9's behaviour, unchanged, and the draw itself is always bounded by the
+simulation's own count. Stride, attribute list and binding shape are re-checked
+on every upload. No buffer is created per frame, no frame waits for completion,
+and there is no separate draw timer. Topology is
+indexed triangles with 16-bit indices and no culling, as for sprites.
+
+For a puppet, the mesh, indices, weights and textures are uploaded when the graph
+is compiled and never again; per frame only the bone matrices change, inside the
+uniform buffer that already existed. What is *not* deduplicated: a puppet with
+clip masks has one vertex array per mask submesh, each its own copy of the same
+vertices, and each is uploaded once. That is the parser's data model and was
+left alone.
+
+Instances share what is immutable — parsed images, translated programs, compiled
+pipelines and the pipeline archive. Pose, playback state, particle state and
+trail history belong to a scene instance and are not shared because two
+wallpapers name the same file.
+
+### Still falls back as a whole scene
+
+Perspective cameras and perspective particles, dynamic lighting and lit
+particles, non-triangle primitives, any other per-frame geometry, a skinning
+shader whose bone array or inputs do not match its mesh, a rope or trail mesh
+that does not have its generator's layout, history-feedback effects, depth or
+MSAA targets, RGB8 images, block-compressed images on a device without them,
+unsupported video formats, sheets that are also videos, plain video wallpapers,
+shaders that do not translate, and scenes loaded before Native Metal was
+selected. The lock-screen extension stays on Compatibility. A scene is never
+drawn with a layer missing: every one of these is the whole scene.
+
+Of the four locally installed wallpapers that contain puppets, two fall back for
+a perspective camera, and the other two fall back for reasons that have nothing
+to do with puppets — a layer that names another layer as its texture, which this
+runtime does not resolve on either renderer. Their puppet layers, taken alone,
+draw natively; see below.
+
+### Interface
+
+No new switches. **Scene renderer**'s description now lists two-dimensional
+puppets and sprite, sprite-trail, rope and rope-trail particles as drawn
+natively, and perspective or lit particles and 3D models as falling back, in
+both languages. The per-wallpaper "Drawn by" list still reports the backend each
+running wallpaper actually got with the renderer's own reason; the reasons added
+this round reach it unchanged, and the three removed ones ("rope particles",
+"particle trails", "animates a puppet skeleton") can no longer appear. **Scene
+optimisation** and **Update only when the scene changes** are unchanged.
+
+### Tests added
+
+- `particle_rope_geometry_test.cpp` (new, CPU only, registered in the renderer
+  gate), 17 cases: rope pieces and their layout, a dead particle skipped and its
+  neighbours joined, no piece across instances, zero and one particle,
+  subdivision through the middle particle, coincident particles without `NaN`,
+  thick format, instance offset, rope trail from the current position along the
+  recorded points, the full-history tail shrink, empty history and dead
+  particles, trails never joined; and through `ParticleSubSystem::Emitt()` — the
+  birth point, growth to capacity then dropping the oldest, the period fraction
+  staying in [0, 1), a zero time step recording nothing, a respawn restarting
+  the history.
+- `metal_backend_test.cpp`, 26 cases: sprite trail, thin rope, thick rope, rope
+  trail and a skinned mesh accepted; a sprite trail without velocity, a
+  rope-marked sprite layout, a thin rope trail, a puppet shader on a plain card
+  and a bone stride of 48 each refused with a distinct reason; a puppet under an
+  effect chain accepted through the chain's final mesh, refused when that mesh
+  has no weights, and refused when the skinning material is not on the chain's
+  last node.
+- `metal_scene_draw_smoke.mm` (real Metal device, private textures, offscreen
+  layer), 31 cases plus one that needs an environment variable:
+  - `APuppetIsSkinnedByItsOwnShaderFromThePoseTheRuntimeProduces` — reflected
+    stride 64; the bone-1 quad **translates by two thirds of its own width** at
+    two thirds of the slide while keeping its width, and the bone-0 quad does not
+    move, which is what rules out a transposed or re-ordered matrix; a moving
+    pose is never reused; `pause()` freezes the picture while time passes and
+    `play()` moves it again.
+  - `TheShippedImageShaderSkinsAPuppetThroughTheNativeBackend` — the author's
+    real `genericimage2` with the two puppet combos translates, reflects a
+    64-byte bone stride, is accepted and draws two different poses. Skips when
+    the shipped shaders are not installed.
+  - `ARopeLayoutMeshReachesTheTarget`, `ASpriteTrailMeshReachesTheTarget`.
+  - `TheShippedRopeAndTrailPreviewScenesAreParsedTranslatedAndDrawnNatively` —
+    the editor's own `spritetrail`, `rope` and `ropetrail` preview projects,
+    through the real parser, the real `genericparticle` and
+    `genericropeparticle` shaders, the shared simulation and the native draw.
+    Skips when the shipped assets are not installed.
+  - `ARopeTrailTooLargeForItsIndexBudgetIsStillDrawnAsItWasBefore` — the
+    shipped rope-trail preview with 5 000 particles loads as a sprite trail,
+    marked as one, and is accepted. Skips when the shipped assets are not
+    installed.
+  - `LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBackend` — any
+    `project.json` listed in `WE_TEST_METAL_PROJECTS` is parsed as the wallpaper
+    loads it; a fallback is printed with its reason, and an accepted scene must
+    prepare and draw 120 frames. Skips when the variable is unset.
+- `offscreen_scene_probe` and the preview test honour `WE_TEST_RANDOM_SEED`, so
+  one seed makes both renderers simulate the same particles.
+
+### What was observed, and how far it goes
+
+Offscreen only, on this machine's GPU, with content that stays outside the
+repository; none of it is a suite that runs on a clean checkout.
+
+- Two reduced copies of a locally installed wallpaper, keeping only its puppet
+  layers (a format-version-21 model with 30 bones, six animations and five
+  animation layers, once plain and once under its four-effect chain), were drawn
+  for 120 frames by both renderers. Sampling every fifth pixel of the 3840×2160
+  result, **no sampled pixel differed** between Native Metal and Compatibility in
+  either case, and frame 0 and frame 119 differed in roughly 40 % of samples, so
+  the comparison was of a moving character.
+- With one random seed, the 90th simulated frame of the shipped `spritetrail`,
+  `rope` and `ropetrail` previews had **no pixel differing by more than 2/255**
+  between the two renderers, while the neighbouring frames differed by hundreds
+  to thousands of pixels, so the comparison is sensitive to a single step.
+
+That is agreement between this application's two renderers. It is **not** a
+comparison with Wallpaper Engine itself, and the rope and rope-trail geometry is
+this round's reading of the author's shader, not a port of the engine's.
+
+### Not verified
+
+- Nothing was displayed. No wallpaper was shown on a desktop, no output was
+  judged by a person against Wallpaper Engine, and no power, energy or thermal
+  measurement was taken.
+- Rope and rope-trail *appearance* against the real engine: the joint shape, the
+  width convention, the rope-trail default of 10 segments (the shipped preview
+  omits the field, so the engine's own default was not observed), and the
+  texture-coordinate behaviour of a full trail's last piece.
+- `UV scale` on both rope renderers is not implemented on either renderer; the
+  author's shaders expose no uniform for it.
+- A sprite trail's `minlength` is now passed through; no project using it was
+  run.
+- A puppet model whose animation block the model parser cannot read — one
+  format-version-23 model seen locally — is drawn in its bind pose on **both**
+  renderers. That is a parser limit this round did not touch, and such a puppet
+  is not an animated puppet on either backend.
+- Puppet clip masks, attachments, single-shot layers, scripted `setFrame` and
+  user-property layer bindings reach Metal through shared state and were not
+  each driven through the native backend; the GPU tests drive play, pause and a
+  looping layer.
+- Block-compressed upload was exercised by local content only; there is no
+  fixture texture for it in the repository.
+- No installed wallpaper reached either index-budget limit; the rope-trail
+  fallback was exercised only by raising the shipped preview's particle count.
+- More than 16 383 *sprite* particles in one system overflow the same 16-bit
+  indices; that predates this round and was left alone.
+
 ## Round 12 — scenes that genuinely stop, and compile results that survive a restart
 
 Feature round, same discipline as rounds 5–11: implement, wire to production,

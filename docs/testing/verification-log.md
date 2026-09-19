@@ -11,6 +11,87 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-19 — Round 13: two-dimensional puppets, sprite trails, ropes and rope trails on Metal
+
+The native Metal backend now accepts two-dimensional puppets, sprite trails,
+ropes and rope trails by what the mesh and the shader actually are, instead of
+refusing them by label. Puppets needed no new data path — deformation was always
+the author's skinning shader and the pose was always the shared animation
+system's — but real content needed three things no fixture had shown: a puppet
+under an effect chain only receives its mesh when the render graph resolves the
+chain, puppet sheets are block-compressed, and some effects declare a texture
+slot they never sample. Rope geometry did not exist on either renderer (the
+generator's rope branch was commented out) and rope trails were loaded as sprite
+trails, so both are implemented once in the shared particle runtime, which also
+changes what Compatibility draws for rope scenes. Native Metal is still a manual
+choice and no default changed. No power measurement was taken.
+
+- `python3 scripts/check_renderer.py` — exit 0 on the final tree. All 10 golden
+  cases `pixels_equal=True`, 0 diagnostics, 8 projects × 2 reload cycles clean,
+  every test binary exit 0. `particle_rope_geometry_test` is new in the gate.
+  An earlier run of the same command with the three shipped particle previews
+  added through `--project` was also exit 0 with `pixels_equal=True` for each.
+- Inside that run: `particle_rope_geometry_test` 17 passed (new; CPU only).
+  Three of its simulation cases failed first because they stepped the frame
+  clock at exactly the recording period, which makes a particle's birth tick a
+  recording tick too; the simulation was right and the cases now step at half a
+  period in binary-exact numbers.
+- `metal_backend_test` 26 passed (12 new or rewritten: trail, rope, rope-trail
+  and skinned acceptance, five distinct refusals, the effect-chain rule).
+- `metal_scene_draw_smoke` 31 passed, 1 skipped, on a real Metal device with
+  private textures and an offscreen layer only. The skip is
+  `LocalProjectsNamedByTheEnvironment…`, which needs `WE_TEST_METAL_PROJECTS`.
+  The three tests that need Wallpaper Engine's shipped assets **ran** here
+  because they are installed on this machine; on a clean checkout they skip. The new
+  skinning test failed first in the full run and passed alone: it took a
+  reference from `emplace_back` and then grew the vector. Fixed in the test.
+- `python3 scripts/test.py` — first run exit 65 at `CodeSign` ("resource fork,
+  Finder information, or similar detritus not allowed") before any native test
+  ran; after `xattr -cr` on the built Debug app, exit 0: 500 native tests, 9
+  skipped (the usual hardware skips), 0 failures, Python suites green.
+- `python3 scripts/build.py --configuration Release` — exit 0, `** BUILD
+  SUCCEEDED **`, app and extension. The delivered binary contains this round's
+  renderer strings and the bundled `settings.js` contains the new description.
+- All three commands were run again, in that order, after the last source
+  change (an over-budget rope trail is loaded as a sprite trail instead of being
+  dropped): renderer gate exit 0 with the counts above, Release build exit 0,
+  `scripts/test.py` exit 0 with 500 / 9 skipped / 0 failures.
+- Not in either gate, run by hand: `particle_mouse_controlpoint_test` 38,
+  `mdl_schema_tests` 52, `scene_mesh_tests` 9 passed. `scene_schema_tests`: 66
+  passed, **2 failed** — `PointerCapabilityFollowsActualCommitsWithoutFirstFrame`
+  and `MouseButtonCommitBaselineKeepsVideoGatingFromStickingNativeLatch`, each
+  timing out waiting for a pointer-capability callback after a scene commit.
+  Believed to predate the round, not proven: both tests build a `Scene` by hand
+  — no parser, no particle subsystem, no material — and run under the default
+  Compatibility preference, where `SelectSceneBackend` returns before any
+  capability code; neither test, nor `SceneWallpaper.cpp`, nor anything else on
+  that path was changed this round. No earlier entry records this binary's
+  result, so there is no baseline to compare with; not investigated further.
+  `unpack_shader_compile_smoke` was updated to expect the rope shader for a rope
+  trail, built, and not run (it needs the unpack corpus).
+- Observed offscreen with local content that stays outside the repository, none
+  of it a suite: two reduced copies of an installed wallpaper keeping only its
+  puppet layers (format-version-21 model, 30 bones, six animations, five
+  animation layers; plain, and under its four-effect chain), 120 frames on both
+  renderers — every fifth pixel of the 3840×2160 result compared, **none
+  differing**, while frames 0 and 119 differed in about 40 % of samples. With
+  `WE_TEST_RANDOM_SEED`, the 90th simulated frame of the shipped `spritetrail`,
+  `rope` and `ropetrail` previews had **no pixel differing by more than 2/255**
+  between the renderers, and the adjacent frames differed by hundreds to
+  thousands. This is agreement between this application's two renderers, not a
+  comparison with Wallpaper Engine.
+- Of four installed wallpapers containing puppets, none runs natively as a
+  whole: two use a perspective camera, and two name another layer as a texture,
+  which neither renderer resolves. One format-version-23 model's animation block
+  is not read by the model parser, so it is drawn in its bind pose on both
+  renderers.
+- The gate's `xcodegen generate` reordered one target line in
+  `mac-wallpaper-engine.xcodeproj/project.pbxproj`; nothing in `project.yml`
+  changed and the file was not hand-edited.
+- Not run: `python3 scripts/test.py --ui`, any desktop, window, screenshot,
+  wallpaper change, lock screen, audio hardware or power measurement. Nothing
+  was installed, launched or quit.
+
 ## 2026-09-19 — Round 12: scenes that genuinely stop, and compile results that survive a restart
 
 A static text scene now reports no reason to keep drawing and stops its frame

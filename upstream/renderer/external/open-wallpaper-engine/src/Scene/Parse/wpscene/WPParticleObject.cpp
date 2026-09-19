@@ -102,15 +102,18 @@ bool ParticleControlpoint::FromJson(const nlohmann::json& json) {
 
 bool ParticleRender::FromJson(const nlohmann::json& json) {
     GET_JSON_NAME_VALUE(json, "name", name);
-    // ropetrail require subdivition, replaced
-    if (name == "ropetrail") name = "spritetrail";
 
     if (sstart_with(name, "rope")) {
         GET_JSON_NAME_VALUE_NOWARN(json, "subdivision", subdivision);
     }
-    if (name == "spritetrail" || name == "ropetrail") {
+    if (name == "spritetrail") {
         GET_JSON_NAME_VALUE_NOWARN(json, "length", length);
         GET_JSON_NAME_VALUE_NOWARN(json, "maxlength", maxlength);
+        GET_JSON_NAME_VALUE_NOWARN(json, "minlength", minlength);
+    }
+    if (name == "ropetrail") {
+        GET_JSON_NAME_VALUE_NOWARN(json, "length", length);
+        GET_JSON_NAME_VALUE_NOWARN(json, "segments", segments);
     }
     return true;
 }

@@ -1,8 +1,11 @@
 #include "WPParticleRawGener.h"
 
-#include <cstring>
-#include <Eigen/Dense>
+#include <algorithm>
 #include <array>
+#include <cstring>
+#include <vector>
+
+#include <Eigen/Dense>
 
 #include "Core/Literals.hpp"
 #include "SpecTexs.hpp"
@@ -102,113 +105,202 @@ inline usize GenParticleData(std::span<const std::unique_ptr<ParticleInstance>> 
     return i;
 }
 
-inline size_t GenRopeParticleData(std::span<const Particle>   particles,
-                                  const ParticleRawGenSpecOp& specOp, WPGOption opt,
-                                  SceneVertexArray& sv) {
-    /*
-    attribute vec4 a_PositionVec4;
-    attribute vec4 a_TexCoordVec4;
-    attribute vec4 a_TexCoordVec4C1;
+struct RopePoint {
+    Eigen::Vector3f position;
+    Eigen::Vector3f color;
+    float           alpha;
+    float           half_size;
+};
 
-    #if THICKFORMAT
-    attribute vec4 a_TexCoordVec4C2;
-    attribute vec4 a_TexCoordVec4C3;
-    attribute vec2 a_TexCoordC4;
-    #else
-    attribute vec3 a_TexCoordVec3C2;
-    attribute vec2 a_TexCoordC3;
-    #endif
+inline Eigen::Vector3f CatmullRom(const Eigen::Vector3f& p0, const Eigen::Vector3f& p1,
+                                  const Eigen::Vector3f& p2, const Eigen::Vector3f& p3, float t) {
+    const float t2 = t * t;
+    const float t3 = t2 * t;
+    return 0.5f * (2.0f * p1 + (-p0 + p2) * t + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 +
+                   (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
+}
 
-    attribute vec4 a_Color;
+inline void WriteRopeQuad(SceneVertexArray& sv, usize quad_index, bool thick, const RopePoint& a,
+                          const RopePoint& b, const Eigen::Vector3f& tangent_a,
+                          const Eigen::Vector3f& tangent_b, float trail_length,
+                          float trail_position) {
+    const usize               one_size = sv.OneSize();
+    std::array<float, 32 * 4> buffer {};
+    // Shader start tangent = (end - start) + (start - cp0); end tangent =
+    // (end - start) - (end - cp1). These cps make those equal tangent_a / tangent_b.
+    const Vector3f            cp0 = b.position - tangent_a;
+    const Vector3f            cp1 = a.position + tangent_b;
+    constexpr float           uv[4][2] { { 0.0f, 1.0f }, { 1.0f, 1.0f }, { 1.0f, 0.0f }, { 0.0f, 0.0f } };
 
-    #define in_ParticleTrailLength (a_TexCoordVec4.w)
-    #define in_ParticleTrailPosition (a_TexCoordVec4C1.w)
-    */
-    std::array<float, 32 * 4> storage;
-
-    float* data = storage.data();
-
-    const auto one_size   = sv.OneSize();
-    const auto totle_size = one_size * 4;
-    uint       i { 0 };
-    for (const auto& p : particles) {
-        if (i == 0) {
-            i++;
-            continue;
-        }
-        if (! ParticleModify::LifetimeOk(p)) break;
-
-        const auto& pre_p  = particles[i - 1];
-        float       size   = p.size / 2.0f;
-        std::size_t offset = 0;
-
-        float lifetime = p.lifetime;
-        specOp(p, { &lifetime });
-        float in_ParticleTrailLength   = particles.size();
-        float in_ParticleTrailPosition = i - 1;
-
-        Vector3f cp_vec = AngleAxisf(p.rotation[2] + M_PI / 2.0f, Vector3f::UnitZ()) *
-                          Vector3f { 0.0f, size / 2.0f, 0.0f };
-        Vector3f pos_vec = Vector3f { p.position } - Vector3f { pre_p.position };
-
-        cp_vec       = pos_vec.normalized().dot(cp_vec) > 0 ? cp_vec : -1.0f * cp_vec;
-        auto&    sp  = pre_p;
-        auto&    ep  = p;
-        Vector3f scp = Vector3f { sp.position } + cp_vec;
-        Vector3f ecp = Vector3f { ep.position } - cp_vec;
-
-        // a_PositionVec4: start pos
-        AssignVertexTimes({ data + offset, totle_size },
-                          std::array { sp.position[0], sp.position[1], sp.position[2], size },
-                          4);
-        offset += 4;
-        // a_TexCoordVec4: end pos
-        AssignVertexTimes(
-            { data + offset, totle_size },
-            std::array { ep.position[0], ep.position[1], ep.position[2], in_ParticleTrailLength },
-            4);
-        offset += 4;
-
-        // a_TexCoordVec4C1: cp start pos
-        AssignVertexTimes({ data + offset, totle_size },
-                          std::array { scp[0], scp[1], scp[2], in_ParticleTrailPosition },
-                          4);
-        offset += 4;
-
-        if (opt.thick_format) {
-            // a_TexCoordVec4C2: cp end pos, size_end
-            AssignVertexTimes(
-                { data + offset, totle_size }, std::array { ecp[0], ecp[1], ecp[2], size }, 4);
-            offset += 4;
-            // a_TexCoordVec4C3: color_end
-            AssignVertexTimes({ data + offset, totle_size },
-                              std::array { p.color[0], p.color[1], p.color[2], p.alpha },
-                              4);
-            offset += 4;
-            // a_TexCoordC4
-            std::array t { 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
-            AssignVertex({ data + offset, totle_size }, t, 4);
-            offset += 4;
+    for (usize v = 0; v < 4; ++v) {
+        float* d = buffer.data() + v * one_size;
+        d[0]     = a.position[0];
+        d[1]     = a.position[1];
+        d[2]     = a.position[2];
+        d[3]     = a.half_size;
+        d[4]     = b.position[0];
+        d[5]     = b.position[1];
+        d[6]     = b.position[2];
+        d[7]     = trail_length;
+        d[8]     = cp0[0];
+        d[9]     = cp0[1];
+        d[10]    = cp0[2];
+        d[11]    = trail_position;
+        if (thick) {
+            d[12] = cp1[0];
+            d[13] = cp1[1];
+            d[14] = cp1[2];
+            d[15] = b.half_size;
+            d[16] = b.color[0];
+            d[17] = b.color[1];
+            d[18] = b.color[2];
+            d[19] = b.alpha;
+            d[20] = uv[v][0];
+            d[21] = uv[v][1];
+            d[22] = 0.0f;
+            d[23] = 0.0f;
+            d[24] = a.color[0];
+            d[25] = a.color[1];
+            d[26] = a.color[2];
+            d[27] = a.alpha;
         } else {
-            // a_TexCoordVec3C2: cp end pos
-            AssignVertexTimes(
-                { data + offset, totle_size }, std::array { ecp[0], ecp[1], ecp[2] }, 4);
-            offset += 4;
-
-            // a_TexCoordC3
-            std::array t { 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
-            AssignVertex({ data + offset, totle_size }, t, 4);
-            offset += 4;
+            d[12] = cp1[0];
+            d[13] = cp1[1];
+            d[14] = cp1[2];
+            d[15] = 0.0f;
+            d[16] = uv[v][0];
+            d[17] = uv[v][1];
+            d[18] = 0.0f;
+            d[19] = 0.0f;
+            d[20] = a.color[0];
+            d[21] = a.color[1];
+            d[22] = a.color[2];
+            d[23] = a.alpha;
         }
-
-        // a_Color
-        AssignVertexTimes({ data + offset, totle_size },
-                          std::array { p.color[0], p.color[1], p.color[2], p.alpha },
-                          4);
-
-        sv.SetVertexs((i++) * 4, { data, totle_size });
     }
-    return i == 0 ? 0 : i - 1;
+    sv.SetVertexs(quad_index * 4, { buffer.data(), one_size * 4 });
+}
+
+inline void EmitRopeStrip(SceneVertexArray& sv, bool thick, std::span<const RopePoint> points,
+                          float trail_length, usize& quad, usize quad_capacity) {
+    const usize n = points.size();
+    if (n < 2) return;
+
+    auto tangent_at = [&](usize i) -> Vector3f {
+        if (i == 0) return points[1].position - points[0].position;
+        if (i + 1 == n) return points[i].position - points[i - 1].position;
+        return points[i + 1].position - points[i - 1].position;
+    };
+
+    for (usize m = 0; m + 1 < n; ++m) {
+        const RopePoint& a     = points[m];
+        const RopePoint& b     = points[m + 1];
+        const Vector3f   delta = b.position - a.position;
+        if (delta.norm() < 1e-6f) continue;
+
+        Vector3f ta = tangent_at(m);
+        Vector3f tb = tangent_at(m + 1);
+        if (ta.norm() < 1e-6f) ta = delta;
+        if (tb.norm() < 1e-6f) tb = delta;
+
+        if (quad >= quad_capacity) {
+            LOG_ERROR("rope geometry exceeds mesh capacity: %zu quads, capacity %zu", quad,
+                      quad_capacity);
+            return;
+        }
+        WriteRopeQuad(sv, quad, thick, a, b, ta, tb, trail_length, static_cast<float>(m));
+        ++quad;
+    }
+}
+
+inline usize GenRopeData(std::span<const std::unique_ptr<ParticleInstance>> instances,
+                         WPGOption opt, SceneVertexArray& sv, ParticleRenderScale render_scale) {
+    std::vector<RopePoint> live;
+    std::vector<RopePoint> rope;
+    const usize            quad_capacity = sv.CapacitySize() / (sv.OneSize() * 4);
+    usize                  quad { 0 };
+    const bool             thick = opt.thick_format;
+
+    for (const auto& inst : instances) {
+        if (inst->IsNoLiveParticle()) continue;
+
+        live.clear();
+        const Vector3f origin = inst->GetBoundedData().pos;
+        for (const auto& p : inst->Particles()) {
+            if (! ParticleModify::LifetimeOk(p)) continue;
+            live.push_back(RopePoint { origin + p.position, p.color, p.alpha,
+                                       (p.size / 2.0f) * render_scale.isotropic_inverse });
+        }
+        if (live.size() < 2) continue;
+
+        const uint32_t s = std::max<uint32_t>(1, render_scale.rope_subdivision);
+        if (s == 1) {
+            EmitRopeStrip(sv, thick, live, static_cast<float>(live.size()), quad, quad_capacity);
+        } else {
+            const usize n = live.size();
+            rope.clear();
+            rope.reserve((n - 1) * s + 1);
+            for (usize j = 0; j + 1 < n; ++j) {
+                const RopePoint& p0 = live[j == 0 ? 0 : j - 1];
+                const RopePoint& p1 = live[j];
+                const RopePoint& p2 = live[j + 1];
+                const RopePoint& p3 = live[j + 2 >= n ? n - 1 : j + 2];
+                for (uint32_t q = 0; q < s; ++q) {
+                    const float t = static_cast<float>(q) / static_cast<float>(s);
+                    rope.push_back(RopePoint {
+                        CatmullRom(p0.position, p1.position, p2.position, p3.position, t),
+                        p1.color + (p2.color - p1.color) * t, p1.alpha + (p2.alpha - p1.alpha) * t,
+                        p1.half_size + (p2.half_size - p1.half_size) * t });
+                }
+            }
+            rope.push_back(live.back());
+            EmitRopeStrip(sv, thick, rope, static_cast<float>(rope.size()), quad, quad_capacity);
+        }
+        if (quad >= quad_capacity) return quad;
+    }
+    return quad;
+}
+
+inline usize GenRopeTrailData(std::span<const std::unique_ptr<ParticleInstance>> instances,
+                              WPGOption opt, SceneVertexArray& sv,
+                              ParticleRenderScale render_scale) {
+    std::vector<RopePoint> points;
+    const usize            quad_capacity = sv.CapacitySize() / (sv.OneSize() * 4);
+    usize                  quad { 0 };
+    const bool             thick = opt.thick_format;
+
+    for (const auto& inst : instances) {
+        if (inst->IsNoLiveParticle()) continue;
+
+        const auto     trails = inst->Trails();
+        const Vector3f origin = inst->GetBoundedData().pos;
+        usize          i { 0 };
+        for (const auto& p : inst->Particles()) {
+            if (! ParticleModify::LifetimeOk(p) || i >= trails.size() || trails[i].Count() == 0) {
+                ++i;
+                continue;
+            }
+
+            const uint32_t h         = trails[i].Count();
+            const float    half_size = (p.size / 2.0f) * render_scale.isotropic_inverse;
+            points.clear();
+            points.push_back(RopePoint { origin + p.position, p.color, p.alpha, half_size });
+            for (uint32_t j = 1; j <= h; ++j) {
+                points.push_back(
+                    RopePoint { trails[i].At(j - 1).position, p.color, p.alpha, half_size });
+            }
+            if (h == trails[i].Capacity() && h >= 2) {
+                const float t = std::clamp(render_scale.trail_fraction, 0.0f, 1.0f);
+                RopePoint&  last = points.back();
+                const RopePoint& previous = points[points.size() - 2];
+                last.position = last.position + (previous.position - last.position) * t;
+            }
+            EmitRopeStrip(sv, thick, points, static_cast<float>(h), quad, quad_capacity);
+            if (quad >= quad_capacity) return quad;
+            ++i;
+        }
+    }
+    return quad;
 }
 
 inline void updateIndexArray(uint16_t index, size_t count, SceneIndexArray& iarray) noexcept {
@@ -243,15 +335,17 @@ void WPParticleRawGener::GenGLData(std::span<const std::unique_ptr<ParticleInsta
     opt.thick_format = sv.GetOption(WE_CB_THICK_FORMAT);
 
     usize particle_num { 0 };
+    const usize expected_rope = opt.thick_format ? 28u : 24u;
 
-    /*
-    if (sv.GetOption(WE_PRENDER_ROPE))
-        particle_num = GenRopeParticleData(particles, specOp, opt, sv);
-    else
-    */
-    particle_num += GenParticleData(instances, specOp, opt, sv, render_scale);
-
-    // LOG_INFO("num: %d", particle_num);
+    if (sv.GetOption(WE_PRENDER_ROPE) && sv.OneSize() != expected_rope) {
+        LOG_ERROR("rope vertex one_size %zu, expected %zu", sv.OneSize(), expected_rope);
+    } else if (sv.GetOption(WE_PRENDER_ROPETRAIL)) {
+        particle_num = GenRopeTrailData(instances, opt, sv, render_scale);
+    } else if (sv.GetOption(WE_PRENDER_ROPE)) {
+        particle_num = GenRopeData(instances, opt, sv, render_scale);
+    } else {
+        particle_num += GenParticleData(instances, specOp, opt, sv, render_scale);
+    }
 
     u16 indexNum = (si.DataCount() * 2) / 6;
     if (particle_num > indexNum) {

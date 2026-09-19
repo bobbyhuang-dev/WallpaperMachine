@@ -1,5 +1,6 @@
 #pragma once
 #include "ParticleEmitter.h"
+#include "ParticleTrail.h"
 #include "Interface/IParticleRawGener.h"
 #include "Core/NoCopyMove.hpp"
 #include "Core/MapSet.hpp"
@@ -40,12 +41,19 @@ public:
     std::span<const Particle> Particles() const;
     std::vector<Particle>&    ParticlesVec();
 
+    /// Recorded paths, parallel to `Particles()` by slot. Empty unless the
+    /// owning subsystem keeps trail history, so a reader must check the size
+    /// before indexing it with a particle's slot.
+    std::span<const ParticleTrailHistory> Trails() const;
+    std::vector<ParticleTrailHistory>&    TrailsVec();
+
     BoundedData& GetBoundedData();
 
 private:
     bool                  m_is_death { false };
     bool                  m_no_live_particle { false };
     std::vector<Particle> m_particles;
+    std::vector<ParticleTrailHistory> m_trails;
     BoundedData           m_bounded_data;
 };
 
@@ -82,6 +90,19 @@ public:
     void SetOwnerNode(std::weak_ptr<SceneNode> node);
     void SetRateMultiplier(std::function<double()> rate_multiplier);
 
+    /// Rope renderers only: how many straight pieces join two connected
+    /// particles. Values below one are treated as one.
+    void SetRopeSubdivision(u32 subdivision);
+    /// Rope trail renderers only: makes every particle record its own path.
+    /// The history is simulation state, advanced once per `Emitt()` with the
+    /// same time step the particles move by, so pausing the simulation pauses
+    /// the recording too.
+    void SetTrail(ParticleTrailConfig config);
+    /// Fraction of a recording period elapsed since the last point was taken,
+    /// in [0, 1). A rope trail's shader reads it to keep the texture from
+    /// jumping each time a point is recorded.
+    float TrailPeriodFraction() const;
+
     SpawnType Type() const;
     u32       MaxInstanceCount() const;
 
@@ -105,6 +126,10 @@ private:
     double               m_rate;
     double               m_time;
     std::function<double()> m_rate_multiplier;
+
+    u32                 m_rope_subdivision { 1 };
+    ParticleTrailConfig m_trail {};
+    double              m_trail_timer { 0.0 };
 
     std::vector<std::unique_ptr<ParticleSubSystem>> m_children;
     std::vector<std::unique_ptr<ParticleInstance>>  m_instances;

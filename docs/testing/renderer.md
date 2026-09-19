@@ -89,6 +89,8 @@ artifacts/renderer/bin/tests/offscreen_scene_probe
 | `WE_TEST_CLICK_OFFSET` | `offscreen_scene_probe` | World-space `"dx dy"` added to the click layer's origin, to hit a covered or transparent texel instead of the centre |
 | `WE_TEST_AUDIO_HZ` | `offscreen_scene_probe` | Synthetic PCM at `0..6000` Hz; `0` means silence |
 | `WE_TEST_AUDIO_ENABLED=0` | `offscreen_scene_probe` | Exercise the disabled audio gate |
+| `WE_TEST_RANDOM_SEED` | `offscreen_scene_probe`, `metal_scene_draw_smoke` | Seeds the particle random source before the scene is parsed, so the same project simulates the same particles on both renderers and their frames can be compared. The probe only steps the particle simulation when `WE_TEST_AUDIO_HZ` is set, and only advances time when `WE_TEST_FRAME_STEP` is |
+| `WE_TEST_METAL_PROJECTS` | `metal_scene_draw_smoke` | Colon-separated `project.json` paths run through the production parser into the native backend offscreen. A fallback is printed with its reason and is not a failure; an accepted scene must prepare and draw 120 frames. With `WE_TEST_OUTPUT` set, the last frame is written there. Unset, the test skips |
 | `WE_TEST_EXPECT_WARM=1` | `text_object_runtime_test` | Assert zero shader compilations on a second run |
 | `WE_TEST_DUMP_POSES=1` | `wpdump` | Dump sampled bone transforms |
 
@@ -141,7 +143,10 @@ executable directly from the renderer check build directory.
 | Render-target reuse correctness | `static_subgraph_cache_test` (reuse verdicts, copy elision, alias resolution) and, on the native backend, `MetalSceneDraw.AnUnchangedTargetIsReusedAndProducesTheSamePixels` / `.TurningTheOptimisationOffDrawsEveryPassAgain` in `metal_scene_draw_smoke`. Reuse must be provable by readback, not by a counter alone: a skipped pass has to leave byte-identical pixels, and a changed input has to redraw. |
 | Sprite-sheet stepping and reuse | `MetalSceneDraw.ASpriteSheetAdvancesOnItsOwnClockAndRedrawsOnlyWhenTheFrameChanges`. A sheet between frame changes may be reused, but its clock must keep running or the animation never reaches the next frame. |
 | Per-frame geometry upload | `MetalSceneDraw.GeometryRebuiltEveryFrameIsUploadedAndDrawnFromItsOwnSlot`, across more frames than there are in-flight slots. Zero live particles must draw nothing rather than fail. |
-| Native backend admission | `metal_backend_test`: every refused construct keeps its own distinct reason, and rope particles, particle trails and other per-frame geometry stay refused while plain sheets and standard sprite particles are accepted. |
+| Native backend admission | `metal_backend_test`: every refused construct keeps its own distinct reason; plain sheets, sprite particles, sprite trails, thin and thick ropes, rope trails and a skinned mesh under a `g_Bones` shader are accepted by their actual layout; a sprite trail without velocity, a rope-marked sprite layout, a thin rope trail, a skinning shader on a mesh without bone weights and a bone stride that cannot hold a 4x4 matrix are refused; a puppet under an effect chain is judged by the chain's final mesh, and only on the chain's last node. |
+| Rope and rope-trail geometry | `particle_rope_geometry_test` (CPU, in the gate): pieces per instance and never across instances, dead particles skipped and neighbours joined, subdivision through the particles, coincident points without `NaN`, the rope-trail head, tail shrink and per-slot separation, and the simulation's history — birth point, growth to capacity, zero time step, respawn reset. |
+| Skinning on the native backend | `MetalSceneDraw.APuppetIsSkinnedByItsOwnShaderFromThePoseTheRuntimeProduces`: a 64-byte reflected bone stride, the skinned quad translating by the distance its bone did with its width unchanged (what rules out a transposed matrix), the unskinned quad still, no reuse while the pose moves, `pause()` freezing and `play()` resuming. `.TheShippedImageShaderSkinsAPuppetThroughTheNativeBackend` repeats the translation and draw with the author's `genericimage2`, and skips without the shipped shaders. |
+| Trail and rope layouts on the native backend | `MetalSceneDraw.ARopeLayoutMeshReachesTheTarget`, `.ASpriteTrailMeshReachesTheTarget`, and `.TheShippedRopeAndTrailPreviewScenesAreParsedTranslatedAndDrawnNatively`, which runs the editor's own preview projects through the real parser and shaders and skips without the shipped assets. |
 | Scene optimisation applied at runtime | `MetalSceneDraw.TurningTheOptimisationBackOnDoesNotReuseAFrameDrawnWhileItWasOff` and `.AGraphCompiledWithTheOptimisationOffStartsReusingWhenItIsTurnedOn`. Turning the setting on must reach a graph that was compiled while it was off, on that graph's next frame, without reusing pixels no plan recorded. |
 | Video consumption decided before import | `MetalVideoTexture.PlanesOnlyDemandEncodesNoConversion`, `.MixedDemandConvertsOnceAndStillPublishesThePlanes`, `.ADemandChangeReImportsTheSameGenerationInsteadOfWaiting`. A frame every consumer samples as planes must encode no conversion and allocate no destination; a mixed scene must convert exactly once. |
 | Video pixel format decided per frame | `MetalVideoTexture.ABgraFrameIgnoresAPlaneDemand` and `.AFormatChangeSwitchesPathWithoutLosingTheTexture`. Software decode hands back BGRA and VideoToolbox hands back NV12 for the same file, either can take over mid-playback, and neither may reparse the scene or lose the picture. |
@@ -595,7 +600,8 @@ Built into the renderer check build directory under `artifacts/renderer/bin/`:
 `scene_schema_tests`, `mdl_schema_tests`, `tex_schema_tests`,
 `script_runtime_compat_test`, `text_object_runtime_test`,
 `render_target_lifetime_test`, `shader_cache_metadata_test`, `audio_tests`,
-`mouse_input_test`, `particle_mouse_controlpoint_test`, `timer_tests`,
+`mouse_input_test`, `particle_mouse_controlpoint_test`,
+`particle_rope_geometry_test`, `timer_tests`,
 `playback_gpu_test`, `video_decode_pump_test`, `video_color_conversion_test`,
 `video_frame_pacing_test`,
 plus the `offscreen_scene_probe`, `scene_reload_cycle_probe` and `wpdump`

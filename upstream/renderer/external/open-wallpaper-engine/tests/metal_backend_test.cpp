@@ -62,7 +62,8 @@ constexpr std::string_view kReflectionJson = R"({
   "active_texture_slots": [0]
 })";
 
-/// Reflection for a shader driven by a puppet skeleton.
+/// Reflection for a shader driven by a puppet skeleton: four 4x4 bone
+/// matrices and the blend attributes the author's vertex shader reads.
 constexpr std::string_view kBonesReflectionJson = R"({
   "descriptor_bindings": [
     { "name": "Globals", "set": 0, "binding": 0, "descriptor": "uniform_buffer",
@@ -70,10 +71,35 @@ constexpr std::string_view kBonesReflectionJson = R"({
   ],
   "uniform_blocks": [
     { "name": "Globals", "binding": 0, "size": 256, "members": [
-      { "name": "g_Bones", "offset": 0, "size": 48, "array_count": 4, "array_stride": 48 }
+      { "name": "g_Bones", "offset": 0, "size": 256, "array_count": 4, "array_stride": 64 }
     ] }
   ],
-  "vertex_inputs": [],
+  "vertex_inputs": [
+    { "name": "a_Position", "location": 0, "format": "r32g32b32_sfloat" },
+    { "name": "a_BlendIndices", "location": 1, "format": "r32g32b32a32_uint" },
+    { "name": "a_BlendWeights", "location": 2, "format": "r32g32b32a32_sfloat" },
+    { "name": "a_TexCoord", "location": 3, "format": "r32g32_sfloat" }
+  ],
+  "active_texture_slots": []
+})";
+
+/// Same puppet layout with a stride too small for a 4x4 float matrix.
+constexpr std::string_view kBonesStride48ReflectionJson = R"({
+  "descriptor_bindings": [
+    { "name": "Globals", "set": 0, "binding": 0, "descriptor": "uniform_buffer",
+      "stages": ["vertex"] }
+  ],
+  "uniform_blocks": [
+    { "name": "Globals", "binding": 0, "size": 256, "members": [
+      { "name": "g_Bones", "offset": 0, "size": 256, "array_count": 4, "array_stride": 48 }
+    ] }
+  ],
+  "vertex_inputs": [
+    { "name": "a_Position", "location": 0, "format": "r32g32b32_sfloat" },
+    { "name": "a_BlendIndices", "location": 1, "format": "r32g32b32a32_uint" },
+    { "name": "a_BlendWeights", "location": 2, "format": "r32g32b32a32_sfloat" },
+    { "name": "a_TexCoord", "location": 3, "format": "r32g32_sfloat" }
+  ],
   "active_texture_slots": []
 })";
 
@@ -187,6 +213,96 @@ std::shared_ptr<SceneMesh> ParticleMesh(std::string_view shader_name, std::size_
     return mesh;
 }
 
+/// What `SetParticleMesh` builds with the thick format: the velocity in
+/// `a_TexCoordVec4C1` is what a sprite trail's author shader stretches from.
+std::shared_ptr<SceneMesh> ThickSpriteMesh(std::string_view shader_name = "genericparticle",
+                                           std::size_t      count       = 64)
+{
+    auto mesh = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
+    std::vector<SceneVertexArray::SceneVertexAttribute> attributes {
+        { std::string(WE_IN_POSITION), VertexType::FLOAT3 },
+        { std::string(WE_IN_TEXCOORDVEC4), VertexType::FLOAT4 },
+        { std::string(WE_IN_COLOR), VertexType::FLOAT4 },
+        { std::string(WE_IN_TEXCOORDVEC4C1), VertexType::FLOAT4 },
+        { std::string(WE_IN_TEXCOORDC2), VertexType::FLOAT2 },
+    };
+    mesh->AddVertexArray(SceneVertexArray(attributes, count * 4));
+    mesh->AddIndexArray(SceneIndexArray(count));
+    mesh->GetVertexArray(0).SetOption(WE_PRENDER_SPRITE, true);
+    mesh->GetVertexArray(0).SetOption(WE_CB_THICK_FORMAT, true);
+
+    SceneMaterial material;
+    material.name     = std::string(shader_name);
+    material.textures = { "materials/card.tex" };
+    material.blenmode = BlendMode::Additive;
+    material.customShader.shader                = std::make_shared<SceneShader>();
+    material.customShader.shader->name          = std::string(shader_name);
+    material.customShader.shader->metal_program = TranslatedProgram();
+    mesh->AddMaterial(std::move(material));
+    return mesh;
+}
+
+/// What `SetRopeParticleMesh` builds. Thin and thick differ in the extra
+/// texcoord attributes; a rope trail is the thick layout plus the trail flags.
+std::shared_ptr<SceneMesh> RopeMesh(bool thick, std::string_view shader_name = "genericropeparticle",
+                                    std::size_t count = 64)
+{
+    auto mesh = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
+    std::vector<SceneVertexArray::SceneVertexAttribute> attributes {
+        { std::string(WE_IN_POSITIONVEC4), VertexType::FLOAT4 },
+        { std::string(WE_IN_TEXCOORDVEC4), VertexType::FLOAT4 },
+        { std::string(WE_IN_TEXCOORDVEC4C1), VertexType::FLOAT4 },
+    };
+    if (thick) {
+        attributes.push_back({ std::string(WE_IN_TEXCOORDVEC4C2), VertexType::FLOAT4 });
+        attributes.push_back({ std::string(WE_IN_TEXCOORDVEC4C3), VertexType::FLOAT4 });
+        attributes.push_back({ std::string(WE_IN_TEXCOORDC4), VertexType::FLOAT4 });
+    } else {
+        attributes.push_back({ std::string(WE_IN_TEXCOORDVEC3C2), VertexType::FLOAT4 });
+        attributes.push_back({ std::string(WE_IN_TEXCOORDC3), VertexType::FLOAT4 });
+    }
+    attributes.push_back({ std::string(WE_IN_COLOR), VertexType::FLOAT4 });
+    mesh->AddVertexArray(SceneVertexArray(attributes, count * 4));
+    mesh->AddIndexArray(SceneIndexArray(count));
+    mesh->GetVertexArray(0).SetOption(WE_PRENDER_ROPE, true);
+    mesh->GetVertexArray(0).SetOption(WE_CB_THICK_FORMAT, thick);
+
+    SceneMaterial material;
+    material.name     = std::string(shader_name);
+    material.textures = { "materials/card.tex" };
+    material.blenmode = BlendMode::Additive;
+    material.customShader.shader                = std::make_shared<SceneShader>();
+    material.customShader.shader->name          = std::string(shader_name);
+    material.customShader.shader->metal_program = TranslatedProgram();
+    mesh->AddMaterial(std::move(material));
+    return mesh;
+}
+
+/// A static skinned card: position, blend indices, blend weights, texcoord.
+/// Deformation lives in the author's vertex shader, so the mesh itself is
+/// not rewritten per frame.
+std::shared_ptr<SceneMesh> SkinnedMesh(std::string_view reflection = kBonesReflectionJson)
+{
+    auto mesh = std::make_shared<SceneMesh>();
+    std::vector<SceneVertexArray::SceneVertexAttribute> attributes {
+        { std::string(WE_IN_POSITION), VertexType::FLOAT3 },
+        { std::string(WE_IN_BLENDINDICES), VertexType::UINT4 },
+        { std::string(WE_IN_BLENDWEIGHTS), VertexType::FLOAT4 },
+        { std::string(WE_IN_TEXCOORD), VertexType::FLOAT2 },
+    };
+    mesh->AddVertexArray(SceneVertexArray(attributes, 4));
+
+    SceneMaterial material;
+    material.name     = "materials/card";
+    material.textures = { "materials/card.tex" };
+    material.blenmode = BlendMode::Translucent;
+    material.customShader.shader                = std::make_shared<SceneShader>();
+    material.customShader.shader->name          = "genericimage2";
+    material.customShader.shader->metal_program = TranslatedProgram(reflection);
+    mesh->AddMaterial(std::move(material));
+    return mesh;
+}
+
 /// Attaches a particle layer to the scene the way the parser does: a node in
 /// the graph carrying the dynamic mesh, plus an emitter entry in the particle
 /// system, which on its own no longer decides anything.
@@ -260,18 +376,27 @@ TEST(MetalCapability, EveryUnsupportedConstructHasItsOwnReason)
     std::vector<std::pair<std::string, std::string>> reasons;
 
     {
-        // A rope renderer's vertex contract is not the sprite particle's, and
-        // the generator that would fill it is not the one this runtime runs.
-        ImageScene fixture;
-        AttachParticleLayer(fixture, ParticleMesh("genericropeparticle"));
-        reasons.emplace_back("rope particles", RejectionFor(fixture));
-    }
-    {
         ImageScene fixture;
         auto       mesh = ParticleMesh("genericparticle");
         mesh->GetVertexArray(0).SetOption(WE_PRENDER_TRAIL, true);
         AttachParticleLayer(fixture, std::move(mesh));
-        reasons.emplace_back("particle trails", RejectionFor(fixture));
+        reasons.emplace_back("sprite trail without velocity", RejectionFor(fixture));
+    }
+    {
+        ImageScene fixture;
+        auto       mesh = ParticleMesh("genericropeparticle");
+        mesh->GetVertexArray(0).SetOption(WE_PRENDER_SPRITE, false);
+        mesh->GetVertexArray(0).SetOption(WE_PRENDER_ROPE, true);
+        AttachParticleLayer(fixture, std::move(mesh));
+        reasons.emplace_back("rope-marked sprite layout", RejectionFor(fixture));
+    }
+    {
+        ImageScene fixture;
+        auto       mesh = RopeMesh(false);
+        mesh->GetVertexArray(0).SetOption(WE_PRENDER_TRAIL, true);
+        mesh->GetVertexArray(0).SetOption(WE_PRENDER_ROPETRAIL, true);
+        AttachParticleLayer(fixture, std::move(mesh));
+        reasons.emplace_back("thin rope trail", RejectionFor(fixture));
     }
     {
         // Every other mesh the runtime rewrites per frame -- a text layer's
@@ -318,7 +443,12 @@ TEST(MetalCapability, EveryUnsupportedConstructHasItsOwnReason)
         ImageScene fixture;
         fixture.material().customShader.shader->metal_program =
             TranslatedProgram(kBonesReflectionJson);
-        reasons.emplace_back("puppet", RejectionFor(fixture));
+        reasons.emplace_back("puppet on card mesh", RejectionFor(fixture));
+    }
+    {
+        ImageScene fixture;
+        fixture.node->AddMesh(SkinnedMesh(kBonesStride48ReflectionJson));
+        reasons.emplace_back("puppet stride 48", RejectionFor(fixture));
     }
     {
         // Never translated, because the preference was off when the scene was
@@ -378,6 +508,130 @@ TEST(MetalCapability, AcceptsAStandardTwoDimensionalSpriteParticleLayer)
 
     const auto selection = EvaluateMetalSupport(fixture.scene);
     EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+}
+
+TEST(MetalCapability, AcceptsAThickSpriteTrail)
+{
+    ImageScene fixture;
+    auto       mesh = ThickSpriteMesh();
+    mesh->GetVertexArray(0).SetOption(WE_PRENDER_TRAIL, true);
+    AttachParticleLayer(fixture, std::move(mesh));
+
+    const auto selection = EvaluateMetalSupport(fixture.scene);
+    EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+    EXPECT_TRUE(selection.fallback_reason.empty());
+}
+
+TEST(MetalCapability, AcceptsAThinRopeParticleLayer)
+{
+    ImageScene fixture;
+    AttachParticleLayer(fixture, RopeMesh(false));
+
+    const auto selection = EvaluateMetalSupport(fixture.scene);
+    EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+    EXPECT_TRUE(selection.fallback_reason.empty());
+}
+
+TEST(MetalCapability, AcceptsAThickRopeParticleLayer)
+{
+    ImageScene fixture;
+    AttachParticleLayer(fixture, RopeMesh(true));
+
+    const auto selection = EvaluateMetalSupport(fixture.scene);
+    EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+    EXPECT_TRUE(selection.fallback_reason.empty());
+}
+
+TEST(MetalCapability, AcceptsARopeTrail)
+{
+    ImageScene fixture;
+    auto       mesh = RopeMesh(true);
+    mesh->GetVertexArray(0).SetOption(WE_PRENDER_TRAIL, true);
+    mesh->GetVertexArray(0).SetOption(WE_PRENDER_ROPETRAIL, true);
+    AttachParticleLayer(fixture, std::move(mesh));
+
+    const auto selection = EvaluateMetalSupport(fixture.scene);
+    EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+    EXPECT_TRUE(selection.fallback_reason.empty());
+}
+
+TEST(MetalCapability, AcceptsASkinnedMeshWithAPuppetShader)
+{
+    ImageScene fixture;
+    fixture.node->AddMesh(SkinnedMesh(kBonesReflectionJson));
+
+    const auto selection = EvaluateMetalSupport(fixture.scene);
+    EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+    EXPECT_TRUE(selection.fallback_reason.empty());
+}
+
+namespace
+{
+
+/// A layer under an effect chain, the way the parser leaves a puppet: the
+/// layer's own node draws a plain card, the chain's nodes carry only a material
+/// until the render graph resolves them, and the puppet's geometry waits in the
+/// chain's final mesh. `skinned_node` picks which of the two effect nodes holds
+/// the skinning material; only the second is the one the final mesh is resolved
+/// onto.
+struct PuppetEffectChain
+{
+    ImageScene                   fixture;
+    std::shared_ptr<SceneCamera> camera;
+
+    PuppetEffectChain(std::size_t skinned_node, bool final_mesh_has_weights)
+    {
+        camera = std::make_shared<SceneCamera>(1920, 1080, -1.0f, 1.0f);
+        fixture.scene.cameras["layer"] = camera;
+        fixture.node->SetCamera("layer");
+
+        auto layer = std::make_shared<SceneImageEffectLayer>(
+            fixture.node.get(), 1920.0f, 1080.0f, "_rt_effect_pingpong_a_0",
+            "_rt_effect_pingpong_b_0");
+        auto effect = std::make_shared<SceneImageEffect>();
+        for (std::size_t i = 0; i < 2; ++i) {
+            SceneMaterial material;
+            material.name     = "materials/card";
+            material.textures = { "materials/card.tex" };
+            material.customShader.shader                = std::make_shared<SceneShader>();
+            material.customShader.shader->name          = "genericimage2";
+            material.customShader.shader->metal_program =
+                TranslatedProgram(i == skinned_node ? kBonesReflectionJson : kReflectionJson);
+            auto mesh = std::make_shared<SceneMesh>();
+            mesh->AddMaterial(std::move(material));
+            auto node = std::make_shared<SceneNode>();
+            node->AddMesh(mesh);
+            effect->nodes.push_back({ "_rt_effect_pingpong_b_0", node });
+        }
+        layer->AddEffect(effect);
+        if (final_mesh_has_weights) {
+            layer->FinalMesh().ChangeMeshDataFrom(*SkinnedMesh());
+        }
+        camera->AttatchImgEffect(layer);
+    }
+};
+
+} // namespace
+
+TEST(MetalCapability, APuppetUnderAnEffectChainIsJudgedByTheMeshTheChainResolvesOntoIt)
+{
+    // The gate runs before the render graph exists, so the chain's last node
+    // has no streams of its own yet. Refusing it for that would refuse every
+    // puppet that has an effect; what it will be drawn with is the final mesh.
+    PuppetEffectChain resolved(/*skinned_node=*/1, /*final_mesh_has_weights=*/true);
+    const auto        selection = EvaluateMetalSupport(resolved.fixture.scene);
+    EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+
+    // A final mesh without bone weights leaves the skinning shader nothing to read.
+    PuppetEffectChain plain_final(1, false);
+    EXPECT_EQ(RejectionFor(plain_final.fixture),
+              "a puppet shader is bound to a mesh without bone weights");
+
+    // Any other node of the chain is given the plain full-target quad, so the
+    // final mesh does not vouch for a skinning shader sitting there.
+    PuppetEffectChain wrong_node(0, true);
+    EXPECT_EQ(RejectionFor(wrong_node.fixture),
+              "a puppet shader is bound to a mesh without bone weights");
 }
 
 TEST(MetalCapability, AParticleLayerWithNoLiveParticlesIsStillAccepted)

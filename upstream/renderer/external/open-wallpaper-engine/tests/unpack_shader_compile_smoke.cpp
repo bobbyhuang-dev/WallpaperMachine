@@ -542,8 +542,9 @@ std::optional<std::string> ParticleShaderOverride(const nlohmann::json& particle
         return std::nullopt;
     }
 
-    auto renderer_name = JsonStringValue(particle_json.at("renderer").at(0), "name");
-    if (renderer_name == "ropetrail") renderer_name = "spritetrail";
+    // Mirrors the parser: every rope renderer, a rope trail included, draws
+    // with the rope shader. A rope trail is no longer loaded as a sprite trail.
+    const auto renderer_name = JsonStringValue(particle_json.at("renderer").at(0), "name");
     if (renderer_name.starts_with("rope")) return std::string("genericropeparticle");
     return std::nullopt;
 }

@@ -15,9 +15,12 @@
 #include "Particle/ParticleSystem.h"
 #include "Presentation/WallpaperScaling.hpp"
 #include "RenderGraph/PassNode.hpp"
+#include "RenderGraph/RenderGraph.hpp"
 #include "Scene/Scene.h"
 #include "SpecTexs.hpp"
 #include "Utils/Eigen.h"
+#include "VulkanRender/CopyPass.hpp"
+#include "VulkanRender/CustomShaderPass.hpp"
 
 #include <gtest/gtest.h>
 
@@ -155,6 +158,49 @@ std::string RejectionFor(ImageScene& fixture)
     return EvaluateMetalSupport(fixture.scene).fallback_reason;
 }
 
+rg::TexNode::Desc TexDesc(const std::string& key)
+{
+    return rg::TexNode::Desc {
+        .name = key,
+        .key  = key,
+        .type = IsSpecTex(key) ? rg::TexNode::TexType::Temp : rg::TexNode::TexType::Imported,
+    };
+}
+
+/// One author draw, shaped the way `sceneToRenderGraph` shapes it: a spec-tex
+/// input is marked as virtually written, which is what orders a reader before a
+/// later real writer of the same key.
+void AddDraw(rg::RenderGraph& graph, const std::string& output,
+             const std::vector<std::string>& inputs)
+{
+    graph.addPass<vulkan::CustomShaderPass>(
+        "draw", rg::PassNode::Type::CustomShader,
+        [&output, &inputs](rg::RenderGraphBuilder& builder, vulkan::CustomShaderPass::Desc& desc) {
+            desc.output = output;
+            for (const auto& input : inputs) {
+                auto* node = builder.createTexNode(TexDesc(input));
+                if (IsSpecTex(input)) builder.markVirtualWrite(node);
+                builder.read(node);
+                desc.textures.push_back(std::string(node->key()));
+            }
+            builder.write(builder.createTexNode(TexDesc(output), true));
+        });
+}
+
+void AddCopy(rg::RenderGraph& graph, const std::string& source, const std::string& destination)
+{
+    graph.addPass<vulkan::CopyPass>(
+        "copy", rg::PassNode::Type::Copy,
+        [&source, &destination](rg::RenderGraphBuilder& builder, vulkan::CopyPass::Desc& desc) {
+            auto* in  = builder.createTexNode(TexDesc(source));
+            auto* out = builder.createTexNode(TexDesc(destination), true);
+            builder.read(in);
+            builder.write(out);
+            desc.src = std::string(in->key());
+            desc.dst = std::string(out->key());
+        });
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -185,14 +231,11 @@ TEST(MetalCapability, EveryUnsupportedConstructHasItsOwnReason)
         reasons.emplace_back("lights", RejectionFor(fixture));
     }
     {
+        // A plain video wallpaper has its own host path; a scene that merely
+        // binds a video texture is decided by the video module instead.
         ImageScene fixture;
-        fixture.scene.post_processes.push_back(std::make_shared<ScenePostProcess>());
-        reasons.emplace_back("post-process", RejectionFor(fixture));
-    }
-    {
-        ImageScene fixture;
-        fixture.scene.textures["video.mp4"] = SceneTexture { .url = "video.mp4", .isVideo = true };
-        reasons.emplace_back("video", RejectionFor(fixture));
+        fixture.scene.single_video_source = true;
+        reasons.emplace_back("video wallpaper", RejectionFor(fixture));
     }
     {
         ImageScene fixture;
@@ -204,19 +247,6 @@ TEST(MetalCapability, EveryUnsupportedConstructHasItsOwnReason)
         ImageScene fixture;
         fixture.scene.activeCamera = fixture.global_perspective.get();
         reasons.emplace_back("perspective", RejectionFor(fixture));
-    }
-    {
-        ImageScene fixture;
-        fixture.global->AttatchImgEffect(std::make_shared<SceneImageEffectLayer>(
-            fixture.node.get(), 1920.0f, 1080.0f, "_rt_effect_pingpong_a_0",
-            "_rt_effect_pingpong_b_0"));
-        reasons.emplace_back("image effect", RejectionFor(fixture));
-    }
-    {
-        ImageScene fixture;
-        // A material that samples the image it draws into is feedback.
-        fixture.material().textures = { std::string(SpecTex_Default) };
-        reasons.emplace_back("feedback", RejectionFor(fixture));
     }
     {
         ImageScene fixture;
@@ -258,6 +288,80 @@ TEST(MetalCapability, EveryUnsupportedConstructHasItsOwnReason)
     ASSERT_NE(untranslatable, reasons.end());
     ASSERT_NE(never_attempted, reasons.end());
     EXPECT_NE(untranslatable->second, never_attempted->second);
+}
+
+TEST(MetalCapability, AnImageEffectChainIsNoLongerRejectedBeforeTheGraphExists)
+{
+    // An effect chain is ordinary multi-pass work now. Whether its particular
+    // shape can be executed is a question about the lowered graph, and refusing
+    // the whole class here would answer it for scenes that are perfectly
+    // drawable.
+    ImageScene fixture;
+    fixture.global->AttatchImgEffect(std::make_shared<SceneImageEffectLayer>(
+        fixture.node.get(), 1920.0f, 1080.0f, "_rt_effect_pingpong_a_0",
+        "_rt_effect_pingpong_b_0"));
+    const auto selection = EvaluateMetalSupport(fixture.scene);
+    EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+
+    ImageScene post;
+    post.scene.post_processes.push_back(std::make_shared<ScenePostProcess>());
+    const auto post_selection = EvaluateMetalSupport(post.scene);
+    EXPECT_EQ(post_selection.backend, SceneBackend::NativeMetal)
+        << post_selection.fallback_reason;
+}
+
+TEST(MetalGraph, SequentialEffectPassesAreAccepted)
+{
+    ImageScene       fixture;
+    rg::RenderGraph  graph;
+    AddDraw(graph, "_rt_effect_pingpong_a_0", { "materials/card.tex" });
+    AddDraw(graph, "_rt_effect_pingpong_b_0", { "_rt_effect_pingpong_a_0" });
+    AddDraw(graph, std::string(SpecTex_Default), { "_rt_effect_pingpong_b_0" });
+
+    EXPECT_EQ(MetalGraphRejection(fixture.scene, graph), "");
+}
+
+TEST(MetalGraph, ALinkTextureProducedEarlierInTheSameFrameIsNotFeedback)
+{
+    // One layer's output, copied into a link texture and sampled by another
+    // layer later in the very same frame. Every pixel it reads was produced by
+    // this frame's work, so there is nothing historical about it.
+    ImageScene      fixture;
+    rg::RenderGraph graph;
+    AddDraw(graph, "_rt_imageLayerComposite_1", { "materials/card.tex" });
+    AddCopy(graph, "_rt_imageLayerComposite_1", "_rt_link_1");
+    AddDraw(graph, std::string(SpecTex_Default), { "_rt_link_1" });
+
+    EXPECT_EQ(MetalGraphRejection(fixture.scene, graph), "");
+}
+
+TEST(MetalGraph, ReadingATargetThatIsOnlyWrittenLaterIsRejectedAsHistoryFeedback)
+{
+    // The mip-mapped frame buffer: sampled by a layer, then filled from the
+    // frame's own output afterwards. What the layer sampled is the previous
+    // frame's picture, which this backend keeps no history for.
+    ImageScene      fixture;
+    rg::RenderGraph graph;
+    AddDraw(graph, std::string(SpecTex_Default),
+            { "materials/card.tex", std::string(WE_MIP_MAPPED_FRAME_BUFFER) });
+    AddCopy(graph, std::string(SpecTex_Default), std::string(WE_MIP_MAPPED_FRAME_BUFFER));
+
+    EXPECT_EQ(MetalGraphRejection(fixture.scene, graph),
+              "the scene uses a history feedback effect");
+}
+
+TEST(MetalGraph, ATargetThisBackendCannotAllocateRejectsTheWholeScene)
+{
+    ImageScene fixture;
+    fixture.scene.renderTargets["_rt_msaa"] = SceneRenderTarget {
+        .width = 1920, .height = 1080, .sample_count = 4,
+    };
+    rg::RenderGraph graph;
+    AddDraw(graph, "_rt_msaa", { "materials/card.tex" });
+    AddDraw(graph, std::string(SpecTex_Default), { "_rt_msaa" });
+
+    EXPECT_EQ(MetalGraphRejection(fixture.scene, graph),
+              "an effect uses a render-target format the native renderer cannot create");
 }
 
 TEST(MetalCapability, RecognisedPassKindsAreClassifiedAndAnythingElseFallsBack)

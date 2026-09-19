@@ -45,6 +45,16 @@ struct RenderInitInfo {
     // uses this for a native desktop poster, not for screen/window capture.
     std::function<bool()> wants_poster;
     std::function<void(std::span<const uint8_t>, uint32_t, uint32_t, bool)> poster_ready;
+
+    /// Lets the host wake the render handler when a poster is requested.
+    ///
+    /// `wants_poster` is only ever polled by a frame, so an idle or user-paused
+    /// scene would leave a request pending forever. The render handler passes a
+    /// closure here when it takes this info and passes an empty one back before
+    /// the info is replaced or destroyed; the host holds its lock across both,
+    /// so a notification already in flight cannot poke a handler that is going
+    /// away.
+    std::function<void(std::function<void()>)> bind_poster_wake;
 };
 
 } // namespace wallpaper

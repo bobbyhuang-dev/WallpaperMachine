@@ -300,6 +300,59 @@ async fn the_backend_report_names_what_ran_and_only_real_fallbacks() {
     );
 }
 
+/// No GPU backend exists until a scene has been parsed and one has been chosen,
+/// so an absent backend is a phase of the scene's life rather than a failed
+/// reading. It has to reach the panel as its own value, distinct from both real
+/// backends and from the preference, and it has to carry no fallback reason:
+/// nothing has fallen back while nothing has been chosen.
+#[tokio::test]
+async fn a_scene_with_no_backend_yet_is_reported_separately_from_a_fallback() {
+    let engine = FakeEngineFacade::default();
+    engine.set_scene_runtime_reports(vec![
+        SceneRuntimeReport {
+            backend: None,
+            ..report(7, 1)
+        },
+        SceneRuntimeReport {
+            backend: Some(SceneBackend::LegacyVulkan),
+            fallback_reason: Some("the scene uses a puppet the native backend cannot draw".into()),
+            ..report(8, 2)
+        },
+    ]);
+    let bridge = bridge(&engine);
+    bridge
+        .set_scene_renderer(SceneRendererPreference::NativeMetalPreferred.as_str().into())
+        .await
+        .unwrap();
+
+    let settings = bridge.settings_snapshot().await.unwrap();
+    let renderers = &settings.scene_renderers;
+
+    assert_eq!(
+        renderers.len(),
+        2,
+        "a scene still choosing a backend is a running scene and must not be dropped"
+    );
+    assert_eq!(renderers[0].backend, "unknown");
+    assert_ne!(
+        renderers[0].backend, settings.scene_renderer,
+        "preferring the native backend must not be published as having got it"
+    );
+    assert_ne!(
+        renderers[0].backend, renderers[1].backend,
+        "not chosen yet and chose compatibility are different answers"
+    );
+    assert_eq!(
+        renderers[0].fallback_reason, None,
+        "nothing has been chosen, so nothing has fallen back"
+    );
+    assert_eq!(
+        renderers[1].fallback_reason.as_deref(),
+        Some("the scene uses a puppet the native backend cannot draw"),
+        "the renderer's own reason is what the panel shows, so it must survive the snapshot"
+    );
+}
+
 #[tokio::test]
 async fn nothing_running_is_reported_as_nothing_running() {
     let engine = FakeEngineFacade::default();

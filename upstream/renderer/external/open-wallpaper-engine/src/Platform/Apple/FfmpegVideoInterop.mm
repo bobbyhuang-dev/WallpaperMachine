@@ -1133,6 +1133,19 @@ void RetainAppleVideoFrame(const VideoTextureFrame& frame, VideoTextureFrame* ou
     }
 }
 
+YuvColorParams AppleVideoFrameColorParams(const VideoTextureFrame& frame)
+{
+    auto pixel_buffer = reinterpret_cast<CVPixelBufferRef>(frame.pixel_buffer);
+    if (pixel_buffer == nullptr) return MakeYuvColorParams(YuvColorDescription {});
+    const YuvColorDescription description =
+        ColorDescriptionForPixelBuffer(pixel_buffer,
+                                       static_cast<OSType>(frame.pixel_format),
+                                       frame.width,
+                                       frame.height);
+    ReportInferredColor(description);
+    return MakeYuvColorParams(description);
+}
+
 std::string DescribeAppleVideoFrame(const VideoTextureFrame& frame)
 {
     std::ostringstream stream;

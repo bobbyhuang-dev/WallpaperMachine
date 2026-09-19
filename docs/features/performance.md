@@ -125,8 +125,25 @@ Vulkan-through-MoltenVK path and the default. **Native Metal preferred** asks
 for the native Metal backend, which covers a subset of scene features; a scene
 it cannot draw runs on the compatibility backend and the status line says why.
 
-The row shows the backend actually in use, not the preference. The lock-screen
-extension always uses the compatibility backend.
+Native Metal draws image layers, ordinary effect chains and scene
+post-processing, layers that read an image another layer produced earlier in
+the same frame, and BGRA or 8-bit NV12 video textures. Particles, puppets,
+perspective 3D, dynamic lighting, sprite sheets, history-feedback effects,
+HDR or 10-bit video, plain video wallpapers and shaders that do not translate
+fall back as a whole scene; an effect is never dropped to keep a scene native.
+Effect and video output has not yet been compared against real wallpapers.
+
+No GPU backend is created until the scene has been parsed and a backend chosen,
+so the row reports one of three states per scene: **preparing** (no backend
+yet), the backend actually in use, or Compatibility with the reason native was
+not used. It never shows the preference in place of the outcome. The
+lock-screen extension always uses the compatibility backend.
+
+Desktop posters work on both backends and need no setting: the native backend
+re-draws its final composition — fit, zoom and flip included — into a texture
+of its own only when a poster is requested, including while the scene is idle
+or paused. **Scene optimisation** applies to the compatibility renderer only;
+the row says so while a scene is running natively.
 
 No power comparison has been measured between the two. Choosing native Metal is
 not a documented saving.

@@ -9,6 +9,7 @@
 #include "SpecTexs.hpp"
 
 #include <functional>
+#include <unordered_map>
 
 namespace wallpaper::metal
 {
@@ -35,6 +36,65 @@ bool TargetExtent(const Scene& scene, const std::string& key, uint32_t& width, u
     width  = static_cast<uint32_t>(target->width);
     height = static_cast<uint32_t>(target->height);
     return true;
+}
+
+/// Declares a copy's destination when the graph invented the name.
+///
+/// The same rule `vulkan::CopyPass::prepare` applies: the destination inherits
+/// the source's shape and becomes reusable. Inventing a different shape here
+/// would size the link texture or the feedback-break copy differently in the
+/// two backends, and every effect that samples it would then sample at a
+/// different texel step.
+void EnsureCopyDestination(Scene& scene, const std::string& source, const std::string& destination)
+{
+    if (destination.empty() || scene.FindRenderTarget(destination) != nullptr) return;
+    const auto* source_target = scene.FindRenderTarget(source);
+    if (source_target == nullptr) return;
+    auto copy       = *source_target;
+    copy.allowReuse = true;
+    scene.renderTargets[destination] = copy;
+}
+
+/// Every render-target key a pass samples, in slot order for a draw and as the
+/// single source for a copy.
+void ForEachRead(const ScenePassDescription& desc, const std::function<void(const std::string&)>& op)
+{
+    if (desc.kind == MetalPassKind::Copy) {
+        if (! desc.source_key.empty()) op(desc.source_key);
+        return;
+    }
+    for (const auto& key : desc.texture_keys) {
+        if (! key.empty()) op(key);
+    }
+}
+
+/// Places mip generation at the last writer of each mip-mapped target before a
+/// reader of it, and at its final writer. Walked in execution order, so a target
+/// written, read, written and read again is regenerated twice rather than once.
+void PlaceMipmapGeneration(const Scene& scene, std::vector<ScenePassDescription>& out)
+{
+    std::unordered_map<std::string, std::size_t> pending;
+    const auto mipmapped = [&scene](const std::string& key) {
+        const auto* target = scene.FindRenderTarget(key);
+        return target != nullptr && target->mipmap_level > 1;
+    };
+
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        ForEachRead(out[i], [&](const std::string& key) {
+            if (! mipmapped(key)) return;
+            const auto found = pending.find(key);
+            if (found == pending.end()) return;
+            out[found->second].generate_mipmaps = true;
+            pending.erase(found);
+        });
+        if (! out[i].target_key.empty() && mipmapped(out[i].target_key)) {
+            pending[out[i].target_key] = i;
+        }
+    }
+    for (const auto& [key, index] : pending) {
+        (void)key;
+        out[index].generate_mipmaps = true;
+    }
 }
 
 } // namespace
@@ -112,6 +172,10 @@ bool BuildScenePassDescriptions(Scene& scene, const rg::RenderGraph& graph,
             desc.source_key  = scene.ResolveRenderTargetName(copy->desc().src);
             desc.target_key  = scene.ResolveRenderTargetName(copy->desc().dst);
             desc.load_action = MetalLoadAction::DontCare;
+            if (! TargetExtent(scene, desc.source_key, desc.source_width, desc.source_height)) {
+                return set_error("a copy step reads an image with no size");
+            }
+            EnsureCopyDestination(scene, desc.source_key, desc.target_key);
             if (! TargetExtent(scene, desc.target_key, desc.target_width, desc.target_height)) {
                 return set_error("a copy step targets an image with no size");
             }
@@ -171,6 +235,7 @@ bool BuildScenePassDescriptions(Scene& scene, const rg::RenderGraph& graph,
     }
 
     if (out.empty()) return set_error("the render graph draws nothing");
+    PlaceMipmapGeneration(scene, out);
     return true;
 }
 

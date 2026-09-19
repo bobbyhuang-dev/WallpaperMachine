@@ -582,7 +582,14 @@ diagnostics. `scripts/check_renderer.py` builds and runs
 `render_target_lifetime_test`, `text_object_runtime_test`,
 `shader_cache_metadata_test`, `video_decode_pump_test`,
 `video_color_conversion_test`, `video_frame_pacing_test`, `timer_tests` and
-`playback_gpu_test`; a non-zero exit from any of them fails the check.
+`playback_gpu_test`; a non-zero exit from any of them fails the check. The
+native Metal backend adds `metal_backend_test` (capability and graph gate, no
+device needed), `metal_scene_draw_smoke` (author shaders and same-frame
+intermediates drawn and read back), `metal_poster_capture_test` (on-request
+poster readback, busy coalescing, invalidation) and `metal_video_texture_test`
+(BGRA import and NV12 conversion against the CPU colour reference, from
+synthetic frames); all four run in the check, draw only into private textures
+and skip visibly without a Metal device.
 
 Useful filters:
 

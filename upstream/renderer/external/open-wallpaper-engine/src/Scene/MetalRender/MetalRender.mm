@@ -5,6 +5,9 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 
+#include "MetalPosterCapture.hpp"
+#include "MetalVideoTextures.hpp"
+
 #include "MetalRender/MetalBlend.hpp"
 #include "MetalRender/MetalCapability.hpp"
 #include "MetalRender/MetalProjection.hpp"
@@ -31,6 +34,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -100,6 +104,12 @@ constexpr NSUInteger kVertexBufferTopIndex = 30;
 /// which is exactly the lifetime these do not have.
 constexpr MTLTextureUsage kRenderTargetUsage =
     MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+
+/// The colour format every scene render target has. The compatibility backend's
+/// texture pool keys every target on `TextureFormat::RGBA8`, so matching it here
+/// is what makes an effect chain's intermediate values identical in the two
+/// backends rather than merely similar.
+constexpr MTLPixelFormat kSceneTargetFormat = MTLPixelFormatRGBA8Unorm;
 
 constexpr std::string_view kPresentShaderSource = R"(
 #include <metal_stdlib>
@@ -259,11 +269,23 @@ struct MetalRender::Impl
     std::string           last_error;
 
     // ---- presentation
-    id<MTLRenderPipelineState> present_pipeline { nil };
+    /// One full-target textured-quad pipeline per destination colour format.
+    /// The drawable's format is built when presentation is, and a scaled copy's
+    /// destination format at compile: a pipeline is never created inside a
+    /// frame, because creating one blocks on the shader compiler.
+    std::unordered_map<uint32_t, id<MTLRenderPipelineState>> present_pipelines;
+    id<MTLLibrary>             present_library { nil };
     id<MTLBuffer>              present_vertices { nil };
     id<MTLBuffer>              present_vertices_flipped { nil };
     id<MTLSamplerState>        present_sampler { nil };
     MTLPixelFormat             drawable_format { MTLPixelFormatBGRA8Unorm };
+
+    // ---- host services
+    MetalPosterCapture poster;
+    MetalVideoTextures video;
+    /// Whether the graph currently compiled has produced a frame. A poster
+    /// composed before that would publish an empty image as the wallpaper.
+    bool               frame_drawn { false };
 
     // ---- host configuration
     uint32_t             output_width { 0 };
@@ -273,7 +295,13 @@ struct MetalRender::Impl
     double               scaling_factor { 1.0 };
     bool                 horizontal_flip { false };
     bool                 video_paused { false };
+    float                video_rate { 1.0f };
     RendererCounters*    counters { nullptr };
+    /// The raster extent the last size resolve produced: the authored canvas
+    /// through the internal render scale, which is what screen-space shader
+    /// inputs have to describe.
+    uint32_t             raster_width { 0 };
+    uint32_t             raster_height { 0 };
 
     // ---- compiled graph
     struct TextureSlotBinding
@@ -341,8 +369,16 @@ struct MetalRender::Impl
     void releasePresentation();
 
     bool buildPresentation();
+    id<MTLRenderPipelineState> presentPipelineFor(MTLPixelFormat format);
+    bool ensurePresentPipeline(MTLPixelFormat format);
+    bool encodeComposition(id<MTLCommandBuffer> command, id<MTLTexture> destination,
+                           const Scene& scene);
+    bool encodeScaledCopy(id<MTLCommandBuffer> command, id<MTLTexture> source,
+                          id<MTLTexture> destination);
     bool compile(Scene& scene, rg::RenderGraph& graph);
+    void resolveTargetSizes(Scene& scene);
     bool prepareTargets(Scene& scene);
+    bool clearTargetsOnce();
     bool prepareDraw(Scene& scene, std::size_t index, PreparedPass& out);
     id<MTLTexture> resolveTexture(Scene& scene, const std::string& key,
                                   id<MTLSamplerState>* sampler_out);
@@ -360,6 +396,9 @@ struct MetalRender::Impl
 
 void MetalRender::Impl::releaseGraph()
 {
+    video.release();
+    poster.invalidate();
+    frame_drawn = false;
     descriptions.clear();
     prepared.clear();
     targets.clear();
@@ -375,7 +414,12 @@ void MetalRender::Impl::releaseGraph()
 
 void MetalRender::Impl::releasePresentation()
 {
-    present_pipeline         = nil;
+    // The pipelines survive: they depend on the device and a colour format, not
+    // on the layer, and a scaled copy still needs its own one after a display
+    // reconfiguration has released the surface.
+    poster.invalidate();
+    frame_drawn              = false;
+    present_library          = nil;
     present_vertices         = nil;
     present_vertices_flipped = nil;
     present_sampler          = nil;
@@ -395,16 +439,8 @@ bool MetalRender::Impl::buildPresentation()
         return fail(std::string("presentation shader failed to compile: ") +
                     (error != nil ? error.localizedDescription.UTF8String : "unknown error"));
     }
-
-    MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
-    descriptor.vertexFunction   = [library newFunctionWithName:@"owe_present_vertex"];
-    descriptor.fragmentFunction = [library newFunctionWithName:@"owe_present_fragment"];
-    descriptor.colorAttachments[0].pixelFormat = drawable_format;
-    present_pipeline = [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
-    if (present_pipeline == nil) {
-        return fail(std::string("presentation pipeline failed to build: ") +
-                    (error != nil ? error.localizedDescription.UTF8String : "unknown error"));
-    }
+    present_library = library;
+    if (! ensurePresentPipeline(drawable_format)) return false;
 
     present_vertices = [device newBufferWithBytes:kPresentVertices
                                            length:sizeof(kPresentVertices)
@@ -423,6 +459,126 @@ bool MetalRender::Impl::buildPresentation()
     sampler_descriptor.tAddressMode = MTLSamplerAddressModeClampToEdge;
     present_sampler = [device newSamplerStateWithDescriptor:sampler_descriptor];
     if (present_sampler == nil) return fail("presentation sampler could not be created");
+    return true;
+}
+
+id<MTLRenderPipelineState> MetalRender::Impl::presentPipelineFor(MTLPixelFormat format)
+{
+    const auto found = present_pipelines.find(static_cast<uint32_t>(format));
+    return found != present_pipelines.end() ? found->second : nil;
+}
+
+bool MetalRender::Impl::ensurePresentPipeline(MTLPixelFormat format)
+{
+    if (presentPipelineFor(format) != nil) return true;
+    if (present_library == nil) return fail("the presentation shader is not available");
+
+    MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
+    descriptor.vertexFunction   = [present_library newFunctionWithName:@"owe_present_vertex"];
+    descriptor.fragmentFunction = [present_library newFunctionWithName:@"owe_present_fragment"];
+    descriptor.colorAttachments[0].pixelFormat = format;
+
+    NSError* error = nil;
+    id<MTLRenderPipelineState> pipeline =
+        [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+    if (pipeline == nil) {
+        return fail(std::string("presentation pipeline failed to build: ") +
+                    (error != nil ? error.localizedDescription.UTF8String : "unknown error"));
+    }
+    present_pipelines.emplace(static_cast<uint32_t>(format), pipeline);
+    return true;
+}
+
+/// Copies `source` onto the whole of `destination` through a render pass.
+///
+/// A blit cannot do this: Metal's texture-to-texture blit requires matching
+/// sizes and compatible formats, and the scene's own post-process chain copies
+/// between buffers that differ in both -- a full-resolution buffer into a half
+/// one, for instance. Skipping such a copy, which is what this used to do,
+/// left the destination holding the previous frame while every later pass read
+/// it as if it were fresh.
+bool MetalRender::Impl::encodeScaledCopy(id<MTLCommandBuffer> command, id<MTLTexture> source,
+                                         id<MTLTexture> destination)
+{
+    if (command == nil || source == nil || destination == nil) return false;
+    id<MTLRenderPipelineState> pipeline = presentPipelineFor(destination.pixelFormat);
+    if (pipeline == nil) return false;
+
+    MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor renderPassDescriptor];
+    descriptor.colorAttachments[0].texture     = destination;
+    // The draw covers every texel, so there is nothing to preserve or clear.
+    descriptor.colorAttachments[0].loadAction  = MTLLoadActionDontCare;
+    descriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+
+    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:descriptor];
+    if (encoder == nil) return false;
+    [encoder setViewport:(MTLViewport) { 0.0, 0.0, (double)destination.width,
+                                         (double)destination.height, 0.0, 1.0 }];
+    [encoder setScissorRect:(MTLScissorRect) { 0, 0, destination.width, destination.height }];
+    [encoder setCullMode:static_cast<MTLCullMode>(kSceneCullMode)];
+    [encoder setRenderPipelineState:pipeline];
+    // Never the flipped vertices: a copy inside the frame is not presentation,
+    // and the user's horizontal flip applies once, at the end.
+    [encoder setVertexBuffer:present_vertices offset:0 atIndex:0];
+    [encoder setFragmentTexture:source atIndex:0];
+    [encoder setFragmentSamplerState:present_sampler atIndex:0];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+    [encoder endEncoding];
+    return true;
+}
+
+/// Draws the scene's output image into `destination` with the user's scaling
+/// mode, zoom and horizontal flip.
+///
+/// One implementation for the drawable and for a poster capture. Two would drift
+/// and the drift would show as a poster that is framed differently from the
+/// wallpaper it claims to be a picture of. The layout is computed from the
+/// destination's own size, which is the only thing that differs between them.
+bool MetalRender::Impl::encodeComposition(id<MTLCommandBuffer> command,
+                                          id<MTLTexture> destination, const Scene& scene)
+{
+    if (command == nil || destination == nil) return false;
+    const auto output = targets.find(scene.ResolveRenderTargetName(SpecTex_Default));
+    if (output == targets.end()) return false;
+    id<MTLRenderPipelineState> pipeline = presentPipelineFor(destination.pixelFormat);
+    if (pipeline == nil) return false;
+
+    const auto layout =
+        scalingLayout(scene, (uint32_t)destination.width, (uint32_t)destination.height);
+    MTLRenderPassDescriptor* present = [MTLRenderPassDescriptor renderPassDescriptor];
+    present.colorAttachments[0].texture     = destination;
+    // Cleared, so the letterbox around a fitted image is black rather than
+    // whatever the destination held.
+    present.colorAttachments[0].loadAction  = MTLLoadActionClear;
+    present.colorAttachments[0].storeAction = MTLStoreActionStore;
+    present.colorAttachments[0].clearColor  = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
+
+    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:present];
+    if (encoder == nil) return false;
+    const VulkanViewportBox viewport {
+        .x      = (double)layout.viewport_px.x,
+        .y      = (double)(layout.viewport_px.y + std::max(1, layout.viewport_px.height)),
+        .width  = (double)std::max(1, layout.viewport_px.width),
+        .height = -(double)std::max(1, layout.viewport_px.height),
+    };
+    const auto metal_viewport = ToMetalViewport(viewport);
+    [encoder setViewport:(MTLViewport) { metal_viewport.origin_x, metal_viewport.origin_y,
+                                         metal_viewport.width, metal_viewport.height, 0.0, 1.0 }];
+    const NSUInteger scissor_width  = (NSUInteger)std::max(0, layout.scissor_px.width);
+    const NSUInteger scissor_height = (NSUInteger)std::max(0, layout.scissor_px.height);
+    [encoder setScissorRect:(MTLScissorRect) { (NSUInteger)std::max(0, layout.scissor_px.x),
+                                               (NSUInteger)std::max(0, layout.scissor_px.y),
+                                               std::min(scissor_width, destination.width),
+                                               std::min(scissor_height, destination.height) }];
+    [encoder setCullMode:static_cast<MTLCullMode>(kSceneCullMode)];
+    [encoder setRenderPipelineState:pipeline];
+    [encoder setVertexBuffer:(horizontal_flip ? present_vertices_flipped : present_vertices)
+                      offset:0
+                     atIndex:0];
+    [encoder setFragmentTexture:output->second atIndex:0];
+    [encoder setFragmentSamplerState:present_sampler atIndex:0];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+    [encoder endEncoding];
     return true;
 }
 
@@ -454,6 +610,17 @@ id<MTLTexture> MetalRender::Impl::resolveTexture(Scene& scene, const std::string
                                                  id<MTLSamplerState>* sampler_out)
 {
     if (key.empty()) return nil;
+
+    // A video key never reaches the image parser: its placeholder still would
+    // be uploaded once and then bound forever in place of the decoded frame.
+    if (video.owns(key)) {
+        if (sampler_out != nullptr) {
+            const auto found = scene.textures.find(key);
+            *sampler_out     = samplerFor(found != scene.textures.end() ? found->second.sample
+                                                                       : TextureSample {});
+        }
+        return video.texture(key);
+    }
 
     if (auto target = targets.find(key); target != targets.end()) {
         if (sampler_out != nullptr) {
@@ -611,18 +778,61 @@ id<MTLRenderPipelineState> MetalRender::Impl::pipelineFor(const MetalPipelineKey
     return state;
 }
 
+/// Sizes every render target the way the compatibility backend does.
+///
+/// The three sizings are different questions and must not be flattened into
+/// one. A screen-bound target follows the raster extent; a target the author
+/// sized directly -- an effect ping-pong buffer, a fixed-fraction scratch
+/// buffer -- follows the internal render scale from its own authored size; a
+/// bound target follows a fraction of the target it names. An author's
+/// half-resolution blur buffer at 50% internal scale is therefore a quarter of
+/// the canvas in each axis, which is what makes the two scales compose instead
+/// of one overwriting the other.
+void MetalRender::Impl::resolveTargetSizes(Scene& scene)
+{
+    const VkExtent2D fallback { std::max<uint32_t>(1, output_width),
+                                std::max<uint32_t>(1, output_height) };
+    const auto extents      = vulkan::ResolveScreenBoundRenderTargetSizes(scene, fallback);
+    const auto render_scale = vulkan::ResolveSceneRenderScale(scene);
+    raster_width            = std::max(1u, extents.raster.width);
+    raster_height           = std::max(1u, extents.raster.height);
+
+    for (auto& [name, target] : scene.renderTargets) {
+        if (name == SpecTex_Default) continue;
+        if (target.bind.screen && target.bind.enable) continue;
+        if (! target.bind.enable) {
+            vulkan::ResolveRenderScaledSize(target, render_scale);
+            continue;
+        }
+        const auto bound = scene.renderTargets.find(target.bind.name);
+        if (target.bind.name.empty() || bound == scene.renderTargets.end()) continue;
+        target.width  = static_cast<int32_t>(target.bind.scale * bound->second.width);
+        target.height = static_cast<int32_t>(target.bind.scale * bound->second.height);
+    }
+
+    for (auto& [name, target] : scene.renderTargets) {
+        (void)name;
+        if (! target.has_mipmap) continue;
+        const auto smaller = std::max(1, std::min(target.width, target.height));
+        target.mipmap_level =
+            std::max(3u, static_cast<uint32_t>(std::floor(std::log2(smaller)))) - 2u;
+    }
+}
+
 bool MetalRender::Impl::prepareTargets(Scene& scene)
 {
     targets.clear();
     for (const auto& [name, target] : scene.renderTargets) {
         if (target.width <= 0 || target.height <= 0) continue;
+        const NSUInteger levels = std::max<uint32_t>(1, target.mipmap_level);
         MTLTextureDescriptor* descriptor = [MTLTextureDescriptor
-            texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+            texture2DDescriptorWithPixelFormat:kSceneTargetFormat
                                          width:(NSUInteger)target.width
                                         height:(NSUInteger)target.height
-                                     mipmapped:NO];
-        descriptor.usage = kRenderTargetUsage;
-        // Private, never memoryless. A later pass, the presentation blit and a
+                                     mipmapped:levels > 1];
+        descriptor.mipmapLevelCount = levels;
+        descriptor.usage            = kRenderTargetUsage;
+        // Private, never memoryless. A later pass, the presentation draw and a
         // poster capture all read these after the pass that wrote them has
         // ended, so their contents have to survive the render pass.
         descriptor.storageMode = MTLStorageModePrivate;
@@ -636,6 +846,35 @@ bool MetalRender::Impl::prepareTargets(Scene& scene)
     if (targets.find(scene.ResolveRenderTargetName(SpecTex_Default)) == targets.end()) {
         return fail("the scene has no output image");
     }
+    return clearTargetsOnce();
+}
+
+/// Zeroes every freshly allocated target once, at compile time.
+///
+/// A private Metal texture's initial contents are undefined. A scene may read a
+/// target the graph never writes -- an effect input the author left empty -- and
+/// without this that read would sample whatever the driver last left in that
+/// memory, which is neither black nor the same twice.
+bool MetalRender::Impl::clearTargetsOnce()
+{
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    if (command == nil) return fail("a Metal command buffer could not be created");
+    for (const auto& [name, texture] : targets) {
+        (void)name;
+        MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor renderPassDescriptor];
+        descriptor.colorAttachments[0].texture     = texture;
+        descriptor.colorAttachments[0].loadAction  = MTLLoadActionClear;
+        descriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+        descriptor.colorAttachments[0].clearColor  = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
+        id<MTLRenderCommandEncoder> encoder =
+            [command renderCommandEncoderWithDescriptor:descriptor];
+        if (encoder == nil) return fail("a render target could not be cleared");
+        [encoder endEncoding];
+    }
+    [command commit];
+    // Compile time, never the frame path: the first frame must not race the
+    // clear of the targets it reads.
+    [command waitUntilCompleted];
     return true;
 }
 
@@ -720,7 +959,9 @@ bool MetalRender::Impl::prepareDraw(Scene& scene, std::size_t index, PreparedPas
         if (! out.texture_slots[i].bound()) continue;
         id<MTLSamplerState> sampler = nil;
         id<MTLTexture> texture = resolveTexture(scene, desc.texture_keys[i], &sampler);
-        if (texture == nil) {
+        // A video texture has no frame yet at compile time, which is not a
+        // missing image: the first `beginFrame` produces one.
+        if (texture == nil && ! video.owns(desc.texture_keys[i])) {
             return fail("an image a layer needs could not be loaded: " + desc.texture_keys[i]);
         }
         out.samplers[i] = sampler;
@@ -907,6 +1148,24 @@ void MetalRender::Impl::writeUniforms(Scene& scene, const ScenePassDescription& 
     auto& sprites = const_cast<PreparedPass&>(pass).sprites;
     updater->UpdateUniforms(desc.node, desc.material_slot, sprites, write);
     if (restore_camera) desc.node->SetCamera(original_camera);
+
+    // Last, so it overrides the parser's constant. The shared value updater
+    // reports render-target sizes; a video slot's real size is the decoded
+    // frame's, and a shader that taps neighbours at the placeholder's step
+    // would sample the wrong texels.
+    for (std::size_t i = 0;
+         i < desc.texture_keys.size() && i < WE_GLTEX_RESOLUTION_NAMES.size(); ++i) {
+        const auto& key = desc.texture_keys[i];
+        if (key.empty() || ! video.owns(key)) continue;
+        id<MTLTexture> frame = video.texture(key);
+        if (frame == nil) continue;
+        const std::array<float, 4> resolution {
+            static_cast<float>(frame.width), static_cast<float>(frame.height),
+            static_cast<float>(frame.width), static_cast<float>(frame.height),
+        };
+        write(WE_GLTEX_RESOLUTION_NAMES[i],
+              ShaderValue(std::span<const float>(resolution.data(), resolution.size())));
+    }
 }
 
 void MetalRender::Impl::computeDemandReasons(Scene& scene, rg::RenderGraph& graph)
@@ -982,19 +1241,46 @@ bool MetalRender::Impl::compile(Scene& scene, rg::RenderGraph& graph)
         return fail(std::move(reason));
     }
 
-    const MTLSize drawable_extent { std::max<uint32_t>(1, output_width),
-                                    std::max<uint32_t>(1, output_height), 1 };
-    vulkan::ResolveScreenBoundRenderTargetSizes(
-        scene,
-        VkExtent2D { static_cast<uint32_t>(drawable_extent.width),
-                     static_cast<uint32_t>(drawable_extent.height) });
+    resolveTargetSizes(scene);
 
-    if (! prepareTargets(scene)) return false;
-
+    // Lowered before the targets are allocated: a copy's destination may be a
+    // name only the graph knows, and lowering is what declares it.
     std::string error;
     if (! BuildScenePassDescriptions(scene, graph, descriptions, &error)) {
         return fail(std::move(error));
     }
+
+    if (! prepareTargets(scene)) return false;
+
+    for (const auto& desc : descriptions) {
+        if (desc.kind != MetalPassKind::Copy) continue;
+        const auto target = targets.find(desc.target_key);
+        if (target == targets.end()) return fail("a copy step targets an image that does not exist");
+        if (! ensurePresentPipeline(target->second.pixelFormat)) return false;
+    }
+
+    // ---- video textures the scene's materials bind
+    std::vector<std::string> video_keys;
+    for (const auto& desc : descriptions) {
+        for (const auto& key : desc.texture_keys) {
+            if (key.empty()) continue;
+            const auto found = scene.textures.find(key);
+            if (found == scene.textures.end() || ! found->second.isVideo) continue;
+            if (std::find(video_keys.begin(), video_keys.end(), key) == video_keys.end()) {
+                video_keys.push_back(key);
+            }
+        }
+    }
+    video.configure(device);
+    std::string video_error;
+    if (! video.prepare(scene, video_keys, &video_error)) {
+        // A video the native path cannot play is a whole-scene fallback, not a
+        // layer quietly drawn without it.
+        return fail(std::move(video_error));
+    }
+    video.setCounters(counters);
+    video.setPaused(video_paused);
+    video.setRate(video_rate);
 
     prepared.resize(descriptions.size());
     uint32_t uniform_cursor = 0;
@@ -1023,12 +1309,13 @@ bool MetalRender::Impl::compile(Scene& scene, rg::RenderGraph& graph)
     }
 
     if (scene.shaderValueUpdater != nullptr) {
-        const auto* output = scene.FindRenderTarget(SpecTex_Default);
-        const auto  width  = output != nullptr ? std::max(1, output->width) : 1;
-        const auto  height = output != nullptr ? std::max(1, output->height) : 1;
-        scene.shaderValueUpdater->SetScreenSize(width, height);
-        scene.shaderValueUpdater->SetTexelSize(1.0f / static_cast<float>(width),
-                                               1.0f / static_cast<float>(height));
+        // The raster extent, not the authored canvas: a half-scale raster has
+        // half-scale texels, and a neighbour-tap effect that is told otherwise
+        // samples at the wrong step.
+        scene.shaderValueUpdater->SetScreenSize(static_cast<int32_t>(raster_width),
+                                                static_cast<int32_t>(raster_height));
+        scene.shaderValueUpdater->SetTexelSize(1.0f / static_cast<float>(raster_width),
+                                               1.0f / static_cast<float>(raster_height));
     }
 
     computeDemandReasons(scene, graph);
@@ -1089,6 +1376,7 @@ bool MetalRender::init(const MetalRenderInitInfo& info)
             pImpl->inflight = dispatch_semaphore_create(kFramesInFlight);
         }
         if (! pImpl->buildPresentation()) return false;
+        pImpl->poster.configure(device, info.wants_poster, info.poster_ready);
         pImpl->inited = true;
         pImpl->last_error.clear();
         return true;
@@ -1109,6 +1397,7 @@ void MetalRender::destroy()
         }
         pImpl->releaseGraph();
         pImpl->releasePresentation();
+        pImpl->present_pipelines.clear();
         pImpl->queue  = nil;
         pImpl->device = nil;
         pImpl->inited = false;
@@ -1145,6 +1434,7 @@ bool MetalRender::resetSurface(const MetalRenderInitInfo& info)
         pImpl->output_height        = info.height;
         pImpl->display_scale_factor = NormalizeScaleFactor(info.display_scale_factor);
         if (! pImpl->buildPresentation()) return false;
+        pImpl->poster.configure(pImpl->device, info.wants_poster, info.poster_ready);
         pImpl->inited     = true;
         pImpl->graph_ready = had_graph;
         return true;
@@ -1189,15 +1479,38 @@ void MetalRender::SetWallpaperScalingFactor(double factor)
 
 void MetalRender::SetWallpaperHorizontalFlip(bool enabled) { pImpl->horizontal_flip = enabled; }
 
-void MetalRender::SetVideoPlaybackPaused(bool paused) { pImpl->video_paused = paused; }
+void MetalRender::SetVideoPlaybackPaused(bool paused)
+{
+    pImpl->video_paused = paused;
+    pImpl->video.setPaused(paused);
+}
 
-void MetalRender::SetVideoPlaybackRate(float) {}
+void MetalRender::SetVideoPlaybackRate(float rate)
+{
+    pImpl->video_rate = rate;
+    pImpl->video.setRate(rate);
+}
 
-double MetalRender::ShortestVideoFramePeriod() const { return 0.0; }
+double MetalRender::ShortestVideoFramePeriod() const
+{
+    return pImpl->video.shortestFramePeriod();
+}
 
-uint32_t MetalRender::ShaderUpdateDemandReasons() const { return pImpl->demand_reasons; }
+uint32_t MetalRender::ShaderUpdateDemandReasons() const
+{
+    uint32_t reasons = pImpl->demand_reasons;
+    // Asked now rather than latched at compile: pausing playback stops the
+    // frames without rebuilding the graph, and a paused video must not keep
+    // the clock running.
+    if (pImpl->video.advancesOnItsOwn()) reasons |= vulkan::DynamicReason::VideoInput;
+    return reasons;
+}
 
-void MetalRender::SetCounters(RendererCounters* counters) { pImpl->counters = counters; }
+void MetalRender::SetCounters(RendererCounters* counters)
+{
+    pImpl->counters = counters;
+    pImpl->video.setCounters(counters);
+}
 
 WallpaperCursorMapping MetalRender::CursorMapping(const Scene& scene) const
 {
@@ -1232,6 +1545,22 @@ bool MetalRender::drawFrame(Scene& scene)
             return true;
         }
 
+        id<MTLCommandBuffer> command = [impl.queue commandBuffer];
+        if (command == nil) {
+            dispatch_semaphore_signal(impl.inflight);
+            return impl.fail("a Metal command buffer could not be created");
+        }
+
+        // Before any pass: a decoded frame taken here is the one every pass in
+        // this command buffer samples, and its conversion is encoded ahead of
+        // them. A failure here is a failed frame, not a black one drawn as if
+        // it had succeeded.
+        std::string video_error;
+        if (! impl.video.beginFrame(scene, command, &video_error)) {
+            dispatch_semaphore_signal(impl.inflight);
+            return impl.fail(std::move(video_error));
+        }
+
         id<MTLBuffer> uniforms = impl.uniform_rings[impl.frame_slot];
         auto*         uniform_base = static_cast<uint8_t*>(uniforms.contents);
 
@@ -1244,7 +1573,14 @@ bool MetalRender::drawFrame(Scene& scene)
         }
         if (scene.shaderValueUpdater != nullptr) scene.shaderValueUpdater->FrameEnd();
 
-        id<MTLCommandBuffer> command = [impl.queue commandBuffer];
+        // Encodes the smaller levels of a mip-mapped target, once its last
+        // writer before a reader has finished with level 0.
+        const auto generate_mipmaps = [&command](id<MTLTexture> texture) {
+            if (texture == nil || texture.mipmapLevelCount <= 1) return;
+            id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+            [blit generateMipmapsForTexture:texture];
+            [blit endEncoding];
+        };
 
         for (std::size_t i = 0; i < impl.prepared.size(); ++i) {
             const auto& pass = impl.prepared[i];
@@ -1255,10 +1591,11 @@ bool MetalRender::drawFrame(Scene& scene)
             if (pass.kind == MetalPassKind::Copy) {
                 const auto source = impl.targets.find(desc.source_key);
                 if (source == impl.targets.end()) continue;
-                id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
-                if (source->second.width == target->second.width &&
-                    source->second.height == target->second.height &&
-                    source->second.pixelFormat == target->second.pixelFormat) {
+                const bool identical = source->second.width == target->second.width &&
+                                       source->second.height == target->second.height &&
+                                       source->second.pixelFormat == target->second.pixelFormat;
+                if (identical) {
+                    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
                     [blit copyFromTexture:source->second
                               sourceSlice:0
                               sourceLevel:0
@@ -1267,8 +1604,14 @@ bool MetalRender::drawFrame(Scene& scene)
                          destinationLevel:0
                                sliceCount:1
                                levelCount:1];
+                    [blit endEncoding];
+                } else if (! impl.encodeScaledCopy(command, source->second, target->second)) {
+                    // Skipping it would leave the destination holding the
+                    // previous frame while the graph says it was refreshed.
+                    dispatch_semaphore_signal(impl.inflight);
+                    return impl.fail("an effect image could not be resampled");
                 }
-                [blit endEncoding];
+                if (desc.generate_mipmaps) generate_mipmaps(target->second);
                 continue;
             }
 
@@ -1287,10 +1630,16 @@ bool MetalRender::drawFrame(Scene& scene)
                 [command renderCommandEncoderWithDescriptor:pass_descriptor];
             if (pass.kind == MetalPassKind::Clear || pass.pipeline == nil) {
                 [encoder endEncoding];
+                if (desc.generate_mipmaps) generate_mipmaps(target->second);
                 continue;
             }
+            // An effect step whose layer is hidden contributes nothing, but its
+            // load action still applies: the target is cleared or preserved
+            // exactly as the graph decided, so the next writer starts from the
+            // same state it would have started from.
             if (desc.visibility_node != nullptr && ! desc.visibility_node->EffectiveVisible()) {
                 [encoder endEncoding];
+                if (desc.generate_mipmaps) generate_mipmaps(target->second);
                 continue;
             }
 
@@ -1368,49 +1717,23 @@ bool MetalRender::drawFrame(Scene& scene)
                             vertexCount:pass.vertex_count];
             }
             [encoder endEncoding];
+            if (desc.generate_mipmaps) generate_mipmaps(target->second);
         }
 
         // ---- presentation
-        const auto output = impl.targets.find(scene.ResolveRenderTargetName(SpecTex_Default));
-        if (output != impl.targets.end()) {
-            const auto layout = impl.scalingLayout(scene, (uint32_t)drawable.texture.width,
-                                                   (uint32_t)drawable.texture.height);
-            MTLRenderPassDescriptor* present = [MTLRenderPassDescriptor renderPassDescriptor];
-            present.colorAttachments[0].texture     = drawable.texture;
-            present.colorAttachments[0].loadAction  = MTLLoadActionClear;
-            present.colorAttachments[0].storeAction = MTLStoreActionStore;
-            present.colorAttachments[0].clearColor  = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
+        impl.encodeComposition(command, drawable.texture, scene);
 
-            id<MTLRenderCommandEncoder> encoder =
-                [command renderCommandEncoderWithDescriptor:present];
-            const VulkanViewportBox viewport {
-                .x      = (double)layout.viewport_px.x,
-                .y      = (double)(layout.viewport_px.y + std::max(1, layout.viewport_px.height)),
-                .width  = (double)std::max(1, layout.viewport_px.width),
-                .height = -(double)std::max(1, layout.viewport_px.height),
-            };
-            const auto metal_viewport = ToMetalViewport(viewport);
-            [encoder setViewport:(MTLViewport) { metal_viewport.origin_x, metal_viewport.origin_y,
-                                                 metal_viewport.width, metal_viewport.height, 0.0,
-                                                 1.0 }];
-            const NSUInteger scissor_width = (NSUInteger)std::max(0, layout.scissor_px.width);
-            const NSUInteger scissor_height = (NSUInteger)std::max(0, layout.scissor_px.height);
-            [encoder setScissorRect:(MTLScissorRect) {
-                                        (NSUInteger)std::max(0, layout.scissor_px.x),
-                                        (NSUInteger)std::max(0, layout.scissor_px.y),
-                                        std::min(scissor_width, drawable.texture.width),
-                                        std::min(scissor_height, drawable.texture.height) }];
-            [encoder setCullMode:static_cast<MTLCullMode>(kSceneCullMode)];
-            [encoder setRenderPipelineState:impl.present_pipeline];
-            [encoder setVertexBuffer:(impl.horizontal_flip ? impl.present_vertices_flipped
-                                                           : impl.present_vertices)
-                              offset:0
-                             atIndex:0];
-            [encoder setFragmentTexture:output->second atIndex:0];
-            [encoder setFragmentSamplerState:impl.present_sampler atIndex:0];
-            [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
-            [encoder endEncoding];
-        }
+        // The poster draws the same composition into a texture this process
+        // owns. It costs nothing unless a request is pending, and it never
+        // reads the drawable, holds one, or makes the layer readable. A capture
+        // that fails is not a failed frame: the wallpaper is already drawn, and
+        // the capture keeps its own diagnostic for the next service call.
+        impl.poster.encodeIfRequested(
+            command, (uint32_t)drawable.texture.width, (uint32_t)drawable.texture.height,
+            drawable.texture.pixelFormat,
+            [&impl, &scene](id<MTLCommandBuffer> poster_command, id<MTLTexture> destination) {
+                return impl.encodeComposition(poster_command, destination, scene);
+            });
 
         dispatch_semaphore_t semaphore = impl.inflight;
         [command addCompletedHandler:^(id<MTLCommandBuffer>) {
@@ -1420,9 +1743,66 @@ bool MetalRender::drawFrame(Scene& scene)
         [command commit];
 
         impl.frame_slot = (impl.frame_slot + 1) % kFramesInFlight;
+        impl.frame_drawn = true;
         if (impl.counters != nullptr) impl.counters->Add(OWE_RC_PRESENT_REQUESTS);
         scene.first_frame_ok = true;
         return true;
+    }
+}
+
+PosterServiceResult MetalRender::ServicePosterRequest(Scene& scene)
+{
+    if (pImpl == nullptr || ! pImpl->inited || ! pImpl->graph_ready) {
+        return PosterServiceResult::NoFrameYet;
+    }
+    // Composing the output image before the compiled graph has ever been drawn
+    // would publish an empty picture as the wallpaper.
+    if (! pImpl->frame_drawn) return PosterServiceResult::NoFrameYet;
+
+    @autoreleasepool {
+        auto& impl = *pImpl;
+
+        uint32_t       width  = std::max<uint32_t>(1, impl.output_width);
+        uint32_t       height = std::max<uint32_t>(1, impl.output_height);
+        MTLPixelFormat format = impl.drawable_format;
+        if (impl.layer != nil) {
+            const CGSize size = impl.layer.drawableSize;
+            if (size.width >= 1.0 && size.height >= 1.0) {
+                width  = (uint32_t)size.width;
+                height = (uint32_t)size.height;
+            }
+            if (impl.layer.pixelFormat != MTLPixelFormatInvalid) format = impl.layer.pixelFormat;
+        }
+
+        id<MTLCommandBuffer> command = [impl.queue commandBuffer];
+        if (command == nil) {
+            impl.last_error = "a Metal command buffer could not be created";
+            return PosterServiceResult::Failed;
+        }
+
+        // Deliberately outside the in-flight semaphore and the uniform ring:
+        // this re-composes the retained output image rather than re-running the
+        // scene, so it needs no uniform slot, and taking a frame slot would let
+        // an idle wallpaper -- one that never completes another frame to signal
+        // it -- wait forever.
+        const auto outcome = impl.poster.encodeIfRequested(
+            command, width, height, format,
+            [&impl, &scene](id<MTLCommandBuffer> poster_command, id<MTLTexture> destination) {
+                return impl.encodeComposition(poster_command, destination, scene);
+            });
+
+        switch (outcome) {
+        case MetalPosterCapture::Outcome::Encoded:
+            [command commit];
+            return PosterServiceResult::Submitted;
+        case MetalPosterCapture::Outcome::Busy: return PosterServiceResult::Busy;
+        case MetalPosterCapture::Outcome::Failed:
+            impl.last_error = impl.poster.lastError();
+            return PosterServiceResult::Failed;
+        case MetalPosterCapture::Outcome::NotRequested:
+            return PosterServiceResult::NotRequested;
+        }
+        return PosterServiceResult::Failed;
     }
 }
 

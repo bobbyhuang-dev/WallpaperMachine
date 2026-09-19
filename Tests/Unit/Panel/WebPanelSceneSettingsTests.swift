@@ -144,6 +144,54 @@ final class WebPanelSceneSettingsTests: XCTestCase {
       "Reporting the preference as the backend in use would make a preference look like evidence")
   }
 
+  /// No GPU backend exists until the scene has been read and one has been
+  /// chosen, so a report without a backend is a phase the user can see rather
+  /// than a reading that failed. It must reach the page as its own value,
+  /// carrying no fallback reason, and the fell-back row next to it must carry
+  /// the renderer's own reason: those are the two rows the page words
+  /// differently from one another and from the saved preference.
+  func testPreparingAndFellBackScenesReachThePageAsDistinctRows() throws {
+    let context = try Context()
+    defer { context.tearDown() }
+    context.store.settingsSnapshot = BridgeSnapshotFixtures.settings(
+      sceneRenderer: "native_metal_preferred",
+      sceneRenderers: [
+        BridgeSceneBackendReport(
+          displayId: 1, displayName: "Display 1", wallpaperId: "sea", wallpaperTitle: "Sea",
+          backend: "unknown", fallbackReason: nil),
+        BridgeSceneBackendReport(
+          displayId: 2, displayName: "Display 2", wallpaperId: "rain", wallpaperTitle: "Rain",
+          backend: "legacy_vulkan", fallbackReason: "the scene uses a puppet"),
+        BridgeSceneBackendReport(
+          displayId: 3, displayName: "Display 3", wallpaperId: "dunes", wallpaperTitle: "Dunes",
+          backend: "legacy_vulkan", fallbackReason: nil),
+      ])
+
+    let settings = try XCTUnwrap(context.controller.snapshot()["settings"] as? [String: Any])
+    let rows = try XCTUnwrap(settings["sceneRenderers"] as? [[String: Any]])
+
+    XCTAssertEqual(rows.count, 3, "A scene still choosing a backend is a running scene")
+    XCTAssertEqual(rows[0]["backend"] as? String, "unknown")
+    XCTAssertTrue(
+      rows[0]["fallbackReason"] is NSNull,
+      "Nothing has been chosen yet, so nothing has fallen back")
+    XCTAssertEqual(rows[0]["display"] as? String, "Display 1")
+    XCTAssertEqual(rows[0]["wallpaperTitle"] as? String, "Sea")
+
+    XCTAssertEqual(rows[1]["backend"] as? String, "legacy_vulkan")
+    XCTAssertEqual(
+      rows[1]["fallbackReason"] as? String, "the scene uses a puppet",
+      "The renderer's own reason is the only one the page may show")
+
+    XCTAssertEqual(rows[2]["backend"] as? String, rows[1]["backend"] as? String)
+    XCTAssertTrue(
+      rows[2]["fallbackReason"] is NSNull,
+      "A fallback the renderer gave no reason for must not acquire an invented one")
+    XCTAssertNotEqual(
+      rows[0]["backend"] as? String, rows[1]["backend"] as? String,
+      "Preparing and Compatibility are different answers and must stay different values")
+  }
+
   func testStoragePublishesTheManagedAssetDirectory() throws {
     let context = try Context()
     defer { context.tearDown() }

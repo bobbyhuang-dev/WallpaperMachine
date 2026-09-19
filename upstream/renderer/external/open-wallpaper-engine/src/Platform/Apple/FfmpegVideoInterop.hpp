@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Video/VideoColorConversion.hpp"
 #include "Video/VideoTextureSource.hpp"
 
 #include <cstdint>
@@ -26,6 +27,14 @@ void ReleaseAppleVideoFrame(VideoTextureFrame* frame);
 /// the caller releases it with `ReleaseAppleVideoFrame`.
 void RetainAppleVideoFrame(const VideoTextureFrame& frame, VideoTextureFrame* out);
 std::string DescribeAppleVideoFrame(const VideoTextureFrame& frame);
+/// Conversion constants for one decoded biplanar frame, read from the
+/// colorimetry the decoder attached to it.
+///
+/// Exposed so a second GPU conversion path cannot choose a different range or
+/// matrix from the one this file's own NV12 import already uses. It decodes
+/// nothing, allocates nothing and converts nothing; a frame that is not
+/// biplanar YCbCr has no meaningful answer and gets the defaults.
+[[nodiscard]] YuvColorParams AppleVideoFrameColorParams(const VideoTextureFrame& frame);
 
 // Imports one decoded frame and returns an opaque owned lease, or null on
 // failure. The lease retains every object the Metal texture's validity depends

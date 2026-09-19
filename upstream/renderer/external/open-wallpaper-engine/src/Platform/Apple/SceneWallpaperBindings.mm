@@ -21,8 +21,11 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <deque>
+#include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -84,13 +87,30 @@ bool validate_render_resolution(uint32_t width, uint32_t height, std::string* er
 // A layer-scoped mailbox keeps requests independent across displays and scene
 // replacements. Notifications stay in-process; no screen-recording permission
 // or private WindowServer API is involved.
+//
+// Three threads touch this: the notification thread raises requests, the render
+// thread polls `wants_poster`, and the native backend delivers pixels from a
+// command-buffer completion handler. One mutex covers every field rather than
+// atomics per field, because the interesting invariants span several of them.
 struct DesktopPosterMailbox {
-    std::atomic<uint64_t> requested { 1 };
+    std::mutex guard;
+    uint64_t requested { 1 };
     uint64_t delivered { 0 };
-    uint64_t in_flight { 0 };
+    // Ids handed to captures that have started but not reported back, oldest
+    // first. A single slot would credit whichever request happens to be in
+    // flight when pixels arrive, and a capture that overlaps a newer request
+    // would then mark that newer request satisfied with older pixels.
+    std::deque<uint64_t> handed_out;
     std::chrono::steady_clock::time_point next_attempt {};
+    std::function<void()> wake;
     __weak CAMetalLayer* layer;
     id observer;
+
+    // A capture that never reports back would otherwise sit at the head of the
+    // queue and misalign every later result. Four is well past the number of
+    // captures that can overlap in practice, so dropping the oldest beyond it
+    // only ever discards an id nothing is going to answer for.
+    static constexpr std::size_t kMaxOutstanding = 4;
 
     ~DesktopPosterMailbox() {
         if (observer != nil) [[NSNotificationCenter defaultCenter] removeObserver:observer];
@@ -105,28 +125,61 @@ void configure_desktop_poster(wallpaper::RenderInitInfo& info, void* metal_layer
     mailbox->observer = [[NSNotificationCenter defaultCenter]
         addObserverForName:@"MacWallpaperEngine.requestDesktopPoster"
         object:mailbox->layer queue:nil usingBlock:^(NSNotification*) {
-            if (auto state = weak_mailbox.lock()) state->requested.fetch_add(1);
+            auto state = weak_mailbox.lock();
+            if (state == nullptr) return;
+            std::scoped_lock lock(state->guard);
+            ++state->requested;
+            // Woken under the lock that unbinding also takes, so a render
+            // handler that has already unbound cannot be poked afterwards.
+            // The wake only enqueues a message, so it does not re-enter here.
+            if (state->wake) state->wake();
         }];
+    info.bind_poster_wake = [mailbox](std::function<void()> wake) {
+        std::scoped_lock lock(mailbox->guard);
+        mailbox->wake = std::move(wake);
+    };
     info.wants_poster = [mailbox] {
+        std::scoped_lock lock(mailbox->guard);
         const auto now = std::chrono::steady_clock::now();
-        const auto requested = mailbox->requested.load();
-        if (requested == mailbox->delivered) return false;
+        if (mailbox->requested == mailbox->delivered) return false;
         // New apply/refresh requests must export the next presented frame,
         // even if the previous wallpaper was sampled less than two seconds ago.
         // Only retries of a FAILED readback retain the backoff.
-        if (requested == mailbox->in_flight && now < mailbox->next_attempt) return false;
+        const bool retry =
+            ! mailbox->handed_out.empty() && mailbox->handed_out.back() == mailbox->requested;
+        if (retry && now < mailbox->next_attempt) return false;
         mailbox->next_attempt = now + std::chrono::seconds(2);
-        mailbox->in_flight = requested;
+        mailbox->handed_out.push_back(mailbox->requested);
+        if (mailbox->handed_out.size() > DesktopPosterMailbox::kMaxOutstanding) {
+            mailbox->handed_out.pop_front();
+        }
         return true;
     };
     info.poster_ready = [mailbox](std::span<const uint8_t> pixels, uint32_t width,
                                   uint32_t height, bool bgra) {
         @autoreleasepool {
+            CAMetalLayer* layer = nil;
+            {
+                std::scoped_lock lock(mailbox->guard);
+                // Captures report in the order they were started, so the head
+                // is the request these pixels were taken for. Nothing recorded
+                // means an old generation answering after the mailbox moved on.
+                // A retried capture records its id twice; once the first copy
+                // is satisfied the second is already answered, and leaving it
+                // at the head would throw away the next request's pixels.
+                while (! mailbox->handed_out.empty() &&
+                       mailbox->handed_out.front() <= mailbox->delivered) {
+                    mailbox->handed_out.pop_front();
+                }
+                if (mailbox->handed_out.empty()) return;
+                const uint64_t captured = mailbox->handed_out.front();
+                mailbox->handed_out.pop_front();
+                mailbox->delivered = captured;
+                layer = mailbox->layer;
+            }
+            if (layer == nil) return;
             NSData* data = [NSData dataWithBytes:pixels.data() length:pixels.size()];
-            mailbox->delivered = mailbox->in_flight;
             dispatch_async(dispatch_get_main_queue(), ^{
-                CAMetalLayer* layer = mailbox->layer;
-                if (layer == nil) return;
                 [[NSNotificationCenter defaultCenter]
                     postNotificationName:@"MacWallpaperEngine.desktopPosterReady"
                     object:layer userInfo:@{ @"pixels": data, @"width": @(width),
@@ -795,7 +848,12 @@ extern "C" int owe_scene_wallpaper_backend(void* scene)
 {
     auto* wallpaper_scene = static_cast<wallpaper::SceneWallpaper*>(scene);
     if (wallpaper_scene == nullptr) return -1;
-    switch (wallpaper_scene->sceneBackendSelection().backend) {
+    const auto selection = wallpaper_scene->sceneBackendSelection();
+    // Same -1 as "no scene": the host shows it as preparing. A backend is only
+    // chosen once the scene is parsed, and naming one before that would make
+    // the panel claim a renderer that has not been created.
+    if (! selection.created) return -1;
+    switch (selection.backend) {
     case wallpaper::SceneBackend::NativeMetal: return OWE_SCENE_BACKEND_NATIVE_METAL;
     case wallpaper::SceneBackend::LegacyVulkan: break;
     }

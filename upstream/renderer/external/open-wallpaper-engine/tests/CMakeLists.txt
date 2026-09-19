@@ -510,4 +510,32 @@ if(APPLE)
       PROPERTIES TIMEOUT 120
       DISCOVERY_TIMEOUT 60
   )
+
+  # Desktop poster capture and scene video textures for the native backend.
+  # Both draw into private offscreen textures only: no layer, no drawable.
+  foreach(metal_module_test metal_poster_capture_test metal_video_texture_test)
+    add_executable(${metal_module_test} ${metal_module_test}.mm)
+    target_link_libraries(${metal_module_test} PRIVATE
+        ${PROJECT_NAME} wpMetalRender wpVulkanRender wpVulkan wpScene wpRGraph
+        wpParticle wpAudio wpFs nlohmann_json::nlohmann_json GTest::gtest_main
+        ${METAL_FRAMEWORK} ${CORE_VIDEO_FRAMEWORK} ${IOSURFACE_FRAMEWORK}
+        ${FOUNDATION_FRAMEWORK})
+    target_include_directories(${metal_module_test} PRIVATE
+        . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/MetalRender
+        ${CMAKE_SOURCE_DIR}/src/Scene/MetalRender/include)
+    target_compile_features(${metal_module_test} PRIVATE cxx_std_20)
+    set_target_properties(${metal_module_test} PROPERTIES
+        OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES)
+    target_compile_options(${metal_module_test} PRIVATE
+        $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+    if(TARGET wescene_rust_shader)
+        target_link_libraries(${metal_module_test} PRIVATE wescene_rust_shader)
+    endif()
+    gtest_discover_tests(
+        ${metal_module_test}
+        TEST_PREFIX ${metal_module_test}.
+        PROPERTIES TIMEOUT 120
+        DISCOVERY_TIMEOUT 60
+    )
+  endforeach()
 endif()

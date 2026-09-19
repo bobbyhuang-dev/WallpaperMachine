@@ -11,6 +11,51 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-19 — Round 8: native Metal backend, second version
+
+Metal desktop poster, backend creation deferred until the scene is parsed,
+effect chains / post-processing / same-frame layer links on Metal, and BGRA +
+8-bit NV12 video textures in Metal scenes. Default stays Compatibility.
+
+- `python3 scripts/check_renderer.py` — exit 0. All 10 golden cases
+  `pixels_equal=True`, 0 diagnostics, 8 projects × 2 reload cycles clean. These
+  run the compatibility backend through the offscreen path, which still creates
+  Vulkan at init; they show the lazy-creation change did not disturb it, not
+  that the lazy path works on a layer.
+- Inside that run: `metal_backend_test` 16 passed (capability and graph gate:
+  effect chain and same-frame link accepted, history feedback and MSAA target
+  rejected), `metal_scene_draw_smoke` 3 passed (adds an intermediate target
+  drawn, blitted and resampled in one frame, by readback),
+  `metal_poster_capture_test` 7 passed (new), `metal_video_texture_test` 8
+  passed (new; synthetic IOSurface frames through an injected source — no real
+  decoder), `playback_gpu_test` 39 passed, `timer_tests` 24 passed. All on a
+  real Metal device, private textures only.
+- `cargo test -p wallpaper-bridge --lib` — 311 passed, 0 failed (one new case:
+  a scene with no backend yet is reported apart from a fallback).
+  `cargo test -p wallpaper-core --lib` — 209 passed, 0 failed. Both need the
+  environment from `scripts/build.py`'s `build_environment()`; without it the
+  link fails on `-lvulkan`. The first run with that environment died in the
+  `wallpaper-core` build script (cmake panic) and an immediate re-run passed;
+  the cause was not investigated.
+- `python3 scripts/test.py` — 483 XCTest cases, 9 skipped, 1 failed:
+  `ControlPanelLayoutTests/testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes`,
+  the same overflow-52 failure recorded in earlier rounds; the Discover grid was
+  not touched. `WebPanelSceneSettingsTests` passed with its new
+  preparing/fell-back case. The first attempt ran no tests: CodeSign rejected
+  the Debug app for "resource fork, Finder information, or similar detritus"
+  (`com.apple.FinderInfo` and `com.apple.fileprovider.fpfs#P` on the bundle
+  directory). `xattr -cr` on that build product fixed it.
+- `python3 scripts/build.py --configuration Release` — **BUILD SUCCEEDED** on
+  the second attempt; the first hit the same CodeSign xattr rejection on the
+  Release bundle and was cleared the same way. The app and the extension
+  binaries contain this round's renderer strings, and the bundled
+  `WebUI/settings.js` contains the preparing state.
+- Not run, not authorized: any desktop session, wallpaper apply, screenshot,
+  lock screen, `scripts/test.py --ui`, power sampling. No Metal effect chain,
+  video scene or poster has been seen on a display. Shader sampling of a link
+  target, mip generation and camera overrides have no GPU test; the dual-plane
+  NV12 fast path does not exist.
+
 ## 2026-09-19 — Round 7: on-demand updating, managed user assets, native Metal
 
 P02 whole-scene on-demand updating (default off), the relocation of

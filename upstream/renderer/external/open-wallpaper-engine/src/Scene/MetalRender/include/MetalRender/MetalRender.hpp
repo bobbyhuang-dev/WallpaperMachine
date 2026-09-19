@@ -120,7 +120,11 @@ public:
     /// parsed scene, uploaded images and shader libraries are not.
     bool ApplyRenderScale(Scene& scene, rg::RenderGraph& graph, double scale);
 
-    bool drawFrame(Scene& scene);
+    /// Draws one frame. `presented`, when given, reports whether a frame
+    /// actually reached the layer: returning true having presented nothing is
+    /// how a tick that found no drawable is distinguished from a failure, and
+    /// the caller needs that difference to decide when the first frame exists.
+    bool drawFrame(Scene& scene, bool* presented = nullptr);
 
     /// Serves a pending poster request outside the frame loop. Render thread
     /// only.

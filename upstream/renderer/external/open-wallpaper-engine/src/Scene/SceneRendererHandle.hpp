@@ -171,8 +171,13 @@ public:
         if (m_vulkan != nullptr) return m_vulkan->ApplySceneOptimization(scene, graph);
         return false;
     }
-    bool drawFrame(Scene& scene) {
-        OWE_FORWARD(drawFrame(scene));
+    /// Draws one frame with whichever backend is active. `presented` reports
+    /// whether a frame actually reached the surface; a backend may legitimately
+    /// succeed without producing one, and the caller's first-frame bookkeeping
+    /// has to tell the two apart.
+    bool drawFrame(Scene& scene, bool* presented = nullptr) {
+        OWE_FORWARD(drawFrame(scene, presented));
+        if (presented != nullptr) *presented = false;
         return false;
     }
 

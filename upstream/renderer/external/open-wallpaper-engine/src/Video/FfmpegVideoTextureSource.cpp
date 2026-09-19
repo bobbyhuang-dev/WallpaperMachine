@@ -1,6 +1,7 @@
 #include "Video/FfmpegVideoTextureSource.hpp"
 
 #include "Image.hpp"
+#include "Video/FfmpegAbi.hpp"
 #include "Video/VideoDecodePump.hpp"
 #include "Video/VideoFramePacing.hpp"
 #include "Video/VideoMetadata.hpp"
@@ -651,6 +652,9 @@ private:
 
     bool openDecoder(std::string* error)
     {
+        if (auto mismatch = FfmpegAbiMismatch(); !mismatch.empty()) {
+            return SetError(error, std::move(mismatch));
+        }
         if (!resolveMediaPath(error)) return false;
 
         AVFormatContext* format_context = avformat_alloc_context();
@@ -1017,10 +1021,24 @@ private:
 
     void fail(std::string error)
     {
-        std::lock_guard lock(m_mutex);
-        if (m_last_error.empty()) m_last_error = std::move(error);
-        m_running = false;
-        m_condition.notify_all();
+        // A decode thread that dies after the first frame is otherwise
+        // invisible: `refreshFrame` keeps answering with the frame already on
+        // screen, so the wallpaper freezes without a word anywhere. The
+        // message is recorded once, by the first failure to reach here.
+        std::string reported;
+        {
+            std::lock_guard lock(m_mutex);
+            if (m_last_error.empty()) {
+                m_last_error = std::move(error);
+                reported     = m_last_error;
+            }
+            m_running = false;
+            m_condition.notify_all();
+        }
+        if (reported.empty()) return;
+        LOG_ERROR("video decoding stopped for \"%s\": %s",
+                  m_debug_label.c_str(),
+                  reported.c_str());
     }
 
     void decodeLoop()
@@ -1310,6 +1328,9 @@ bool ProbeVideoFileMetadata(std::string_view media_path,
 {
     if (out == nullptr) return SetError(error, "video metadata output must not be null");
     if (media_path.empty()) return SetError(error, "video media path must not be empty");
+    if (auto mismatch = FfmpegAbiMismatch(); !mismatch.empty()) {
+        return SetError(error, std::move(mismatch));
+    }
 
     AVFormatContext* format_context = nullptr;
     if (const int result = avformat_open_input(&format_context,

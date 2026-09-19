@@ -38,6 +38,18 @@ Licensing constraints on the resulting bundle (notably the Homebrew FFmpeg
 build) are recorded in [../LICENSING.md](../LICENSING.md) and are not repeated
 here.
 
+`ffmpeg@8` is keg-only and reached through `pkg-config`, but Homebrew links
+whichever FFmpeg formula is not keg-only into the shared `/opt/homebrew/include`
+— and several other dependencies put that prefix on the include path. The two
+majors' `AVFrame` and `AVCodecContext` differ by removed members, so compiling
+against one and linking the other is accepted by the compiler and then reads
+frame metadata at the wrong offsets at runtime. The renderer's CMake therefore
+pins the resolved FFmpeg prefix ahead of every other include directory
+(`wescene_prefer_ffmpeg_headers`), and the decode and probe entry points refuse
+to run when the loaded libav* majors are not the compiled ones. If you see that
+refusal, an include path is reaching a second FFmpeg before the one
+`pkg-config` chose.
+
 ## The build environment
 
 `scripts/build.py` does not rely on your shell environment for the renderer. It

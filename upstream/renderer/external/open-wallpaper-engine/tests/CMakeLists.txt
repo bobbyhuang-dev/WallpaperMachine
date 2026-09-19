@@ -405,6 +405,7 @@ target_link_libraries(video_source_input_test PRIVATE ${PROJECT_NAME}
     PkgConfig::TEST_AVFORMAT PkgConfig::TEST_AVCODEC PkgConfig::TEST_AVUTIL GTest::gtest_main)
 target_include_directories(video_source_input_test PRIVATE
     . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/include)
+wescene_prefer_ffmpeg_headers(video_source_input_test "TEST_")
 target_compile_features(video_source_input_test PRIVATE cxx_std_20)
 gtest_discover_tests(
     video_source_input_test
@@ -421,6 +422,7 @@ target_link_libraries(shared_video_session_test PRIVATE ${PROJECT_NAME}
     PkgConfig::TEST_AVFORMAT PkgConfig::TEST_AVCODEC PkgConfig::TEST_AVUTIL GTest::gtest_main)
 target_include_directories(shared_video_session_test PRIVATE
     . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/include)
+wescene_prefer_ffmpeg_headers(shared_video_session_test "TEST_")
 target_compile_features(shared_video_session_test PRIVATE cxx_std_20)
 gtest_discover_tests(
     shared_video_session_test
@@ -508,14 +510,7 @@ if(APPLE)
   target_include_directories(metal_scene_draw_smoke PRIVATE
       . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/MetalRender/include
       ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender)
-  # BEFORE, and deliberately: this target also pulls in `/opt/homebrew/include`
-  # through another dependency, and a machine with a second FFmpeg installed
-  # there would compile these sources against headers that do not match the
-  # libraries on the link line. The symptom is not a build failure but garbage
-  # struct fields at runtime, so the pinned prefix has to win the search order.
-  target_include_directories(metal_scene_draw_smoke BEFORE PRIVATE
-      ${TEST_AVFORMAT_INCLUDE_DIRS} ${TEST_AVCODEC_INCLUDE_DIRS}
-      ${TEST_AVUTIL_INCLUDE_DIRS})
+  wescene_prefer_ffmpeg_headers(metal_scene_draw_smoke "TEST_")
   target_compile_features(metal_scene_draw_smoke PRIVATE cxx_std_20)
   set_target_properties(metal_scene_draw_smoke PROPERTIES
       OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES)

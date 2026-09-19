@@ -76,6 +76,13 @@ public:
 
     std::string scene_id { "unknown_id" };
 
+    /// Whether a frame of this scene has reached the surface.
+    ///
+    /// Written by the scene's frame handler and by nothing else. A backend
+    /// that sets it directly would satisfy the handler's own check before the
+    /// handler ran, and the one thing the handler does on that edge -- telling
+    /// the host a first frame exists -- would never happen, leaving the host
+    /// waiting out its startup deadline on a wallpaper that is drawing fine.
     bool                 first_frame_ok { false };
     bool                 accepts_pointer_input { true };
     /// Set only by the engine's own plain-video scene: one video texture, a

@@ -3693,8 +3693,9 @@ WallpaperCursorMapping MetalRender::CursorMapping(const Scene& scene) const
 
 const std::string& MetalRender::lastError() const { return pImpl->last_error; }
 
-bool MetalRender::drawFrame(Scene& scene)
+bool MetalRender::drawFrame(Scene& scene, bool* presented)
 {
+    if (presented != nullptr) *presented = false;
     if (! pImpl->inited || ! pImpl->graph_ready || pImpl->layer == nil) return false;
 
     @autoreleasepool {
@@ -3707,7 +3708,9 @@ bool MetalRender::drawFrame(Scene& scene)
         id<CAMetalDrawable> drawable = [impl.layer nextDrawable];
         if (drawable == nil) {
             // The layer has no drawable to give right now. Nothing was
-            // submitted, so nothing will signal; release the slot here.
+            // submitted, so nothing will signal; release the slot here. Not a
+            // failure, and not a frame either: `presented` stays false so the
+            // caller does not count this tick as one the surface received.
             dispatch_semaphore_signal(impl.inflight);
             return true;
         }
@@ -4069,7 +4072,10 @@ bool MetalRender::drawFrame(Scene& scene)
         // reads a value rather than a table another thread is rewriting.
         impl.reported_path.store(impl.framePathReport(planes_enabled));
         if (impl.counters != nullptr) impl.counters->Add(OWE_RC_PRESENT_REQUESTS);
-        scene.first_frame_ok = true;
+        // `scene.first_frame_ok` belongs to the frame handler: setting it here
+        // would satisfy its own check before it ran and swallow the one edge
+        // it reports to the host.
+        if (presented != nullptr) *presented = true;
         return true;
     }
 }

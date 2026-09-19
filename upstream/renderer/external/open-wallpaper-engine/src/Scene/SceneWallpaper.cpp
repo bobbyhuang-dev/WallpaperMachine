@@ -1051,8 +1051,9 @@ private:
                 }
             }
 
+            bool presented = false;
             if (frame_ok) {
-                frame_ok = m_render->drawFrame(*m_scene);
+                frame_ok = m_render->drawFrame(*m_scene, &presented);
                 // A native frame can fail after the graph compiled -- a video
                 // texture that stops decoding, a copy that cannot be encoded.
                 // Suspending would leave that wallpaper black; the scene is
@@ -1061,7 +1062,7 @@ private:
                 if (! frame_ok && m_render->hasBackend() &&
                     m_render->backend() == SceneBackend::NativeMetal) {
                     frame_ok = fallBackToCompatibility() && rebuildRenderGraph() &&
-                               m_render->drawFrame(*m_scene);
+                               m_render->drawFrame(*m_scene, &presented);
                 }
             }
             if (frame_ok) {
@@ -1077,7 +1078,12 @@ private:
             m_scene->shaderValueUpdater->FrameEnd();
             // fps_counter.RegisterFrame();
 
-            if (frame_ok && ! m_scene->first_frame_ok) {
+            // The edge the host waits on, so it is taken from a frame that
+            // actually reached the surface. A tick that succeeded without
+            // presenting -- no drawable was free -- is not that frame, and
+            // claiming it would start the wallpaper on whatever was there
+            // before.
+            if (frame_ok && presented && ! m_scene->first_frame_ok) {
                 m_scene->first_frame_ok = true;
                 main_handler.sendFirstFrameOk();
             }

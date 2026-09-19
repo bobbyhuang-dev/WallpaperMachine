@@ -182,6 +182,15 @@ TEST_F(SharedVideoSessionTest, AFrameStaysValidAfterTheDecoderMovesOn) {
     ASSERT_NE(driver, nullptr) << error;
     ASSERT_TRUE(holder->prime(&error)) << error;
 
+    // The session gives its decoder one clock and lets exactly one consumer
+    // move it, so the consumer that is going to advance has to be the elected
+    // driver. Election takes the first consumer that reports a running state:
+    // syncing `driver` first is what makes it that consumer, and syncing
+    // `holder` afterwards leaves it a live -- but non-driving -- reader on the
+    // same timeline, which is the case this test is about.
+    ASSERT_TRUE(driver->syncPlayback(VideoPlaybackState { false, 1.0f, 0.0 }, &error)) << error;
+    ASSERT_TRUE(driver->refreshFrame(&error)) << error;
+
     ASSERT_TRUE(holder->syncPlayback(VideoPlaybackState { false, 1.0f, 0.0 }, &error)) << error;
     ASSERT_TRUE(holder->refreshFrame(&error)) << error;
     const auto held = holder->currentFrame();
@@ -190,8 +199,6 @@ TEST_F(SharedVideoSessionTest, AFrameStaysValidAfterTheDecoderMovesOn) {
     // The other consumer drives the decoder past that frame. Asserting that it
     // really moved is the point: if the decoder never promoted anything, the
     // retention below would hold trivially and prove nothing.
-    ASSERT_TRUE(driver->syncPlayback(VideoPlaybackState { false, 1.0f, 0.0 }, &error)) << error;
-    ASSERT_TRUE(driver->refreshFrame(&error)) << error;
     ASSERT_TRUE(AdvanceUntilFrameChanges(driver, held.generation))
         << "the decoder never moved past the held frame, so retention is untested";
     ASSERT_NE(driver->currentFrame().pixel_buffer, held.pixel_buffer);

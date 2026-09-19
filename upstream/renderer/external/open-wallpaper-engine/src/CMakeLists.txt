@@ -143,6 +143,7 @@ if(APPLE)
 endif()
 
 target_include_directories(${PROJECT_NAME} PUBLIC . Swapchain)
+wescene_prefer_ffmpeg_headers(${PROJECT_NAME} "")
 set_target_properties(${PROJECT_NAME} PROPERTIES
   OBJCXX_STANDARD 20
   OBJCXX_STANDARD_REQUIRED YES)

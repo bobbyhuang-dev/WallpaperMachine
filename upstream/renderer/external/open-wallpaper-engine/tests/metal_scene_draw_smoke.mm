@@ -520,6 +520,52 @@ TEST_F(MetalSceneDraw, AnIntermediateTargetIsDrawnCopiedAndResampledInOneFrame)
     }
 }
 
+TEST_F(MetalSceneDraw, ADrawnFrameIsReportedAsPresentedAndLeavesTheFirstFrameFlagAlone)
+{
+    // `Scene::first_frame_ok` is the scene handler's, and the handler tells the
+    // host a first frame exists on the edge where it sets it. A backend that
+    // set the flag itself would satisfy that check before the handler ran, the
+    // host would never hear about the frame, and a wallpaper drawing perfectly
+    // well would be torn down when the startup deadline expired.
+    const auto project = WriteFixture(root_ / "project");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "cache", loaded, error)) << error;
+    ASSERT_EQ(SelectSceneBackend(*loaded.scene).backend, SceneBackend::NativeMetal);
+
+    @autoreleasepool {
+        id<MTLDevice>  device = MTLCreateSystemDefaultDevice();
+        CAMetalLayer*  layer  = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(256, 128);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 256,
+            .height               = 128,
+            .render_width         = 256,
+            .render_height        = 128,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+
+        bool presented = false;
+        ASSERT_TRUE(render.drawFrame(*loaded.scene, &presented)) << render.lastError();
+        EXPECT_TRUE(presented) << "a frame was drawn but not reported as reaching the layer";
+        EXPECT_FALSE(loaded.scene->first_frame_ok)
+            << "the backend claimed the handler's first-frame flag, so the host would never be "
+               "told this wallpaper started";
+
+        render.destroy();
+    }
+}
+
 TEST_F(MetalSceneDraw, RememberedPrepareFailureStopsTheBackendFlipFlopping)
 {
     const auto project = WriteFixture(root_ / "project");

@@ -11,6 +11,116 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-20 — Scene video textures froze, and a native first frame never reached the host
+
+Two separate defects behind one report about `爱弥斯窗外雨天【dy安静】` (Library
+`3801532994`, a scene whose single image layer is a 3840×2160 H.264 video
+texture): with every Performance option on, switching to it failed after 20
+seconds with "The wallpaper did not render a first frame"; with them off the
+wallpaper drew, but the picture stopped moving after about half a second. No
+desktop run, no visual check on the wallpaper itself, no power measurement.
+
+- **Frozen video — an FFmpeg header/library mismatch.** `offscreen_scene_probe`
+  on the real project (`WE_TEST_FRAMES=200 WE_TEST_FRAME_STEP=0.0333`) produced
+  20 distinct images followed by 181 identical ones. Temporary instrumentation
+  in `FfmpegVideoTextureSource` showed why: every decoded frame arrived with
+  `best_effort_timestamp = 0` while `pts` advanced 0, 512, 1024 … at
+  `tb=1/15360`, so each frame was stamped at absolute time zero, the displayed
+  frame never advanced, and after one second the forward-resync threshold turned
+  every refresh into a seek whose ticket invalidated the frame it produced.
+  Cause was not FFmpeg: `flags.make` put `/opt/homebrew/include` (a symlink to
+  the `ffmpeg` 7.1.1 formula, libavutil 59 / libavcodec 61) ahead of the
+  `ffmpeg@8` cellar path pkg-config resolved, while the link line and the loaded
+  dylibs were libavutil 60 / libavcodec 62. libavutil 59's `AVFrame` still
+  carries the `FF_API_FRAME_PKT`, `INTERLACED_FRAME`, `FRAME_KEY` and
+  `PALETTE_HAS_CHANGED` members that 60 removed, so every field after them —
+  `best_effort_timestamp` included — was read at the wrong offset. After
+  `wescene_prefer_ffmpeg_headers` put the resolved prefix first, the same probe
+  reported `best == pts` and 200 distinct images out of 200 frames.
+- **20-second timeout — a flag the backend was not entitled to set.**
+  `MetalRender::drawFrame` set `Scene::first_frame_ok` itself, which satisfied
+  the frame handler's own `frame_ok && !first_frame_ok` check before the handler
+  ran, so `sendFirstFrameOk()` never fired and the host waited out its deadline
+  on a wallpaper that was drawing correctly. Matches session `20260919-224156`:
+  Metal translations requested (`hits=22`), no `metal render:` failure, no
+  Vulkan init, then teardown. The backends now report presentation through
+  `drawFrame`'s `presented` out-parameter and only the handler writes the flag;
+  the no-drawable early return reports `presented = false` so a tick that
+  presented nothing is not counted as the first frame.
+- `metal_scene_draw_smoke` `ADrawnFrameIsReportedAsPresentedAndLeavesTheFirstFrameFlagAlone`
+  is new and was checked both ways: it fails (`first_frame_ok Actual: true`)
+  with the backend write restored and passes without it.
+- `metal_scene_draw_smoke` with `WE_TEST_METAL_PROJECTS` pointed at
+  `3801532994`: Native Metal, 120 frames drawn, 19 657 287 bytes differ between
+  the first and the last.
+- `shared_video_session_test` `AFrameStaysValidAfterTheDecoderMovesOn` failed on
+  the first post-fix run. Its previous green was an artefact of the same
+  timestamp bug: with every frame stamped zero, any refresh promoted a new one,
+  so the test never exercised the session's documented rule that exactly one
+  elected consumer moves the shared clock. The test now lets the consumer that
+  advances sync first so it is the driver; the session logic was not loosened.
+- The guard in `FfmpegAbi.hpp` has internal linkage rather than plain `inline`.
+  Two targets include it, and an external-linkage `inline` lets the linker keep
+  one definition and discard the rest — under the very mismatch it guards
+  against, those definitions do not hold the same version constants, so one
+  translation unit could answer for another's headers. All three gates below
+  were re-run after that change.
+- `python3 scripts/check_renderer.py` — exit 0, verified from `report.json`
+  rather than the tail: every test binary 0, all 10 generated cases
+  `pixels_equal=True` in pooled and isolated mode, 0 diagnostics, 8 projects × 2
+  reload cycles clean (`desktop_automation: false`, `gpu_surface: false`). No
+  local Workshop corpus passed through `--project`, so shipped-asset coverage is
+  **not** claimed for this round.
+- `python3 scripts/test.py` — exit 0, 500 native tests, 491 passed, 9 skipped,
+  0 failures; Python suites green.
+- `python3 scripts/build.py --configuration Release` — exit 0, `** BUILD
+  SUCCEEDED **`. Freshness checked rather than assumed: the app's own
+  cargo/CMake renderer build regenerated `flags.make` with the `ffmpeg@8` prefix
+  first, and the delivered binary contains both new strings ("this build
+  compiled against ", "video decoding stopped for ") and links only
+  `ffmpeg@8` dylibs.
+
+Still unverified: the wallpaper's appearance on a real desktop, and whether the
+Performance options behave for the user as they do in the probes. The scene's
+property scripts also log `TypeError: not a function` from
+`<property-script-factory>`; that is untouched here and unrelated to the video
+texture.
+
+## 2026-09-19 — Release build of `a9b2c79` (no source change)
+
+Build-only round on a clean tree at `a9b2c79` ("localize scaling option, resolve
+zh locales via Intl, guard i18n catalog"). The delivered Release app predated the
+two Metal-backend renderer commits merged earlier today, so the full renderer +
+Swift pipeline was rebuilt rather than `--swift-only`. Nothing in the repository
+was modified. No desktop run, no visual check, no power measurement.
+
+- `python3 scripts/test.py` — first run exit 65 at `CodeSign` ("resource fork,
+  Finder information, or similar detritus not allowed"). The built Debug
+  `.app` **directory** carried `com.apple.FinderInfo` and
+  `com.apple.fileprovider.fpfs#P`; source files under `WebUI/`, `App/Resources/`
+  and `Extension/` carry only `com.apple.provenance`, which codesign accepts. So
+  the detritus is attached to the product by the file provider on this
+  `…/Github.nosync/…` path, not committed. After `xattr -cr` on the built Debug
+  app: exit 0, 500 native tests, 491 passed, 9 skipped (the usual hardware
+  skips), 0 failures; Python suites green.
+- `python3 scripts/build.py --configuration Release` — exit 0, `** BUILD
+  SUCCEEDED **` for app and extension. `xattr -cr` was applied to the Release
+  products directory first, so `CodeSign` did not hit the same failure.
+  Freshness checked rather than assumed: `libwallpaper_bridge.a` relinked at
+  22:44:05 against a newest renderer source of 21:22, app and `.appex`
+  executables relinked 22:44:33, `diff -r WebUI …/Contents/Resources/WebUI`
+  identical, the delivered binary contains the `a9b2c79` stamp, signature
+  ad-hoc `Sign to Run Locally`.
+- `python3 scripts/check_renderer.py` — exit 0. All 10 generated cases
+  `pixels_equal=True` in both pooled and isolated mode, 0 diagnostics, 8
+  projects × 2 reload cycles clean, every test binary exit 0 in `report.json`
+  (`desktop_automation: false`, `gpu_surface: false`). Inside that run:
+  `metal_scene_draw_smoke` 31 passed / 1 skipped
+  (`LocalProjectsNamedByTheEnvironment…`, needs `WE_TEST_METAL_PROJECTS`),
+  `metal_backend_test` 26 passed, `particle_rope_geometry_test` 17 passed,
+  `playback_gpu_test` 39 passed. No local Workshop corpus was passed through
+  `--project`, so shipped-asset coverage for this round is **not** claimed.
+
 ## 2026-09-19 — Round 13: two-dimensional puppets, sprite trails, ropes and rope trails on Metal
 
 The native Metal backend now accepts two-dimensional puppets, sprite trails,

@@ -1,6 +1,7 @@
 #include "Audio/FfmpegSoundStream.hpp"
 
 #include "Fs/IBinaryStream.h"
+#include "Video/FfmpegAbi.hpp"
 #include "Utils/Logging.h"
 
 extern "C" {
@@ -195,6 +196,9 @@ private:
 
 bool ProbeHasAudioStream(FfmpegInputSource& input_source, std::string* error, bool audio_optional = false)
 {
+    if (auto mismatch = video::FfmpegAbiMismatch(); !mismatch.empty()) {
+        return SetError(error, std::move(mismatch));
+    }
     AVFormatContext* format_context = nullptr;
     if (!input_source.Open(&format_context, error)) return false;
 

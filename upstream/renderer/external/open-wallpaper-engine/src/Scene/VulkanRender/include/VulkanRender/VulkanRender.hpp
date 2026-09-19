@@ -39,7 +39,11 @@ public:
     /// preserved. Returns false if surface/swapchain creation fails.
     bool resetSurface(const RenderInitInfo& info);
 
-    bool drawFrame(Scene&);
+    /// Draws one frame. `presented`, when given, reports whether a frame
+    /// actually reached the surface, which for this backend is the same answer
+    /// as the return value: a swapchain image that cannot be acquired is a
+    /// failed frame here, not a skipped one.
+    bool drawFrame(Scene&, bool* presented = nullptr);
 
     bool clearLastRenderGraph();
     bool compileRenderGraph(Scene&, rg::RenderGraph&);

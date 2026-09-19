@@ -229,7 +229,11 @@ bool VulkanRender::resetSurface(const RenderInitInfo& info) {
     if (! pImpl->releasePresentation()) return false;
     return pImpl->initPresentation(info);
 }
-bool VulkanRender::drawFrame(Scene& scene) { return pImpl->drawFrame(scene); }
+bool VulkanRender::drawFrame(Scene& scene, bool* presented) {
+    const bool drawn = pImpl->drawFrame(scene);
+    if (presented != nullptr) *presented = drawn;
+    return drawn;
+}
 bool VulkanRender::clearLastRenderGraph() { return pImpl->clearLastRenderGraph(); }
 bool VulkanRender::compileRenderGraph(Scene& scene, rg::RenderGraph& rg) {
     return pImpl->compileRenderGraph(scene, rg);

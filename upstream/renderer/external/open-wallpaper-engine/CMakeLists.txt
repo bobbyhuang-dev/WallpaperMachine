@@ -22,6 +22,30 @@ endif()
 
 find_package(PkgConfig REQUIRED)
 
+# Puts the FFmpeg headers pkg-config resolved ahead of every other include
+# directory on `target`.
+#
+# Homebrew keeps each formula in its own cellar and links the default one into
+# the shared `/opt/homebrew/include`, so a machine with both `ffmpeg` and
+# `ffmpeg@8` installed offers two sets of libav* headers with different
+# `AVFrame`/`AVCodecContext` layouts. Every other dependency (Eigen, freetype,
+# nlohmann, quickjs) drags that shared prefix in, and because it is reached
+# through a linked target it lands ahead of the cellar path pkg-config chose --
+# so the build reads one major's struct offsets out of the other major's
+# objects. The fields still line up far enough in for the compiler to accept
+# it, and the damage shows up at runtime as silently wrong frame metadata.
+#
+# `prefix` selects the pkg_check_modules variable set to use (empty for the
+# unprefixed one, `TEST_` for the suite's own).
+function(wescene_prefer_ffmpeg_headers target prefix)
+    target_include_directories(
+        ${target} SYSTEM BEFORE PRIVATE
+        ${${prefix}AVFORMAT_INCLUDE_DIRS}
+        ${${prefix}AVCODEC_INCLUDE_DIRS}
+        ${${prefix}AVUTIL_INCLUDE_DIRS}
+        ${${prefix}SWRESAMPLE_INCLUDE_DIRS})
+endfunction()
+
 set(_wescene_is_top_level OFF)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(_wescene_is_top_level ON)

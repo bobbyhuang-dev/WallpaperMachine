@@ -45,6 +45,51 @@ bool SceneUsesPerspective(const Scene& scene)
     return false;
 }
 
+/// Whether a mesh the runtime rewrites every frame is one this backend knows
+/// how to feed, and why not when it is not.
+///
+/// The discriminator is the particle renderer's vertex contract, not the
+/// particle count and not "it is two-dimensional": a rope or trail renderer
+/// reads attributes that mean something different from a sprite particle's, and
+/// accepting one because it happens to arrive as quads would draw the right
+/// number of triangles with the wrong geometry. Everything else that rebuilds
+/// its geometry per frame -- a text layer's card, most obviously -- is still
+/// refused, because nothing here has checked its upload shape.
+std::string RejectDynamicMesh(SceneMesh& mesh)
+{
+    constexpr std::string_view kNotParticles = "the scene rebuilds mesh geometry every frame";
+
+    const auto* material = mesh.MaterialForSlot(0);
+    if (material == nullptr) return std::string(kNotParticles);
+    if (material->name.rfind("genericrope", 0) == 0) {
+        return "the scene draws rope particles";
+    }
+    if (mesh.MaterialSlots().size() != 1 || mesh.Submeshes().size() != 1) {
+        return std::string(kNotParticles);
+    }
+    const auto& submesh = mesh.Submeshes().front();
+    // One vertex stream and one index stream is what the particle generator
+    // writes. A second of either would be a shape this upload path has not
+    // been written against.
+    if (submesh.VertexCount() != 1 || submesh.IndexCount() != 1) {
+        return std::string(kNotParticles);
+    }
+    const auto& vertices = submesh.GetVertexArray(0);
+    if (vertices.GetOption(WE_PRENDER_ROPE)) return "the scene draws rope particles";
+    if (vertices.GetOption(WE_PRENDER_TRAIL)) return "the scene draws particle trails";
+    // A positive statement, not the absence of the two above: every other mesh
+    // the runtime rewrites per frame -- a text layer's card, most obviously --
+    // has a layout and an update cadence nothing here has checked.
+    if (! vertices.GetOption(WE_PRENDER_SPRITE)) return std::string(kNotParticles);
+    // Capacity, not current size: a particle mesh is legitimately empty until
+    // the first emission, and a zero-capacity one has nowhere to put a frame.
+    if (vertices.CapacitySizeOf() == 0 || vertices.OneSizeOf() == 0) {
+        return std::string(kNotParticles);
+    }
+    if (submesh.GetIndexArray(0).CapacitySizeof() == 0) return std::string(kNotParticles);
+    return {};
+}
+
 const SceneCamera* FindCamera(const Scene& scene, const std::string& name)
 {
     if (name.empty()) return nullptr;
@@ -100,7 +145,7 @@ std::string RejectNodes(const Scene& scene, const SceneNode* node)
 
     if (auto* mesh = const_cast<SceneNode*>(node)->Mesh(); mesh != nullptr) {
         if (mesh->Dynamic()) {
-            return "the scene rebuilds mesh geometry every frame";
+            if (auto reason = RejectDynamicMesh(*mesh); ! reason.empty()) return reason;
         }
         if (mesh->Primitive() != MeshPrimitive::TRIANGLE) {
             return "the scene draws a primitive the native renderer does not support";
@@ -174,18 +219,20 @@ std::string RejectShaders(const Scene& scene, const SceneNode* node, bool& saw_a
 std::string SceneMetalStructuralRejection(const Scene& scene)
 {
     if (scene.sceneGraph == nullptr) return "the scene has no drawable content";
-    // Every scene owns a particle system object; only some have an emitter in
-    // it, and it is the emitter that this backend cannot draw.
-    if (scene.paritileSys != nullptr && scene.paritileSys->HasEmitters()) {
-        return "the scene uses a particle emitter";
-    }
+    // Emitters are no longer refused on sight. The simulation is the shared
+    // runtime's either way -- this backend never emits, ages or kills a
+    // particle -- so what decides is whether the geometry that simulation
+    // produces is a shape the draw path can consume, which `RejectDynamicMesh`
+    // answers per mesh while the scene graph is walked below.
     if (! scene.lights.empty()) return "the scene uses dynamic lighting";
     // A plain video wallpaper is not a scene this backend competes for: the
     // host has a dedicated path for it.
     if (scene.single_video_source) return "the wallpaper is a video";
 
     for (const auto& [name, texture] : scene.textures) {
-        if (texture.isSprite) return "the scene uses an animated sprite sheet";
+        // A sprite sheet is one uploaded image whose frame rectangle arrives as
+        // a uniform, so it is not refused any more. A sheet that is also a
+        // video still is, below: that would need both paths at once.
         if (texture.isVideo) {
             if (auto reason = MetalVideoTextureRejection(scene, name); ! reason.empty()) {
                 return reason;

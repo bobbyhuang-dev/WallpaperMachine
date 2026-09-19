@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace wallpaper
@@ -59,6 +60,18 @@ struct ElisionPassDesc
 /// write of either side keeps the copy. A copy that exists to break a feedback
 /// loop always has a later writer of its source, so it is never elided.
 std::vector<CopyElision> PlanCopyElision(std::span<const ElisionPassDesc> passes);
+
+/// The key whose image an aliased destination actually names.
+///
+/// `Alias` leaves the destination with no writer of its own, so a later read of
+/// it is really a read of the source. An analysis that does not follow the
+/// chain sees a name nothing in the pass list produces, concludes the read
+/// carries no dependency, and can then call a target reusable although the
+/// pixels behind that name are redrawn every frame. Chains are followed to a
+/// key that is not itself an alias, and the walk is bounded by the map size so
+/// a cycle -- which the planner cannot produce -- still terminates.
+std::string ResolveCopyAliasKey(const std::unordered_map<std::string, std::string>& aliases,
+                                const std::string&                                 key);
 
 } // namespace vulkan
 } // namespace wallpaper

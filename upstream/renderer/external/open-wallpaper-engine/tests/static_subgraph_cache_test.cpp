@@ -5,12 +5,14 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using wallpaper::vulkan::CopyElision;
 using wallpaper::vulkan::DynamicReason;
 using wallpaper::vulkan::ElisionPassDesc;
 using wallpaper::vulkan::PlanCopyElision;
+using wallpaper::vulkan::ResolveCopyAliasKey;
 using wallpaper::vulkan::StaticPassDesc;
 using wallpaper::vulkan::StaticPassSample;
 using wallpaper::vulkan::StaticSubgraphCache;
@@ -349,4 +351,72 @@ TEST(CopyElisionPlan, ThePresentedTargetIsNotTreatedAsUnread)
     };
     EXPECT_NE(PlanCopyElision(passes)[1], CopyElision::Dead)
         << "the final blit reads it, so its result has a consumer";
+}
+
+
+// ---------------------------------------------------------------------------
+// An aliased destination names its source's image, and the reuse analysis has
+// to see that. Found while porting this analysis to the native backend.
+
+TEST(CopyAliasResolution, AnAliasedNameResolvesThroughItsChain)
+{
+    const std::unordered_map<std::string, std::string> aliases {
+        { "_rt_link_1", "_rt_effect_a" },
+        { "_rt_link_2", "_rt_link_1" },
+    };
+    EXPECT_EQ(ResolveCopyAliasKey(aliases, "_rt_link_2"), "_rt_effect_a");
+    EXPECT_EQ(ResolveCopyAliasKey(aliases, "_rt_effect_a"), "_rt_effect_a");
+    EXPECT_EQ(ResolveCopyAliasKey(aliases, "_rt_other"), "_rt_other");
+    EXPECT_EQ(ResolveCopyAliasKey({}, "_rt_link_1"), "_rt_link_1");
+}
+
+TEST(CopyAliasResolution, ACycleTerminatesInsteadOfHanging)
+{
+    // The planner cannot produce one -- an alias destination has no other
+    // writer -- but a resolver that trusts that is a resolver that hangs if it
+    // ever stops being true.
+    const std::unordered_map<std::string, std::string> aliases {
+        { "_rt_a", "_rt_b" },
+        { "_rt_b", "_rt_a" },
+    };
+    const auto resolved = ResolveCopyAliasKey(aliases, "_rt_a");
+    EXPECT_TRUE(resolved == "_rt_a" || resolved == "_rt_b");
+}
+
+TEST(StaticSubgraphCacheTest, AReaderOfAnAliasedDestinationInheritsItsSourcesDynamism)
+{
+    // The shape: a time-varying layer draws `_rt_effect_a`, a copy of it into
+    // `_rt_link_1` is aliased away, and a still effect samples `_rt_link_1`.
+    // Unresolved, `_rt_link_1` is a name no pass writes, so the reader looks
+    // like it depends on nothing and its target is called reusable -- while the
+    // pixels behind that name are redrawn every frame.
+    const std::unordered_map<std::string, std::string> aliases {
+        { "_rt_link_1", "_rt_effect_a" },
+    };
+
+    StaticSubgraphCache unresolved;
+    unresolved.Compile(std::vector {
+        Pass("_rt_effect_a", {}, static_cast<uint32_t>(DynamicReason::TimeUniform)),
+        Pass("_rt_default", { "_rt_link_1" }),
+    });
+    bool output_cacheable_unresolved = false;
+    for (std::size_t i = 0; i < unresolved.TargetCount(); ++i) {
+        if (unresolved.TargetKey(i) == "_rt_default") {
+            output_cacheable_unresolved = unresolved.TargetCacheable(i);
+        }
+    }
+    ASSERT_TRUE(output_cacheable_unresolved)
+        << "the unresolved shape is not the one this test is about";
+
+    StaticSubgraphCache resolved;
+    resolved.Compile(std::vector {
+        Pass("_rt_effect_a", {}, static_cast<uint32_t>(DynamicReason::TimeUniform)),
+        Pass("_rt_default", { ResolveCopyAliasKey(aliases, "_rt_link_1") }),
+    });
+    for (std::size_t i = 0; i < resolved.TargetCount(); ++i) {
+        if (resolved.TargetKey(i) != "_rt_default") continue;
+        EXPECT_FALSE(resolved.TargetCacheable(i))
+            << "a reader of an aliased destination was cached although its source is redrawn "
+               "every frame";
+    }
 }

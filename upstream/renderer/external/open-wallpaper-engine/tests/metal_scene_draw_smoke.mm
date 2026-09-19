@@ -27,6 +27,9 @@
 #include "Scene/Scene.h"
 #include "Scene/SceneBackendSelection.hpp"
 #include "Scene/SceneNode.h"
+#include "Scene/SceneMesh.h"
+#include "Scene/SceneTexture.h"
+#include "SpriteAnimation.hpp"
 #include "SpecTexs.hpp"
 #include "RenderGraph/RenderGraph.hpp"
 #include "VulkanRender/CopyPass.hpp"
@@ -468,4 +471,408 @@ TEST_F(MetalSceneDraw, RememberedPrepareFailureStopsTheBackendFlipFlopping)
 
     SetSceneRendererPreference(SceneRendererPreference::NativeMetalPreferred);
     EXPECT_EQ(SelectSceneBackend(*loaded.scene).backend, SceneBackend::NativeMetal);
+}
+
+
+// ---------------------------------------------------------------------------
+// Scene optimisation on the native backend
+
+namespace
+{
+
+/// A drawn frame plus the reuse counters that frame moved.
+struct FrameCounters
+{
+    uint64_t executed { 0 };
+    uint64_t skipped { 0 };
+};
+
+FrameCounters DrawOneFrame(MetalRender& render, Scene& scene)
+{
+    const auto before = wallpaper::vulkan::CurrentSceneOptimizationTotals();
+    const bool ok     = render.drawFrame(scene);
+    EXPECT_TRUE(ok) << render.lastError();
+    const auto after = wallpaper::vulkan::CurrentSceneOptimizationTotals();
+    return FrameCounters { after.executed_passes - before.executed_passes,
+                           after.skipped_passes - before.skipped_passes };
+}
+
+std::vector<uint8_t> ReadOutput(MetalRender& render, Scene& scene)
+{
+    std::vector<uint8_t> pixels;
+    uint32_t             width = 0;
+    uint32_t             height = 0;
+    EXPECT_TRUE(render.ReadRenderTargetForTests(scene.ResolveRenderTargetName(SpecTex_Default),
+                                                pixels, width, height));
+    return pixels;
+}
+
+} // namespace
+
+TEST_F(MetalSceneDraw, AnUnchangedTargetIsReusedAndProducesTheSamePixels)
+{
+    // This fixture binds no frame-varying uniform, which is exactly the scene
+    // whose second frame has nothing new to draw. What must be true is both
+    // halves at once: work was removed, AND the picture is byte-identical to
+    // the one the work produced.
+    const auto  project = WriteFixture(root_ / "project");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "cache", loaded, error)) << error;
+    ASSERT_EQ(SelectSceneBackend(*loaded.scene).backend, SceneBackend::NativeMetal);
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        const auto first = DrawOneFrame(render, *loaded.scene);
+        EXPECT_EQ(first.skipped, 0u) << "nothing can be reused before anything has been drawn";
+        EXPECT_GT(first.executed, 0u);
+        const auto drawn = ReadOutput(render, *loaded.scene);
+        ASSERT_FALSE(drawn.empty());
+
+        const auto second = DrawOneFrame(render, *loaded.scene);
+        EXPECT_GT(second.skipped, 0u)
+            << "an unchanged scene re-executed every pass; nothing was reused";
+        EXPECT_EQ(ReadOutput(render, *loaded.scene), drawn)
+            << "the reused target does not hold the pixels the drawn frame produced";
+
+        // Moving the layer changes the model transform, which is part of the
+        // sample. The target has to be redrawn, and the picture has to change.
+        auto* node = FirstDrawableNode(loaded.scene->sceneGraph.get());
+        ASSERT_NE(node, nullptr);
+        node->SetTranslate(Eigen::Vector3f { 96.0f, 64.0f, 0.0f });
+        const auto moved = DrawOneFrame(render, *loaded.scene);
+        EXPECT_EQ(moved.skipped, 0u)
+            << "a moved layer reused its target; the transform is not in the sample";
+        EXPECT_NE(ReadOutput(render, *loaded.scene), drawn)
+            << "the target was re-executed but the picture did not change";
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, TurningTheOptimisationOffDrawsEveryPassAgain)
+{
+    const auto  project = WriteFixture(root_ / "project");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "cache", loaded, error)) << error;
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+
+        wallpaper::vulkan::SetSceneOptimizationEnabled(false);
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        DrawOneFrame(render, *loaded.scene);
+        const auto second = DrawOneFrame(render, *loaded.scene);
+        EXPECT_EQ(second.skipped, 0u) << "pixels were reused with the setting switched off";
+        wallpaper::vulkan::SetSceneOptimizationEnabled(true);
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, GeometryRebuiltEveryFrameIsUploadedAndDrawnFromItsOwnSlot)
+{
+    // The particle shape, without a particle system: a mesh marked dynamic,
+    // empty when the graph is compiled, filled afterwards. What is proved is
+    // the upload path -- an empty frame is not a failure, a filled one reaches
+    // the screen, and the storage rotates per in-flight frame without the CPU
+    // overwriting what the GPU is reading.
+    const auto  project = WriteFixture(root_ / "project");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "cache", loaded, error)) << error;
+
+    auto* node = FirstDrawableNode(loaded.scene->sceneGraph.get());
+    ASSERT_NE(node, nullptr);
+    auto* source_mesh = node->Mesh();
+    ASSERT_NE(source_mesh, nullptr);
+    auto material = source_mesh->MaterialSlotPtr(0);
+    ASSERT_NE(material, nullptr);
+
+    // Same attribute names the author's shader declares, so the translated
+    // pipeline binds this stream exactly as it binds the static one.
+    auto dynamic_mesh = std::make_shared<SceneMesh>(true);
+    std::vector<SceneVertexArray::SceneVertexAttribute> attributes {
+        { std::string(WE_IN_POSITION), VertexType::FLOAT3 },
+        { std::string(WE_IN_TEXCOORD), VertexType::FLOAT2 },
+    };
+    constexpr std::size_t kQuads = 4;
+    dynamic_mesh->AddVertexArray(SceneVertexArray(attributes, kQuads * 4));
+    dynamic_mesh->AddIndexArray(SceneIndexArray(kQuads));
+    dynamic_mesh->GetVertexArray(0).SetOption(WE_PRENDER_SPRITE, true);
+    dynamic_mesh->MaterialSlots().push_back(material);
+    node->AddMesh(dynamic_mesh);
+
+    ASSERT_EQ(SelectSceneBackend(*loaded.scene).backend, SceneBackend::NativeMetal)
+        << SelectSceneBackend(*loaded.scene).fallback_reason;
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        // A mesh the runtime has not filled yet must keep the scene ticking
+        // rather than be declared still, and must not be reusable.
+        EXPECT_TRUE(render.ShaderUpdateDemandReasons() &
+                    wallpaper::vulkan::DynamicReason::DynamicMesh)
+            << "a mesh rebuilt per frame was not reported as advancing on its own";
+
+        // Three empty frames: nothing to draw is not a failed frame.
+        for (int frame = 0; frame < 3; ++frame) {
+            ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+            loaded.scene->PassFrameTime(1.0 / 60.0);
+        }
+        const auto empty = ReadOutput(render, *loaded.scene);
+        ASSERT_FALSE(empty.empty());
+
+        // Now fill one quad, the way the particle generator does, and let more
+        // than `kFramesInFlight` frames go by so every slot is written and read.
+        auto& vertices = dynamic_mesh->GetVertexArray(0);
+        auto& indices  = dynamic_mesh->GetIndexArray(0);
+        const std::array<float, 20> quad {
+            20.0f,  20.0f,  0.0f, 0.0f, 0.0f,
+            360.0f, 20.0f,  0.0f, 1.0f, 0.0f,
+            360.0f, 230.0f, 0.0f, 1.0f, 1.0f,
+            20.0f,  230.0f, 0.0f, 0.0f, 1.0f,
+        };
+        vertices.SetVertexs(0, quad);
+        const std::array<uint16_t, 6> quad_indices { 0, 1, 3, 1, 2, 3 };
+        indices.AssignHalf(0, quad_indices);
+        indices.SetRenderDataCount(3);
+        dynamic_mesh->SetDirty();
+
+        for (int frame = 0; frame < 5; ++frame) {
+            ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+            loaded.scene->PassFrameTime(1.0 / 60.0);
+        }
+        const auto filled = ReadOutput(render, *loaded.scene);
+        EXPECT_NE(filled, empty)
+            << "geometry uploaded after the graph was compiled never reached the target";
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, ASpriteSheetAdvancesOnItsOwnClockAndRedrawsOnlyWhenTheFrameChanges)
+{
+    // Sprite animation reaches the shader as the frame's rotation and
+    // translation uniforms, so what has to be proved is the chain around them:
+    // the sheet is picked up at prepare, advanced by the shared value updater
+    // every frame, folded into the reuse sample as the rectangle that will
+    // actually be sampled, and reported as something that keeps the clock
+    // running. The fixture's shader binds no texture slot, so nothing here
+    // claims a sheet was sampled on the GPU -- only that the machinery around
+    // it behaves.
+    const auto  project = WriteFixture(root_ / "project");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "cache", loaded, error)) << error;
+
+    auto* node = FirstDrawableNode(loaded.scene->sceneGraph.get());
+    ASSERT_NE(node, nullptr);
+    auto* material = node->Mesh()->MaterialForSlot(0);
+    ASSERT_NE(material, nullptr);
+
+    // Two frames of one sheet, a tenth of a second apart.
+    SceneTexture sheet { .url = "materials/sheet.tex", .isSprite = true };
+    sheet.spriteAnim.AppendFrame(
+        SpriteFrame { .imageId = 0, .frametime = 0.1f, .width = 0.5f, .height = 1.0f });
+    sheet.spriteAnim.AppendFrame(SpriteFrame {
+        .imageId = 0, .frametime = 0.1f, .x = 0.5f, .width = 0.5f, .height = 1.0f });
+    loaded.scene->textures["materials/sheet.tex"] = std::move(sheet);
+    material->textures = { "materials/sheet.tex" };
+
+    ASSERT_EQ(SelectSceneBackend(*loaded.scene).backend, SceneBackend::NativeMetal)
+        << SelectSceneBackend(*loaded.scene).fallback_reason;
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        // A sheet with more than one frame is not a still scene: whatever the
+        // reuse cache decides, the clock has to keep running or the animation
+        // never reaches its next frame.
+        EXPECT_TRUE(render.ShaderUpdateDemandReasons() &
+                    wallpaper::vulkan::DynamicReason::AnimatedSprite)
+            << "an animated sheet was not reported as advancing on its own";
+
+        DrawOneFrame(render, *loaded.scene);
+        // A sheet starts with no time left on its current frame, so the first
+        // tick that carries any elapsed time steps it. That step has to redraw.
+        loaded.scene->PassFrameTime(1.0 / 60.0);
+        const auto first_step = DrawOneFrame(render, *loaded.scene);
+        EXPECT_EQ(first_step.skipped, 0u)
+            << "the sheet stepped to its second frame and the target was reused anyway";
+
+        // A sixtieth of a second does not consume the tenth of a second this
+        // frame is held for, so the rectangle the shader samples is unchanged
+        // and the target may be reused.
+        const auto between = DrawOneFrame(render, *loaded.scene);
+        EXPECT_GT(between.skipped, 0u) << "a sheet between frame changes forced a redraw";
+
+        // Enough time to step the sheet again: the rectangle changes, so the
+        // target must be redrawn rather than reused. The clock kept running
+        // through the reused frames above, which is what makes this reachable.
+        loaded.scene->PassFrameTime(0.5);
+        const auto stepped = DrawOneFrame(render, *loaded.scene);
+        EXPECT_EQ(stepped.skipped, 0u)
+            << "the sheet advanced a frame and the target was reused anyway";
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, TurningTheOptimisationBackOnDoesNotReuseAFrameDrawnWhileItWasOff)
+{
+    // The defect this covers: with reuse off, nothing records a signature, so
+    // the table keeps the one that was current when it was switched off -- while
+    // every frame in between redraws from whatever inputs it has. If the inputs
+    // later return to that recorded value, re-enabling would call the target
+    // unchanged although its pixels came from a frame with different inputs.
+    const auto  project = WriteFixture(root_ / "project");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "cache", loaded, error)) << error;
+
+    auto* node = FirstDrawableNode(loaded.scene->sceneGraph.get());
+    ASSERT_NE(node, nullptr);
+    const Eigen::Vector3f home = node->Translate();
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        DrawOneFrame(render, *loaded.scene);
+        const auto at_home = ReadOutput(render, *loaded.scene);
+        ASSERT_FALSE(at_home.empty());
+        ASSERT_GT(DrawOneFrame(render, *loaded.scene).skipped, 0u)
+            << "the recorded signature this test depends on was never taken";
+
+        // Off: the layer moves and is drawn there. Nothing records that.
+        wallpaper::vulkan::SetSceneOptimizationEnabled(false);
+        node->SetTranslate(Eigen::Vector3f { home.x() + 96.0f, home.y(), home.z() });
+        const auto moved = DrawOneFrame(render, *loaded.scene);
+        EXPECT_EQ(moved.skipped, 0u) << "pixels were reused with the setting switched off";
+        const auto away = ReadOutput(render, *loaded.scene);
+        ASSERT_NE(away, at_home);
+
+        // Back to where the recorded signature was taken, without drawing: the
+        // target still holds the moved picture.
+        node->SetTranslate(home);
+        wallpaper::vulkan::SetSceneOptimizationEnabled(true);
+
+        const auto resumed = DrawOneFrame(render, *loaded.scene);
+        EXPECT_EQ(resumed.skipped, 0u)
+            << "re-enabling reused a target whose pixels came from a frame drawn while it was off";
+        EXPECT_EQ(ReadOutput(render, *loaded.scene), at_home)
+            << "the first frame after re-enabling did not restore the picture its inputs describe";
+
+        // And it records again from there.
+        EXPECT_GT(DrawOneFrame(render, *loaded.scene).skipped, 0u)
+            << "reuse never resumed after the setting was switched back on";
+
+        render.destroy();
+    }
 }

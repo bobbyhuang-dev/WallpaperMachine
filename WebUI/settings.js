@@ -11,6 +11,7 @@ const videoPaths = {
   nv12_direct: 'planes sampled directly, no conversion',
   nv12_converted: 'converted once per frame',
   nv12_mixed: 'planes sampled directly, plus one shared conversion',
+  nv12_converted_preparing: 'converted once per frame, direct sampling still being prepared',
 };
 // The renderer's own words for why a scene is still updating. `unknown_input`
 // is deliberately not folded into a generic phrase: it means the renderer found

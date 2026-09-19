@@ -70,6 +70,7 @@ add_library(
   Runtime/SceneSettingResolver.cpp
   Runtime/ScriptedDynamicValue.cpp
   Shader/RustShaderBridge.cpp
+  Shader/SceneMetalVariants.cpp
   Text/SystemFontResolver.cpp
   Text/TextLayer.cpp
   Scripting/ScriptEngine.cpp

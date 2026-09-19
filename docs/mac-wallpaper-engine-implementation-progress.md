@@ -80,6 +80,263 @@ recorded as blocked rather than failed:
 **No power number, watt figure or saving percentage is reported anywhere in this
 document.** Counters and unit tests bound what is claimed.
 
+## Round 11 — text and runtime images on Metal, optional programs off the load path
+
+Feature round, same discipline as rounds 5–10: implement, wire to production,
+keep it building, fix what this round broke. Native Metal stays a manual choice
+and Compatibility stays the default; direct plane sampling stays experimental
+and off. Visual output on real wallpapers, desktop behaviour and power are the
+user's to accept. **No power measurement of any kind was taken and no saving is
+claimed anywhere below.**
+
+| Feature | State | Default |
+|---|---|---|
+| Text layers drawn by the native Metal backend | Implemented end to end: parsed text object → translated text program → rasterised glyphs → card drawn into the scene's own target | Follows the backend choice |
+| Unchanged text costs no layout, no rasterisation and no upload | Implemented; the scripts still run every frame | Always on |
+| Runtime-replaced images consumed and refreshed on Metal | Implemented for every runtime image a material binds, text textures and the media thumbnail alike | Always on |
+| The optional NV12 program prepared off the load path | Implemented: translation on a bounded background worker, Metal pipeline on a serial queue, adopted at a frame boundary | Follows the existing experimental switch |
+| Nothing prepared at all while that switch is off | Implemented and asserted | Off |
+| Metal libraries and pipelines shared across scenes and surfaces | Implemented, keyed by program content and device | Always on |
+
+### Two corrections to what round 10 reported
+
+Both are corrections of wording, not of behaviour, and neither needed new work
+to establish:
+
+- "Not compiled in the per-frame hot path" was true and was **not** the same
+  claim as "does not affect the first frame". Round 10 compiled the optional
+  variant inside the parse, which is on the path to the first frame; it simply
+  was not inside a frame. This round is what makes the stronger statement true
+  for the optional program. The **base** program's Metal pipeline is still
+  created synchronously in `compileRenderGraph`, before the first frame, and
+  that is unchanged.
+- The round 10 colour and sampling comparison was one synthetic stream with
+  neutral chroma, held still, at two scales. It does not support "all conforming
+  streams are identical", and that sentence is withdrawn. What it supports is
+  what it measured: that stream, at 1:1, agreed to one code value, and scaled it
+  stayed inside the clamp excursion the stream's own limited range implies.
+
+### Text layers reach the native backend
+
+A text layer was never refused for being text. It was refused because its card
+is a mesh the runtime rewrites — `RejectDynamicMesh` accepted only the particle
+generator's vertex contract and refused everything else, text cards included,
+with the honest reason that nothing had checked their upload shape. Three things
+were missing, and all three are now there:
+
+- **A program.** `BuildTextSceneShader` compiled the text program to SPIR-V only,
+  so `SceneShader::metal_program` stayed null and `prepareDraw` had nothing to
+  draw with. It now queues the same `PendingMetalTranslation` a material does,
+  captured before the SPIR-V compile consumes the units, so the text program is
+  translated to Metal exactly like an author's.
+- **A shape the gate can name.** `IsDynamicCardMesh` states the geometry
+  positively: one submesh, one vertex array of a float3 position and a float2
+  texture coordinate, four vertices of fixed capacity, no index array. That is
+  what `ResizeCardMesh` writes for a text layer's own card, for an effect
+  chain's final card and for the node an effect chain resolves its last pass
+  onto. Anything else that rebuilds geometry per frame is still judged by the
+  particle rules and still refused.
+- **An upload for it.** The dynamic path assumed an index stream. A card has
+  none: four corners, drawn as a triangle strip. `prepareDraw`,
+  `uploadDynamicMesh` and the encoder now carry the index-less case, and the
+  upload re-checks that the mesh still has the shape it was prepared for, so a
+  mesh that grew or lost an index stream fails the frame instead of being
+  reinterpreted against the wrong storage.
+
+The layer is an ordinary scene layer from there on: layer order, transform,
+opacity, blend, the camera, the author's canvas, `renderScale`, the effect
+chains its own node carries, the final composition and the poster all apply to
+it because it is a node with a mesh and a material like any other. Nothing is
+overlaid as an AppKit or SwiftUI view.
+
+One shared behaviour worth stating because it is easy to mistake for a fault in
+this round: a text layer under an effect chain draws into a buffer whose size
+the parser fixed from the text it was parsed with, and a much longer string is
+clipped to it. That is the shared parser and runtime — `ResolveTextEffectCapacity`
+and the effect camera — not this backend, and the compatibility renderer does
+the same. Nothing here changed it and nothing here should be read as having
+fixed it.
+
+Everything the text system already supports comes with it, because none of it
+was reimplemented: the text, the font (asset, system or family), point size,
+colour, alpha, brightness, background, padding, horizontal and vertical
+alignment, the anchor, explicit size, maximum width and rows, wrapping and
+clipping are all resolved by `ResolveTextLayerState` and rasterised by
+`RasterizeTextLayer` exactly as the compatibility backend gets them. What that
+system does not do, this round does not add: there is no new font library, no
+new shaper and no new layout engine, and a backend change cannot give a text
+system typographic features it never had.
+
+### The same text does not get redrawn into a new texture
+
+This is the round's optimisation, and it is stated as what must not happen: a
+clock layer whose script returns the same string must cost no measurement, no
+rasterisation, no geometry rebuild and no texture upload, while the script keeps
+running exactly as before.
+
+- The runtime already separated a text value changing from a text value being
+  produced: `TextLayer::SetText` returns immediately when the string is equal,
+  and only a changed string marks the cache dirty and raises the layout
+  revision. Nothing in that was weakened, and no script was slowed down, batched
+  or given a deadline. `update()` runs on its own schedule and a `Date` in it
+  means nothing to any of this.
+- The renderer now asks a version, not a picture. `RuntimeImageSource::Version`
+  answers "has anything replaced these pixels?" with one integer under the lock
+  it already had, and `refreshRuntimeImages` compares it per in-flight frame
+  slot. The common case touches no pixels at all: no `Parse`, no decode, no
+  `replaceRegion`.
+- When content does change, it is written into the storage the next frame owns —
+  one texture per in-flight frame, the same pattern the dynamic vertex ring
+  uses — so new pixels never land in an image a queued command buffer is still
+  reading, and a text that changes every minute does not allocate a texture
+  every minute. A size or format change does allocate, and the images it
+  replaces stay alive exactly as long as the command buffers that reference
+  them, because `[queue commandBuffer]` retains what it encodes.
+- The reuse analysis now folds each bound runtime image's version into the pass
+  sample. Without it a target whose only moving input is that image would be
+  called unchanged and keep showing the previous picture. That was already live
+  for the media thumbnail on Metal before text existed, so this is a bug fixed
+  rather than a cost introduced.
+
+There is no glyph atlas to keep in step: the text system rasterises one texture
+per layer, and a re-layout replaces the texture and the card's corners together,
+in the same frame, from the same prepared result.
+
+### Runtime images, not only text
+
+The refresh is written against "an image the runtime replaces", not against
+text, so the two production producers of those — a text layer's rasterised
+glyphs and the system media thumbnail — take the identical path: collected once
+per compiled graph from the keys the materials actually bind, refreshed at each
+frame boundary before anything samples one, and re-uploaded only when the
+version moved. No file is re-read, no image re-decoded and no texture recreated
+for an unchanged image, and nothing here invents a thumbnail when the system has
+not published one.
+
+### The optional program is no longer part of loading a wallpaper
+
+Round 10 produced the NV12 variant during the parse and built its pipeline in
+`compileRenderGraph`. Both are on the path to a first frame. This round splits
+the two preparations:
+
+- **Required**: the ordinary RGB program, its reflection and its pipeline, built
+  with the graph as before. A scene is ready when those are.
+- **Optional**: the plane-sampling variant. The parser now captures what it
+  would be compiled from — the preprocessed units, the combos, the texture info
+  and every include the ordinary translation read, with contents — into a
+  snapshot that owns itself, and compiles nothing. `WPShaderParser::CompileMslVariant`
+  replays that snapshot through the identical compile with no virtual file
+  system at all, so it can run an hour later, after the project, the parser and
+  its mounts are gone.
+- One worker thread, a queue bounded at 32, and the claim held on the program
+  itself, so one program is translated once however many times it is asked for
+  and a program that failed is never retried. Two surfaces that parsed the same
+  wallpaper separately hold separate programs and each translates its own; what
+  they do share is the Metal side, below. Switching wallpapers drops what has
+  not started; a compile already inside the shader compiler finishes, because
+  nothing can interrupt it, and its result goes away with the program it was
+  compiled for. That is stated as it is, not as an abort.
+- The Metal library and pipeline are built on a serial utility queue and posted
+  into a mailbox owned by a shared pointer, so a build that comes back after the
+  graph, the renderer or the process's interest in it is gone writes into a box
+  nobody reads. The renderer collects at a frame boundary, checks the graph
+  generation, and adopts between frames.
+- The variant brings its own uniform storage, one buffer per in-flight frame,
+  allocated when it is adopted. The shared ring is cut when the graph is
+  compiled and the variant is not there yet; re-cutting it later would move
+  storage the current frame is already writing into.
+- With the switch off, nothing is asked for, nothing is translated and no extra
+  pipeline is created. That is asserted, not asserted-about: the test reads the
+  program's state and requires it to be untouched.
+
+### Program and pipeline reuse
+
+`MetalPipelineKey::program_id` was the address of the translated program object.
+That is unique only while that object lives — two wallpapers loaded one after
+another can put different programs at the same address — so it could not be
+shared beyond one compiled graph, and a cache keyed on it would eventually hand
+the second scene the first one's pipeline. It is now a hash of what the program
+contains: each stage's kind, entry point, language version and Metal source.
+
+With that, the library and pipeline caches moved out of the renderer instance
+into one process-wide cache scoped by `MTLDevice.registryID`, holding libraries
+by source and pipeline states by the full key — vertex layout, blend state,
+colour format, sample count and alpha write mask all included, so two programs
+that merely share a name can never share an incompatible pipeline. It is bounded
+at 256 libraries and 512 pipelines per device; past that nothing new is
+remembered and the caller still gets a correctly built object.
+
+What is cached, said precisely, because these are four different things:
+
+| Layer | What it holds | Where |
+|---|---|---|
+| Translated MSL text | The Rust shader program cache, per scene, on disk and in memory | Unchanged from before this round |
+| `MTLLibrary` | Compiled Metal source, per device, keyed by the source itself | New, process-wide |
+| `MTLRenderPipelineState` | Per device, keyed by program content plus pipeline state | New, process-wide |
+| GPU binary archive | **Not implemented** | — |
+
+There is no `MTLBinaryArchive` in this round. Reading a cached MSL file is not
+the same as not compiling: a library restored from cached text still goes
+through the Metal shader compiler on first use in a process. The first cold
+launch after an install still compiles every program it draws with.
+
+### Interface
+
+No new switch. The two existing ones carry the round:
+
+- **Native Metal renderer** (Advanced) — unchanged; still a manual choice,
+  Compatibility still the default. Text layers and runtime images are simply no
+  longer a reason for a scene to fall back.
+- **Direct video plane sampling** (Advanced, experimental, off) — unchanged as a
+  control. What changed is what it costs: off now means nothing is prepared, and
+  on now means the wallpaper plays while the optional program is prepared behind
+  it.
+- **Drawn by** gains one more video path: *converted once per frame, direct
+  sampling still being prepared*. It is said only while a translation or a
+  pipeline is genuinely in flight. A material whose variant was refused, or
+  which never had a candidate, reports the plain converting path, because
+  nothing further is coming — and "preparing" never means the wallpaper is not
+  playing.
+
+### Tests added
+
+- `metal_scene_draw_smoke.mm`: 4 new cases, 17 total, all green.
+  A parsed text project is accepted by the native backend, is translated,
+  rasterised and drawn into the scene's own output, and reports itself as a
+  reason to keep drawing. A text that does not change costs no measurement and
+  no upload over twelve frames while the runtime ticks, then a new string costs
+  at most one upload per in-flight frame and reaches the picture, then goes
+  quiet again. A text layer with an effect chain — which has three cards the
+  relayout rewrites, not one — draws through the chain and follows a new string
+  to the chain's own output. The same translated program compiled by a second
+  renderer on the same device is not handed to the Metal compiler a second
+  time.
+- `metal_scene_draw_smoke.mm`, rewritten for the new preparation: the video
+  cases now assert that the parse compiled **nothing** optional, ask for the
+  variant the way the wallpaper's own loop does, and draw until the path
+  settles rather than assuming the first frame. The switch-off case additionally
+  asserts the program was never even claimed.
+- `crates/core`: every video path the renderer can report has its own name, and
+  a value this build does not know is not invented.
+
+### Not verified
+
+- No real wallpaper has been drawn on a display and nothing has been seen by a
+  human. The text cases draw a synthetic project whose glyphs come from this
+  machine's font resolution; no golden image of text exists and none is claimed.
+- Complex script systems — Arabic shaping, Indic reordering, vertical writing —
+  are exactly as supported as they were before this round, which is to say
+  whatever `RasterizeTextLayer` already does. Nothing here improved or degraded
+  them, and no claim is made about them.
+- A purely static text layer still keeps the scene drawing, because its card is
+  a per-frame mesh and its texture is a runtime image. That is the conservative
+  choice the specification permits, not a limitation discovered late: nothing
+  here tries to prove a text layer will never change again.
+- No power measurement, and no claim that any of this saves a measurable amount
+  of anything. What is claimed is that specific work does not happen: no
+  re-layout, no re-rasterisation and no re-upload for unchanged content, and no
+  optional compile while the switch is off.
+
 ## Round 10 — NV12 direct plane sampling, scene optimisation applied at runtime
 
 Feature round, same discipline as rounds 5–9: implement, wire to production,

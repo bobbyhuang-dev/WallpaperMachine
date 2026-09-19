@@ -27,6 +27,14 @@ enum class SceneVideoPath : uint8_t
     /// shared conversion for the consumers that cannot. Also what a scene whose
     /// video textures took different paths reports.
     Nv12Mixed,
+    /// NV12 converted, exactly as `Nv12Converted`, while the optional direct
+    /// program for this content is still being prepared.
+    ///
+    /// The frame took the converting path and the wallpaper is playing
+    /// normally; the only extra thing this says is that something is still
+    /// coming. A scene whose variant is refused, or for which none applies,
+    /// reports `Nv12Converted` and stays there.
+    Nv12ConvertedPreparing,
 };
 
 /// The name the diagnostics surface uses for one path.
@@ -37,6 +45,7 @@ enum class SceneVideoPath : uint8_t
     case SceneVideoPath::Nv12Direct: return "nv12_direct";
     case SceneVideoPath::Nv12Converted: return "nv12_converted";
     case SceneVideoPath::Nv12Mixed: return "nv12_mixed";
+    case SceneVideoPath::Nv12ConvertedPreparing: return "nv12_converted_preparing";
     case SceneVideoPath::None: break;
     }
     return "none";

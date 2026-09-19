@@ -148,6 +148,11 @@ executable directly from the renderer check build directory.
 | Direct plane sampling, end to end | `MetalSceneDraw.AVideoLayerSamplesTheDecoderPlanesThroughItsOwnShader` and `.AVideoLayerKeepsConvertingWhileTheSettingIsOff`: an ordinary parsed author material, a real decoded video, the variant compiled by the parser, bound through its own reflection and drawn. A test-only shader does not cover this. |
 | Direct-versus-converted picture | `MetalSceneDraw.OneToOneSamplingProducesTheSamePictureOnBothPaths` (must agree to one code value) and `.ScaledSamplingStaysInsideTheClampExcursionTheStreamImplies` (see [performance](../features/performance.md)). The paths are exactly equivalent at a one-to-one mapping; under resampling they differ only where the stream carries codes outside the range it declares, bounded by that clamp's own excursion. |
 | Plane variant refusals | `video_planes.rs` in `crates/shader`: an explicit-LOD sample, a size query, and any other use of the video slot refuses the variant instead of mistranslating it, and the ordinary program is unchanged by the option existing. |
+| Text layers on the native backend | `MetalSceneDraw.ATextLayerIsParsedTranslatedAndDrawnByTheNativeBackend`: a parsed text object, the text program translated to Metal, the rasterised glyphs imported and the card drawn into the scene's own target. A text layer must reach the backend through the ordinary parser, not through a hand-built mesh. |
+| Unchanged text costs nothing | `MetalSceneDraw.TextThatHasNotChangedIsNeitherLaidOutNorUploadedAgain`: twelve frames of an unchanged string measure nothing and upload nothing, a new string costs at most one upload per in-flight frame and reaches the drawn picture, and it then goes quiet again. The script keeps running throughout; "quiet" must never be achieved by stopping it. |
+| Text layers under an effect chain | `MetalSceneDraw.ATextLayerWithAnEffectChainKeepsBothOfItsCards`: a text layer with effects has three meshes the relayout rewrites — its own card, the chain's final card and the node the chain resolves its last pass onto — and all of them have to be accepted and updated, or the scene falls back as a whole or freezes at its first layout. Use text whose glyphs differ, not more of the same word: the chain clips the card to its buffer, so a longer repetition can leave identical pixels. |
+| Optional programs stay off the load path | `MetalSceneDraw.AVideoLayerSamplesTheDecoderPlanesThroughItsOwnShader` asserts the parse compiled nothing optional before asking for it; `.AVideoLayerKeepsConvertingWhileTheSettingIsOff` asserts the program was never even claimed while the switch was off. Preparing an optional variant during a parse is a first-frame cost, not a free one. |
+| Metal program reuse | `MetalSceneDraw.TheSameProgramIsCompiledOnceAndReusedByTheNextSurface`: a second renderer on the same device must not hand an identical translated program to the Metal compiler again. The pipeline key must identify the program by content, never by the address of the object holding it. |
 | Download-speed sampling | `DownloaderTests` in `Tests/Unit/Workshop/`: real `nettop` streaming over a private PTY with local-socket traffic; CRLF and split line endings. LF-only fixtures do not verify live delivery. |
 
 ### Property bindings and alignment anchors
@@ -595,8 +600,9 @@ diagnostics. `scripts/check_renderer.py` builds and runs
 `playback_gpu_test`; a non-zero exit from any of them fails the check. The
 native Metal backend adds `metal_backend_test` (capability and graph gate, no
 device needed), `metal_scene_draw_smoke` (author shaders and same-frame
-intermediates drawn and read back, plus target reuse, dynamic-geometry upload
-and sprite-sheet stepping), `metal_poster_capture_test` (on-request poster
+intermediates drawn and read back, plus target reuse, dynamic-geometry upload,
+sprite-sheet stepping, text layers and their update dedup, direct video plane
+sampling end to end and Metal program reuse across renderers), `metal_poster_capture_test` (on-request poster
 readback, busy coalescing, invalidation) and `metal_video_texture_test` (BGRA
 import and NV12 conversion against the CPU colour reference, from synthetic
 frames); all four run in the check, draw only into private textures and skip

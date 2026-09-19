@@ -37,6 +37,7 @@
 #include "VulkanRender/CustomShaderPass.hpp"
 #include "VulkanRender/SceneToRenderGraph.hpp"
 #include "VulkanRender/StaticSubgraphCache.hpp"
+#include "Shader/SceneMetalVariants.hpp"
 #include "WPSceneParser.hpp"
 #include "synthetic_video.hpp"
 
@@ -45,10 +46,12 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 
 using namespace wallpaper;
 using namespace wallpaper::metal;
@@ -59,7 +62,12 @@ namespace
 /// A minimal original scene: one flat-coloured card drawn through the author's
 /// own vertex and fragment shaders. Small on purpose -- the point is that the
 /// shader is real and travels the whole pipeline, not that the scene is rich.
-std::filesystem::path WriteFixture(const std::filesystem::path& root)
+/// `blue` picks the constant the fragment shader writes, which is only ever
+/// varied to make a fixture's translated program textually unique -- the one
+/// test that has to observe a cold compile needs a source no earlier test in
+/// the same process has already compiled.
+std::filesystem::path WriteFixture(const std::filesystem::path& root,
+                                   std::string_view blue = "0.25")
 {
     const std::string vertex =
         "uniform mat4 g_ModelViewProjectionMatrix;\n"
@@ -73,7 +81,7 @@ std::filesystem::path WriteFixture(const std::filesystem::path& root)
     const std::string fragment =
         "varying vec2 v_TexCoord;\n"
         "void main() {\n"
-        "  gl_FragColor = vec4(v_TexCoord.x, v_TexCoord.y, 0.25, 1.0);\n"
+        "  gl_FragColor = vec4(v_TexCoord.x, v_TexCoord.y, " + std::string(blue) + ", 1.0);\n"
         "}\n";
 
     const std::map<std::string, std::string> files {
@@ -197,6 +205,52 @@ void AddCopy(rg::RenderGraph& graph, const std::string& source, const std::strin
             desc.src = std::string(in->key());
             desc.dst = std::string(out->key());
         });
+}
+
+/// Asks for this scene's optional programs and waits, bounded, for the
+/// background translation to settle.
+///
+/// The wallpaper's own loop asks for exactly this at a frame boundary and never
+/// waits; a test that wants to compare the two paths has to know the second one
+/// exists before it starts drawing, which is what this waits for.
+bool SettleVariantTranslation(Scene& scene, std::string* reason)
+{
+    RequestSceneMetalVariants(scene, true);
+    for (const auto& program : scene.metal_variant_candidates) {
+        if (program == nullptr) continue;
+        for (int attempt = 0; attempt < 500; ++attempt) {
+            if (program->videoPlaneState() != SceneMetalVariantState::Pending) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        const auto state = program->videoPlaneState();
+        if (state == SceneMetalVariantState::Ready) continue;
+        if (reason != nullptr) {
+            const auto variant = program->videoPlanes();
+            *reason = state == SceneMetalVariantState::Failed && variant != nullptr
+                          ? variant->error
+                          : "the optional translation did not finish";
+        }
+        return false;
+    }
+    return true;
+}
+
+/// Draws, without advancing the scene clock, until the frame path settles on
+/// the one asked for.
+///
+/// Bounded and not immediate on purpose: the optional pipeline is built off the
+/// frame thread, so the frame that adopts it is the first one after the build
+/// came back rather than the first one after the setting changed. That is the
+/// behaviour, not a tolerance.
+bool DrawUntilVideoPath(MetalRender& render, Scene& scene, SceneVideoPath wanted,
+                        int frames = 64)
+{
+    for (int frame = 0; frame < frames; ++frame) {
+        if (! render.drawFrame(scene)) return false;
+        if (render.VideoPath() == wanted) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return false;
 }
 
 SceneMaterial* FirstMaterial(SceneNode* node)
@@ -1078,9 +1132,19 @@ TEST_F(MetalSceneDraw, AVideoLayerSamplesTheDecoderPlanesThroughItsOwnShader)
     ASSERT_NE(program, nullptr);
     ASSERT_TRUE(program->error.empty()) << program->error;
 
-    // ---- 1. the parser produced the second program from the same inputs
-    const auto* variant = program->video_planes.get();
-    ASSERT_NE(variant, nullptr) << "no plane variant was attempted for a single-video material";
+    // ---- 1. the parser captured what a second program would need, and
+    // compiled nothing: loading a wallpaper must not pay for an optional
+    // program before it has drawn a frame.
+    ASSERT_TRUE(program->hasVideoPlaneCandidate())
+        << "no plane variant was even possible for a single-video material";
+    ASSERT_EQ(program->videoPlaneState(), SceneMetalVariantState::None)
+        << "the optional program was compiled during the parse";
+
+    // ---- 2. asked for, it is produced in the background from that snapshot
+    std::string variant_error;
+    ASSERT_TRUE(SettleVariantTranslation(*loaded.scene, &variant_error)) << variant_error;
+    const auto variant = program->videoPlanes();
+    ASSERT_NE(variant, nullptr);
     ASSERT_TRUE(variant->ok()) << "plane variant refused: " << variant->error;
     EXPECT_EQ(variant->slot, 0u);
     ASSERT_FALSE(variant->stages.empty());
@@ -1090,7 +1154,7 @@ TEST_F(MetalSceneDraw, AVideoLayerSamplesTheDecoderPlanesThroughItsOwnShader)
     const auto selection = SelectSceneBackend(*loaded.scene);
     ASSERT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
 
-    // ---- 2. a real frame, drawn through the variant
+    // ---- 3. a real frame, drawn through the variant
     ScopedPlaneSampling sampling(true);
 
     @autoreleasepool {
@@ -1121,8 +1185,12 @@ TEST_F(MetalSceneDraw, AVideoLayerSamplesTheDecoderPlanesThroughItsOwnShader)
             ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
             loaded.scene->PassFrameTime(1.0 / 60.0);
         }
+        // The optional pipeline is built off the frame thread, so the adoption
+        // happens at the first boundary after it comes back rather than at the
+        // first frame. A few more frames is what that looks like from here.
+        DrawUntilVideoPath(render, *loaded.scene, SceneVideoPath::Nv12Direct);
 
-        // ---- 3. the path the frame really took
+        // ---- 4. the path the frame really took
         const auto path = render.VideoPath();
         if (path != SceneVideoPath::Nv12Direct) {
             // Software decode hands back BGRA, and the direct path is then not
@@ -1162,9 +1230,15 @@ TEST_F(MetalSceneDraw, AVideoLayerKeepsConvertingWhileTheSettingIsOff)
     std::string error;
     ASSERT_TRUE(LoadScene(project, root_ / "video-off-cache", loaded, error)) << error;
 
-    // Default state, asserted rather than assumed: the variant exists and is
-    // simply not selected, which is what makes the switch a selection.
+    // Default state, asserted rather than assumed: the material could have a
+    // variant and, with the switch off, none is asked for at all.
     ScopedPlaneSampling sampling(false);
+    auto* off_material = FirstMaterial(loaded.scene->sceneGraph.get());
+    ASSERT_NE(off_material, nullptr);
+    ASSERT_NE(off_material->customShader.shader, nullptr);
+    const auto off_program = off_material->customShader.shader->metal_program;
+    ASSERT_NE(off_program, nullptr);
+    ASSERT_TRUE(off_program->hasVideoPlaneCandidate());
 
     @autoreleasepool {
         id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
@@ -1188,20 +1262,30 @@ TEST_F(MetalSceneDraw, AVideoLayerKeepsConvertingWhileTheSettingIsOff)
         ASSERT_NE(graph, nullptr);
         ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
         render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
-        ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+        for (int frame = 0; frame < 3; ++frame) {
+            ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+            loaded.scene->PassFrameTime(1.0 / 60.0);
+        }
 
         const auto path = render.VideoPath();
         EXPECT_NE(path, SceneVideoPath::Nv12Direct)
             << "the switch is off and a material still sampled planes";
         EXPECT_NE(path, SceneVideoPath::Nv12Mixed);
+        // Nothing was translated and nothing was built. This is the whole point
+        // of the switch being off: it is not "compiled and unused", it is "not
+        // compiled".
+        EXPECT_EQ(off_program->videoPlaneState(), SceneMetalVariantState::None)
+            << "an optional program was prepared although the switch was off";
 
         // And switching it on reaches a scene that is already running, without
-        // the graph being compiled again.
+        // the graph being compiled again. The wallpaper's own loop asks at a
+        // frame boundary; this drives the renderer directly, so it asks here.
         SetMetalVideoPlaneSamplingEnabled(true);
-        ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+        std::string variant_error;
         if (path == SceneVideoPath::Nv12Converted) {
-            EXPECT_EQ(render.VideoPath(), SceneVideoPath::Nv12Direct)
-                << "a running scene did not pick the setting up at its next frame";
+            ASSERT_TRUE(SettleVariantTranslation(*loaded.scene, &variant_error)) << variant_error;
+            EXPECT_TRUE(DrawUntilVideoPath(render, *loaded.scene, SceneVideoPath::Nv12Direct))
+                << "a running scene never picked the setting up";
         }
 
         render.destroy();
@@ -1311,11 +1395,14 @@ PathComparison CompareVideoPaths(const std::filesystem::path& project,
         result.converted = std::move(previous);
 
         SetMetalVideoPlaneSamplingEnabled(true);
-        if (! render.drawFrame(*loaded.scene)) {
-            result.skip_reason = render.lastError();
+        std::string variant_error;
+        if (! SettleVariantTranslation(*loaded.scene, &variant_error)) {
+            result.skip_reason = variant_error;
             return result;
         }
-        if (render.VideoPath() != SceneVideoPath::Nv12Direct) {
+        // Without advancing the clock: the frame is held, and what is being
+        // waited for is the optional pipeline, not a new picture.
+        if (! DrawUntilVideoPath(render, *loaded.scene, SceneVideoPath::Nv12Direct)) {
             result.skip_reason = "the running scene did not take the direct path";
             return result;
         }
@@ -1406,4 +1493,341 @@ TEST_F(MetalSceneDraw, ScaledSamplingStaysInsideTheClampExcursionTheStreamImplie
                          << " code values on average, which is a picture difference rather than "
                             "a clamp-order effect at the edges";
     RecordProperty("worst_delta", worst);
+}
+
+namespace
+{
+
+/// A project whose only layer is a text object, in the shape the editor's "add
+/// text" writes: no model, no material, no author shader. Everything the layer
+/// draws with -- the card, its texture and the program that samples it -- is
+/// produced by the parser and the text system.
+std::filesystem::path WriteTextFixture(const std::filesystem::path& root, std::string_view text,
+                                       bool with_effect = false)
+{
+    const std::string effects =
+        with_effect ? R"(,"effects":[{"file":"effects/probe.json","visible":true}])" : "";
+    const std::map<std::string, std::string> files {
+        { "project.json",
+          R"({"title":"Metal text smoke","type":"scene","file":"layout.json","general":{"properties":{}}})" },
+        // An effect chain over the text layer: the layer draws into a buffer,
+        // the effect samples it, and the chain's final card -- a second mesh the
+        // relayout rewrites -- draws the result.
+        { "effects/probe.json",
+          R"({"name":"probe copy","passes":[{"material":"materials/copy.json"}]})" },
+        { "materials/copy.json",
+          R"({"passes":[{"shader":"probe_copy","blending":"translucent","cullmode":"nocull",)"
+          R"("depthtest":"disabled","depthwrite":"disabled","textures":[null]}]})" },
+        { "shaders/probe_copy.vert",
+          "uniform mat4 g_ModelViewProjectionMatrix;\n"
+          "attribute vec3 a_Position;\n"
+          "attribute vec2 a_TexCoord;\n"
+          "varying vec2 v_TexCoord;\n"
+          "void main() {\n"
+          "  gl_Position = g_ModelViewProjectionMatrix * vec4(a_Position, 1.0);\n"
+          "  v_TexCoord = a_TexCoord;\n"
+          "}\n" },
+        { "shaders/probe_copy.frag",
+          "uniform sampler2D g_Texture0;\n"
+          "varying vec2 v_TexCoord;\n"
+          "void main() {\n"
+          "  gl_FragColor = texture(g_Texture0, v_TexCoord);\n"
+          "}\n" },
+        { "layout.json",
+          R"({"camera":{"center":[0,0,0],"eye":[0,0,1],"up":[0,1,0]},)"
+          R"("general":{"ambientcolor":[0,0,0],"skylightcolor":[0,0,0],"clearcolor":[0.0,0.0,0.0],)"
+          R"("cameraparallax":false,"orthogonalprojection":{"width":384,"height":256}},)"
+          R"("objects":[{"id":1,"name":"caption","text":")" + std::string(text) +
+              R"(","font":"Arial","pointsize":48,"origin":[192,128,0],)"
+              R"("scale":[1,1,1],"angles":[0,0,0],"visible":true)" + effects + R"(}]})" },
+    };
+
+    for (const auto& [name, contents] : files) {
+        const auto path = root / name;
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream(path) << contents;
+    }
+    return root / "project.json";
+}
+
+/// How many pixels carry colour, which is the only thing that distinguishes
+/// "the glyphs were drawn" from "the pass ran".
+///
+/// Colour, not alpha: a cleared opaque black target has alpha everywhere and
+/// would satisfy a test that counted it.
+std::size_t LitPixels(const std::vector<uint8_t>& rgba)
+{
+    std::size_t lit = 0;
+    for (std::size_t i = 0; i + 3 < rgba.size(); i += 4) {
+        if (rgba[i] != 0 || rgba[i + 1] != 0 || rgba[i + 2] != 0) ++lit;
+    }
+    return lit;
+}
+
+/// One production frame: the runtime tick and the text pump the wallpaper's own
+/// loop runs, then the draw.
+void AdvanceSceneFrame(MetalRender& render, Scene& scene)
+{
+    if (scene.runtime != nullptr) {
+        scene.runtime->Tick(1.0 / 60.0);
+        scene.runtime->PumpTextLayerCache();
+    }
+    EXPECT_TRUE(render.drawFrame(scene)) << render.lastError();
+    scene.PassFrameTime(1.0 / 60.0);
+}
+
+} // namespace
+
+TEST_F(MetalSceneDraw, ATextLayerIsParsedTranslatedAndDrawnByTheNativeBackend)
+{
+    // The whole chain for a text layer, through the ordinary parser and the
+    // production graph lowering: the card the runtime rewrites is accepted, the
+    // text program is translated to Metal, the rasterised glyphs are imported as
+    // an ordinary image and the layer reaches the scene's own output.
+    const auto  project = WriteTextFixture(root_ / "text-project", "HELLO");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "cache", loaded, error)) << error;
+    ASSERT_NE(loaded.scene->runtime, nullptr);
+
+    const auto selection = SelectSceneBackend(*loaded.scene);
+    ASSERT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        for (int frame = 0; frame < 3; ++frame) AdvanceSceneFrame(render, *loaded.scene);
+
+        const auto drawn = ReadOutput(render, *loaded.scene);
+        ASSERT_FALSE(drawn.empty());
+        EXPECT_GT(LitPixels(drawn), 0u)
+            << "the text layer produced no pixels in the scene's own target";
+
+        // A layer whose picture the runtime replaces must keep the clock
+        // running, or a text that changes would never be redrawn.
+        EXPECT_TRUE(render.ShaderUpdateDemandReasons() &
+                    wallpaper::vulkan::DynamicReason::RuntimeImage)
+            << "a runtime-replaced image was not reported as a reason to keep drawing";
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, TextThatHasNotChangedIsNeitherLaidOutNorUploadedAgain)
+{
+    // The round's optimisation, stated as what must NOT happen: the scripts and
+    // the runtime keep running every frame, and the same string must still cost
+    // no measurement, no rasterisation and no texture upload. Then a real change
+    // must cost exactly those, once.
+    const auto  project = WriteTextFixture(root_ / "text-repeat-project", "12:30");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "cache", loaded, error)) << error;
+    ASSERT_NE(loaded.scene->runtime, nullptr);
+    ASSERT_EQ(SelectSceneBackend(*loaded.scene).backend, SceneBackend::NativeMetal);
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        // Settle: the first layout is prepared on the text worker, so the
+        // uploads it produces belong to start-up rather than to steady state.
+        for (int frame = 0; frame < 8; ++frame) AdvanceSceneFrame(render, *loaded.scene);
+        const auto settled         = ReadOutput(render, *loaded.scene);
+        const auto settled_uploads = render.RuntimeImageUploadsForTests();
+        ResetTextLayerMeasurementCountForTests();
+
+        for (int frame = 0; frame < 12; ++frame) AdvanceSceneFrame(render, *loaded.scene);
+        EXPECT_EQ(render.RuntimeImageUploadsForTests(), settled_uploads)
+            << "an unchanged text was uploaded to the GPU again";
+        EXPECT_EQ(TextLayerMeasurementCountForTests(), 0u)
+            << "an unchanged text was measured and laid out again";
+        EXPECT_EQ(ReadOutput(render, *loaded.scene), settled);
+
+        // The same layer, a different string: the work that was skipped above
+        // has to happen now, and the picture has to change with it.
+        ASSERT_TRUE(loaded.scene->runtime->SetNodeText("caption", "12:31"));
+        std::vector<uint8_t> changed;
+        for (int frame = 0; frame < 16; ++frame) {
+            AdvanceSceneFrame(render, *loaded.scene);
+            changed = ReadOutput(render, *loaded.scene);
+            if (changed != settled) break;
+        }
+        EXPECT_NE(changed, settled) << "a new string never reached the drawn picture";
+        const auto changed_uploads = render.RuntimeImageUploadsForTests();
+        EXPECT_GT(changed_uploads, settled_uploads);
+        // One write per in-flight slot at most: new pixels go into the storage
+        // the frame owns, never into an image a queued command buffer reads.
+        EXPECT_LE(changed_uploads - settled_uploads, 2u)
+            << "one text change caused more uploads than there are frames in flight";
+
+        // And back to quiet: once every in-flight slot holds the new picture,
+        // the new string is the unchanged one and costs nothing again.
+        for (int frame = 0; frame < 4; ++frame) AdvanceSceneFrame(render, *loaded.scene);
+        const auto quiet_uploads = render.RuntimeImageUploadsForTests();
+        for (int frame = 0; frame < 12; ++frame) AdvanceSceneFrame(render, *loaded.scene);
+        EXPECT_EQ(render.RuntimeImageUploadsForTests(), quiet_uploads)
+            << "a text that had already settled kept uploading";
+
+        render.destroy();
+    }
+}
+
+TEST_F(MetalSceneDraw, TheSameProgramIsCompiledOnceAndReusedByTheNextSurface)
+{
+    // Two renderers, the same wallpaper, one device. The second one must find
+    // the translated program already compiled: a second surface showing what is
+    // already on screen is the ordinary case -- the lock screen beside the
+    // desktop, a preview beside the wallpaper -- and paying the Metal compiler
+    // again for the identical source is pure duplicated work.
+    // A constant no other fixture uses, so the first load below is a genuine
+    // cold compile rather than a hit left by an earlier test in this process.
+    const auto project = WriteFixture(root_ / "reuse-project", "0.3125");
+
+    const auto draw_once = [&](const std::filesystem::path& cache) {
+        LoadedScene loaded;
+        std::string error;
+        EXPECT_TRUE(LoadScene(project, cache, loaded, error)) << error;
+        if (loaded.scene == nullptr) return;
+
+        @autoreleasepool {
+            id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+            CAMetalLayer* layer   = [CAMetalLayer layer];
+            layer.device          = device;
+            layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+            layer.drawableSize    = CGSizeMake(384, 256);
+            layer.framebufferOnly = NO;
+
+            MetalRender         render;
+            MetalRenderInitInfo info {
+                .metal_layer          = (__bridge void*)layer,
+                .width                = 384,
+                .height               = 256,
+                .render_width         = 384,
+                .render_height        = 256,
+                .display_scale_factor = 1.0,
+            };
+            ASSERT_TRUE(render.init(info)) << render.lastError();
+            auto graph = sceneToRenderGraph(*loaded.scene);
+            ASSERT_NE(graph, nullptr);
+            ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+            render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+            ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+            render.destroy();
+        }
+    };
+
+    const auto before_first = MetalRender::ProgramCompilesForTests();
+    draw_once(root_ / "reuse-cache-a");
+    const auto after_first = MetalRender::ProgramCompilesForTests();
+    // The first one has to compile something, or the comparison below would be
+    // satisfied by a counter nothing increments.
+    ASSERT_GT(after_first, before_first)
+        << "nothing was handed to the Metal compiler, so nothing could be reused";
+
+    draw_once(root_ / "reuse-cache-b");
+    EXPECT_EQ(MetalRender::ProgramCompilesForTests(), after_first)
+        << "the same translated program was compiled by Metal a second time";
+}
+
+TEST_F(MetalSceneDraw, ATextLayerWithAnEffectChainKeepsBothOfItsCards)
+{
+    // A text layer with effects has more than one mesh the relayout rewrites:
+    // its own card, the chain's final card, and the node the chain resolves its
+    // last pass onto. All three are the same four-corner shape, and the gate has
+    // to accept all three or the scene falls back as a whole.
+    const auto  project = WriteTextFixture(root_ / "text-effect-project", "EFFECT", true);
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "text-effect-cache", loaded, error)) << error;
+    ASSERT_NE(loaded.scene->runtime, nullptr);
+
+    const auto selection = SelectSceneBackend(*loaded.scene);
+    ASSERT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+
+    @autoreleasepool {
+        id<MTLDevice> device  = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer   = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        for (int frame = 0; frame < 4; ++frame) AdvanceSceneFrame(render, *loaded.scene);
+        const auto drawn = ReadOutput(render, *loaded.scene);
+        ASSERT_FALSE(drawn.empty());
+        EXPECT_GT(LitPixels(drawn), 0u)
+            << "the text layer's effect chain produced no pixels in the scene's own target";
+        // And the chain's cards follow a relayout rather than keeping the size
+        // the first frame was built at. Different glyphs, not more of the same
+        // word: the chain draws into a buffer the layer's card is clipped to,
+        // and a longer repetition can leave exactly the same pixels inside it.
+        ASSERT_TRUE(loaded.scene->runtime->SetNodeText("caption", "WOVEN"));
+        std::vector<uint8_t> changed;
+        for (int frame = 0; frame < 16; ++frame) {
+            AdvanceSceneFrame(render, *loaded.scene);
+            changed = ReadOutput(render, *loaded.scene);
+            if (changed != drawn) break;
+        }
+        EXPECT_NE(changed, drawn) << "a relayout never reached the effect chain's output";
+
+        render.destroy();
+    }
 }

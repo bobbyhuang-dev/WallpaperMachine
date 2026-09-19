@@ -285,6 +285,9 @@ pub enum SceneVideoPath {
     Nv12Converted,
     /// Both, for one scene whose consumers or textures differ.
     Nv12Mixed,
+    /// Converted, with the optional direct program still being prepared. The
+    /// wallpaper is playing; only the second program is still coming.
+    Nv12ConvertedPreparing,
 }
 
 impl SceneVideoPath {
@@ -297,6 +300,7 @@ impl SceneVideoPath {
             2 => Self::Nv12Direct,
             3 => Self::Nv12Converted,
             4 => Self::Nv12Mixed,
+            5 => Self::Nv12ConvertedPreparing,
             _ => Self::None,
         }
     }
@@ -310,6 +314,7 @@ impl SceneVideoPath {
             Self::Nv12Direct => "nv12_direct",
             Self::Nv12Converted => "nv12_converted",
             Self::Nv12Mixed => "nv12_mixed",
+            Self::Nv12ConvertedPreparing => "nv12_converted_preparing",
         }
     }
 }
@@ -343,5 +348,25 @@ mod tests {
     fn a_raw_mode_outside_the_enumeration_is_not_invented() {
         assert_eq!(SceneUpdateMode::from_raw(99), None);
         assert_eq!(SceneBackend::from_raw(7), None);
+    }
+
+    #[test]
+    fn every_video_path_the_renderer_can_report_has_its_own_name() {
+        // Including the one that says a wallpaper is playing normally while an
+        // optional program is still being prepared: folding it into the plain
+        // converting path would tell a user "this content will not use direct
+        // sampling" when the answer is "not yet".
+        let named: Vec<&str> = (0..=5).map(|raw| SceneVideoPath::from_raw(raw).name()).collect();
+        assert_eq!(named, vec![
+            "none",
+            "bgra",
+            "nv12_direct",
+            "nv12_converted",
+            "nv12_mixed",
+            "nv12_converted_preparing",
+        ]);
+        // A renderer newer than this binary must not be read as a path this
+        // build happens to know.
+        assert_eq!(SceneVideoPath::from_raw(6), SceneVideoPath::None);
     }
 }

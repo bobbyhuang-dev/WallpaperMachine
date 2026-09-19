@@ -1,6 +1,8 @@
 #include "SceneWallpaper.hpp"
 #include "SceneRendererHandle.hpp"
 #include "MetalRender/MetalBackendRouter.hpp"
+#include "MetalRender/MetalVideoSupport.hpp"
+#include "Shader/SceneMetalVariants.hpp"
 #include "SceneWallpaperSurface.hpp"
 #include "SceneSourceResolver.hpp"
 #include "Project/ProjectProperties.hpp"
@@ -975,6 +977,20 @@ private:
                 }
             }
 
+            // Optional programs, asked for at a frame boundary and never
+            // waited for. The setting is process-wide and arrives without a
+            // message, so this is where a user who has just turned it on is
+            // noticed; a program already compiled, already in flight or already
+            // refused is not asked for again, so the ordinary case is a walk
+            // over a short list and nothing else. The wallpaper draws with the
+            // programs it already has meanwhile.
+            if (frame_ok && m_scene != nullptr) {
+                RequestSceneMetalVariants(
+                    *m_scene,
+                    m_render->hasBackend() && m_render->backend() == SceneBackend::NativeMetal &&
+                        metal::MetalVideoPlaneSamplingEnabled());
+            }
+
             // At the frame boundary, before the frame is drawn: the setting is
             // process-wide and arrives without a message, so a change is
             // noticed here rather than waited for until the graph is next
@@ -1123,6 +1139,12 @@ private:
     MHANDLER_CMD(SET_SCENE) {
         std::shared_ptr<Scene> scene;
         if (msg->findObject("scene", &scene)) {
+            // Whatever optional work the wallpaper being replaced had queued is
+            // dropped here. A compile already inside the shader compiler is not
+            // interrupted -- nothing can interrupt it -- but its result belongs
+            // to a program this process is about to stop drawing with, and it
+            // goes away with the scene that owned it.
+            CancelSceneMetalVariants();
             if (m_rg && ! m_render->clearLastRenderGraph()) {
                 suspendRendering();
                 return;
@@ -1406,6 +1428,10 @@ void SceneWallpaper::shutdown() {
     if (m_main_handler != nullptr) {
         m_main_handler->shutdown();
     }
+    // After the handlers, and before this process starts tearing down what the
+    // background compile uses: a compile still running is waited for, because
+    // it is writing into memory this process owns.
+    ShutdownSceneMetalVariants();
 }
 
 #ifdef WESCENE_BUILD_TESTS

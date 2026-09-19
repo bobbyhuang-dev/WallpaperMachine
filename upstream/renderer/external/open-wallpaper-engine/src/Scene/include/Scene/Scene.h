@@ -19,6 +19,9 @@ class ParticleSystem;
 class IShaderValueUpdater;
 class IImageParser;
 class SceneRuntimeContext;
+/// Declared, never defined here: the scene library must stay free of any
+/// renderer, and a shared pointer to an incomplete type is all this needs.
+struct SceneMetalProgram;
 
 struct ScenePostProcessPass {
     std::shared_ptr<SceneNode> node;
@@ -61,6 +64,15 @@ public:
     std::unique_ptr<IImageParser>        imageParser;
     std::unique_ptr<SceneRuntimeContext> runtime;
     std::unique_ptr<fs::VFS>             vfs;
+    /// Translated programs that could have an optional variant compiled for
+    /// them later, collected while parsing so nothing has to walk the scene
+    /// graph to find them again.
+    ///
+    /// Holding them here, rather than only through the materials that use them,
+    /// is what lets the variant be asked for long after the parse: an hour
+    /// later, when the user ticks a setting, the list is still exactly the
+    /// programs this scene draws with.
+    std::vector<std::shared_ptr<const SceneMetalProgram>> metal_variant_candidates;
 
     std::string scene_id { "unknown_id" };
 

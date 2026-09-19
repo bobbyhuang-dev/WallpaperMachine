@@ -2,11 +2,37 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
 namespace wallpaper
 {
+
+/// Everything the optional plane-sampling variant of one program needs to be
+/// compiled later, captured while the parser still holds it.
+///
+/// Opaque here on purpose. It is made of parser types -- the preprocessed
+/// units, the combos, the texture info -- which the renderer has no business
+/// knowing; it only ever passes the pointer back. Owning it by shared pointer
+/// is what gives the background compile an input with a lifetime of its own:
+/// the parser, its virtual file system and the project it read are all long
+/// gone by the time a user turns the setting on.
+struct SceneMetalVariantInputs;
+
+/// Where one program's optional variant has got to.
+///
+/// `None` is the resting state and the one every program is in while the
+/// feature is off: nothing has been asked for, so nothing has been spent.
+/// `Pending` means a compile is in flight and the ordinary program is drawing
+/// meanwhile -- never that the wallpaper is waiting for anything.
+enum class SceneMetalVariantState : uint8_t
+{
+    None = 0,
+    Pending = 1,
+    Ready = 2,
+    Failed = 3,
+};
 
 /// Metal argument-table namespace a shader resource is bound into.
 ///
@@ -96,15 +122,82 @@ struct SceneMetalProgram
     /// Non-empty when translation was attempted and failed. The scene still
     /// loads and still draws; only the native backend is refused.
     std::string error;
-    /// The direct plane-sampling variant, when the material had exactly one
-    /// candidate video slot. Null means no variant was ever attempted, which
-    /// is a different answer from one that was attempted and refused.
-    std::shared_ptr<const SceneMetalVideoPlaneVariant> video_planes;
+    /// What the optional variant would be compiled from, or null when this
+    /// material has no candidate video slot at all. Present does not mean
+    /// requested: nothing is compiled until something asks.
+    std::shared_ptr<const SceneMetalVariantInputs> video_plane_inputs;
 
     [[nodiscard]] bool ok() const
     {
         return error.empty() && ! stages.empty() && ! reflection_json.empty();
     }
+
+    /// Whether a variant could ever exist for this program.
+    [[nodiscard]] bool hasVideoPlaneCandidate() const
+    {
+        return video_plane_inputs != nullptr;
+    }
+
+    [[nodiscard]] SceneMetalVariantState videoPlaneState() const
+    {
+        const std::lock_guard lock { m_video_plane_mutex };
+        return m_video_plane_state;
+    }
+
+    /// The compiled variant, or null while there is none. Safe to call from the
+    /// render thread at any time: it takes a copy of the pointer, so a compile
+    /// finishing mid-frame cannot pull the program out from under a draw.
+    [[nodiscard]] std::shared_ptr<const SceneMetalVideoPlaneVariant> videoPlanes() const
+    {
+        const std::lock_guard lock { m_video_plane_mutex };
+        return m_video_planes;
+    }
+
+    /// Claims the right to compile this program's variant, once.
+    ///
+    /// False means somebody already has it, or it is already decided. Two
+    /// surfaces showing the same wallpaper therefore compile it once between
+    /// them rather than once each.
+    [[nodiscard]] bool claimVideoPlaneCompile() const
+    {
+        const std::lock_guard lock { m_video_plane_mutex };
+        if (video_plane_inputs == nullptr) return false;
+        if (m_video_plane_state != SceneMetalVariantState::None) return false;
+        m_video_plane_state = SceneMetalVariantState::Pending;
+        return true;
+    }
+
+    /// Gives a claim back without deciding anything.
+    ///
+    /// For work that was queued and then dropped before it ran: the program
+    /// returns to its resting state, so asking again later is allowed. A
+    /// compile that actually ran reports its result instead, failure included,
+    /// which is what stops a hopeless variant from being retried every frame.
+    void releaseVideoPlaneClaim() const
+    {
+        const std::lock_guard lock { m_video_plane_mutex };
+        if (m_video_plane_state == SceneMetalVariantState::Pending) {
+            m_video_plane_state = SceneMetalVariantState::None;
+        }
+    }
+
+    /// Records the compile's result. A variant that failed is remembered as
+    /// failed, so the same condition is never retried in a loop.
+    void publishVideoPlanes(std::shared_ptr<const SceneMetalVideoPlaneVariant> variant) const
+    {
+        const std::lock_guard lock { m_video_plane_mutex };
+        const bool usable    = variant != nullptr && variant->ok();
+        m_video_planes       = std::move(variant);
+        m_video_plane_state =
+            usable ? SceneMetalVariantState::Ready : SceneMetalVariantState::Failed;
+    }
+
+private:
+    mutable std::mutex                                        m_video_plane_mutex;
+    mutable SceneMetalVariantState                            m_video_plane_state {
+        SceneMetalVariantState::None
+    };
+    mutable std::shared_ptr<const SceneMetalVideoPlaneVariant> m_video_planes;
 };
 
 } // namespace wallpaper

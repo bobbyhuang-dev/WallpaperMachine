@@ -51,6 +51,19 @@ public:
         return m_runtime_images.find(name) != m_runtime_images.end();
     }
 
+    /// How many times this name has been given new pixels, or zero when it
+    /// never has.
+    ///
+    /// Monotonic per name and readable without taking a copy of the image, so a
+    /// renderer can ask "is what I uploaded still current?" every frame without
+    /// hashing pixels. The same number is what `Image::key` carries, so the two
+    /// can never disagree.
+    uint64_t Version(const std::string& name) const {
+        std::lock_guard lock(m_mutex);
+        const auto iterator = m_versions.find(name);
+        return iterator == m_versions.end() ? 0 : iterator->second;
+    }
+
     void SetRgbaImage(std::string name, uint32_t width, uint32_t height, const uint8_t* rgba,
                       std::size_t rgba_len) {
         if (name.empty() || width == 0 || height == 0 || rgba == nullptr) return;
@@ -98,6 +111,7 @@ public:
         image->slots.push_back(std::move(slot));
 
         std::lock_guard lock(m_mutex);
+        m_versions[name]                  = version;
         m_runtime_images[std::move(name)] = std::move(image);
     }
 
@@ -105,6 +119,7 @@ private:
     mutable std::mutex                                      m_mutex;
     std::unique_ptr<IImageParser>                           m_fallback;
     std::unordered_map<std::string, std::shared_ptr<Image>> m_runtime_images;
+    std::unordered_map<std::string, uint64_t>               m_versions;
     std::atomic<uint64_t>                                   m_next_version { 0 };
 };
 

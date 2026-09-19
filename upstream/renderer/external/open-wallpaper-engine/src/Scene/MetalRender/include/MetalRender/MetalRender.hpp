@@ -165,6 +165,21 @@ public:
     /// which is why it is not on the per-frame path.
     bool ReadRenderTargetForTests(const std::string& key, std::vector<uint8_t>& rgba,
                                   uint32_t& width, uint32_t& height);
+
+    /// How many times pixels have been written into a replaceable image since
+    /// this graph was compiled.
+    ///
+    /// Test-only, and the only externally visible difference between "the text
+    /// did not change" and "the text was uploaded again anyway": both draw the
+    /// same picture.
+    [[nodiscard]] uint64_t RuntimeImageUploadsForTests() const;
+
+    /// How many shader sources this process has handed to the Metal compiler.
+    ///
+    /// Test-only, and process-wide rather than per renderer: what it exists to
+    /// show is that a second surface, or the same wallpaper loaded again, does
+    /// not compile a program that is already compiled.
+    [[nodiscard]] static uint64_t ProgramCompilesForTests();
 #endif
 
 private:

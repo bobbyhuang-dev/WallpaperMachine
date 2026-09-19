@@ -11,6 +11,66 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-19 — Round 11: text and runtime images on Metal, optional programs off the load path
+
+Text layers and runtime-replaced images now reach the native Metal backend
+through the ordinary parser, and unchanged content costs no layout,
+rasterisation or upload. The optional NV12 plane-sampling program is no longer
+compiled while a wallpaper loads: its inputs are captured as a snapshot, the
+translation runs on a bounded background worker only when the experimental
+switch is on, the Metal pipeline is built off the frame thread, and the scene
+adopts it between frames. Metal libraries and pipeline states are now shared
+across scenes and surfaces, keyed by program content rather than by the address
+of the object holding it. Native Metal is still a manual choice, Compatibility
+is still the default and direct plane sampling is still off by default.
+
+- `python3 scripts/check_renderer.py` — exit 0, re-run on the delivered tree.
+  All 10 golden cases `pixels_equal=True`, 0 diagnostics, 8 projects × 2 reload
+  cycles clean, every test binary exit 0. Evidence bundle under
+  `artifacts/renderer/` (disposable).
+- Inside that run, on a real Metal device with private textures and an offscreen
+  layer only: `metal_scene_draw_smoke` 17 passed (4 new: a parsed text project
+  is accepted, translated, rasterised and drawn into the scene's own target and
+  reports itself as a reason to keep drawing; an unchanged string costs no
+  measurement and no upload over twelve ticking frames, a new string costs at
+  most one upload per in-flight frame and reaches the picture, and it then goes
+  quiet again; a text layer with an effect chain draws through the chain and
+  follows a new string to the chain's output; the same translated program is not
+  handed to the Metal compiler again by a second renderer on the same device).
+  The three video cases were rewritten around the new preparation and now assert
+  that the parse compiled nothing optional, that the switch being off leaves the
+  program unclaimed, and that the direct path is taken after the background
+  preparation rather than on the first frame. `metal_backend_test` 20,
+  `metal_video_texture_test` 14, `metal_poster_capture_test` 7,
+  `static_subgraph_cache_test` 24, `text_object_runtime_test` 60,
+  `playback_gpu_test` 39 and the rest all exit 0.
+- `cargo test --workspace --release` in `upstream/renderer` — exit 0, 22 test
+  binaries, 1049 cases passing, 0 failed. Includes the new case that every video
+  path the renderer can report has its own name and that a value this build does
+  not know is not invented.
+- `python3 scripts/test.py` — 486 executed, 476 passed, 9 skipped, 1 failed. The
+  failure is the recorded pre-existing
+  `ControlPanelLayoutTests/testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes`
+  (overflow 52), unrelated to this round and unchanged by it.
+- `python3 scripts/build.py --configuration Release` — **BUILD SUCCEEDED**.
+  Delivered at `build/Build/Products/Release/MacWallpaperEngine.app`, verified to
+  contain the round's code (`nv12_converted_preparing`, the optional-variant
+  queue label, the dynamic-mesh gate's reason text) and a bundled `settings.js`
+  carrying the new video-path label.
+- One diagnosis worth recording, because it was a test fault and not a renderer
+  fault: the first version of the effect-chain text case changed "EFFECT" to
+  "EFFECT EFFECT EFFECT" and read back a byte-identical picture. The chain draws
+  into a buffer the layer's card is clipped to, and the middle repetition landed
+  exactly where the single word had been. The relayout, the texture upload and
+  both passes were verified to be happening before the test was changed to use
+  different glyphs; nothing in the renderer was altered to make it pass.
+
+**Not established by any of the above:** nothing was drawn on a display and no
+human has seen any of it. No power measurement of any kind was taken and no
+saving is claimed. Complex script systems are exactly as supported as the
+existing text system already made them. A purely static text layer still keeps
+its scene drawing, deliberately.
+
 ## 2026-09-19 — Round 10: NV12 direct plane sampling, runtime scene optimisation
 
 A video material is now translated twice while the scene is parsed — once as

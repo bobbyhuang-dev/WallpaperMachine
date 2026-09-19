@@ -45,19 +45,51 @@ bool SceneUsesPerspective(const Scene& scene)
     return false;
 }
 
+/// Whether this per-frame mesh is the four-corner card a text layer's relayout
+/// rewrites.
+///
+/// A positive statement about the geometry, not about who owns it: one submesh
+/// holding one vertex array of exactly a float3 position and a float2 texture
+/// coordinate, four vertices of fixed capacity and no index array. That is what
+/// `ResizeCardMesh` writes when the runtime re-lays out a text layer -- for the
+/// layer's own card, for an effect chain's final card and for the node an
+/// effect chain resolves its last pass onto -- and it is exactly the upload the
+/// native backend's dynamic path performs. Anything with a second stream, a
+/// different attribute set or a growing vertex count is not this shape and is
+/// judged by the particle rules below.
+bool IsDynamicCardMesh(const SceneMesh& mesh)
+{
+    if (mesh.MaterialSlots().size() != 1 || mesh.Submeshes().size() != 1) return false;
+    const auto& submesh = mesh.Submeshes().front();
+    if (submesh.VertexCount() != 1 || submesh.IndexCount() != 0) return false;
+    const auto& vertices = submesh.GetVertexArray(0);
+    const auto& attributes = vertices.Attributes();
+    if (attributes.size() != 2) return false;
+    if (attributes[0].name != WE_IN_POSITION || attributes[0].type != VertexType::FLOAT3) {
+        return false;
+    }
+    if (attributes[1].name != WE_IN_TEXCOORD || attributes[1].type != VertexType::FLOAT2) {
+        return false;
+    }
+    if (vertices.OneSize() == 0) return false;
+    return vertices.CapacitySize() / vertices.OneSize() == 4;
+}
+
 /// Whether a mesh the runtime rewrites every frame is one this backend knows
 /// how to feed, and why not when it is not.
 ///
-/// The discriminator is the particle renderer's vertex contract, not the
-/// particle count and not "it is two-dimensional": a rope or trail renderer
-/// reads attributes that mean something different from a sprite particle's, and
-/// accepting one because it happens to arrive as quads would draw the right
-/// number of triangles with the wrong geometry. Everything else that rebuilds
-/// its geometry per frame -- a text layer's card, most obviously -- is still
-/// refused, because nothing here has checked its upload shape.
+/// The discriminator is the geometry's own contract, not the particle count and
+/// not "it is two-dimensional": a rope or trail renderer reads attributes that
+/// mean something different from a sprite particle's, and accepting one because
+/// it happens to arrive as quads would draw the right number of triangles with
+/// the wrong geometry. A text layer's card is accepted because its shape is
+/// checked above and the dynamic upload path writes exactly it; everything else
+/// that rebuilds its geometry per frame is still refused.
 std::string RejectDynamicMesh(SceneMesh& mesh)
 {
     constexpr std::string_view kNotParticles = "the scene rebuilds mesh geometry every frame";
+
+    if (IsDynamicCardMesh(mesh)) return {};
 
     const auto* material = mesh.MaterialForSlot(0);
     if (material == nullptr) return std::string(kNotParticles);
@@ -78,8 +110,8 @@ std::string RejectDynamicMesh(SceneMesh& mesh)
     if (vertices.GetOption(WE_PRENDER_ROPE)) return "the scene draws rope particles";
     if (vertices.GetOption(WE_PRENDER_TRAIL)) return "the scene draws particle trails";
     // A positive statement, not the absence of the two above: every other mesh
-    // the runtime rewrites per frame -- a text layer's card, most obviously --
-    // has a layout and an update cadence nothing here has checked.
+    // the runtime rewrites per frame has a layout and an update cadence nothing
+    // here has checked.
     if (! vertices.GetOption(WE_PRENDER_SPRITE)) return std::string(kNotParticles);
     // Capacity, not current size: a particle mesh is legitimately empty until
     // the first emission, and a zero-capacity one has nowhere to put a frame.

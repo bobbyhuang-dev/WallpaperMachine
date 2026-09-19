@@ -125,15 +125,25 @@ Vulkan-through-MoltenVK path and the default. **Native Metal preferred** asks
 for the native Metal backend, which covers a subset of scene features; a scene
 it cannot draw runs on the compatibility backend and the status line says why.
 
-Native Metal draws image layers, sprite-sheet animation, standard
+Native Metal draws image layers, text layers, sprite-sheet animation, standard
 two-dimensional sprite particles, ordinary effect chains and scene
 post-processing, layers that read an image another layer produced earlier in
-the same frame, and BGRA or 8-bit NV12 video textures — the latter either
-converted once per frame or, with **Direct video plane sampling** on, sampled by
-the layer's own shader. Rope particles, particle trails, puppets, perspective
-3D, dynamic lighting, history-feedback effects, HDR or 10-bit video, plain video
-wallpapers and shaders that do not translate fall back as a whole scene; an
-effect is never dropped to keep a scene native.
+the same frame, images the runtime replaces while the scene plays, and BGRA or
+8-bit NV12 video textures — the latter either converted once per frame or, with
+**Direct video plane sampling** on, sampled by the layer's own shader. Rope
+particles, particle trails, puppets, perspective 3D, dynamic lighting,
+history-feedback effects, HDR or 10-bit video, plain video wallpapers and
+shaders that do not translate fall back as a whole scene; an effect is never
+dropped to keep a scene native.
+
+A text layer is an ordinary layer here: it takes its place in the layer order
+and carries its transform, opacity, blend, effect chain, camera and the final
+composition, and it appears in desktop posters. Its typography is the engine's
+existing text system's — the same fonts, layout and rasterisation the
+compatibility backend uses — and choosing a renderer neither adds nor removes a
+typographic feature. Text whose content has not changed is not laid out,
+rasterised or uploaded again; a script that produces it still runs on its own
+schedule every frame.
 Effect and video output has not yet been compared against real wallpapers.
 
 No GPU backend is created until the scene has been parsed and a backend chosen,
@@ -178,16 +188,19 @@ before any layer samples it. Where a layer's own shader can do that conversion
 while it samples, the pass is not needed at all.
 
 The renderer does not rewrite anything at run time to achieve this. While the
-scene is parsed, a material with exactly one video texture is translated twice
-from the same author source: once as before, and once with that slot's sampling
-calls reading the two planes and applying the same colour transform the
-conversion pass would have applied, from the same eight constants. Both programs
-are compiled with the scene's graph, so the switch selects between them and no
-shader is ever compiled inside a frame.
+scene is parsed, a material with exactly one video texture records everything a
+second translation of the same author source would need. Nothing is compiled
+then: the wallpaper loads and draws with its ordinary program first. Only if the
+switch is on is the second program produced, on a background worker, and its
+Metal pipeline built off the frame thread; the scene adopts it between frames
+when it is ready. With the switch off nothing is prepared at all, and no shader
+is ever compiled inside a frame either way.
 
 What each running scene actually did is reported per scene in **Drawn by**:
-sampled directly, converted once per frame, or both, for a scene whose materials
-differ. A material whose shader the translation cannot reproduce — an explicit
+sampled directly, converted once per frame, both for a scene whose materials
+differ, or converted while the direct program is still being prepared — which
+means the wallpaper is playing normally and a second program is still on its
+way. A material whose shader the translation cannot reproduce — an explicit
 level-of-detail sample, a size query, a texel fetch, two video slots in one
 material — keeps converting and says nothing; so does any frame that is not
 8-bit NV12, which is what a software decoder produces for the same file. Nothing

@@ -123,81 +123,30 @@ SceneMetalSlotKind ToSceneMetalSlotKind(shader::RustShaderMetalSlotKind kind) {
     return SceneMetalSlotKind::Buffer;
 }
 
-/// Compiles the direct plane-sampling variant of one already-translated
-/// program, if this material has exactly one candidate video slot.
+/// Records what the direct plane-sampling variant of one already-translated
+/// program would be compiled from, if this material has exactly one candidate
+/// video slot.
 ///
-/// Everything it needs is still here -- the combos, the preprocessed units, the
-/// texture info -- which is the whole reason the variant is produced now rather
-/// than when the first frame reveals the decoder's pixel format. Nothing about
-/// this call can take the material away from the native backend: a refusal is
-/// recorded on the variant and the ordinary program keeps the material.
-void CompileVideoPlaneVariant(Scene& scene, PendingMetalTranslation& request,
-                              SceneMetalProgram& program) {
+/// Nothing is compiled here. The combos, the preprocessed units, the texture
+/// info and the includes the ordinary translation read are all still available
+/// at this point and nowhere else, so they are copied into a snapshot that owns
+/// itself; whether the variant is ever wanted is a question for the renderer
+/// and the user's setting, long after this parse has finished. A wallpaper must
+/// not pay for an optional program before it has drawn a single frame.
+void CaptureVideoPlaneInputs(Scene& scene, PendingMetalTranslation& request,
+                             SceneMetalProgram& program, WPShaderIncludeMap includes) {
     const auto slot = ResolveVideoPlaneCandidate(scene, request.texture_keys);
     if (! slot.has_value()) return;
 
-    auto variant  = std::make_shared<SceneMetalVideoPlaneVariant>();
-    variant->slot = *slot;
-
-    // Copies, not the originals: this compile merges its own combos, default
-    // textures and preprocessor results into whatever it is handed, and the
-    // ordinary program's inputs have already been consumed once.
-    auto         units       = request.units;
-    WPShaderInfo shader_info = request.shader_info;
-
-    std::vector<shader::RustShaderMetalStage> stages;
-    std::string                               reflection_json;
-    bool                                      compiled = false;
-    try {
-        compiled = WPShaderParser::CompileToMslRust(request.scene_id,
-                                                    request.shader_name,
-                                                    units,
-                                                    stages,
-                                                    *request.vfs,
-                                                    &shader_info,
-                                                    request.texinfos,
-                                                    &reflection_json,
-                                                    slot);
-    } catch (const std::exception& e) {
-        variant->error = e.what();
-    }
-    if (! compiled && variant->error.empty()) {
-        variant->error = shader::LastRustShaderError();
-        if (variant->error.empty()) variant->error = "the shader cannot sample the video as planes";
-    }
-
-    if (compiled) {
-        variant->reflection_json = std::move(reflection_json);
-        for (const auto& stage : stages) {
-            SceneMetalStage out;
-            out.kind             = stage.kind == ShaderType::FRAGMENT
-                                       ? SceneMetalStageKind::Fragment
-                                       : SceneMetalStageKind::Vertex;
-            out.source           = stage.source;
-            out.entry_point      = stage.entry_point;
-            out.language_version = stage.language_version;
-            out.bindings.reserve(stage.bindings.size());
-            for (const auto& binding : stage.bindings) {
-                out.bindings.push_back(SceneMetalBinding {
-                    .name      = binding.name,
-                    .set       = binding.set,
-                    .binding   = binding.binding,
-                    .slot_kind = ToSceneMetalSlotKind(binding.slot_kind),
-                    .slot      = binding.slot,
-                });
-            }
-            variant->stages.push_back(std::move(out));
-        }
-        if (variant->stages.empty() || variant->reflection_json.empty()) {
-            variant->error = "the plane variant produced no usable shader";
-        }
-    }
-    if (! variant->error.empty()) {
-        LOG_INFO("metal video plane variant of '%s' not used: %s",
-                 request.shader_name.c_str(),
-                 variant->error.c_str());
-    }
-    program.video_planes = std::move(variant);
+    auto inputs              = std::make_shared<SceneMetalVariantInputs>();
+    inputs->scene_id         = request.scene_id;
+    inputs->shader_name      = request.shader_name;
+    inputs->units            = request.units;
+    inputs->shader_info      = request.shader_info;
+    inputs->texinfos         = request.texinfos;
+    inputs->includes         = std::move(includes);
+    inputs->nv12_plane_slot  = *slot;
+    program.video_plane_inputs = std::move(inputs);
 }
 
 /// Runs the queued translations, if the scene is still a candidate.
@@ -218,7 +167,13 @@ void FlushPendingMetalTranslations(Scene& scene) {
 
         std::vector<shader::RustShaderMetalStage> stages;
         std::string                               reflection_json;
+        WPShaderIncludeMap                        includes;
         bool                                      compiled = false;
+        // The units this compile is handed are the ones the snapshot below has
+        // to describe, so the snapshot is taken from a copy made before the
+        // compile merges its results into them.
+        const auto captured_units       = request.units;
+        const auto captured_shader_info = request.shader_info;
         try {
             compiled = WPShaderParser::CompileToMslRust(request.scene_id,
                                                         request.shader_name,
@@ -227,7 +182,9 @@ void FlushPendingMetalTranslations(Scene& scene) {
                                                         *request.vfs,
                                                         &request.shader_info,
                                                         request.texinfos,
-                                                        &reflection_json);
+                                                        &reflection_json,
+                                                        std::nullopt,
+                                                        &includes);
         } catch (const std::exception& e) {
             program->error = e.what();
         }
@@ -268,7 +225,12 @@ void FlushPendingMetalTranslations(Scene& scene) {
                       program->error.c_str());
         }
         if (compiled) {
-            CompileVideoPlaneVariant(scene, request, *program);
+            request.units       = captured_units;
+            request.shader_info = captured_shader_info;
+            CaptureVideoPlaneInputs(scene, request, *program, std::move(includes));
+            if (program->hasVideoPlaneCandidate()) {
+                scene.metal_variant_candidates.push_back(program);
+            }
         }
         // Stored either way: a recorded failure is what distinguishes "tried
         // and could not" from "never tried", and only the first is a fault in
@@ -1437,7 +1399,8 @@ std::string TextRuntimeName(const ParseContext& context, const wpscene::WPTextOb
     return "__we_text_" + std::to_string(obj.id);
 }
 
-std::shared_ptr<SceneShader> BuildTextSceneShader(fs::VFS& vfs, std::string_view scene_id) {
+std::shared_ptr<SceneShader> BuildTextSceneShader(fs::VFS& vfs, std::string_view scene_id,
+                                                  const std::string& texture_key) {
     std::string vertex_src =
         "layout(binding = 1) uniform mat4 g_ModelViewProjectionMatrix;\n"
         "in vec3 a_Position;\n"
@@ -1473,6 +1436,23 @@ std::shared_ptr<SceneShader> BuildTextSceneShader(fs::VFS& vfs, std::string_view
     auto shader              = std::make_shared<SceneShader>();
     shader->name             = "text";
     std::string reflection_json;
+    // Captured before the SPIR-V compile consumes the units and merges its
+    // results into `shader_info`, exactly as a material's translation is. A
+    // text layer is an ordinary scene layer to both backends, so it needs the
+    // same second translation; without it the native backend has no program for
+    // the card and the whole scene falls back.
+    if (MetalTranslationRequested()) {
+        PendingMetalTranslation pending;
+        pending.shader      = shader;
+        pending.shader_name = "text";
+        pending.scene_id    = std::string(scene_id);
+        pending.units.assign(units.begin(), units.end());
+        pending.shader_info  = shader_info;
+        pending.texinfos.assign(tex_infos.begin(), tex_infos.end());
+        pending.texture_keys = { texture_key };
+        pending.vfs          = &vfs;
+        g_pending_metal_translations.push_back(std::move(pending));
+    }
     if (! WPShaderParser::CompileToSpvRust(
             scene_id, "text", units, shader->codes, vfs, &shader_info, tex_infos, &reflection_json)) {
         return nullptr;
@@ -1679,7 +1659,8 @@ void ParseTextObj(ParseContext& context, wpscene::WPTextObject& obj) {
         material.textures            = { texture_name };
         material.defines             = { "g_Texture0" };
         material.blenmode            = BlendMode::Translucent;
-        material.customShader.shader = BuildTextSceneShader(*context.vfs, context.scene->scene_id);
+        material.customShader.shader =
+            BuildTextSceneShader(*context.vfs, context.scene->scene_id, texture_name);
         if (material.customShader.shader != nullptr) {
             mesh->AddMaterial(std::move(material));
         }

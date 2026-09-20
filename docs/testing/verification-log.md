@@ -11,6 +11,40 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-20 — Rebase of scene-media plumbing onto native Now Playing
+
+`e342a31` (`feat(media): integrate scene media support and enhance media handling`)
+was rebased onto `f2cf701` (`feat(media): native now-playing integration and Leon
+scene fixes`) as `51a0e90`. The host keeps one `DesktopMediaSession`: adapter
+Now Playing is primary, AppleScript is fallback, web uses the shared relay, and
+scenes are fed only by `SceneMediaSink`. After the rebase,
+`MediaThumbnailTextureSmoke.PreviousThumbnailKeepsTheCoverItReplaced` failed
+because `SetRgbaImage` auto-promote stamped the new version onto the outgoing
+cover; the previous slot now keeps that image's own version so `Version()` and
+`Image::key` agree when `AliasRuntimeImage` also runs. That C++ fix and the
+provenance note are still uncommitted on top of `51a0e90`. No desktop or
+Now Playing session was started.
+
+- `python3 scripts/test.py` — exit 0, 523 native tests, 514 passed, 9 skipped,
+  0 failures. Python suites green.
+- `python3 scripts/check_renderer.py` — exit 0, `adaptive-20260920-114535`:
+  10 generated cases `pixels_equal=true`, 0 diagnostics, 8 projects × 2 reload
+  cycles clean.
+- `media_thumbnail_texture_smoke` 14 passed;
+  `scenescript_media_event_smoke` 16 passed.
+  `cargo test -p wallpaper-core --release --lib` 213 passed;
+  `cargo test -p wallpaper-bridge --release --lib` 316 passed.
+- `python3 scripts/build.py --configuration Release` — exit 0,
+  `** BUILD SUCCEEDED **`. Delivered
+  `build/Build/Products/Release/MacWallpaperEngine.app`. Bundled
+  `Contents/Resources/WebUI/panel.js` matches `WebUI/panel.js`. The binary
+  contains `submit_system_media_event`, `apply_system_media_artwork`,
+  `system_media_scene_handles`, `$mediaThumbnail`, `$mediaPreviousThumbnail`,
+  `AdapterSystemMediaProvider`, `AppleScriptMediaProvider`,
+  `DesktopMediaSession`, `SceneMediaSink` and `mediaIntegrationEnabled`.
+  `Info.plist` still has `NSAppleEventsUsageDescription`. The app was not
+  launched.
+
 ## 2026-09-20 — The renderer changes were never compiled; media consent, covers and AppleScript
 
 The previous round's C++ and Rust edits were real but absent from the shipped

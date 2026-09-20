@@ -118,10 +118,19 @@ public:
         std::lock_guard lock(m_mutex);
         if (name == "$mediaThumbnail") {
             const auto previous = m_runtime_images.find(name);
-            const bool cleared = width == 1 && height == 1 && rgba[3] == 0;
-            m_runtime_images["$mediaPreviousThumbnail"] =
-                !cleared && previous != m_runtime_images.end() ? previous->second : image;
-            m_versions["$mediaPreviousThumbnail"] = version;
+            const bool cleared  = width == 1 && height == 1 && rgba[3] == 0;
+            // Keep the outgoing cover's image and version together. The new
+            // version belongs to the pixels being published now; stamping it
+            // onto the previous slot made Version() disagree with Image::key.
+            if (!cleared && previous != m_runtime_images.end()) {
+                const auto old_version              = m_versions.find(name);
+                m_runtime_images["$mediaPreviousThumbnail"] = previous->second;
+                m_versions["$mediaPreviousThumbnail"] =
+                    old_version == m_versions.end() ? 0 : old_version->second;
+            } else {
+                m_runtime_images["$mediaPreviousThumbnail"] = image;
+                m_versions["$mediaPreviousThumbnail"]       = version;
+            }
         }
         m_versions[name]                  = version;
         m_runtime_images[std::move(name)] = std::move(image);

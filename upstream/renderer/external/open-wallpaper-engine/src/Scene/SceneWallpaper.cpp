@@ -25,6 +25,8 @@
 #include "Interface/IImageParser.h"
 #include "Interface/IShaderValueUpdater.h"
 
+#include <nlohmann/json.hpp>
+
 #include "Fs/VFS.h"
 #include "Fs/PhysicalFs.h"
 #include "WPPkgFs.hpp"
@@ -940,6 +942,49 @@ private:
                                   artwork.rgba.size());
         return rebuildRenderGraph();
     }
+    /// Records `json` as the latest event of its type, keeping the order the
+    /// types first arrived so a replay reaches a script in the same sequence a
+    /// live session would.
+    void retainMediaEvent(const std::string& json) {
+        const auto parsed = nlohmann::json::parse(json, nullptr, false);
+        if (parsed.is_discarded() || ! parsed.is_object()) return;
+        const auto type = parsed.find("type");
+        if (type == parsed.end() || ! type->is_string()) return;
+        const auto name = type->get<std::string>();
+        for (auto& retained : m_pending_media_events) {
+            if (retained.first == name) {
+                retained.second = json;
+                return;
+            }
+        }
+        // An unbounded set of types would be a leak; the protocol has five and
+        // a wallpaper that invents more does not get to grow this forever.
+        if (m_pending_media_events.size() >= 16) return;
+        m_pending_media_events.emplace_back(name, json);
+    }
+
+    /// Replays what is playing to a scene that has just been attached.
+    void replayMediaEvents() {
+        if (! m_media_integration_enabled || m_scene == nullptr || m_scene->runtime == nullptr)
+            return;
+        for (const auto& [name, json] : m_pending_media_events) {
+            m_scene->runtime->DispatchMediaEventJson(json);
+        }
+    }
+    /// Publishes the display's pixel resolution to the scene's scripts.
+    ///
+    /// `RenderInitInfo::width`/`height` are already physical pixels -- the host
+    /// fills them from `DisplayDesc`, and both backends divide by
+    /// `display_scale_factor` when they want logical points -- so they are
+    /// published as they are. Not the render size: internal quality may halve
+    /// that, and a quality setting must not move a script's layout.
+    void publishScreenResolution() {
+        if (m_scene == nullptr || m_scene->runtime == nullptr) return;
+        if (m_render_init_info == nullptr) return;
+        m_scene->runtime->SetScreenResolution(
+            Eigen::Vector2f(static_cast<float>(m_render_init_info->width),
+                            static_cast<float>(m_render_init_info->height)));
+    }
 
     MHANDLER_CMD(STOP) {
         bool stop { false };
@@ -1152,19 +1197,25 @@ private:
         bool enabled { false };
         if (msg->findBool("value", &enabled)) {
             m_media_integration_enabled = enabled;
+            // Consent withdrawn drops what was retained; nothing is replayed to
+            // a wallpaper whose user turned this off.
+            if (! enabled) {
+                m_pending_media_events.clear();
+                m_pending_system_media_artwork.reset();
+            }
             if (m_scene != nullptr && m_scene->runtime != nullptr) {
                 m_scene->runtime->SetMediaIntegrationEnabled(enabled);
             }
         }
     }
     MHANDLER_CMD(MEDIA_EVENT_JSON) {
-        if (! m_media_integration_enabled || m_scene == nullptr || m_scene->runtime == nullptr)
-            return;
+        if (! m_media_integration_enabled) return;
 
         std::string json;
-        if (msg->findString("value", &json)) {
-            m_scene->runtime->DispatchMediaEventJson(json);
-        }
+        if (! msg->findString("value", &json)) return;
+        retainMediaEvent(json);
+        if (m_scene == nullptr || m_scene->runtime == nullptr) return;
+        m_scene->runtime->DispatchMediaEventJson(json);
     }
     MHANDLER_CMD(SYSTEM_MEDIA_ARTWORK) {
         std::shared_ptr<SystemMediaArtworkPayload> artwork;
@@ -1216,6 +1267,12 @@ private:
             m_render_blocked = false;
             if (m_scene != nullptr && m_scene->runtime != nullptr) {
                 m_scene->runtime->SetMediaIntegrationEnabled(m_media_integration_enabled);
+                // Before the graph is built, so a script that reveals a layer
+                // on `mediaPlaybackChanged` has done it by the first frame
+                // rather than one event later, and so a script that sizes
+                // itself against the screen has the real one to size against.
+                publishScreenResolution();
+                replayMediaEvents();
                 installContentWake(*m_scene);
             }
             selectSceneBackend();
@@ -1247,6 +1304,9 @@ private:
 
         adoptRenderInitInfo(std::move(info));
         m_render_blocked = false;
+        // A surface this wallpaper is already running on can be replaced when
+        // the display changes, so the resolution is republished here too.
+        publishScreenResolution();
 
         // Offscreen surfaces and surfaces with no layer have no native option
         // at all, so there is nothing to wait for: the probe and test paths
@@ -1452,6 +1512,17 @@ private:
     bool                                     m_horizontal_flip { false };
     bool                                     m_media_integration_enabled { false };
     std::optional<SystemMediaArtworkPayload> m_pending_system_media_artwork {};
+    /// The latest media event of each type, in the order the types first
+    /// arrived.
+    ///
+    /// A scene being rebuilt has no runtime for a moment, and that is exactly
+    /// when the host replays what it knows: it replays because the handle is
+    /// new. The artwork already survives that window by being parked here; the
+    /// events describing what is playing did not, so a wallpaper whose cover
+    /// group is revealed by `mediaPlaybackChanged` stayed blank until the user
+    /// pressed pause and play again. Latest-per-type, because a burst of
+    /// timeline updates is one fact repeated, not a queue to drain.
+    std::vector<std::pair<std::string, std::string>> m_pending_media_events {};
 
     std::atomic<std::array<float, 2>> m_mouse_pos { std::array { 0.5f, 0.5f } };
     std::mutex                        m_mouse_buttons_mutex;

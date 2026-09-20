@@ -15,6 +15,57 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-20 — Parallel native tests, opt-in live Steam cases, doc split, build-on-request
+
+Follow-up to the tiered gate. Test classes now run in parallel worker processes
+(`-parallel-testing-enabled YES`, `--serial` to diagnose interference); the two
+`testLive…` Workshop cases became opt-in behind
+`MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1`; `scripts/test.py` keeps the five newest
+result bundles; `scripts/build.py` also uses `xcodegen --use-cache`. Coverage
+inventory moved to `docs/testing/coverage.md`, `docs/architecture.md` gained a
+section index, and the Release build is now on request
+(`.omp/rules/release-build-on-request.md`) rather than after every feature.
+
+- `python3 scripts/tests/test_test.py` — 10 tests OK (identifiers, parallel flag,
+  bundle pruning, opt-in variable list).
+- `python3 scripts/test.py` — Python script tests OK; native 529 tests, 518 passed,
+  11 skipped, 0 failures, 1m12 wall clock (was 2m41 serial). Three parallel runs,
+  no interference; skips are 9 asset/media + the 2 live Steam cases.
+- `MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1 python3 scripts/test.py --only WorkshopTests`
+  — 7 passed, 0 skipped; without the variable, 5 passed, 2 skipped.
+- No Release build: tooling and docs only, no delivery requested.
+
+## 2026-09-20 — Tiered verification: `scripts/test.py --only`, xcodegen cache, small-fix gate
+
+Small bug fixes were paying the full gate twice plus a Release build (~20 min).
+`AGENTS.md` now scales the gate to the change (`docs/testing/README.md`
+"Verification tiers"); `scripts/test.py --only <Class[/method]>` narrows the
+native run and `xcodegen generate --use-cache` keeps incremental builds alive.
+
+- `python3 scripts/tests/test_test.py` — 5 tests OK (identifier and command shape).
+- `python3 scripts/test.py --only AppLanguageTests` — 5 passed, 0 failures, ~2 s wall clock.
+- `python3 scripts/test.py` — Python script tests OK; native 529 tests, 520 passed,
+  9 skipped, 0 failures, test phase 157 s. No Release build (tooling/docs change).
+
+## 2026-09-20 — Discover search button wrapped vertically in Chinese; panel tests pinned to English
+
+`.search-form` let its submit button shrink, and a CJK label breaks between any
+two characters, so 搜索 rendered one glyph per line and taller than the input.
+`WebUI/panel.css` now gives `.search-form button` `flex: none; white-space:
+nowrap`. The first gate run also exposed that panel tests reading English labels
+used `AppLanguageStore.shared`, which follows the developer's in-app language
+choice; they now pass `AppLanguageStore.english()` (`Tests/Unit/Support/`).
+
+- `python3 scripts/test.py` before the test fix, with the app set to 简体中文 —
+  native 516 passed, 9 skipped, 4 failures, all Chinese labels or a JS lookup
+  by English title in `ControlPanelLayoutTests`; none related to the CSS change.
+- `python3 scripts/test.py` after — 73 Python tests OK; native 520 passed,
+  9 skipped, 0 failures.
+- `python3 scripts/build.py --swift-only --configuration Release` — exit 0,
+  `** BUILD SUCCEEDED **`; bundled `Contents/Resources/WebUI/` matches `WebUI/`.
+  Delivered `build/Build/Products/Release/MacWallpaperEngine.app`; not launched.
+  The rendered Chinese button was not screenshotted (no desktop run).
+
 ## 2026-09-20 — In-app language picker, per-language panel catalogs, registry checks
 
 Simplified Chinese was already translated but only reachable through macOS's
@@ -148,6 +199,138 @@ composite put it at x ∈ [0, 312] — never at the layer's world x.
   `lookAt` TypeError in its debug overlay, and `engine.screenResolution` being
   published as the cursor viewport's world extent rather than display pixels.
 
+## 2026-09-20 — In-app language picker, per-language panel catalogs, registry checks
+
+Simplified Chinese was already translated but only reachable through macOS's
+language settings. Settings → General now has **Language** (System (Auto),
+English, 简体中文); the choice switches the panel in place and mirrors into the
+app-domain `AppleLanguages` so native strings follow on the next launch. The
+WebUI catalog moved to `WebUI/locales/zh-Hans.js` behind a registry in
+`i18n.js`; `AppLanguage.supported` drives the picker and the served-file allow
+list. Adding a language is documented in `docs/localization.md`.
+
+- `python3 scripts/test.py` — 73 Python tests OK (catalog check now verifies
+  Swift/i18n/locales/xcstrings registries agree, native keys all translated, key
+  parity across catalogs); native 529 tests, 9 skipped, 0 failures. New:
+  `AppLanguageTests` (5), `testLanguageSettingSwitchesThePanelInPlaceAndOffersEveryShippedLanguage`.
+- `python3 scripts/build.py --swift-only --configuration Release` — succeeded;
+  bundled `WebUI/` byte-identical to source, `locales/zh-Hans.js` and
+  `zh-Hans.lproj` present. No renderer change, no desktop run; the picker's
+  visual layout is unchecked on screen.
+
+## 2026-09-20 — Verification log capped at ten entries; durable facts promoted
+
+Documentation only. The log had grown to 106 entries in six days (260 KB, 30% of
+`docs/`), and facts that were still true were only findable inside it. No source,
+build or desktop change.
+
+- Entries 11 and older moved verbatim into
+  `docs/testing/archive/verification-log-2026-09.md`; only relative link depth
+  changed. Checked byte-identical against `git show HEAD:…` before and after the
+  split, so no recorded result was altered or lost.
+- Promoted out of the log: the two `scene_schema_tests` pointer-case timeouts,
+  the stale `$TMPDIR/wallpaper-engine-video` cache failures, `tex_schema_tests`
+  not compiling (`lz4.h`; `PkgConfig::LZ4` is `PRIVATE` in `src/CMakeLists.txt`
+  and the test target never links it), the `clipping_mask` / Music Visualizer
+  shader-compile gaps, unimplemented `thisLayer.getParent()` and the unrendered
+  perspective 3D content → `docs/testing/renderer.md`; the codesign xattr
+  detritus failure and the first-configure cargo retry → `docs/build.md`.
+- Entry format and the ten-entry retention rule are now in `docs/conventions.md`,
+  `AGENTS.md` and `docs/testing/README.md`; the archive is indexed in
+  `docs/README.md`.
+- `python3 -m unittest discover -s scripts/tests -q` — 71 tests, OK. Relative
+  Markdown links across `AGENTS.md`, `README.md`, `CONTRIBUTING.md`,
+  `LICENSING.md` and all 24 `docs/**/*.md` resolve: 0 broken. No app build, no
+  renderer gate, no desktop run — nothing outside `docs/` and `AGENTS.md` changed.
+
+## 2026-09-20 — The cover was drawn at a composition layer's local coordinates
+
+Follow-up to the entry below, on the same wallpaper. With the texture binding
+fixed, the album art reached a draw but landed as a clipped blob against the
+left edge of the canvas while the square the user looks at stayed untextured.
+`WE_TEST_DUMP_PASSES` attributed both shapes: pass 11 (node 297 `Song Cover`,
+`textures=[$mediaThumbnail]`) filled its whole 1024×1024 target with the
+published cover, the blend and rounded-mask passes preserved it, and the screen
+composite put it at x ∈ [0, 312] — never at the layer's world x.
+
+- **`SceneNode::AppendChild` set the parent without dirtying the child.**
+  `UpdateTrans()` returns early on a clean node, so a node whose matrix had
+  already been computed while it was unparented kept that matrix for good. A
+  composition layer builds its camera and effect chain during parsing, before
+  `AttachLayerNode` wires the graph, so node 208
+  (`Livello di composizione regolabile`) reported `world=(0, 1085)` — its own
+  local translate — instead of `(2560, 1085)`, and its children `38` and `297`
+  inherited that origin. Every other layer in the scene was parented before
+  anything asked for its transform, which is why only this subtree moved.
+  `AppendChild` now calls `MarkTransDirty()` on the child, the same invariant
+  `SetTranslate` / `SetScale` / `SetRotation` / `SetAttachmentTransform`
+  already keep.
+- Measured on the real project with the user's display geometry
+  (`WE_TEST_CLICK_VIEWPORT=4112x2658@2.0:fill`, 40 frames at
+  `WE_TEST_FRAME_STEP=0.0166`): node 208 now reports `world=(2560, 1085)`, and
+  two runs differing only in artwork colour now differ **inside the cover
+  square** — a 20 px patch at frame fraction (0.50, 0.47) reads `(27, 0, 0)`
+  for `ff0000` and `(0, 27, 0)` for `00ff00`, with the artwork's bounding box
+  centred at (0.500, 0.497). The left-edge blob is gone. The user confirmed the
+  cover on the desktop afterwards.
+- **The cover was then dimmed to 12%, and that was ours too.** All four
+  `Song Cover` / `Song Cover SMALL` layers carry a constant
+  `"color": "0.11765 0.11765 0.11765"`, and `genericimage4.frag` line 93 is
+  `texSample2D(g_Texture0, v_TexCoord.xy) * g_Color4`, so the artwork drew at
+  ~12% — pure `ff0000` measured `(27, 0, 0)`, one multiply, not two. The
+  author's own recordings, linked from the wallpaper's description
+  (`i.imgur.com/KOEcClx.gif`, not the 256×256 iOS mock-up in `preview.gif`),
+  show that cover at full strength with white highlights. They are a montage —
+  85 frames, several tracks, the clock pinned at Apple's 9:41 — so not one
+  continuous capture, and the per-track blurred backgrounds in them do not
+  match the shipped scene, which tints from the palette instead: these are
+  recordings of an earlier build. What carries is that every state draws a
+  different cover matching its own title and artist at full strength, which is
+  engine output rather than hand-painted. Two further arguments point the same
+  way inside the shipped content: another scene paints a background layer
+  `0 0 0` behind a `scenetexture` binding, and this one exposes a separate
+  "Image Brightness" slider for dimming. That colour paints the `util/white`
+  placeholder the shared model material ships; once a runtime image is
+  substituted into the slot there is nothing left for it to describe.
+  `WPImageObject::FromJson` now drops it in
+  exactly that case, and only that case: a binding that names a project
+  property (`"usertextures":["bg"]`, `["backgroundimage"]`) substitutes nothing,
+  so those layers — one of which is authored `0 0 0` — keep their colour.
+  `IsSystemUserTexture` is now the single definition the substitution and this
+  rule share. Measured after: node 297 draws with `g_Color4=[1,1,1,1]` and the
+  square reads `(227, 0, 0)`, while node 38 — the same authored colour, no
+  runtime image — still draws its dark card at `g_Color4=[0.11765,…]`.
+  `SceneSchema.InstanceColourSurvivesUnlessARuntimeImageTakesTheSlot` pins both
+  directions.
+- `SceneSchema.AttachingAParentRefreshesAWorldTransformThatWasAlreadyComputed`
+  covers the fix at three levels: compute a child's transform, attach a parent,
+  and the world origin must follow, including for a subtree attached later. It
+  fails with the `MarkTransDirty()` call removed and passes with it.
+- The probe's node dump now records `world=`, `rendered=` and `override=` next
+  to the local transform, which is what separated "positioned wrong" from
+  "textured wrong" in one run.
+- `python3 scripts/test.py` — exit 0. Counts read back from
+  `Tests-20260920-150006-694596.xcresult` rather than the console tail:
+  `result: Passed`, 523 tests, 514 passed, 0 failed, 9 skipped, no
+  `testFailures`.
+- `python3 scripts/check_renderer.py` — exit 0, `adaptive-20260920-150236`: 10
+  generated cases `pixels_equal=true`, 0 diagnostics, 8 projects × 2 reload
+  cycles clean.
+- OWE suites, which neither gate builds: `mouse_input_test` 11,
+  `media_thumbnail_texture_smoke` 14, `scenescript_media_event_smoke` 16,
+  `scenescript_sound_layer_smoke` 8, `layer_texture_reference_test` 10,
+  `scene_mesh_tests` 16 — all passed. `scene_schema_tests` 72 passed with the
+  same two pre-existing pointer-capability timeouts recorded below.
+- `python3 scripts/build.py --configuration Release` — exit 0,
+  `** BUILD SUCCEEDED **`, twice: once for the re-parenting fix (binary
+  14:43:10) and again after the instance-colour fix (binary 15:05:28, newer
+  than every source edit in this entry). Delivered
+  `build/Build/Products/Release/MacWallpaperEngine.app`. The app was not
+  launched and no desktop state was changed.
+- Still open on this wallpaper: `engine.openUserShortcut` (transport buttons),
+  the `getLayer(…).play()` throw for its press sounds, the per-frame
+  `lookAt` TypeError in its debug overlay, and `engine.screenResolution` being
+  published as the cursor viewport's world extent rather than display pixels.
 
 ## 2026-09-20 — `$mediaThumbnail` reaches solid instance layers; the media buttons are inert by design gap
 

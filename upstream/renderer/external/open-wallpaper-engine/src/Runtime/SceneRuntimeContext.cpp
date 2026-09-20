@@ -588,7 +588,21 @@ void SceneRuntimeContext::SetCursorViewport(const CursorViewport& viewport) {
     if (! viewport.content_origin.allFinite() || ! viewport.content_size.allFinite()) return;
     if (viewport.size.x() == 0.0f || viewport.size.y() == 0.0f) return;
     m_cursor_viewport = viewport;
-    m_host_context->screen_resolution = viewport.size;
+}
+
+/// Publishes the display's pixel resolution, which is what
+/// `engine.screenResolution` means.
+///
+/// This used to be the cursor viewport's size, which is the region of the
+/// scene's own world the window shows -- 2560x1080 scene units for a wallpaper
+/// authored at that size, whatever display it is on. A script sizing itself
+/// against the screen got the author's canvas back instead. The rasterization
+/// size is not it either: internal quality may halve that, and a quality
+/// setting must not move a layout.
+void SceneRuntimeContext::SetScreenResolution(const Eigen::Vector2f& resolution) {
+    if (! resolution.allFinite()) return;
+    if (resolution.x() <= 0.0f || resolution.y() <= 0.0f) return;
+    m_host_context->screen_resolution = resolution;
 }
 
 void SceneRuntimeContext::SetCursorInput(float x, float y) {

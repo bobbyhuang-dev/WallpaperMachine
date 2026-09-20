@@ -104,6 +104,10 @@ public:
     // World rectangle the window shows, so window-normalized cursor input lands
     // where the presented wallpaper actually draws each layer.
     void          SetCursorViewport(const CursorViewport& viewport);
+    /// The display's pixel resolution, which `engine.screenResolution` reports.
+    /// Distinct from the cursor viewport above, which is scene world units,
+    /// and from the rasterization size, which internal quality may reduce.
+    void          SetScreenResolution(const Eigen::Vector2f& resolution);
     void          SetCursorInput(float x, float y);
     void          SetCursorEnter(bool entered);
     void          SetCursorButton(int button, bool pressed);

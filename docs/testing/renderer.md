@@ -399,6 +399,17 @@ layers only take cursor events while the cursor is inside it. Without that,
 `FIT` and scaled-down wallpapers would let letterbox bars trigger any layer
 whose box crosses the canvas edge.
 
+`engine.screenResolution` is a different quantity and has its own setter.
+`SceneWallpaper::publishScreenResolution` reports the display's pixels on scene
+attach and again whenever the surface is replaced. `RenderInitInfo::width`/
+`height` already are those pixels — the host fills them from `DisplayDesc`, and
+both backends divide by `display_scale_factor` when they want logical points —
+so scaling them again would publish twice the resolution on every Retina panel. It used to be whatever the cursor mapping
+published, which is the region of the scene's own world the window shows, so a
+script sizing itself against the screen read the author's canvas back instead.
+The rasterization size is not it either: internal quality may halve that, and a
+quality setting must not move a script's layout.
+
 ### Text, fonts and clocks
 
 Font decoding prefers valid authored bytes, then a usable installed family, then

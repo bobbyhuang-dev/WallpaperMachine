@@ -557,6 +557,9 @@ export function update(value) {
     EXPECT_FLOAT_EQ(runtime->NodeTranslate("Probe").y(), 1080.0f);
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 
+    // The cursor viewport is the region of the scene's own world the window
+    // shows, in scene units. It used to drive this value, which handed a script
+    // the author's canvas back and called it the screen.
     runtime->SetCursorViewport(CursorViewport {
         .origin         = Eigen::Vector2f::Zero(),
         .size           = Eigen::Vector2f(2560.0f, 1440.0f),
@@ -564,8 +567,20 @@ export function update(value) {
         .content_size   = Eigen::Vector2f(2560.0f, 1440.0f),
     });
     runtime->Tick(1.0 / 60.0);
-    EXPECT_FLOAT_EQ(runtime->NodeTranslate("Probe").x(), 2560.0f);
-    EXPECT_FLOAT_EQ(runtime->NodeTranslate("Probe").y(), 1440.0f);
+    EXPECT_FLOAT_EQ(runtime->NodeTranslate("Probe").x(), 1920.0f);
+    EXPECT_FLOAT_EQ(runtime->NodeTranslate("Probe").y(), 1080.0f);
+
+    // The display's pixels do. A 1512-point Retina panel is 3024 pixels wide,
+    // which is what the surface already carries and what the script reads.
+    runtime->SetScreenResolution(Eigen::Vector2f(3024.0f, 1964.0f));
+    runtime->Tick(1.0 / 60.0);
+    EXPECT_FLOAT_EQ(runtime->NodeTranslate("Probe").x(), 3024.0f);
+    EXPECT_FLOAT_EQ(runtime->NodeTranslate("Probe").y(), 1964.0f);
+
+    // A resolution that is not a size is refused rather than published.
+    runtime->SetScreenResolution(Eigen::Vector2f(0.0f, 1964.0f));
+    runtime->Tick(1.0 / 60.0);
+    EXPECT_FLOAT_EQ(runtime->NodeTranslate("Probe").x(), 3024.0f);
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 

@@ -15,6 +15,14 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-20 — The consent test now pins the clear it is named for
+
+As first written, WithdrawingConsentDropsWhatWasRetained passed with the whole fix removed: while the setting is off both the replay and the runtime's own gate refuse to dispatch, so the assertion could not tell retention-with-clear from no retention at all.
+
+- Re-sequenced to enable → event → disable → enable again → attach: retaining without clearing replays the stale event on the second enable, which is the only way that sequence can reveal the probe
+- Verified by deleting just the `clear()` in `SET_MEDIA_INTEGRATION_ENABLED` — the test fails with "consent was withdrawn and what was playing then was replayed anyway" and passes with it restored
+- `scene_schema_tests` — 74 passed, plus the two pre-existing 5 s pointer-capability timeouts recorded in renderer.md; neither gate builds this suite
+
 ## 2026-09-20 — Corrected: a settings change reloads on the same object, and the harness exists
 
 Two claims in the entry below were wrong. A property change does not produce a new scene handle: set_property_override sets a property on the existing object and SceneWallpaper turns it into LOAD_SCENE on that same object, so the host's fedHandles diff is empty and there is no replay at all — the old runtime is discarded with the old Scene and the new one starts blank. The null-runtime window the entry described is the wallpaper-switch case. Retaining every live event and replaying on attach covers both, and depends on no host timing.

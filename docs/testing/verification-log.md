@@ -25,6 +25,13 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — Release build carrying the whole shortcut chain
+
+python3 scripts/build.py --configuration Release, the first full renderer release build since the deployment-target fix -- which is what made it possible at all.
+
+- Confirmed the delivered app carries the change: the binary contains the bound-action value and the bridge call, the bundled WebUI matches WebUI/ file for file, and the bundled zh-Hans catalogue has the new option
+- Delivered: `build/Build/Products/Release/MacWallpaperEngine.app` — quit and reopen the app to pick it up
+
 ## 2026-09-21 — A bound wallpaper button now reaches a real media player
 
 The Swift side takes presses off the bridge's long poll and carries them out through whichever provider is currently answering. The three combos default to no action, so the buttons stay inert until the user binds them in the wallpaper's own properties -- which is what Wallpaper Engine has them do, and what keeps a wallpaper from choosing on their behalf.
@@ -108,11 +115,3 @@ The extra frosted shape beside the media card reproduces offscreen, and only on 
 - Traced both backends at the clouds pass: g_Color1=[0,0,0], g_Color2=[0.141176,...], g_CloudScales=[1,1,1,0.5], g_Texture0Resolution=[6520,3460,...] agree exactly, and every one resolves to a real reflection member on Metal
 - Repro: `WE_TEST_METAL_SURFACE=5120x2160 WE_TEST_METAL_PROJECTS=<project.json> metal_scene_draw_smoke --gtest_filter=*LocalProjectsNamed*` against `WE_TEST_FRAMES=120 offscreen_scene_probe`
 - `metal_scene_draw_smoke` 33 passed; not yet isolated, so nothing is claimed fixed
-
-## 2026-09-20 — The consent test now pins the clear it is named for
-
-As first written, WithdrawingConsentDropsWhatWasRetained passed with the whole fix removed: while the setting is off both the replay and the runtime's own gate refuse to dispatch, so the assertion could not tell retention-with-clear from no retention at all.
-
-- Re-sequenced to enable → event → disable → enable again → attach: retaining without clearing replays the stale event on the second enable, which is the only way that sequence can reveal the probe
-- Verified by deleting just the `clear()` in `SET_MEDIA_INTEGRATION_ENABLED` — the test fails with "consent was withdrawn and what was playing then was replayed anyway" and passes with it restored
-- `scene_schema_tests` — 74 passed, plus the two pre-existing 5 s pointer-capability timeouts recorded in renderer.md; neither gate builds this suite

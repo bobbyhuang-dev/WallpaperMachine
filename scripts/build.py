@@ -62,6 +62,22 @@ def build_environment():
     return result
 
 
+def cargo_environment():
+    """The build environment with the deployment target left off.
+
+    Cargo builds proc-macro crates and build scripts for the host and then
+    dlopens them in the running compiler. Pinning a deployment target applies
+    to those host dylibs too, and the ones this toolchain then produces are
+    rejected at load with "mis-aligned LINKEDIT" -- which the compiler reports
+    as `can't find crate for <macro>`, so every crate behind a derive fails to
+    build. Xcode still sets its own deployment target for the app, and the
+    crates ship a staticlib the app links, so nothing here needs the pin.
+    """
+    result = build_environment()
+    result.pop("MACOSX_DEPLOYMENT_TARGET", None)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--swift-only", action="store_true")
@@ -73,7 +89,7 @@ def main():
     VERBOSE = args.verbose
     env = build_environment()
     if not args.swift_only:
-        run(["cargo", "build", "--workspace", "--release"], RENDERER, env, stage="cargo")
+        run(["cargo", "build", "--workspace", "--release"], RENDERER, cargo_environment(), stage="cargo")
         run([RENDERER / "target/release/uniffi-bindgen", "generate", "--library", RENDERER / "target/release/libwallpaper_bridge.a", "--language", "swift", "--no-format", "--out-dir", GENERATED_BRIDGE], cwd=RENDERER, env=env, stage="bindgen")
     if args.renderer_only:
         return

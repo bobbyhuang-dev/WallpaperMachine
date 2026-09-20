@@ -41,6 +41,12 @@ pub struct EngineActor {
     fail_next_refresh_displays: bool,
     #[cfg(test)]
     pointer_notifications: Vec<(Arc<()>, bool)>,
+    /// Requests a wallpaper has made and nothing has taken yet, oldest first.
+    ///
+    /// Bounded for the same reason the runtime's own queue is: a wallpaper can
+    /// press faster than anything drains, and the press still being waited on
+    /// is the newest one.
+    user_shortcut_requests: Vec<(SceneHandle, String, String)>,
 }
 
 #[derive(Clone)]
@@ -132,6 +138,7 @@ impl EngineActor {
             fail_next_refresh_displays: false,
             #[cfg(test)]
             pointer_notifications: Vec::new(),
+            user_shortcut_requests: Vec::new(),
         }
     }
 
@@ -994,6 +1001,27 @@ impl Message<messages::NativePointerInputChanged> for EngineActor {
             runtime.apply_pointer_input_capability(&msg.renderer_instance, msg.accepts_pointer_input)
         });
         if changed { self.publish_snapshot(); }
+    }
+}
+
+impl Message<messages::NativeUserShortcutRequested> for EngineActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: messages::NativeUserShortcutRequested,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) {
+        // A wallpaper the user has since replaced must not still be pressing
+        // buttons, so the handle has to still name a live scene.
+        if self.state.scene_mut(msg.handle).is_err() {
+            return;
+        }
+        const MAX_PENDING: usize = 16;
+        if self.user_shortcut_requests.len() >= MAX_PENDING {
+            self.user_shortcut_requests.remove(0);
+        }
+        self.user_shortcut_requests.push((msg.handle, msg.property_name, msg.property_value));
     }
 }
 

@@ -6,9 +6,12 @@ use serde_json::Value;
 use crate::{
     DisplayDesc, EngineError, WallpaperWindow,
     display::state::DisplayKey,
-    engine::{FirstFrameCallback, actor::EngineActor, messages::NativePointerInputChanged},
+    engine::{
+        FirstFrameCallback, actor::EngineActor,
+        messages::{NativePointerInputChanged, NativeUserShortcutRequested},
+    },
     media::audio::AudioVolume,
-    owe::backend::{OweBackend, OweScene, PointerInputCallback},
+    owe::backend::{OweBackend, OweScene, PointerInputCallback, UserShortcutCallback},
     project::{ScalingMode, SceneDesc, SceneHandle, SerdeValudeExt},
     render::RendererSurfaceCounters,
     window::{MouseButtonEdges, NormalizedMousePosition},
@@ -51,6 +54,57 @@ impl PointerInputRelay {
 
 impl Drop for PointerInputRelay {
     fn drop(&mut self) { self.stop(); }
+}
+
+/// Carries `engine.openUserShortcut` requests off the native main looper.
+///
+/// Bounded rather than latest-value: these are presses, and a play/pause
+/// followed quickly by a next must deliver both. A full queue drops the new
+/// request with a log instead of blocking the looper that reported it, because
+/// a press nobody can take is not worth stalling a frame for.
+struct UserShortcutRelay {
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl UserShortcutRelay {
+    fn new(
+        actor: WeakActorRef<EngineActor>,
+        handle: SceneHandle,
+    ) -> Result<(Self, UserShortcutCallback), EngineError> {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+            EngineError::Platform(format!("user shortcut relay requires actor runtime: {error}"))
+        })?;
+        let (sender, mut receiver) = tokio::sync::mpsc::channel::<(String, String)>(16);
+        let callback: UserShortcutCallback = Arc::new(move |name, value| {
+            if let Err(error) = sender.try_send((name, value)) {
+                log::warn!("dropped a user shortcut request nobody could take: {error}");
+            }
+        });
+        let task = runtime.spawn(async move {
+            while let Some((property_name, property_value)) = receiver.recv().await {
+                let Some(actor) = actor.upgrade() else { break };
+                let result = actor
+                    .tell(NativeUserShortcutRequested { handle, property_name, property_value })
+                    .send()
+                    .await;
+                drop(actor);
+                if result.is_err() {
+                    break;
+                }
+            }
+        });
+        Ok((Self { task }, callback))
+    }
+
+    fn stop(&self) {
+        self.task.abort();
+    }
+}
+
+impl Drop for UserShortcutRelay {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 #[derive(Default)]
@@ -151,6 +205,7 @@ pub struct SceneRuntime {
     renderer: OweScene,
     actor: WeakActorRef<EngineActor>,
     pointer_relay: PointerInputRelay,
+    shortcut_relay: UserShortcutRelay,
     pointer_input: NativePointerInputState,
     /// Runtime override applied after descriptor defaults.
     scaling_mode: ScalingMode,
@@ -262,6 +317,7 @@ impl SceneRuntime {
         stored_desc.mark_shader_refresh_complete();
         let window = WallpaperWindow::builder(desc.display.clone()).open()?;
         let (pointer_relay, pointer_callback) = PointerInputRelay::new(actor.clone(), handle)?;
+        let (shortcut_relay, shortcut_callback) = UserShortcutRelay::new(actor.clone(), handle)?;
         let renderer = backend.open_scene(
             desc,
             window.metal_layer_ptr(),
@@ -273,6 +329,7 @@ impl SceneRuntime {
                 move || callback(handle)
             })),
             Some(pointer_callback),
+            Some(shortcut_callback),
         )?;
         let descriptor_state = SceneRuntimeState::try_from(desc)?;
         let mut runtime = Self {
@@ -283,6 +340,7 @@ impl SceneRuntime {
             renderer,
             pointer_input: NativePointerInputState::new(pointer_relay.renderer_instance.clone()),
             pointer_relay,
+            shortcut_relay,
             actor,
             scaling_mode: state.scaling_mode,
             scaling_factor: state.scaling_factor,
@@ -420,6 +478,10 @@ impl SceneRuntime {
         let old_display = self.desc.display.clone();
         let first_frame_callback = self.renderer_first_frame_callback();
         let (pointer_relay, pointer_callback) = PointerInputRelay::new(self.actor.clone(), self.handle)?;
+        // Both open paths, or a wallpaper switch on this display would
+        // silently un-wire the buttons the user just used.
+        let (shortcut_relay, shortcut_callback) =
+            UserShortcutRelay::new(self.actor.clone(), self.handle)?;
         let window = self.window.as_mut().ok_or_else(|| {
             EngineError::Platform("wallpaper window is already closed".to_string())
         })?;
@@ -445,6 +507,7 @@ impl SceneRuntime {
             render_resolution,
             Some(first_frame_callback),
             Some(pointer_callback),
+            Some(shortcut_callback),
         ) {
             Ok(renderer) => renderer,
             Err(error) => {
@@ -464,6 +527,7 @@ impl SceneRuntime {
         self.last_media = None;
         self.generation = self.generation.saturating_add(1);
         let old_relay = std::mem::replace(&mut self.pointer_relay, pointer_relay);
+        drop(std::mem::replace(&mut self.shortcut_relay, shortcut_relay));
         self.pointer_input = NativePointerInputState::new(self.pointer_relay.renderer_instance.clone());
         old_relay.stop();
         self.desc = stored_desc;
@@ -649,6 +713,7 @@ impl SceneRuntime {
 
     pub fn close(&mut self) -> Result<(), EngineError> {
         self.pointer_relay.stop();
+        self.shortcut_relay.stop();
         let backend_result = self.renderer.close();
         if let Some(mut window) = self.window.take() {
             window.close();

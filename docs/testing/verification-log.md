@@ -25,6 +25,15 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — A pinned deployment target was breaking every release renderer build
+
+scripts/build.py handed cargo a MACOSX_DEPLOYMENT_TARGET. Cargo builds proc-macro crates and build scripts for the host and then dlopens them in the running compiler, and the pinned host dylibs this toolchain produces are rejected at load with "mis-aligned LINKEDIT" -- which rustc reports as `can't find crate for <macro>`, so arc-swap, tokio, zerocopy, miette, futures-util and uniffi_meta all failed to compile. Any renderer release build was dead; --swift-only hid it by skipping cargo.
+
+- Isolated by rebuilding one proc-macro under the environment minus each variable in turn and dlopening the result: without SDKROOT it still fails, without MACOSX_DEPLOYMENT_TARGET it loads
+- Cargo steps in `build.py` and `check_renderer.py` now use `cargo_environment()`; Xcode still sets its own deployment target for the app, and the crates ship a staticlib the app links
+- `cargo test --release -p wallpaper-core --lib` 213 passed, `-p wallpaper-bridge --lib` 316 passed — the bridge compiles core, so this also covers the open_scene arity change
+- `scripts/check_renderer.py` clean — 10 generated cases, pixels_equal=True, 0 diagnostics, 8 reload cycles
+
 ## 2026-09-21 — The shortcut request reaches the FFI boundary; the host chain above it does not exist yet
 
 SceneWallpaper drains the runtime's requests after the tick that produced them and reports each on the native main looper, and owe_scene_wallpaper_set_user_shortcut_callback follows the pointer-callback contract exactly. OweScene::set_user_shortcut_callback installs the Rust sink. The buttons are still dead: nothing above the FFI consumes these yet, the three properties hold empty values, and no send path to a media player exists.
@@ -110,15 +119,3 @@ The entry below reported three scenes changing and called them wall-clock text. 
 - 2998757800 — 205 px, a clock digit
 - Unchanged: 6 of 10 scenes byte-identical; the only attributable change is 3280146735`s cover at 0.54%
 - `layer_texture_reference_test` — 11 passed. The regression test now pins both halves: with the combo off the authored slot 0 survives and the defaulted slot 1 is left unbound. It fails on both assertions with the parser change reverted
-
-## 2026-09-20 — An annotation default was claiming the author bound that texture slot
-
-3280146735's album cover rendered as a circle. WPSceneParser's default-texture stabilisation loop feeds the defaulted list back as the compiler's texture presence, so every sampler with both a combo and a default had that combo forced to 1; rounded_mask then read its radius from a white default instead of u_Radius. The default still binds for sampling — only what the combo reports changed.
-
-- Probe on 3280146735 — the cover goes from an inscribed circle (fill 0.790 ≈ π/4) to the authored rounded square; same crop, same seed
-- Same-seed frames for all 10 installed scenes, before and after: 6 byte-identical; 3662790108, 2998757800 and 3665954520 differ only in their wall-clock text (a same-binary back-to-back rerun of 3665954520 changes 5.33% against the 5.39% measured, so that scene is noise)
-- The only change outside those clocks is the cover itself: 0.54% of 3280146735
-- `LayerTextureReference.AnnotationDefaultBindsItsSlotWithoutClaimingTheAuthorBoundIt` — 11 tests pass; it fails with the change reverted
-- `metal_scene_draw_smoke` local gate on 3280146735 — still Native Metal, 120 frames, no `metal translation of … failed`
-- `python3 scripts/check_renderer.py` — exit 0, adaptive-20260920-204029: 10 generated cases `pixels_equal=true`, 0 diagnostics
-- `python3 scripts/test.py` — exit 0, Tests-20260920-210253-762337.xcresult: 519 passed, 0 failed, 11 skipped of 530

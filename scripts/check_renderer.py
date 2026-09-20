@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import subprocess
 
-from build import build_environment
+from build import build_environment, cargo_environment
 from lib.paths import RENDERER, RENDERER_ARTIFACTS, ROOT
 
 GENERATED_CASE_COUNT = 10
@@ -269,7 +269,11 @@ def main():
             (["cmake", "--build", build, "--target", "offscreen_scene_probe", "scene_reload_cycle_probe", "render_target_lifetime_test", "text_object_runtime_test", "shader_cache_metadata_test", "video_decode_pump_test", "video_color_conversion_test", "video_frame_pacing_test", "video_conversion_budget_test", "video_source_input_test", "shared_video_session_test", "render_scale_test", "static_subgraph_cache_test", "scene_mesh_tests", "particle_rope_geometry_test", "layer_texture_reference_test", "timer_tests", "playback_gpu_test", "metal_backend_test", "metal_scene_draw_smoke", "metal_poster_capture_test", "metal_video_texture_test", "-j", "6"], "build", ROOT),
         ]
         for command, name, cwd in steps:
-            if run(command, out / (name + ".log"), env, 600, cwd):
+            # Cargo gets the environment without the deployment-target pin:
+            # it builds host proc-macro dylibs that the compiler then loads, and
+            # a pinned one is rejected at load. See build.cargo_environment.
+            step_env = cargo_environment() if command[0] == "cargo" else env
+            if run(command, out / (name + ".log"), step_env, 600, cwd):
                 print(f"Build failed; see {out / (name + '.log')}")
                 return 1
     report = {"desktop_automation": False, "gpu_surface": False, "cases": []}

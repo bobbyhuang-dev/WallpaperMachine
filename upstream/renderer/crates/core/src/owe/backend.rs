@@ -87,6 +87,7 @@ impl OweBackend {
         render_resolution: Option<(u32, u32)>,
         first_frame_callback: Option<FirstFrameCallback>,
         pointer_input_callback: Option<PointerInputCallback>,
+        user_shortcut_callback: Option<UserShortcutCallback>,
     ) -> Result<OweScene, EngineError> {
         let mut raw = std::ptr::null_mut();
         call_status("owe_scene_wallpaper_new", || unsafe {
@@ -104,6 +105,7 @@ impl OweBackend {
         scene.initialize_renderer(desc, metal_layer, render_resolution)?;
         scene.set_first_frame_callback(first_frame_callback)?;
         scene.set_pointer_input_callback(pointer_input_callback)?;
+        scene.set_user_shortcut_callback(user_shortcut_callback)?;
         scene.apply_scene_config(desc)?;
         scene.set_scaling_mode(scaling_mode)?;
         scene.set_scaling_factor(scaling_factor)?;

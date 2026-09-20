@@ -12,6 +12,17 @@ pub(super) struct NativePointerInputChanged {
     pub accepts_pointer_input: bool,
 }
 
+/// One `engine.openUserShortcut` request from a wallpaper.
+///
+/// Carries the handle so the wallpaper it came from can be identified, and the
+/// property plus the value its user chose. Nothing here decides what the value
+/// means.
+pub(super) struct NativeUserShortcutRequested {
+    pub handle: SceneHandle,
+    pub property_name: String,
+    pub property_value: String,
+}
+
 pub(super) struct PollMouseState {
     pub state: super::MousePollState,
 }

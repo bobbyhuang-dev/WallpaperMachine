@@ -9,7 +9,7 @@ Authoritative build document. Everything here is driven by `scripts/build.py` an
 | Requirement | Detail |
 |---|---|
 | Hardware | Apple Silicon only. `project.yml` sets `ARCHS: arm64`, and release archives are named `-arm64`. |
-| macOS | 26 or later. `project.yml` pins `deploymentTarget.macOS` and `MACOSX_DEPLOYMENT_TARGET` to `26.0`; `scripts/build.py` exports the same value for the renderer. |
+| macOS | 26 or later. `project.yml` pins `deploymentTarget.macOS` and `MACOSX_DEPLOYMENT_TARGET` to `26.0`; `scripts/build.py` passes the same value to the renderer as `OWE_MACOSX_DEPLOYMENT_TARGET`. |
 | Xcode | A full Xcode selected with `xcode-select`. The build reads `xcode-select -p` for the toolchain and `xcrun --sdk macosx --show-sdk-path` for the SDK. Command Line Tools alone are not enough. |
 | Homebrew | Provides every renderer dependency; `brew --prefix` is queried at build time. |
 | XcodeGen | `xcodegen` must be on `PATH`. The build regenerates the project on every run. |
@@ -65,7 +65,8 @@ command produces the same build from a terminal, an editor, or CI.
 | `LIBCLANG_PATH` | `$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib` | Rust `bindgen`/`uniffi` need `libclang` from the selected Xcode toolchain. |
 | `SDKROOT` | `xcrun --sdk macosx --show-sdk-path` | Pins C/C++/Rust compilation to the selected macOS SDK. |
 | `CC` / `CXX` | `/usr/bin/clang`, `/usr/bin/clang++` | Apple Clang, not a Homebrew LLVM that happens to be first on `PATH`. |
-| `MACOSX_DEPLOYMENT_TARGET` | `26.0` | Keeps renderer objects compatible with the Xcode targets. |
+| `MACOSX_DEPLOYMENT_TARGET` | `26.0` | Set for `xcodegen` and `xcodebuild`. Deliberately **not** in cargo's environment: cargo builds proc-macro crates for the host and dlopens them in the running compiler, and a pinned host dylib is rejected at load with `mis-aligned LINKEDIT`, which the compiler reports as `can't find crate for <macro>`. |
+| `OWE_MACOSX_DEPLOYMENT_TARGET` | `26.0` | The same value under a name cargo ignores. The renderer crate's build script passes it as `CMAKE_OSX_DEPLOYMENT_TARGET`, so the C++ engine keeps the minimum the app links against. |
 | `GIT_SHORT_COMMIT` | `git rev-parse --short HEAD` in the repository root | Stamps the build with the revision it was built from; Settings shows it as `Git revision`. The renderer build runs with `upstream/renderer` as its working directory, so HEAD is resolved against the repository root explicitly. |
 
 ## Stages and outputs

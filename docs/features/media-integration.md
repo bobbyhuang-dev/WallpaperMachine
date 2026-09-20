@@ -80,8 +80,19 @@ the current slot used to hold, not a second copy. Clearing artwork clears both
 textures. Repeated artwork does not rebuild the scene graph, and a recreated
 renderer receives the current snapshot again.
 
-`usershortcut` transport (play / pause / next) is not implemented, so a
-wallpaper's own transport buttons do nothing.
+A wallpaper's own transport buttons call `engine.openUserShortcut` with the
+name of one of its `usershortcut` properties. The engine resolves that property
+against the wallpaper's own declarations -- naming another throws -- and reports
+the request with the property's **value**, which is the user's choice. The
+property reaches the panel as a picker offering no action, play / pause, next
+track and previous track; it defaults to no action, so a button does nothing
+until its user binds it.
+
+`WallpaperBridge.next_user_shortcut` long-polls for those presses and drops any
+from a wallpaper the user has not consented to media integration for. The app
+carries the bound action out through whichever media provider is currently
+answering, so a command cannot land on a player that is not the one being
+reported.
 
 ### Rendering one without a desktop
 

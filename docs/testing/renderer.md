@@ -628,6 +628,16 @@ The swizzle has to follow reads reached through `#define` aliases (written
 inside `main` by the audio-bars shader family) and through array-parameter
 specialization, not just direct ones.
 
+A sampler slot's `combo` answers whether the **material** bound a texture
+there, and that is not the same question as whether the slot is bound. An
+annotation's `default` exists so an unused sampler still reads something sane;
+`WPSceneParser` binds it, then reports the slot as unbound to the compiler so
+the combo stays 0. Feeding the defaulted list back turned every
+`{"combo":…,"default":…}` sampler permanently on — `rounded_mask` read its
+corner radius from a white default instead of `u_Radius` and masked the layer
+it was applied to into a circle. A slot the combo leaves unsampled is cleared
+afterwards, so nothing holds a texture it never reads.
+
 ## Rust crates
 
 Run from `upstream/renderer` with the Homebrew environment from

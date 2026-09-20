@@ -1318,7 +1318,17 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::WPMaterial& wpmat, Scene* pScene,
                                  texHeaders,
                                  textures);
 
-        const auto texinfos = BuildShaderTexInfos(*pScene, texHeaders, textures);
+        auto texinfos = BuildShaderTexInfos(*pScene, texHeaders, textures);
+        // A slot filled only by the shader's own annotation default is bound,
+        // but nobody bound it: the default exists so an unused sampler still
+        // reads something sane. Its combo asks whether the material supplied a
+        // texture, and answering yes turns the shader's optional feature on
+        // permanently -- `rounded_mask` then takes its radius from a white
+        // default instead of `u_Radius` and masks every layer to a circle.
+        for (usize slot = 0; slot < texinfos.size(); ++slot) {
+            const bool author_bound = slot < base_textures.size() && ! base_textures[slot].empty();
+            if (! author_bound && ! textures[slot].empty()) texinfos[slot].present = false;
+        }
         // Captured before the compile that consumes them, so the record holds
         // the exact input the SPIR-V compile saw rather than the state it left
         // behind. Overwritten on every iteration, so the last one to run is the

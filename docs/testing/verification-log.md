@@ -25,6 +25,18 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-20 — An annotation default was claiming the author bound that texture slot
+
+3280146735's album cover rendered as a circle. WPSceneParser's default-texture stabilisation loop feeds the defaulted list back as the compiler's texture presence, so every sampler with both a combo and a default had that combo forced to 1; rounded_mask then read its radius from a white default instead of u_Radius. The default still binds for sampling — only what the combo reports changed.
+
+- Probe on 3280146735 — the cover goes from an inscribed circle (fill 0.790 ≈ π/4) to the authored rounded square; same crop, same seed
+- Same-seed frames for all 10 installed scenes, before and after: 6 byte-identical; 3662790108, 2998757800 and 3665954520 differ only in their wall-clock text (a same-binary back-to-back rerun of 3665954520 changes 5.33% against the 5.39% measured, so that scene is noise)
+- The only change outside those clocks is the cover itself: 0.54% of 3280146735
+- `LayerTextureReference.AnnotationDefaultBindsItsSlotWithoutClaimingTheAuthorBoundIt` — 11 tests pass; it fails with the change reverted
+- `metal_scene_draw_smoke` local gate on 3280146735 — still Native Metal, 120 frames, no `metal translation of … failed`
+- `python3 scripts/check_renderer.py` — exit 0, adaptive-20260920-204029: 10 generated cases `pixels_equal=true`, 0 diagnostics
+- `python3 scripts/test.py` — exit 0, Tests-20260920-210253-762337.xcresult: 519 passed, 0 failed, 11 skipped of 530
+
 ## 2026-09-20 — A scalar uniform array had two different layouts
 
 std140 pads every array element to 16 bytes — what the host packs and the reflection reports — while the MSL backend emits the natural tight stride, so `float g_AudioSpectrum64Left[64]` moved every member after it by 768 bytes on Native Metal only. Narrow array members are now declared `vec4 name[N]` with reads swizzled back; see [renderer.md](renderer.md). `ShaderPipelineRevision` 6 → 8.
@@ -146,28 +158,3 @@ list. Adding a language is documented in `docs/localization.md`.
   bundled `WebUI/` byte-identical to source, `locales/zh-Hans.js` and
   `zh-Hans.lproj` present. No renderer change, no desktop run; the picker's
   visual layout is unchecked on screen.
-
-## 2026-09-20 — Verification log capped at ten entries; durable facts promoted
-
-Documentation only. The log had grown to 106 entries in six days (260 KB, 30% of
-`docs/`), and facts that were still true were only findable inside it. No source,
-build or desktop change.
-
-- Entries 11 and older moved verbatim into
-  `docs/testing/archive/verification-log-2026-09.md`; only relative link depth
-  changed. Checked byte-identical against `git show HEAD:…` before and after the
-  split, so no recorded result was altered or lost.
-- Promoted out of the log: the two `scene_schema_tests` pointer-case timeouts,
-  the stale `$TMPDIR/wallpaper-engine-video` cache failures, `tex_schema_tests`
-  not compiling (`lz4.h`; `PkgConfig::LZ4` is `PRIVATE` in `src/CMakeLists.txt`
-  and the test target never links it), the `clipping_mask` / Music Visualizer
-  shader-compile gaps, unimplemented `thisLayer.getParent()` and the unrendered
-  perspective 3D content → `docs/testing/renderer.md`; the codesign xattr
-  detritus failure and the first-configure cargo retry → `docs/build.md`.
-- Entry format and the ten-entry retention rule are now in `docs/conventions.md`,
-  `AGENTS.md` and `docs/testing/README.md`; the archive is indexed in
-  `docs/README.md`.
-- `python3 -m unittest discover -s scripts/tests -q` — 71 tests, OK. Relative
-  Markdown links across `AGENTS.md`, `README.md`, `CONTRIBUTING.md`,
-  `LICENSING.md` and all 24 `docs/**/*.md` resolve: 0 broken. No app build, no
-  renderer gate, no desktop run — nothing outside `docs/` and `AGENTS.md` changed.

@@ -15,6 +15,7 @@
 #include "RenderGraph/RenderGraph.hpp"
 #include "VulkanRender/SceneToRenderGraph.hpp"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -317,4 +318,50 @@ TEST(LayerTextureReference, EffectChainSourceLinksFromCompositeNotDefault) {
     const auto* composite = FindPassByOutput(*graph, LayerCompositeTargetKey(159));
     ASSERT_NE(composite, nullptr);
     EXPECT_NE(composite->desc().output, SpecTex_Default);
+}
+
+TEST(LayerTextureReference, AnnotationDefaultBindsItsSlotWithoutClaimingTheAuthorBoundIt) {
+    // A sampler annotation's `default` exists so an unbound slot still samples
+    // something sane. Its `combo` answers a different question -- did the
+    // material bind a texture here -- and answering yes from the default turns
+    // the shader's optional feature on permanently. `rounded_mask` then reads
+    // its corner radius out of a white default instead of `u_Radius` and masks
+    // every layer it touches into a circle.
+    constexpr std::string_view kMaskFrag = R"(uniform sampler2D g_Texture0;
+uniform sampler2D g_Texture1; // {"combo":"MASKED","default":"solid"}
+varying vec2 v_TexCoord;
+void main() {
+#if MASKED
+  gl_FragColor = texture(g_Texture1, v_TexCoord);
+#else
+  gl_FragColor = texture(g_Texture0, v_TexCoord);
+#endif
+}
+)";
+    fs::VFS vfs;
+    auto    parsed = ParseScene(vfs, R"([
+        {"id":1,"name":"masked","image":"masked.json"}
+      ])",
+      {{ "/masked.json", R"({"width":64,"height":32,"material":"masked_mat.json"})" },
+       { "/masked_mat.json",
+         R"({"passes":[{"blending":"translucent","cullmode":"nocull","depthtest":"disabled","depthwrite":"disabled","shader":"masked","textures":["solid"]}]})" },
+       { "/shaders/masked.vert", std::string(kVert) },
+       { "/shaders/masked.frag", std::string(kMaskFrag) }});
+    ASSERT_NE(parsed, nullptr);
+
+    SceneNode* node = nullptr;
+    for (auto& child : parsed->sceneGraph->GetChildren()) {
+        if (child->Name() == "masked") node = child.get();
+    }
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->Mesh(), nullptr);
+    auto* material = node->Mesh()->MaterialForSlot(0);
+    ASSERT_NE(material, nullptr);
+
+    // The authored binding is untouched.
+    ASSERT_FALSE(material->textures.empty());
+    EXPECT_EQ(material->textures[0], "solid");
+    // The `#if MASKED` branch must not have been compiled in, so the pass
+    // samples slot 0 the way the author wrote it.
+    EXPECT_EQ(std::count(material->defines.begin(), material->defines.end(), "MASKED"), 0);
 }

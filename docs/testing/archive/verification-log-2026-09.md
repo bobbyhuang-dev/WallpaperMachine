@@ -15,6 +15,31 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-20 — Verification log capped at ten entries; durable facts promoted
+
+Documentation only. The log had grown to 106 entries in six days (260 KB, 30% of
+`docs/`), and facts that were still true were only findable inside it. No source,
+build or desktop change.
+
+- Entries 11 and older moved verbatim into
+  `docs/testing/archive/verification-log-2026-09.md`; only relative link depth
+  changed. Checked byte-identical against `git show HEAD:…` before and after the
+  split, so no recorded result was altered or lost.
+- Promoted out of the log: the two `scene_schema_tests` pointer-case timeouts,
+  the stale `$TMPDIR/wallpaper-engine-video` cache failures, `tex_schema_tests`
+  not compiling (`lz4.h`; `PkgConfig::LZ4` is `PRIVATE` in `src/CMakeLists.txt`
+  and the test target never links it), the `clipping_mask` / Music Visualizer
+  shader-compile gaps, unimplemented `thisLayer.getParent()` and the unrendered
+  perspective 3D content → `docs/testing/renderer.md`; the codesign xattr
+  detritus failure and the first-configure cargo retry → `docs/build.md`.
+- Entry format and the ten-entry retention rule are now in `docs/conventions.md`,
+  `AGENTS.md` and `docs/testing/README.md`; the archive is indexed in
+  `docs/README.md`.
+- `python3 -m unittest discover -s scripts/tests -q` — 71 tests, OK. Relative
+  Markdown links across `AGENTS.md`, `README.md`, `CONTRIBUTING.md`,
+  `LICENSING.md` and all 24 `docs/**/*.md` resolve: 0 broken. No app build, no
+  renderer gate, no desktop run — nothing outside `docs/` and `AGENTS.md` changed.
+
 ## 2026-09-20 — The cover was drawn at a composition layer's local coordinates
 
 Follow-up to the entry below, on the same wallpaper. With the texture binding

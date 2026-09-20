@@ -110,7 +110,7 @@ extension WebPanelController {
     default: break
     }
     guard !commandBusy else {
-      throw WallpaperActionError(message: "Wait for the current action to finish.")
+      throw WallpaperActionError(message: String(localized: "Wait for the current action to finish."))
     }
     commandBusy = true
     actionError = nil
@@ -229,7 +229,8 @@ extension WebPanelController {
         try DesktopClickRevealPreference.setEnabled(!(try request.boolean("value")))
       case "lockScreenEnabled":
         guard let lock = store.lockScreenWallpaper else {
-          throw WallpaperActionError(message: "Lock Screen integration is unavailable.")
+          throw WallpaperActionError(
+            message: String(localized: "Lock Screen integration is unavailable."))
         }
         lock.setEnabled(try request.boolean("value"))
       case "videoBackend":
@@ -611,7 +612,8 @@ extension WebPanelController {
           let wallpaper = store.monitorInformationSnapshot.rows.first(where: { $0.displayId == id }
           )?.wallpaperId
         else {
-          throw WallpaperActionError(message: "Choose a wallpaper for this display first.")
+          throw WallpaperActionError(
+            message: String(localized: "Choose a wallpaper for this display first."))
         }
         var body = request.body
         body["id"] = wallpaper
@@ -661,7 +663,7 @@ extension WebPanelController {
 
   func beginImport(_ request: WebPanelRequest) async throws {
     guard importTask == nil else {
-      throw WallpaperActionError(message: "An import is already running.")
+      throw WallpaperActionError(message: String(localized: "An import is already running."))
     }
     let policy =
       (request.body["duplicates"] as? String) == "keepBoth"
@@ -773,7 +775,8 @@ struct WebPanelRequest {
   init(_ body: [String: Any]) { self.body = body }
   static var invalid: WallpaperActionError {
     WallpaperActionError(
-      message: "This control sent an invalid value. Refresh the interface and retry.")
+      message: String(
+        localized: "This control sent an invalid value. Refresh the interface and retry."))
   }
   func string(_ key: String) throws -> String {
     guard let value = body[key] as? String, value.count <= 65_536 else { throw Self.invalid }

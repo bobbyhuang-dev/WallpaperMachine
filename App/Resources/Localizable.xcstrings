@@ -1087,6 +1087,18 @@
     "This wallpaper is no longer in your library. Refresh Library and choose another wallpaper." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper is no longer in your library. Refresh Library and choose another wallpaper."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此壁纸已不在壁纸库中。请刷新壁纸库并选择其他壁纸。"}}}
     },
+    "This control sent an invalid value. Refresh the interface and retry." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This control sent an invalid value. Refresh the interface and retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此控件发送了无效的值。请刷新界面后重试。"}}}
+    },
+    "Lock Screen integration is unavailable." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Lock Screen integration is unavailable."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "锁定屏幕集成不可用。"}}}
+    },
+    "Choose a wallpaper for this display first." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose a wallpaper for this display first."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请先为此显示器选择壁纸。"}}}
+    },
+    "An import is already running." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "An import is already running."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已有导入正在进行。"}}}
+    },
     "Wallpaper settings are unavailable. Refresh Library and retry." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wallpaper settings are unavailable. Refresh Library and retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸设置不可用。请刷新壁纸库后重试。"}}}
     },
@@ -1107,6 +1119,9 @@
     },
     "The selected display is unavailable, disabled, or mirroring another display. Choose an enabled independent display in Settings." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The selected display is unavailable, disabled, or mirroring another display. Choose an enabled independent display in Settings."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "所选显示器不可用、已停用或正在镜像其他显示器。请在设置中选择已启用的独立显示器。"}}}
+    },
+    "Wait for the current action to finish." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wait for the current action to finish."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请等待当前操作完成。"}}}
     },
     "Wait for the current wallpaper to finish applying." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wait for the current wallpaper to finish applying."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请等待当前壁纸应用完成。"}}}

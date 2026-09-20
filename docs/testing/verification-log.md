@@ -25,6 +25,16 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-20 — Attributing the per-scene diffs behind the annotation-default fix
+
+The entry below reported three scenes changing and called them wall-clock text. Re-measured with both probe binaries built first and run back to back, which is the only way the clock and the async text layout hold still.
+
+- 3665954520 — text layers identical, 0.509% changed at max delta 9 (sub-perceptual); the 5.39% first measured was a minute roll plus that scene`s time-varying grain
+- 3662790108 — not the clock: the same binary run twice changes 0.531% at max 765 and its text layers still disagree on raster size for identical strings, so that scene is unstable run to run through the text layout worker
+- 2998757800 — 205 px, a clock digit
+- Unchanged: 6 of 10 scenes byte-identical; the only attributable change is 3280146735`s cover at 0.54%
+- `layer_texture_reference_test` — 11 passed. The regression test now pins both halves: with the combo off the authored slot 0 survives and the defaulted slot 1 is left unbound. It fails on both assertions with the parser change reverted
+
 ## 2026-09-20 — An annotation default was claiming the author bound that texture slot
 
 3280146735's album cover rendered as a circle. WPSceneParser's default-texture stabilisation loop feeds the defaulted list back as the compiler's texture presence, so every sampler with both a combo and a default had that combo forced to 1; rounded_mask then read its radius from a white default instead of u_Radius. The default still binds for sampling — only what the combo reports changed.
@@ -139,22 +149,3 @@ choice; they now pass `AppLanguageStore.english()` (`Tests/Unit/Support/`).
   `** BUILD SUCCEEDED **`; bundled `Contents/Resources/WebUI/` matches `WebUI/`.
   Delivered `build/Build/Products/Release/MacWallpaperEngine.app`; not launched.
   The rendered Chinese button was not screenshotted (no desktop run).
-
-## 2026-09-20 — In-app language picker, per-language panel catalogs, registry checks
-
-Simplified Chinese was already translated but only reachable through macOS's
-language settings. Settings → General now has **Language** (System (Auto),
-English, 简体中文); the choice switches the panel in place and mirrors into the
-app-domain `AppleLanguages` so native strings follow on the next launch. The
-WebUI catalog moved to `WebUI/locales/zh-Hans.js` behind a registry in
-`i18n.js`; `AppLanguage.supported` drives the picker and the served-file allow
-list. Adding a language is documented in `docs/localization.md`.
-
-- `python3 scripts/test.py` — 73 Python tests OK (catalog check now verifies
-  Swift/i18n/locales/xcstrings registries agree, native keys all translated, key
-  parity across catalogs); native 529 tests, 9 skipped, 0 failures. New:
-  `AppLanguageTests` (5), `testLanguageSettingSwitchesThePanelInPlaceAndOffersEveryShippedLanguage`.
-- `python3 scripts/build.py --swift-only --configuration Release` — succeeded;
-  bundled `WebUI/` byte-identical to source, `locales/zh-Hans.js` and
-  `zh-Hans.lproj` present. No renderer change, no desktop run; the picker's
-  visual layout is unchecked on screen.

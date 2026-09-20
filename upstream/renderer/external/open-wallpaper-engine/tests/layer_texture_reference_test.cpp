@@ -358,9 +358,15 @@ void main() {
     auto* material = node->Mesh()->MaterialForSlot(0);
     ASSERT_NE(material, nullptr);
 
-    // The authored binding is untouched.
+    // With the combo off the shader takes its `#else` branch, so the authored
+    // slot 0 is the one sampled and survives. Reporting the default as an
+    // author binding compiles the other branch instead, which stops sampling
+    // slot 0 and clears it -- that is what this asserts against.
     ASSERT_FALSE(material->textures.empty());
     EXPECT_EQ(material->textures[0], "solid");
+    // The default slot is never read under that branch, so nothing holds a
+    // texture it does not sample.
+    EXPECT_TRUE(material->textures.size() < 2u || material->textures[1].empty());
     // The `#if MASKED` branch must not have been compiled in, so the pass
     // samples slot 0 the way the author wrote it.
     EXPECT_EQ(std::count(material->defines.begin(), material->defines.end(), "MASKED"), 0);

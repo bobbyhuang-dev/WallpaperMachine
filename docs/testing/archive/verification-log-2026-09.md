@@ -15,6 +15,25 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-20 — In-app language picker, per-language panel catalogs, registry checks
+
+Simplified Chinese was already translated but only reachable through macOS's
+language settings. Settings → General now has **Language** (System (Auto),
+English, 简体中文); the choice switches the panel in place and mirrors into the
+app-domain `AppleLanguages` so native strings follow on the next launch. The
+WebUI catalog moved to `WebUI/locales/zh-Hans.js` behind a registry in
+`i18n.js`; `AppLanguage.supported` drives the picker and the served-file allow
+list. Adding a language is documented in `docs/localization.md`.
+
+- `python3 scripts/test.py` — 73 Python tests OK (catalog check now verifies
+  Swift/i18n/locales/xcstrings registries agree, native keys all translated, key
+  parity across catalogs); native 529 tests, 9 skipped, 0 failures. New:
+  `AppLanguageTests` (5), `testLanguageSettingSwitchesThePanelInPlaceAndOffersEveryShippedLanguage`.
+- `python3 scripts/build.py --swift-only --configuration Release` — succeeded;
+  bundled `WebUI/` byte-identical to source, `locales/zh-Hans.js` and
+  `zh-Hans.lproj` present. No renderer change, no desktop run; the picker's
+  visual layout is unchecked on screen.
+
 ## 2026-09-20 — Verification log capped at ten entries; durable facts promoted
 
 Documentation only. The log had grown to 106 entries in six days (260 KB, 30% of

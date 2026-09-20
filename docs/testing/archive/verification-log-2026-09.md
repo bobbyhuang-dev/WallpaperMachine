@@ -15,6 +15,15 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — The shortcut request reaches the FFI boundary; the host chain above it does not exist yet
+
+SceneWallpaper drains the runtime's requests after the tick that produced them and reports each on the native main looper, and owe_scene_wallpaper_set_user_shortcut_callback follows the pointer-callback contract exactly. OweScene::set_user_shortcut_callback installs the Rust sink. The buttons are still dead: nothing above the FFI consumes these yet, the three properties hold empty values, and no send path to a media player exists.
+
+- Remaining, in order: a bounded channel per scene in core (the pointer relay uses a watch, which coalesces -- wrong for presses, where play/pause followed by next must not lose one), an actor message tagged with the SceneHandle, a PropertyKind::UserShortcut carrying Combo metadata so the user picks the action, and a Swift consumer that sends it to whichever provider is currently answering
+- Enabling that send changes the bundled adapter from read-only to control, which the mediaremote-adapter provenance note currently states is not done -- that note has to change with it
+- `scripts/test.py` — 523 passed, 0 failed, 11 skipped of 534
+- First run failed on CodeSign with "resource fork, Finder information, or similar detritus not allowed" on the Debug app; `xattr -cr` on the product cleared it, unrelated to any change here
+
 ## 2026-09-21 — engine.openUserShortcut existed nowhere, so every transport button threw
 
 This wallpaper's play/pause, next and previous buttons each have a cursorDown handler whose only statement is engine.openUserShortcut("<property>"). That member was not registered on the engine object at all, so the call threw TypeError, the handler aborted, and the press did nothing -- which is the whole of the reported 切歌无效, not a missing media permission.

@@ -25,6 +25,14 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — Release build after the revert and the doc updates
+
+python3 scripts/build.py --configuration Release, following the full gate.
+
+- Confirmed in the delivered binary: the bound transport value and the shortcut option label are present, and the reverted video-picker title is gone
+- Owning docs updated: media-integration.md no longer says transport is unimplemented, build.md records why the deployment pin is kept out of cargo, renderer.md lists the three new probe knobs. Link check clean apart from two pre-existing breaks in docs/archive/implementation-progress.md (f94ab32, not this work)
+- Delivered: `build/Build/Products/Release/MacWallpaperEngine.app` — quit and reopen the app to pick it up
+
 ## 2026-09-21 — Corrected: two sound claims were wrong, and the video picker promised what cannot work
 
 Three things in the entries below do not survive checking. The sound volume was never dropped -- _GetJsonValue reads a node's `value` when it is an object (WPJson.cpp:47-50), so 0.3 parsed fine; what was actually wrong is narrower, and the volume now follows the user's live property instead of the number scene.json shipped with. The negative check cited was a compile failure on the old header, which only shows a field exists.
@@ -103,12 +111,3 @@ scripts/build.py handed cargo a MACOSX_DEPLOYMENT_TARGET. Cargo builds proc-macr
 - Cargo steps in `build.py` and `check_renderer.py` now use `cargo_environment()`; Xcode still sets its own deployment target for the app, and the crates ship a staticlib the app links
 - `cargo test --release -p wallpaper-core --lib` 213 passed, `-p wallpaper-bridge --lib` 316 passed — the bridge compiles core, so this also covers the open_scene arity change
 - `scripts/check_renderer.py` clean — 10 generated cases, pixels_equal=True, 0 diagnostics, 8 reload cycles
-
-## 2026-09-21 — The shortcut request reaches the FFI boundary; the host chain above it does not exist yet
-
-SceneWallpaper drains the runtime's requests after the tick that produced them and reports each on the native main looper, and owe_scene_wallpaper_set_user_shortcut_callback follows the pointer-callback contract exactly. OweScene::set_user_shortcut_callback installs the Rust sink. The buttons are still dead: nothing above the FFI consumes these yet, the three properties hold empty values, and no send path to a media player exists.
-
-- Remaining, in order: a bounded channel per scene in core (the pointer relay uses a watch, which coalesces -- wrong for presses, where play/pause followed by next must not lose one), an actor message tagged with the SceneHandle, a PropertyKind::UserShortcut carrying Combo metadata so the user picks the action, and a Swift consumer that sends it to whichever provider is currently answering
-- Enabling that send changes the bundled adapter from read-only to control, which the mediaremote-adapter provenance note currently states is not done -- that note has to change with it
-- `scripts/test.py` — 523 passed, 0 failed, 11 skipped of 534
-- First run failed on CodeSign with "resource fork, Finder information, or similar detritus not allowed" on the Debug app; `xattr -cr` on the product cleared it, unrelated to any change here

@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use super::{DisplaySnapshotEntry, PointerConsumerCallback};
+use super::{DisplaySnapshotEntry, PointerConsumerCallback, UserShortcutObserverCallback};
 use crate::window::MouseButtonTracker;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -22,6 +22,7 @@ struct PointerConsumerObserver {
 pub struct EngineSnapshotPublisher {
     snapshot: arc_swap::ArcSwap<EngineSnapshot>,
     pointer_consumer: Mutex<PointerConsumerObserver>,
+    user_shortcut: Mutex<Option<UserShortcutObserverCallback>>,
     mouse_buttons: Arc<Mutex<MouseButtonTracker>>,
 }
 
@@ -31,6 +32,7 @@ impl EngineSnapshotPublisher {
         Self {
             snapshot: arc_swap::ArcSwap::from_pointee(snapshot),
             pointer_consumer: Mutex::new(PointerConsumerObserver { callback: None, has_consumers }),
+            user_shortcut: Mutex::new(None),
             mouse_buttons,
         }
     }
@@ -43,6 +45,24 @@ impl EngineSnapshotPublisher {
         let mut observer = self.pointer_consumer.lock().unwrap_or_else(|error| error.into_inner());
         observer.callback = callback;
         if let Some(callback) = &observer.callback { callback(observer.has_consumers); }
+    }
+
+    /// Installs the observer for `engine.openUserShortcut` requests.
+    ///
+    /// Replaces rather than adds: one host, one sink. The callback runs under
+    /// this lock and must only hand the request on, never reenter the engine.
+    pub fn set_user_shortcut_callback(&self, callback: Option<UserShortcutObserverCallback>) {
+        let mut observer = self.user_shortcut.lock().unwrap_or_else(|error| error.into_inner());
+        *observer = callback;
+    }
+
+    /// Reports one request. Returns false when no host is listening, which is
+    /// the ordinary state before the app has installed its sink.
+    pub fn report_user_shortcut(&self, handle: crate::project::SceneHandle, name: &str, value: &str) -> bool {
+        let observer = self.user_shortcut.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(callback) = observer.as_ref() else { return false };
+        callback(handle, name.to_owned(), value.to_owned());
+        true
     }
 
     pub fn publish(&self, snapshot: EngineSnapshot) {

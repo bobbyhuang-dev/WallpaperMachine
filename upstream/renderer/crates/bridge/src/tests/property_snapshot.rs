@@ -357,3 +357,39 @@ async fn conditional_snapshot_tracks_language_defaults_discard_and_hidden_overri
         .wallpaper_options;
     assert_property_ids(&japanese_default, &["language", "japanese", "malformed"]);
 }
+
+#[tokio::test]
+async fn user_shortcut_offers_the_actions_this_host_can_carry_out() {
+    // The author declares that a shortcut exists and leaves its value empty;
+    // what it does is the user's choice, so it has to reach them as a choice.
+    let bridge = WallpaperBridge::new_for_test();
+    bridge.inject_scene_project_for_test(
+        "100",
+        "Scene",
+        r#"{
+            "type":"scene",
+            "title":"Scene",
+            "general":{"properties":{
+                "playpausebutton":{"type":"usershortcut","text":"Play/Pause","value":""}
+            }}
+        }"#,
+    ).await;
+
+    let snapshot = bridge.wallpaper_options_snapshot("100".to_string()).await.unwrap();
+    let property = snapshot
+        .properties
+        .iter()
+        .find(|entry| entry.id == "playpausebutton")
+        .expect("the shortcut property is described");
+
+    assert_eq!(property.kind, BridgePropertyKind::Combo,
+        "a shortcut the user cannot bind is a button that does nothing");
+    let values: Vec<BridgePropertyValue> =
+        property.combo_options.iter().map(|option| option.value.clone()).collect();
+    assert_eq!(
+        values,
+        ["", "media:playpause", "media:next", "media:previous"]
+            .map(|value| BridgePropertyValue::String { value: value.to_owned() })
+            .to_vec()
+    );
+}

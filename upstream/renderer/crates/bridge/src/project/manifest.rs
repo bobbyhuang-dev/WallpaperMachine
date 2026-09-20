@@ -102,6 +102,12 @@ impl ProjectModel {
                     let kind = match object.get("type").and_then(Value::as_str).unwrap_or("") {
                         raw if raw.eq_ignore_ascii_case("slider") => PropertyKind::Slider,
                         raw if raw.eq_ignore_ascii_case("combo") => PropertyKind::Combo,
+                        // The author declares that a shortcut exists; the user
+                        // decides what it does. Wallpaper Engine has the user
+                        // bind one in its own editor, and this is the same
+                        // choice offered through the control the panel already
+                        // has, so nothing downstream needs a new widget.
+                        raw if raw.eq_ignore_ascii_case("usershortcut") => PropertyKind::Combo,
                         raw if raw.eq_ignore_ascii_case("bool") => PropertyKind::Bool,
                         raw if raw.eq_ignore_ascii_case("color") => PropertyKind::Color,
                         raw if raw.eq_ignore_ascii_case("textinput") => PropertyKind::TextInput,
@@ -136,6 +142,16 @@ impl ProjectModel {
                                 step,
                                 precision,
                                 fraction,
+                            }
+                        }
+                        PropertyKind::Combo
+                            if object
+                                .get("type")
+                                .and_then(Value::as_str)
+                                .is_some_and(|raw| raw.eq_ignore_ascii_case("usershortcut")) =>
+                        {
+                            PropertyMetadata::Combo {
+                                options: user_shortcut_options(),
                             }
                         }
                         PropertyKind::Combo => {
@@ -571,4 +587,18 @@ mod tests {
         );
         assert_eq!(by_id("mystery").metadata, PropertyMetadata::Unknown);
     }
+}
+
+/// What a `usershortcut` property may be bound to.
+///
+/// Wallpaper Engine lets the user pick the action in its own editor; these are
+/// the ones this host can carry out. The empty value means the wallpaper's
+/// button does nothing, which is what an unbound shortcut already did.
+fn user_shortcut_options() -> Vec<ComboOption> {
+    vec![
+        ComboOption { label: "None".to_owned(), value: String::new() },
+        ComboOption { label: "Play / Pause".to_owned(), value: "media:playpause".to_owned() },
+        ComboOption { label: "Next Track".to_owned(), value: "media:next".to_owned() },
+        ComboOption { label: "Previous Track".to_owned(), value: "media:previous".to_owned() },
+    ]
 }

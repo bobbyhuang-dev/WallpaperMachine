@@ -41,12 +41,6 @@ pub struct EngineActor {
     fail_next_refresh_displays: bool,
     #[cfg(test)]
     pointer_notifications: Vec<(Arc<()>, bool)>,
-    /// Requests a wallpaper has made and nothing has taken yet, oldest first.
-    ///
-    /// Bounded for the same reason the runtime's own queue is: a wallpaper can
-    /// press faster than anything drains, and the press still being waited on
-    /// is the newest one.
-    user_shortcut_requests: Vec<(SceneHandle, String, String)>,
 }
 
 #[derive(Clone)]
@@ -138,7 +132,6 @@ impl EngineActor {
             fail_next_refresh_displays: false,
             #[cfg(test)]
             pointer_notifications: Vec::new(),
-            user_shortcut_requests: Vec::new(),
         }
     }
 
@@ -1017,11 +1010,10 @@ impl Message<messages::NativeUserShortcutRequested> for EngineActor {
         if self.state.scene_mut(msg.handle).is_err() {
             return;
         }
-        const MAX_PENDING: usize = 16;
-        if self.user_shortcut_requests.len() >= MAX_PENDING {
-            self.user_shortcut_requests.remove(0);
-        }
-        self.user_shortcut_requests.push((msg.handle, msg.property_name, msg.property_value));
+        // Pushed straight to whoever is listening. Nothing is held here: a
+        // request no host has taken is a press the user already stopped
+        // waiting for, and keeping it would replay it at the next launch.
+        self.snapshots.report_user_shortcut(msg.handle, &msg.property_name, &msg.property_value);
     }
 }
 

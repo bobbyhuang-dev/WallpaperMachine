@@ -113,6 +113,14 @@ pub trait EngineFacade: Send + Sync + 'static {
         &self,
         callback: Option<wallpaper_core::PointerConsumerCallback>,
     );
+    /// Installs the sink for `engine.openUserShortcut` requests. Pushed rather
+    /// than polled: a press is rare and must not cost an idle wakeup to notice.
+    fn set_user_shortcut_callback(
+        &self,
+        callback: Option<wallpaper_core::UserShortcutObserverCallback>,
+    ) {
+        let _ = callback;
+    }
     /// Globally suspends or resumes system-audio capture. Per-scene audio
     /// response settings are preserved across the transition.
     fn set_audio_capture_suspended(&self, suspended: bool) -> EngineFuture<()> {
@@ -596,6 +604,13 @@ impl EngineFacade for RealEngineFacade {
         callback: Option<wallpaper_core::PointerConsumerCallback>,
     ) {
         self.engine.set_pointer_consumer_callback(callback);
+    }
+
+    fn set_user_shortcut_callback(
+        &self,
+        callback: Option<wallpaper_core::UserShortcutObserverCallback>,
+    ) {
+        self.engine.set_user_shortcut_callback(callback);
     }
 }
 

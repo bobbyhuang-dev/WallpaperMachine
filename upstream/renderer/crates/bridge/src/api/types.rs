@@ -643,3 +643,15 @@ pub struct BridgeNativeVideoWallpaper {
     pub scaling_mode: BridgeScalingMode,
     pub scaling_factor: f64,
 }
+
+/// One `engine.openUserShortcut` request from a running wallpaper.
+///
+/// `value` is what the wallpaper's user chose for that property, and is the
+/// only thing a host may act on: the property's name is the author's, not the
+/// user's, so acting on it would be deciding for them.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct BridgeUserShortcut {
+    pub scene_handle: u64,
+    pub property: String,
+    pub value: String,
+}

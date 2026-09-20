@@ -17,7 +17,7 @@ pub use types::{
     BridgeMonitorInformationSnapshot, BridgePlaybackState, BridgePropertyDescriptor,
     BridgePropertyKind, BridgePropertyValue, BridgeRendererCountersReport,
     BridgeRendererSurfaceCounters, BridgeScalingMode, BridgeSceneBackendReport,
-    BridgeSceneUpdateModeReport, BridgeSettingsSnapshot,
+    BridgeSceneUpdateModeReport, BridgeSettingsSnapshot, BridgeUserShortcut,
     BridgeSliderMetadata, BridgeSnapshotBundle, BridgeStorageStatus, BridgeVideoBackendReport,
     BridgeWallpaperEntry,
     BridgeWallpaperKind, BridgeWallpaperMutationBundle, BridgeWallpaperOptionsSnapshot,
@@ -203,6 +203,20 @@ impl<E: EngineFacade> BridgeBuilder<E> {
             None
         };
 
+        // Small: a user cannot press faster than the app takes them, and a
+        // backlog nobody has taken is presses already stopped being waited on.
+        let (shortcut_sender, shortcut_receiver) = tokio::sync::mpsc::channel(8);
+        engine.set_user_shortcut_callback(Some(Arc::new(move |handle, property, value| {
+            let event = BridgeUserShortcut {
+                scene_handle: handle.raw(),
+                property,
+                value,
+            };
+            if shortcut_sender.try_send(event).is_err() {
+                log::warn!("dropped a user shortcut nobody had taken yet");
+            }
+        })));
+
         Ok(WallpaperBridge {
             actor,
             mouse_poller,
@@ -210,6 +224,7 @@ impl<E: EngineFacade> BridgeBuilder<E> {
             system_media: SystemMediaStore::default(),
             engine,
             _config_store: self.config_store,
+            user_shortcuts: tokio::sync::Mutex::new(shortcut_receiver),
         })
     }
 }
@@ -402,6 +417,10 @@ pub struct WallpaperBridge {
     /// analysis can be read without an actor round trip on every poll.
     engine: ArcEngineFacade,
     _config_store: Option<ConfigStore>,
+    /// Requests waiting for `next_user_shortcut`. Bounded, and outside the
+    /// actor: awaiting one inside a message handler would stall the mailbox for
+    /// every other request while nobody is pressing anything.
+    user_shortcuts: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<BridgeUserShortcut>>,
 }
 
 #[derive(Clone)]
@@ -1552,6 +1571,36 @@ impl WallpaperBridge {
     /// # Errors
     ///
     /// Returns an error when the bridge actor is gone.
+    /// Waits for the next `engine.openUserShortcut` request from a wallpaper
+    /// whose user has consented to media integration.
+    ///
+    /// Long-polls rather than returning immediately: a press is rare, and a
+    /// caller that had to ask repeatedly would burn wakeups finding nothing.
+    /// The wait happens outside the actor, so it stalls no other request.
+    ///
+    /// Requests from wallpapers without that consent are dropped here rather
+    /// than handed on -- a wallpaper the user has not let near their media must
+    /// not reach a media player through this.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the engine has shut the channel.
+    pub async fn next_user_shortcut(&self) -> Result<BridgeUserShortcut, BridgeError> {
+        loop {
+            let event = {
+                let mut receiver = self.user_shortcuts.lock().await;
+                receiver.recv().await
+            };
+            let Some(event) = event else {
+                return Err(BridgeError::engine("the engine stopped reporting user shortcuts"));
+            };
+            if self.system_media_scene_handles().await?.contains(&event.scene_handle) {
+                return Ok(event);
+            }
+            log::debug!("ignored a user shortcut from a wallpaper without media consent");
+        }
+    }
+
     pub async fn system_media_scene_handles(&self) -> Result<Vec<u64>, BridgeError> {
         self.actor
             .ask(crate::actor::messages::GetSystemMediaSceneHandles)

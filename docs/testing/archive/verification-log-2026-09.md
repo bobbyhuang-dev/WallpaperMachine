@@ -15,6 +15,19 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-20 — Retained media events across a scene rebuild; screenResolution is the display
+
+Two fixes the reported symptoms pointed at. MEDIA_EVENT_JSON was dropped whenever the wallpaper had no scene or runtime — the window a settings change opens, and exactly when the host replays state because the rebuilt scene is a new handle. The artwork already survived it by being parked; the events did not, and this wallpaper's cover group is revealed by mediaPlaybackChanged. Separately engine.screenResolution followed the cursor viewport, which is the scene's own world extent.
+
+- SceneWallpaper retains the latest media event per type in first-arrival order and replays them on scene attach; withdrawing media consent clears them
+- `SceneRuntimeContext::SetScreenResolution` is now its own setter; `SetCursorViewport` no longer moves it. SceneWallpaper publishes `RenderInitInfo::width`/`height`, which are already physical pixels (host fills them from `DisplayDesc`; both backends divide by the scale factor for logical points)
+- `SceneScriptMediaEventSmoke.EngineScreenResolutionIsAReadableVec2` now asserts the viewport does NOT move the value, that the display resolution does, and that a zero is refused — it fails on the old coupling
+- `scenescript_media_event_smoke` 16, `mouse_input_test` 11, `layer_texture_reference_test` 11 — passed. `script_runtime_compat_test` fails only on the pre-existing `HostVectorUpdatesDoNotCallMutableGlobalVectorConstructors`
+- Installed corpus (10 scenes, probe) — 4 pre-existing failures in 3292361861, every other scene 0
+- `python3 scripts/test.py` — 523 passed, 0 failed, 11 skipped of 534. The first run failed `ControlPanelShellTests.testFirstRunGuideCovers…`, which passes 10/10 targeted both with and without these changes and is flaky under the new parallel runner, not a regression here
+- `python3 scripts/check_renderer.py` — exit 0, adaptive-20260920-215805; `python3 scripts/build.py --configuration Release` — exit 0
+- Not covered by an automated test: the SceneWallpaper half of both fixes (retain/replay, and publishing the surface size). No harness constructs SceneWallpaper with a surface and a runtime — the binding tests never load a scene and the Metal smoke drives MetalRender directly
+
 ## 2026-09-20 — Attributing the per-scene diffs behind the annotation-default fix
 
 The entry below reported three scenes changing and called them wall-clock text. Re-measured with both probe binaries built first and run back to back, which is the only way the clock and the async text layout hold still.

@@ -84,6 +84,10 @@ pub struct WallpaperEngine {
 
 pub type FirstFrameCallback = Arc<dyn Fn(SceneHandle) + Send + Sync + 'static>;
 pub type PointerConsumerCallback = Arc<dyn Fn(bool) + Send + Sync + 'static>;
+/// Receives one `engine.openUserShortcut` request: which wallpaper asked,
+/// the property it named, and the value its user chose for that property.
+pub type UserShortcutObserverCallback =
+    Arc<dyn Fn(crate::project::SceneHandle, String, String) + Send + Sync + 'static>;
 
 #[derive(Clone)]
 struct FirstFrameCallbackCell {
@@ -225,6 +229,14 @@ impl WallpaperEngine {
     /// The callback must only update polling control and must not reenter the engine.
     pub fn set_pointer_consumer_callback(&self, callback: Option<PointerConsumerCallback>) {
         self.snapshots.set_pointer_consumer_callback(callback);
+    }
+
+    /// Installs the sink for `engine.openUserShortcut` requests.
+    ///
+    /// Pushed rather than polled: a press is rare and must not cost an idle
+    /// wakeup to notice.
+    pub fn set_user_shortcut_callback(&self, callback: Option<UserShortcutObserverCallback>) {
+        self.snapshots.set_user_shortcut_callback(callback);
     }
 
     #[cfg(test)]

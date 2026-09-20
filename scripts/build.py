@@ -74,10 +74,14 @@ def cargo_environment():
 
     The pin is not dropped, only moved: the renderer crate's build script reads
     `OWE_MACOSX_DEPLOYMENT_TARGET` and hands it to CMake, so the C++ engine is
-    still built for the same minimum as the app that links it.
+    still built for the same minimum as the app that links it. Rust's own
+    objects fall back to the compiler default, which is below that minimum and
+    therefore links without complaint.
     """
     result = build_environment()
-    result["OWE_MACOSX_DEPLOYMENT_TARGET"] = result.pop("MACOSX_DEPLOYMENT_TARGET", "26.0")
+    pinned = result.pop("MACOSX_DEPLOYMENT_TARGET", None)
+    if pinned is not None:
+        result["OWE_MACOSX_DEPLOYMENT_TARGET"] = pinned
     return result
 
 

@@ -40,7 +40,7 @@ pub use display::{
 };
 pub use engine::{
     DisplayConfig, DisplaySelector, DisplaySnapshotEntry, FirstFrameCallback, PointerConsumerCallback,
-    WallpaperAssignment, WallpaperEngine, WallpaperEngineConfig,
+    UserShortcutObserverCallback, WallpaperAssignment, WallpaperEngine, WallpaperEngineConfig,
 };
 pub use error::EngineError;
 pub use owe::backend::AudioSpectrum128;

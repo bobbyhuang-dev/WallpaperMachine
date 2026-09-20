@@ -155,8 +155,16 @@ Swift tests cover, without starting the app:
   the native reply bridge, routes a `navigate` message to Settings, and rejects
   a non-allowlisted external URL; an English/Simplified Chinese regression that
   checks the injected language, rendered navigation/accessibility labels, settings
-  and result summary, plus locale fallback and literal placeholder substitution.
-  Python catalog checks reject duplicate/empty entries, missing direct-call and
+  and result summary, plus locale fallback and literal placeholder substitution;
+  a language-switch regression that sends `languageSetting` and confirms the
+  page re-renders in place, the picker offers every shipped language under its
+  own name, and an unshipped tag is refused. `Tests/Unit/Localization/` covers
+  the preference store: system matching, persistence, the `AppleLanguages`
+  mirror and rejected tags. Python catalog checks
+  (`scripts/tests/test_panel_localization.py`) require the Swift registry, the
+  `i18n.js` registry, `WebUI/locales/` and both `.xcstrings` to name the same
+  languages, every native key to be translated, every catalog to hold the same
+  keys, and reject duplicate/empty entries, missing direct-call and
   static-markup translations, and placeholder mismatches; an About-updates regression that checks,
   downloads, and refuses to install without a window, plus a snapshot mapping of
   idle/available/ready actions; a `dismissError` regression where a

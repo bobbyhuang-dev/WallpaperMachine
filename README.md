@@ -15,6 +15,7 @@ lock screen.
 | [Audio-responsive wallpapers](docs/features/audio-response.md) | Per-wallpaper audio response driven by system audio |
 | [Animated lock screen](docs/features/lock-screen.md) | Experimental, extension-based, off by default |
 | [Appearance](docs/features/appearance.md) | System/Light/Dark, accent color, surface tone |
+| [Languages](docs/features/control-panel.md#language) | English and Simplified Chinese; follows macOS or an in-app choice, more languages via [localization.md](docs/localization.md) |
 
 ## Quickstart
 

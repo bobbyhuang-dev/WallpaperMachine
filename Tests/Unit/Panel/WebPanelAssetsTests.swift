@@ -26,11 +26,16 @@ final class WebPanelAssetsTests: XCTestCase {
 
   func testServesEveryBundledPanelModule() throws {
     let assets = WebPanelAssets()
-    for name in ["index.html", "panel.js", "settings.js", "theme.js", "icons.js", "i18n.js", "panel.css", "settings.css"] {
+    let locales = AppLanguage.supported.map(\.tag).filter { $0 != "en" }.map { "locales/\($0).js" }
+    XCTAssertFalse(locales.isEmpty)
+    for name in ["index.html", "panel.js", "settings.js", "theme.js", "icons.js", "i18n.js", "panel.css", "settings.css"] + locales {
       let route = assets.route(try XCTUnwrap(URL(string: "mwe-ui://app/\(name)")))
       guard case .file(let file)? = route else { return XCTFail("\(name) is not served") }
-      XCTAssertEqual(file.lastPathComponent, name)
+      XCTAssertTrue(file.path.hasSuffix("/WebUI/\(name)"), file.path)
+      XCTAssertTrue(FileManager.default.fileExists(atPath: file.path), "\(name) is not bundled")
     }
     XCTAssertNil(assets.route(try XCTUnwrap(URL(string: "mwe-ui://app/missing.js"))))
+    XCTAssertNil(assets.route(try XCTUnwrap(URL(string: "mwe-ui://app/locales/en.js"))))
+    XCTAssertNil(assets.route(try XCTUnwrap(URL(string: "mwe-ui://app/locales/../panel.js"))))
   }
 }

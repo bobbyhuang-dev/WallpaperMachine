@@ -8,21 +8,27 @@ a system dialog and renderer content is never loaded into the web view.
 
 ## Language
 
-The control panel supports English and Simplified Chinese, including navigation,
-filters, wallpaper options, download/sign-in guidance, settings and accessibility
-labels. It follows the app language selected by macOS, not Steam's language.
-To use Chinese without changing the system language, add MacWallpaperEngine in
-**System Settings → General → Language & Region → Applications** and choose
-**Simplified Chinese**, then quit and reopen the app. There is no separate
-in-app language switch.
+The app ships in English and Simplified Chinese (简体中文), including navigation,
+filters, wallpaper options, download/sign-in guidance, settings, accessibility
+labels, menus and dialogs. **Settings → General → Language** offers **System
+(Auto)** and every shipped language, each listed under its own name:
 
-Swift injects the bundle's preferred localization before the page loads; the
-bundled [`i18n.js`](../../WebUI/i18n.js) catalog translates the WebUI. Unsupported
-languages and missing keys fall back to English. Native menus and dialogs use
-`App/Resources/Localizable.xcstrings`. Wallpaper titles, descriptions, creator
-names, custom property labels and upstream diagnostic details remain as supplied;
-this does not translate third-party wallpaper content. Steam filter values and
-bridge action identifiers remain unchanged when labels are translated.
+- **System (Auto)** (default) follows the macOS language list as macOS matches
+  it to the app: `zh-CN`, `zh` and `zh-Hans-TW` reach Simplified Chinese;
+  Traditional Chinese and any other language fall back to English. A per-app
+  choice made in **System Settings → General → Language & Region →
+  Applications** is honoured the same way.
+- Choosing a language switches the panel immediately, without a reload, and is
+  remembered. Native menus and dialogs use the new language the next time the
+  app is opened, because macOS fixes a process's localization at launch.
+  Returning to **System (Auto)** hands the choice back to macOS.
+
+Steam's own language is not involved. Unsupported languages and missing keys
+fall back to English. Wallpaper titles, descriptions, creator names, custom
+property labels and upstream diagnostic details remain as supplied; this does
+not translate third-party wallpaper content. Steam filter values and bridge
+action identifiers remain unchanged when labels are translated. How the layers
+fit together and how to add a language: [Localization](../localization.md).
 
 ## Layout
 
@@ -60,7 +66,7 @@ filter disclosure or popover.
 - **Installed** shows the local library.
 - **Settings** replaces the browser with a sectioned native-feeling settings
   view (General, Appearance, Performance, Displays, Library & Steam, Storage,
-  About).
+  About). **General** starts with the [Language](#language) picker.
   **Performance** holds the video backend choice, the internal render scale,
   the opt-in battery quality profile and the experimental content-pacing and
   shared-video-decode switches. See [Performance settings](performance.md).

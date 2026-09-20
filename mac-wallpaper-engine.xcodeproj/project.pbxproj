@@ -40,6 +40,7 @@
 		3917DEAE978C5276A38F8313 /* LockScreenWallpaperServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1015DAA18F3ACA593229554 /* LockScreenWallpaperServiceTests.swift */; };
 		3E6439CA9546452C160303E9 /* DownloaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FC8EC44DEAD3ABAB644E213 /* DownloaderTests.swift */; };
 		4142A8074138F9E44CB6750B /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D6F60DDEA7540438E0B324BA /* AppKit.framework */; };
+		42CAC6CC72581E919E9A4236 /* AppLanguageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8F33CC024A29274B8709DA4 /* AppLanguageTests.swift */; };
 		435DD724C386DA7C7AE950C3 /* WallpaperPresentationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF12BE7A20C30B7F618DC09 /* WallpaperPresentationPolicy.swift */; };
 		444B748A6750B7FD4912FFCE /* WallpaperController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04D0FB6B06C559179E57D48F /* WallpaperController.swift */; };
 		4519052E5A0BD408A995925C /* WallpaperPresentationAuthority.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A5144B06539C7765D02FB25 /* WallpaperPresentationAuthority.swift */; };
@@ -141,6 +142,7 @@
 		D141200F145FD1F56D51C48A /* UserAssetStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 151FB993898861A9D2E2D478 /* UserAssetStorage.swift */; };
 		D1B54A6D7453C6032C788D5B /* NativeVideoWallpaperWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04F123AC46A0264C4CD580CC /* NativeVideoWallpaperWindow.swift */; };
 		D404D84A2910AB78FE6CDA61 /* WorkshopService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B64F414CE5DFAC464E2A9BA /* WorkshopService.swift */; };
+		D5EFEED28E6B7023CB33819B /* AppLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82FD587AA834825FAF5FAE15 /* AppLanguage.swift */; };
 		D5FB8776C95A5411DD395EEE /* SystemMediaEventCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D83F616A359F437A2D5C2AE /* SystemMediaEventCodecTests.swift */; };
 		D7EF20DDDC59C195704AB019 /* MediaRemote.m in Sources */ = {isa = PBXBuildFile; fileRef = 4D422A70DFB05B08D97A3A6F /* MediaRemote.m */; };
 		DE58FADC8F82A261CC0FFB69 /* BatchDeletionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E910E7175F81F6CEF69CB5DA /* BatchDeletionTests.swift */; };
@@ -309,6 +311,7 @@
 		7F8B36E9A99B383A0C0B1594 /* SteamCMDApprovalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamCMDApprovalTests.swift; sourceTree = "<group>"; };
 		810D74ACE9185C8F22FDD530 /* SceneMediaSink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneMediaSink.swift; sourceTree = "<group>"; };
 		821B762E4C396492C679C3A4 /* RuntimeCounters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeCounters.swift; sourceTree = "<group>"; };
+		82FD587AA834825FAF5FAE15 /* AppLanguage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLanguage.swift; sourceTree = "<group>"; };
 		8430D06CBD99C977CAA8CD92 /* WebWallpaperHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebWallpaperHost.swift; sourceTree = "<group>"; };
 		84455E0644A22136DF7B0882 /* AppUpdateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateTests.swift; sourceTree = "<group>"; };
 		849D0C107D7EC40070B49392 /* NativeVideoPlayerMediaTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeVideoPlayerMediaTests.swift; sourceTree = "<group>"; };
@@ -360,6 +363,7 @@
 		C1FECEE7CABD3E49FCA50093 /* ControlPanelWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanelWindow.swift; sourceTree = "<group>"; };
 		C24CEBE6BC0D4A6CC1E48261 /* DesktopSpaceWallpaperAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopSpaceWallpaperAPI.swift; sourceTree = "<group>"; };
 		C874854210140C108F9DB20B /* SteamCMDSetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamCMDSetupTests.swift; sourceTree = "<group>"; };
+		C8F33CC024A29274B8709DA4 /* AppLanguageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLanguageTests.swift; sourceTree = "<group>"; };
 		C96545463639E3F159BB3D93 /* WebPanelSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPanelSnapshot.swift; sourceTree = "<group>"; };
 		D197CA08A9369C894301D3CB /* MediaArtworkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaArtworkTests.swift; sourceTree = "<group>"; };
 		D372A98958809A2404D1B89F /* WorkshopTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkshopTests.swift; sourceTree = "<group>"; };
@@ -630,6 +634,7 @@
 				08BD349469B9D6D1D54B50A2 /* Diagnostics */,
 				2D78DC0FC241307F31428FEF /* GitHub */,
 				A56D2B3C091EED7F59C859FE /* Library */,
+				D2064843617B9956C9F4A729 /* Localization */,
 				1E8987176FC193DEADE9B8D6 /* LockScreen */,
 				DA9AE3418B96473A9574582A /* NativeVideo */,
 				A4391F9FD85D1D50AB0E984F /* Steam */,
@@ -882,6 +887,7 @@
 				A03B10BFC6D7C8E8E32CA552 /* Diagnostics */,
 				54CBC68E14EF5C73769D9B45 /* GitHub */,
 				35F96355F9F57EE1B5395D0B /* Library */,
+				E18420554681158538288684 /* Localization */,
 				900C55CFCFC5B13F5BA9B994 /* LockScreen */,
 				B7EDDA190DE56D4332CE362A /* NativeVideo */,
 				84564FA720E6F193FB30ED41 /* Panel */,
@@ -940,6 +946,14 @@
 			path = ControlPanel;
 			sourceTree = "<group>";
 		};
+		D2064843617B9956C9F4A729 /* Localization */ = {
+			isa = PBXGroup;
+			children = (
+				82FD587AA834825FAF5FAE15 /* AppLanguage.swift */,
+			);
+			path = Localization;
+			sourceTree = "<group>";
+		};
 		DA9AE3418B96473A9574582A /* NativeVideo */ = {
 			isa = PBXGroup;
 			children = (
@@ -949,6 +963,14 @@
 				04F123AC46A0264C4CD580CC /* NativeVideoWallpaperWindow.swift */,
 			);
 			path = NativeVideo;
+			sourceTree = "<group>";
+		};
+		E18420554681158538288684 /* Localization */ = {
+			isa = PBXGroup;
+			children = (
+				C8F33CC024A29274B8709DA4 /* AppLanguageTests.swift */,
+			);
+			path = Localization;
 			sourceTree = "<group>";
 		};
 		E43350743446551851648455 /* StarterWallpaper */ = {
@@ -1176,6 +1198,7 @@
 			files = (
 				653F7F6CC3F94FAFFF8B204C /* AdapterSystemMediaProvider.swift in Sources */,
 				23EA27A13A0E49F1C39CF91B /* AppDelegate.swift in Sources */,
+				D5EFEED28E6B7023CB33819B /* AppLanguage.swift in Sources */,
 				6C5C48868186C61BBC69BC7A /* AppLog.swift in Sources */,
 				688C47965928932A5D01CC0C /* AppTheme.swift in Sources */,
 				77F8EB0665ADAF0532C2B694 /* AppUpdateInstaller.swift in Sources */,
@@ -1261,6 +1284,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C8DE46234E3D8792BC7742B1 /* AdapterSystemMediaProviderTests.swift in Sources */,
+				42CAC6CC72581E919E9A4236 /* AppLanguageTests.swift in Sources */,
 				F95B3F0CA93A7ACAEA8B350B /* AppThemeTests.swift in Sources */,
 				ED3CA32F7A6453DC0B838626 /* AppUpdateTests.swift in Sources */,
 				DE58FADC8F82A261CC0FFB69 /* BatchDeletionTests.swift in Sources */,

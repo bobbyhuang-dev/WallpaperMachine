@@ -338,6 +338,7 @@ extension WebPanelController {
       "settingsSection": navigation.settingsSection.rawValue,
       "settingsSectionToken": Int(navigation.settingsSectionToken),
       "theme": theme.preferences.snapshot,
+      "language": appLanguage.snapshot,
       "selectedID": store.appSnapshot.selectedWallpaperId as Any? ?? null,
       "paused": store.appSnapshot.playbackState == .paused,
       "busy": commandBusy || store.activatingWallpaperID != nil || store.applyingWallpaperID != nil,

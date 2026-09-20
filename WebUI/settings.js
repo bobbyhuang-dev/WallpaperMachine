@@ -116,7 +116,14 @@ function draw(view) {
   const settingToggle = (key, label, off = false, note = '') => row(key, t(label), toggle(key, t(label), draft(key, settings[key]), `data-setting="${key}"`, off || busy || unavailable), note);
   const paragraphs = (...texts) => texts.map(text => `<p>${e(text)}</p>`).join('');
   const lockUnavailable = unavailable || settings.lockScreenStatus == null;
-  const general = settingToggle('launchAtLogin', 'Launch at login', !settings.launchAtLoginAvailable, !settings.launchAtLoginAvailable ? t('Move the app to Applications to enable.') : '')
+  // Language lives natively beside the theme, so it stays usable when renderer settings are unavailable.
+  // Option names are each language's own name and are deliberately left untranslated.
+  const languageState = state.language || {};
+  const languageOptions = [['system', t('System (Auto)')], ...(languageState.options || []).map(option => [option.id, option.name])];
+  const languageValue = draft('language', languageState.preference || 'system');
+  const general = row('language', t('Language'), select('language', t('Language'), languageValue, languageOptions, 'data-language-setting', view.pending.has('language')), t('The interface switches at once. Menus and dialogs follow the next time you open the app.'))
+    + `<div class="settings-group-gap"></div>`
+    + settingToggle('launchAtLogin', 'Launch at login', !settings.launchAtLoginAvailable, !settings.launchAtLoginAvailable ? t('Move the app to Applications to enable.') : '')
     + settingToggle('pauseOnBattery', 'Pause on battery')
     + settingToggle('keepWindowsOnWallpaperClick', 'Keep windows in place when clicking the wallpaper', false, t('Turns off macOS’s “Click wallpaper to reveal desktop” so clicks reach interactive wallpapers.'))
     + `<div class="settings-group-gap"></div>`
@@ -383,6 +390,13 @@ async function onChange(view, event) {
   const input = event.target;
   if (input.dataset.local) {
     view.drafts.set(input.dataset.key, input.type === 'checkbox' ? input.checked : input.value);
+    draw(view);
+    return;
+  }
+  if (input.dataset.languageSetting !== undefined) {
+    view.drafts.set('language', input.value);
+    await perform(view, 'language', 'languageSetting', { value: String(input.value) });
+    view.drafts.delete('language');
     draw(view);
     return;
   }

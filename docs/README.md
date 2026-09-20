@@ -19,6 +19,7 @@ live under `testing/`.
 |---|---|
 | [architecture.md](architecture.md) | Runtime architecture and module boundaries |
 | [repository-layout.md](repository-layout.md) | Directory map and where new code goes |
+| [localization.md](localization.md) | Language resolution, native and panel catalogs, how to add a language |
 
 ## Process
 

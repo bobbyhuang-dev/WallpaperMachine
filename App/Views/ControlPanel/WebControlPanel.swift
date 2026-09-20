@@ -49,12 +49,13 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
   let workshop: WorkshopStore
   let updater: AppUpdateStore
   let theme: AppThemeStore
+  let appLanguage: AppLanguageStore
   let displayTitles: DisplayTitleResolver
   weak var webView: WKWebView?
   let assets: WebPanelAssets
-  /// BCP 47 tag of the localization the page renders in, normally the bundle's preferred
-  /// one so the panel and the native strings agree.
-  let language: String
+  /// BCP 47 tag of the localization the page renders in: the user's in-app choice, or the
+  /// language macOS resolves for the bundle so the panel and native strings agree.
+  var language: String { Self.pageLanguage(appLanguage.effective.tag) }
   var subscriptions = Set<AnyCancellable>()
   var isReady = false
   var stopped = false
@@ -112,11 +113,11 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
     defaults: UserDefaults = .standard,
     libraryMetrics: LibraryMetricsService? = nil,
     assets: WebPanelAssets? = nil,
-    language: String? = nil
+    appLanguage: AppLanguageStore? = nil
   ) {
     self.store = store
     self.assets = assets ?? WebPanelAssets()
-    self.language = Self.pageLanguage(language ?? Bundle.main.preferredLocalizations.first)
+    self.appLanguage = appLanguage ?? .shared
     self.navigation = navigation
     self.workshop = workshop
     self.updater =
@@ -178,11 +179,13 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
     return view
   }
 
-  private func applyTheme(_ preferences: AppThemePreferences) {
+  /// This is the panel's only user script. It is replaced whenever the theme or language
+  /// changes so every reload, including WebContent recovery, starts with the latest saved
+  /// choices before first paint.
+  func installUserScript(theme preferences: AppThemePreferences? = nil) {
     guard let view = webView else { return }
-    view.appearance = preferences.mode.appearance
-    // This is the panel's only user script. Replace it so every reload, including
-    // WebContent recovery, starts with the latest saved theme before first paint.
+    // `$preferences` publishes before the store's value changes, so the sink passes its own.
+    let preferences = preferences ?? theme.preferences
     let content = view.configuration.userContentController
     content.removeAllUserScripts()
     // Mode/tone are closed enums, accent is validated as six hexadecimal digits and the
@@ -192,6 +195,12 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
         source:
           "window.__appTheme = {mode:'\(preferences.mode.rawValue)',accent:'\(preferences.accent)',tone:'\(preferences.tone.rawValue)'};window.__appLanguage='\(language)';",
         injectionTime: .atDocumentStart, forMainFrameOnly: true))
+  }
+
+  private func applyTheme(_ preferences: AppThemePreferences) {
+    guard let view = webView else { return }
+    view.appearance = preferences.mode.appearance
+    installUserScript(theme: preferences)
     guard isReady, !stopped else { return }
     Task { @MainActor [weak self, weak view] in
       guard let self, !self.stopped, let view else { return }
@@ -498,6 +507,11 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
     "index.html", "panel.js", "panel.css", "settings.js", "settings.css", "theme.js", "icons.js",
     "i18n.js",
   ]
+  /// One catalog module per shipped language, served as `mwe-ui://app/locales/<tag>.js`.
+  private static let localeFiles: Set<String> = Set(
+    AppLanguage.supported.filter { $0.tag != AppLanguage.english.tag }.map {
+      "locales/\($0.tag).js"
+    })
 
   enum Route: Equatable {
     case file(URL)
@@ -588,7 +602,7 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
       return nil
     }
     let name = String(url.path.dropFirst())
-    if url.host == "app", Self.files.contains(name) {
+    if url.host == "app", Self.files.contains(name) || Self.localeFiles.contains(name) {
       return Bundle.main.resourceURL?.appendingPathComponent("WebUI", isDirectory: true)
         .appendingPathComponent(name)
     }

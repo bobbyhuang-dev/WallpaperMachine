@@ -61,12 +61,15 @@ Adding a new target, source directory, resource or build setting means editing
   Report failures; never swallow them into a silent no-op.
 - **User-facing text is localized**: native strings use `String(localized:)` and
   `App/Resources/Localizable.xcstrings` / `InfoPlist.xcstrings`. WebUI strings use
-  `t(source, params)` and the Simplified Chinese catalog in `WebUI/i18n.js`;
-  static HTML uses `data-i18n` / `data-i18n-label`. Translate labels, never action
-  identifiers, option values, paths or third-party content. Escape translated
-  text and interpolated values at the HTML boundary; use named placeholders
-  instead of assembling sentences from English fragments. Missing keys fall
-  back to their English source. No hardcoded English in new UI strings.
+  `t(source, params)` and one catalog module per language in `WebUI/locales/`,
+  registered in `WebUI/i18n.js`; static HTML uses `data-i18n` / `data-i18n-label`.
+  A new string goes into every shipped catalog in the same change; a new
+  language follows [localization.md](localization.md) and is declared in
+  `AppLanguage.supported`. Translate labels, never action identifiers, option
+  values, paths or third-party content. Escape translated text and interpolated
+  values at the HTML boundary; use named placeholders instead of assembling
+  sentences from English fragments. Missing keys fall back to their English
+  source. No hardcoded English in new UI strings.
 - **Log through `AppLog`** (`trace`/`debug`/`info`/`warn`/`error`), which routes
   into the in-app log view. Do not add `print` to app code.
 - **Paths come from `ClientPaths`.** Never hardcode `~/Library/Application

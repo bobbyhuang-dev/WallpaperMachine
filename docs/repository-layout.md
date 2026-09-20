@@ -23,6 +23,7 @@ App/                               MacWallpaperEngine application target sources
   Services/Diagnostics/            runtime diagnostics session and counter sampling
   Services/GitHub/                 GitHub release client, update models, update store, installer
   Services/Library/                ClientPaths and library import/deletion; owns the app-support layout
+  Services/Localization/           AppLanguage.swift: shipped-language registry and the language preference store
   Services/LockScreen/             lock-screen selection overrides and configuration publishing
   Services/NativeVideo/            AVFoundation video backend: admission, player and host window
   Services/Steam/                  SteamCMD runtime discovery and setup state
@@ -40,10 +41,11 @@ Extension/                         MacWallpaperExtension sources, Info.plist, en
 Shared/                            contracts compiled into both targets: LockScreenConfiguration,
                                    RuntimeCounters, WallpaperPresentationAuthority
 WebUI/                             HTML/CSS/JS control panel; bundled verbatim as the app resource folder WebUI
+  locales/                         one panel catalog module per shipped language (zh-Hans.js), registered in i18n.js
 Resources/StarterWallpaper/        bundled sample wallpaper (Aurora.mp4, preview.jpg, project.json)
 Tests/Unit/<Domain>/               MacWallpaperEngineTests, grouped Appearance, Desktop, Diagnostics, GitHub,
-                                   Library, LockScreen, NativeVideo, Panel, Steam, SystemMedia, UserAssets,
-                                   WebWallpaper, Workshop; hosted in the app binary
+                                   Library, Localization, LockScreen, NativeVideo, Panel, Steam, SystemMedia,
+                                   UserAssets, WebWallpaper, Workshop; hosted in the app binary
 Tests/UI/                          MacWallpaperEngineUITests; desktop-driving XCUITest suite
 docs/                              all project documentation; see docs/README.md for the index
 scripts/                           developer command line; Python only
@@ -76,6 +78,7 @@ Things that must not appear:
 | View or panel-hosting feature | `App/Views/ControlPanel/` | Page state belongs in the snapshot builder, actions in the action handlers |
 | Observable app state | `App/ViewModels/` | Keep renderer calls behind `BridgeStore`; no views here |
 | Web-panel UI | `WebUI/` | Extend `panel.js`/`settings.js` plus the matching CSS; new files must be added to the served allow list in `WebPanelAssets`. Icons come from the vendored Lucide set in `icons.js`, never hand-drawn SVG |
+| A language | `WebUI/locales/<tag>.js`, `WebUI/i18n.js`, `App/Services/Localization/AppLanguage.swift`, both `.xcstrings` | Follow [localization.md](localization.md); the allow list and Settings picker derive from `AppLanguage.supported` |
 | Code shared with the extension | `Shared/` | Only if both targets genuinely need it, and it must build extension-API-only |
 | Lock-screen extension behaviour | `Extension/` | Nothing here may depend on app-only APIs or app-private files |
 | Unit test | `Tests/Unit/<Domain>/` | Same domain folder name as the code under test |

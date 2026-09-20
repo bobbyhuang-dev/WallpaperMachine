@@ -20,6 +20,12 @@ extension WebPanelController {
     case "resetTheme":
       theme.reset()
       return
+    case "languageSetting":
+      try appLanguage.set(try request.string("value"))
+      // The page switches from the snapshot it gets back; the user script is refreshed so a
+      // later reload or WebContent recovery starts in the same language.
+      installUserScript()
+      return
     case "dismissError":
       actionError = nil
       dismissedErrorRevision = store.latestBridgeErrorRevision

@@ -124,7 +124,7 @@ final class ControlPanelLayoutTests: XCTestCase {
     for language in ["en", "zh-Hans"] {
       let controller = WebPanelController(
         store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
-        language: language)
+        appLanguage: AppLanguageStore(defaults: defaults, systemLanguages: [language]))
       let web = controller.makeWebView()
       defer { controller.stop() }
       web.setFrameSize(NSSize(width: 960, height: 640))
@@ -152,7 +152,8 @@ final class ControlPanelLayoutTests: XCTestCase {
         """
         const {t, setLanguage} = await import('./i18n.js');
         const cases = [['zh-CN','zh-Hans'], ['zh-Hans-TW','zh-Hans'], ['zh','zh-Hans'],
-          ['zh-TW','en'], ['zh-Hant','en'], ['en-CN','en'], ['fr','en'], ['zhgarbage','en']];
+          ['zh-TW','en'], ['zh-Hant','en'], ['zh-Hant-CN','en'], ['en-CN','en'], ['en-GB','en'],
+          ['fr','en'], ['zhgarbage','en'], ['','en'], [undefined,'en']];
         const resolved = cases.every(([tag, expected]) => setLanguage(tag) === expected);
         setLanguage('zh-Hans');
         const payload = '<img src=x onerror=alert(1)> {count} $&';
@@ -179,6 +180,94 @@ final class ControlPanelLayoutTests: XCTestCase {
         zh.unicodeScalars.contains { $0.properties.isIdeographic },
         "\(key): expected Han text, got \(zh)")
     }
+    await workshop.steamCMDSetup.shutdown()
+  }
+
+  func testLanguageSettingSwitchesThePanelInPlaceAndOffersEveryShippedLanguage() async throws {
+    let fixture = makeStore()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "web-panel-language-switch-\(UUID().uuidString)")
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
+    defer {
+      defaults.removePersistentDomain(forName: root.lastPathComponent)
+      try? FileManager.default.removeItem(at: root)
+    }
+    let workshop = WorkshopStore(
+      downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
+      defaults: defaults)
+    let languages = AppLanguageStore(defaults: defaults, systemLanguages: ["en"])
+    let controller = WebPanelController(
+      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
+      appLanguage: languages)
+    let web = controller.makeWebView()
+    defer { controller.stop() }
+    web.setFrameSize(NSSize(width: 960, height: 640))
+    let deadline = Date().addingTimeInterval(15)
+    while !controller.isReady && Date() < deadline {
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    guard controller.isReady else { return XCTFail("panel did not become ready") }
+    let probe = """
+      const bridge = window.webkit.messageHandlers.native;
+      window.wallpaperUI.receive(await bridge.postMessage({action:'navigate',page:'settings'}));
+      const reply = await bridge.postMessage({action:'languageSetting', value});
+      window.wallpaperUI.receive(reply);
+      const select = document.querySelector('[data-language-setting]');
+      return {
+        lang: document.documentElement.lang,
+        tab: document.querySelector('.tabs [data-page="discover"]').textContent,
+        navLabel: document.querySelector('.tabs').getAttribute('aria-label'),
+        section: document.querySelector('#settings-tab-general').textContent,
+        selected: select.value,
+        options: Array.from(select.options).map(option => [option.value, option.textContent]),
+        effective: reply.language.effective,
+      };
+      """
+    let chineseReply = try await web.callAsyncJavaScript(
+      probe, arguments: ["value": "zh-Hans"], in: nil, contentWorld: .page)
+    let chinese = try XCTUnwrap(chineseReply as? [String: Any])
+    XCTAssertEqual(chinese["lang"] as? String, "zh-Hans")
+    XCTAssertEqual(chinese["selected"] as? String, "zh-Hans")
+    XCTAssertEqual(chinese["effective"] as? String, "zh-Hans")
+    XCTAssertEqual(languages.preference, "zh-Hans")
+    XCTAssertEqual(controller.language, "zh-Hans")
+    for key in ["tab", "navLabel", "section"] {
+      let text = try XCTUnwrap(chinese[key] as? String, key)
+      XCTAssertTrue(
+        text.unicodeScalars.contains { $0.properties.isIdeographic },
+        "\(key): the page must switch without a reload, got \(text)")
+    }
+    let options = try XCTUnwrap(chinese["options"] as? [[String]])
+    XCTAssertEqual(options.first?.first, "system")
+    XCTAssertEqual(
+      options.dropFirst().map { $0[0] }, AppLanguage.supported.map(\.tag),
+      "Every shipped language is offered after System")
+    for language in AppLanguage.supported {
+      XCTAssertTrue(
+        options.contains { $0[0] == language.tag && $0[1] == language.name },
+        "\(language.tag) is listed under its own name in any interface language")
+    }
+
+    let englishReply = try await web.callAsyncJavaScript(
+      probe, arguments: ["value": "system"], in: nil, contentWorld: .page)
+    let english = try XCTUnwrap(englishReply as? [String: Any])
+    XCTAssertEqual(english["lang"] as? String, "en")
+    XCTAssertEqual(english["selected"] as? String, "system")
+    XCTAssertEqual(languages.preference, AppLanguageStore.systemChoice)
+    for key in ["tab", "navLabel", "section"] {
+      let text = try XCTUnwrap(english[key] as? String, key)
+      XCTAssertNotEqual(text, chinese[key] as? String, key)
+      XCTAssertFalse(text.unicodeScalars.contains { $0.properties.isIdeographic }, key)
+    }
+
+    let refused =
+      try await web.callAsyncJavaScript(
+        """
+        try { await window.webkit.messageHandlers.native.postMessage({action:'languageSetting', value:'zh-TW'}); return false; }
+        catch { return document.documentElement.lang === 'en'; }
+        """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+    XCTAssertEqual(refused, true, "A language the app does not ship is refused and changes nothing")
+    XCTAssertNil(web.window, "This regression must not open a desktop window")
     await workshop.steamCMDSetup.shutdown()
   }
 

@@ -1,6 +1,6 @@
 import { renderSettings } from './settings.js';
 import { glyphs } from './icons.js';
-import { t, applyStaticText } from './i18n.js';
+import { t, applyStaticText, setLanguage, language } from './i18n.js';
 
 const $ = (id) => document.getElementById(id);
 const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
@@ -154,6 +154,10 @@ function receive(snapshot) {
   if (selection.size) { const ids = new Set((snapshot.wallpapers || []).map(item => item.id)); for (const id of selection) if (!ids.has(id)) selection.delete(id); }
   if (selectionAnchor && !selection.has(selectionAnchor)) selectionAnchor = null;
   window.appTheme.apply(snapshot.theme);
+  // Every string is translated where it is drawn, so a language change only needs the
+  // static markup refreshed before the render below redraws the rest.
+  const shown = language();
+  if (snapshot.language?.effective && setLanguage(snapshot.language.effective) !== shown) applyStaticText();
   if (!workshopDraft) workshopDraft = { text: snapshot.workshop?.text || '', sort: snapshot.workshop?.sort || 'trend-year', tags: [...(snapshot.workshop?.tags || [])], excludedTags: [...(snapshot.workshop?.excludedTags || defaultExcludedTags)] };
   render();
 }

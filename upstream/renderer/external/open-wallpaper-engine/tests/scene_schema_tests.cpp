@@ -4366,13 +4366,19 @@ TEST(SceneSchema, MediaStateSurvivesTheSceneItArrivedBefore) {
     EXPECT_EQ(scene->runtime->scriptErrorCount(), 0u);
 }
 
-TEST(SceneSchema, MediaStateIsNotReplayedAfterConsentIsWithdrawn) {
+TEST(SceneSchema, WithdrawingConsentDropsWhatWasRetained) {
+    // Turning the setting back on must not resurrect what was playing when it
+    // was last on. Retaining without clearing would replay a stale event here,
+    // which is the only way this sequence can reveal the probe -- while the
+    // setting is off both the replay and the runtime refuse to dispatch, so a
+    // test that never re-enables pins nothing.
     wallpaper::SceneWallpaper wallpaper;
     ASSERT_TRUE(wallpaper.init());
     wallpaper.setPropertyBool(wallpaper::PROPERTY_MEDIA_INTEGRATION_ENABLED, true);
     wallpaper.setPropertyString(wallpaper::PROPERTY_MEDIA_EVENT_JSON,
                                 R"({"type":"mediaPlaybackChanged","state":0})");
     wallpaper.setPropertyBool(wallpaper::PROPERTY_MEDIA_INTEGRATION_ENABLED, false);
+    wallpaper.setPropertyBool(wallpaper::PROPERTY_MEDIA_INTEGRATION_ENABLED, true);
 
     std::shared_ptr<wallpaper::SceneNode> probe;
     auto scene = MakeMediaProbeScene(probe);
@@ -4382,5 +4388,5 @@ TEST(SceneSchema, MediaStateIsNotReplayedAfterConsentIsWithdrawn) {
     wallpaper.shutdown();
 
     EXPECT_FALSE(scene->runtime->NodeVisible("probe"))
-        << "a wallpaper whose user turned media integration off was still told what is playing";
+        << "consent was withdrawn and what was playing then was replayed anyway";
 }

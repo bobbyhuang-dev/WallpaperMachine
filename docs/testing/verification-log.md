@@ -25,6 +25,14 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-20 — The consent test now pins the clear it is named for
+
+As first written, WithdrawingConsentDropsWhatWasRetained passed with the whole fix removed: while the setting is off both the replay and the runtime's own gate refuse to dispatch, so the assertion could not tell retention-with-clear from no retention at all.
+
+- Re-sequenced to enable → event → disable → enable again → attach: retaining without clearing replays the stale event on the second enable, which is the only way that sequence can reveal the probe
+- Verified by deleting just the `clear()` in `SET_MEDIA_INTEGRATION_ENABLED` — the test fails with "consent was withdrawn and what was playing then was replayed anyway" and passes with it restored
+- `scene_schema_tests` — 74 passed, plus the two pre-existing 5 s pointer-capability timeouts recorded in renderer.md; neither gate builds this suite
+
 ## 2026-09-20 — Corrected: a settings change reloads on the same object, and the harness exists
 
 Two claims in the entry below were wrong. A property change does not produce a new scene handle: set_property_override sets a property on the existing object and SceneWallpaper turns it into LOAD_SCENE on that same object, so the host's fedHandles diff is empty and there is no replay at all — the old runtime is discarded with the old Scene and the new one starts blank. The null-runtime window the entry described is the wallpaper-switch case. Retaining every live event and replaying on attach covers both, and depends on no host timing.
@@ -120,14 +128,3 @@ std140 pads every array element to 16 bytes — what the host packs and the refl
 - Panel suites rerun after a test-only isolation fix (Shell/Library/Discover/Sync: 30 passed): every WebPanelController in tests now receives the test's own UserDefaults suite. Before that, test runs wrote welcomeSeen=1 into the real app.mac-wallpaper-engine domain; the key was deleted again with defaults delete.
 - Visual: offscreen WKWebView.takeSnapshot captures (throwaway test, deleted) at 760×560 dark en, 960×640 dark zh-Hans, 1240×800 light en; one overflow at the minimum window fixed by widening the card and relaxing the step measure. impeccable detect: no findings.
 - Not done: no Release build, no desktop run; the entrance animation and real-window focus were not observed live.
-
-## 2026-09-20 — Download ring names the SteamCMD step before bytes move
-
-- Change: WorkshopDownloader.phase (preparing/connecting/updating/signingIn/requesting/transferring/finishing) set alongside status; DownloadJob.phase; snapshot field phase.
-- WebUI: busy tile ring shows the phase word (ring-phase) instead of an empty sweep; transfer without percent keeps speed; progress 1 + finishing reads Finishing not 100%.
-- zh-Hans catalog: Preparing/Connecting/Signing in/Requesting/Finishing (Updating already present).
-- python3 scripts/test.py --only DownloaderLifecycleTests: 20 passed (new testPhaseFollowsEachSteamCMDStepBeforeAndAfterTheTransfer).
-- python3 scripts/test.py --only ControlPanelDiscoverTests: 6 passed (ring test extended with phased/finishing).
-- python3 scripts/test.py: 519 passed, 0 failed, 11 skipped (opt-in/asset checks).
-- impeccable detect on WebUI/panel.css, panel.js: no findings.
-- Gap: no desktop run; ring word fit at 60/72px and Chinese rendering not visually checked. Release app not rebuilt.

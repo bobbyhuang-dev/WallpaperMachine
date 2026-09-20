@@ -148,7 +148,7 @@ impl FunctionCoercion<'_> {
     }
 }
 
-/// Applies legacy vector-to-scalar conversion to unambiguous user inputs.
+/// Applies legacy vector prefix conversion to unambiguous user inputs.
 pub(super) fn narrow_user_scalar_arguments(
     context: &mut StrategyContext<'_, '_, '_>,
     tokens: TokenCursor<'_>,
@@ -175,9 +175,8 @@ pub(super) fn narrow_user_scalar_arguments(
         token_facts,
     };
     for (index, argument) in call.arguments.iter().enumerate() {
-        if analyzer.argument_vector_width(tokens, argument).is_none() {
-            continue;
-        }
+        let Some(actual) = analyzer.argument_vector_width(tokens, argument) else { continue; };
+        let actual_width = crate::legalize::LegacyTypeName::new(actual.constructor()).vector_width().unwrap();
         let mut candidates = token_facts
             .function_signatures()
             .iter()
@@ -186,14 +185,11 @@ pub(super) fn narrow_user_scalar_arguments(
                     && function.parameters().len() == call.arguments.len()
             })
             .peekable();
-        // Do not resolve overloads by guessing: every candidate must consume
-        // a float here. A vector overload must keep its original argument.
-        if candidates.peek().is_none()
-            || !candidates.all(|function| {
-                matches!(
-                    function.parameters()[index].ty().as_str(),
-                    "float" | "float1"
-                )
+        let Some(first) = candidates.peek() else { continue; };
+        let Some(width) = crate::legalize::LegacyTypeName::new(first.parameters()[index].ty().as_str()).vector_width() else { continue; };
+        // Preserve overload resolution unless every signature expects the same prefix.
+        if width >= actual_width || !candidates.all(|function| {
+                crate::legalize::LegacyTypeName::new(function.parameters()[index].ty().as_str()).vector_width() == Some(width)
             })
         {
             continue;
@@ -231,7 +227,7 @@ pub(super) fn narrow_user_scalar_arguments(
         context
             .context()
             .fixups
-            .push(Fixup::insert(argument.span().end_point(), ").x".to_owned()));
+            .push(Fixup::insert(argument.span().end_point(), format!(").{}", &"xyzw"[..usize::from(width)])));
     }
 }
 

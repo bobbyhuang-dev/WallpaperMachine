@@ -351,7 +351,7 @@ extension WebPanelController {
         Self.options(
           $0, titles: titles, assets: measuredAssets(for: $0),
           errors: propertyPathErrors[$0.wallpaperId] ?? [:],
-          delivery: store.webWallpaperDeliveryStatus?())
+          delivery: store.webWallpaperDeliveryStatus?(), sceneMedia: store.sceneMediaAvailability?())
       } as Any? ?? null,
       "settings": [
         "launchAtLogin": settings.launchAtLoginEnabled,
@@ -559,7 +559,8 @@ extension WebPanelController {
   static func options(
     _ value: BridgeWallpaperOptionsSnapshot, titles: ResolvedDisplayTitles,
     assets: [String: WebPanelPropertyAsset], errors: [String: String],
-    delivery: WebWallpaperHost.DeliveryStatus? = nil
+    delivery: WebWallpaperHost.DeliveryStatus? = nil,
+    sceneMedia: SystemMediaAvailability? = nil
   ) -> [String: Any] {
     let null = NSNull()
     // Only a running host can say whether anything is being delivered. With no
@@ -570,6 +571,16 @@ extension WebPanelController {
         delivered["audioDelivering"] = !delivery.audioSubscribedDisplayIDs.isEmpty
         delivered["mediaAvailable"] = delivery.mediaUnavailableReason == nil
         if let reason = delivery.mediaUnavailableReason {
+            delivered["mediaUnavailableReason"] = reason
+        }
+    }
+    if value.kind == .projectScene, let sceneMedia {
+        switch sceneMedia {
+        case .available:
+            delivered["mediaAvailable"] = true
+            delivered.removeValue(forKey: "mediaUnavailableReason")
+        case .unavailable(let reason):
+            delivered["mediaAvailable"] = false
             delivered["mediaUnavailableReason"] = reason
         }
     }

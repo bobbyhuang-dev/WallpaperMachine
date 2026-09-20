@@ -45,6 +45,38 @@ pub struct MediaPollResult {
     pub artwork: Option<MediaThumbnailRgba>,
 }
 
+impl MediaPollResult {
+    pub fn changed_events<'a>(&'a self, previous: Option<&'a Self>) -> impl Iterator<Item = &'a MediaIntegrationEvent> {
+        let artwork_changed = self.artwork.is_some()
+            && previous.and_then(|state| state.artwork.as_ref()) != self.artwork.as_ref();
+        self.events.iter().filter(move |event| {
+            (artwork_changed && matches!(event, MediaIntegrationEvent::ThumbnailChanged { .. }))
+                || !previous.is_some_and(|state| state.events.contains(event))
+        })
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn changed_cover_replays_thumbnail_event_even_when_colors_match() {
+        let first = MediaPollResult {
+            events: vec![MediaIntegrationEvent::ThumbnailChanged {
+                has_thumbnail: true, primary_color: [0.0; 3], text_color: [1.0; 3],
+            }],
+            artwork: Some(MediaThumbnailRgba::new(1, 1, vec![255, 0, 0, 255]).unwrap()),
+        };
+        let mut second = first.clone();
+        second.artwork.as_mut().unwrap().rgba = vec![0, 255, 0, 255];
+        assert_eq!(first.changed_events(None).count(), 1);
+        assert_eq!(first.changed_events(Some(&first)).count(), 0);
+        assert_eq!(second.changed_events(Some(&first)).count(), 1);
+        assert_eq!(second.changed_events(Some(&second)).count(), 0);
+    }
+}
+
 impl MediaThumbnailRgba {
     /// # Errors
     ///

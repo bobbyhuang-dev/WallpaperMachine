@@ -1,9 +1,11 @@
 #include "WPParticleRawGener.h"
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <cstring>
 #include <vector>
+#include <limits>
 
 #include <Eigen/Dense>
 
@@ -181,10 +183,19 @@ inline void WriteRopeQuad(SceneVertexArray& sv, usize quad_index, bool thick, co
     sv.SetVertexs(quad_index * 4, { buffer.data(), one_size * 4 });
 }
 
+inline float RopeStripPosition(usize m, usize n, bool smoothing) {
+    if (! smoothing || n <= 2) return static_cast<float>(m);
+    const float t = static_cast<float>(m) / static_cast<float>(n - 1);
+    const float s = t * t * (3.0f - 2.0f * t);
+    return s * static_cast<float>(n - 1);
+}
+
 inline void EmitRopeStrip(SceneVertexArray& sv, bool thick, std::span<const RopePoint> points,
-                          float trail_length, usize& quad, usize quad_capacity) {
+                          float authored_length, usize& quad, usize quad_capacity,
+                          const ParticleRenderScale& render_scale) {
     const usize n = points.size();
     if (n < 2) return;
+    const float trail_length = EncodeRopeTrailLength(authored_length, render_scale.uv_scale);
 
     auto tangent_at = [&](usize i) -> Vector3f {
         if (i == 0) return points[1].position - points[0].position;
@@ -208,7 +219,8 @@ inline void EmitRopeStrip(SceneVertexArray& sv, bool thick, std::span<const Rope
                       quad_capacity);
             return;
         }
-        WriteRopeQuad(sv, quad, thick, a, b, ta, tb, trail_length, static_cast<float>(m));
+        WriteRopeQuad(sv, quad, thick, a, b, ta, tb, trail_length,
+                      RopeStripPosition(m, n, render_scale.uv_smoothing));
         ++quad;
     }
 }
@@ -234,8 +246,11 @@ inline usize GenRopeData(std::span<const std::unique_ptr<ParticleInstance>> inst
         if (live.size() < 2) continue;
 
         const uint32_t s = std::max<uint32_t>(1, render_scale.rope_subdivision);
+        const float authored_length =
+            render_scale.uv_scrolling ? static_cast<float>(quad_capacity) + 1.0f
+                                      : static_cast<float>(live.size());
         if (s == 1) {
-            EmitRopeStrip(sv, thick, live, static_cast<float>(live.size()), quad, quad_capacity);
+            EmitRopeStrip(sv, thick, live, authored_length, quad, quad_capacity, render_scale);
         } else {
             const usize n = live.size();
             rope.clear();
@@ -254,7 +269,10 @@ inline usize GenRopeData(std::span<const std::unique_ptr<ParticleInstance>> inst
                 }
             }
             rope.push_back(live.back());
-            EmitRopeStrip(sv, thick, rope, static_cast<float>(rope.size()), quad, quad_capacity);
+            const float subdivided_length =
+                render_scale.uv_scrolling ? static_cast<float>(quad_capacity) + 1.0f
+                                          : static_cast<float>(rope.size());
+            EmitRopeStrip(sv, thick, rope, subdivided_length, quad, quad_capacity, render_scale);
         }
         if (quad >= quad_capacity) return quad;
     }
@@ -295,7 +313,10 @@ inline usize GenRopeTrailData(std::span<const std::unique_ptr<ParticleInstance>>
                 const RopePoint& previous = points[points.size() - 2];
                 last.position = last.position + (previous.position - last.position) * t;
             }
-            EmitRopeStrip(sv, thick, points, static_cast<float>(h), quad, quad_capacity);
+            const float authored_length =
+                render_scale.uv_scrolling ? static_cast<float>(trails[i].Capacity())
+                                          : static_cast<float>(h);
+            EmitRopeStrip(sv, thick, points, authored_length, quad, quad_capacity, render_scale);
             if (quad >= quad_capacity) return quad;
             ++i;
         }
@@ -303,23 +324,54 @@ inline usize GenRopeTrailData(std::span<const std::unique_ptr<ParticleInstance>>
     return quad;
 }
 
-inline void updateIndexArray(uint16_t index, size_t count, SceneIndexArray& iarray) noexcept {
-    constexpr size_t single_size = 6;
-    const uint16_t   cv          = index * 4;
+inline uint64_t FilledQuadCount(const SceneIndexArray& iarray) noexcept {
+    const uint64_t units = iarray.DataCount();
+    if (iarray.Width() == SceneIndexWidth::UInt32) return units / 6;
+    uint64_t packed = 0;
+    if (! CheckedMulU64(units, 2, packed)) return 0;
+    return packed / 6;
+}
 
-    std::array<uint16_t, single_size> single;
-    // 0 1 3
-    // 1 2 3
-    single[0] = cv;
-    single[1] = cv + 1;
-    single[2] = cv + 3;
-    single[3] = cv + 1;
-    single[4] = cv + 2;
-    single[5] = cv + 3;
-    // every particle
-    for (uint16_t i = index; i < count; i++) {
-        iarray.AssignHalf(i * single_size, single);
-        for (auto& x : single) x += 4;
+inline void updateIndexArray(uint32_t start_quad, uint32_t count, SceneIndexArray& iarray) noexcept {
+    constexpr uint32_t kIndicesPerQuad = 6;
+    constexpr uint32_t kVertsPerQuad   = 4;
+    if (count <= start_quad) return;
+
+    if (iarray.Width() == SceneIndexWidth::UInt32) {
+        std::array<uint32_t, kIndicesPerQuad> single;
+        uint32_t cv = start_quad * kVertsPerQuad;
+        // 0 1 3
+        // 1 2 3
+        single[0] = cv;
+        single[1] = cv + 1;
+        single[2] = cv + 3;
+        single[3] = cv + 1;
+        single[4] = cv + 2;
+        single[5] = cv + 3;
+        for (uint32_t i = start_quad; i < count; ++i) {
+            iarray.Assign(static_cast<usize>(i) * kIndicesPerQuad, single);
+            for (auto& x : single) x += kVertsPerQuad;
+        }
+        return;
+    }
+
+    uint64_t last_vertex = 0;
+    if (! CheckedMulU64(uint64_t(count) - 1, kVertsPerQuad, last_vertex) ||
+        ! CheckedAddU64(last_vertex, 3, last_vertex) || last_vertex > kMaxUInt16VertexIndex) {
+        LOG_ERROR("particle index count %u exceeds 16-bit vertex addressing", count);
+        return;
+    }
+    std::array<uint16_t, kIndicesPerQuad> single;
+    const uint32_t cv = start_quad * kVertsPerQuad;
+    single[0] = static_cast<uint16_t>(cv);
+    single[1] = static_cast<uint16_t>(cv + 1);
+    single[2] = static_cast<uint16_t>(cv + 3);
+    single[3] = static_cast<uint16_t>(cv + 1);
+    single[4] = static_cast<uint16_t>(cv + 2);
+    single[5] = static_cast<uint16_t>(cv + 3);
+    for (uint32_t i = start_quad; i < count; ++i) {
+        iarray.AssignHalf(static_cast<usize>(i) * kIndicesPerQuad, single);
+        for (auto& x : single) x = static_cast<uint16_t>(x + kVertsPerQuad);
     }
 }
 } // namespace
@@ -347,9 +399,37 @@ void WPParticleRawGener::GenGLData(std::span<const std::unique_ptr<ParticleInsta
         particle_num += GenParticleData(instances, specOp, opt, sv, render_scale);
     }
 
-    u16 indexNum = (si.DataCount() * 2) / 6;
-    if (particle_num > indexNum) {
-        updateIndexArray(indexNum, particle_num, si);
+    uint64_t draw_indices = 0;
+    if (! CheckedMulU64(particle_num, 6, draw_indices)) {
+        LOG_ERROR("particle index count overflow: quads=%zu", particle_num);
+        si.SetDrawIndexCount(0);
+        return;
     }
-    si.SetRenderDataCount(particle_num * 6 / 2);
+    const uint64_t filled = FilledQuadCount(si);
+    const uint64_t cap    = si.QuadCapacity();
+    uint64_t       quads  = particle_num;
+    if (quads > cap) {
+        LOG_ERROR("particle geometry exceeds index capacity: %zu quads, capacity %zu",
+                  particle_num, static_cast<size_t>(cap));
+        quads = cap;
+        if (! CheckedMulU64(quads, 6, draw_indices)) {
+            si.SetDrawIndexCount(0);
+            return;
+        }
+    }
+    if (quads > filled) {
+        if (quads > std::numeric_limits<uint32_t>::max() ||
+            filled > std::numeric_limits<uint32_t>::max()) {
+            LOG_ERROR("particle index range exceeds uint32: filled=%llu quads=%llu",
+                      (unsigned long long)filled, (unsigned long long)quads);
+            si.SetDrawIndexCount(0);
+            return;
+        }
+        updateIndexArray(static_cast<uint32_t>(filled), static_cast<uint32_t>(quads), si);
+    }
+    if (draw_indices > std::numeric_limits<usize>::max()) {
+        si.SetDrawIndexCount(0);
+        return;
+    }
+    si.SetDrawIndexCount(static_cast<usize>(draw_indices));
 }

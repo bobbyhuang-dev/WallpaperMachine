@@ -1,7 +1,9 @@
 #pragma once
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <string_view>
 #include <variant>
 #include <vector>
@@ -75,6 +77,10 @@ public:
     std::vector<std::shared_ptr<const SceneMetalProgram>> metal_variant_candidates;
 
     std::string scene_id { "unknown_id" };
+    /// Shared layer-as-texture resolution. Both backends read this; an error
+    /// here is unsupported on both, not a Metal-only fallback.
+    std::unordered_set<int32_t> layer_texture_sources;
+    std::string                 layer_texture_error;
 
     /// Whether a frame of this scene has reached the surface.
     ///
@@ -97,7 +103,7 @@ public:
 
     std::unique_ptr<ParticleSystem> paritileSys;
 
-    SceneCamera* activeCamera;
+    SceneCamera* activeCamera { nullptr };
 
     i32                  ortho[2] { 1920, 1080 }; // w, h
     /// The author's canvas in scene units: what "100% render scale" means for

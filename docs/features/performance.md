@@ -144,14 +144,15 @@ it cannot draw runs on the compatibility backend and the status line says why.
 
 Native Metal draws image layers, text layers, sprite-sheet animation,
 two-dimensional puppets, two-dimensional sprite, sprite-trail, rope and
-rope-trail particles, ordinary effect chains and scene post-processing, layers
-that read an image another layer produced earlier in the same frame, images the
-runtime replaces while the scene plays, and BGRA or 8-bit NV12 video textures —
-the latter either converted once per frame or, with **Direct video plane
-sampling** on, sampled by the layer's own shader. Perspective or lit particles,
-perspective 3D, dynamic lighting, history-feedback effects, HDR or 10-bit
-video, plain video wallpapers and shaders that do not translate fall back as a
-whole scene; an effect is never dropped to keep a scene native.
+rope-trail particles, perspective cameras for those layer types, ordinary
+effect chains and scene post-processing, layers that read an image another
+layer produced earlier in the same frame, images the runtime replaces while
+the scene plays, and BGRA or 8-bit NV12 video textures — the latter either
+converted once per frame or, with **Direct video plane sampling** on, sampled
+by the layer's own shader. Lit particles, 3D models, dynamic lighting,
+history-feedback effects, HDR or 10-bit video, plain video wallpapers and
+shaders that do not translate fall back as a whole scene; an effect is never
+dropped to keep a scene native.
 
 A puppet is deformed by its author's own skinning shader on both renderers. The
 pose comes from the one animation system the scene already has — animation

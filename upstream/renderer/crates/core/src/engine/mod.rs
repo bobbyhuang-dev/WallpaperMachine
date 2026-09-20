@@ -820,6 +820,12 @@ impl WallpaperEngine {
             .await
     }
 
+    /// Delivers the host's current player state to one scene.
+    pub async fn update_media(&self, handle: SceneHandle, enabled: bool,
+        state: crate::media::MediaPollResult) -> Result<(), EngineError> {
+        self.ask_actor(messages::UpdateMedia { handle, enabled, state }).await
+    }
+
     /// Sets the scene-wide audio volume multiplier.
     ///
     /// # Errors

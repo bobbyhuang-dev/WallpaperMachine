@@ -2898,6 +2898,30 @@ fn pipeline_matches_cross_stage_varying_locations_by_name_not_declaration_order(
     assert!(fragment_source.contains("layout(location = 1) in vec2 v_Uv;"));
 }
 
+#[test]
+fn pipeline_compiles_array_varyings_followed_by_scalar_varyings() {
+    let request = interface_request(
+        "attribute vec2 a_Position;\nvarying vec2 taps[4];\nvarying vec2 uv;\nvoid main() { for (int i=0;i<4;i++) taps[i]=a_Position; uv=a_Position; gl_Position=vec4(a_Position,0,1); }",
+        "varying vec2 taps[4];\nvarying vec2 uv;\nvoid main() { gl_FragColor=vec4(taps[0]+taps[3]+uv,0,1); }");
+    let _ = pipeline().compile(&request).expect("array locations must not overlap the next varying");
+}
+
+#[test]
+fn pipeline_narrows_user_vector_arguments_to_declared_width() {
+    let request = interface_request(
+        "attribute vec2 a_Position;\nvoid main() { gl_Position=vec4(a_Position,0,1); }",
+        "vec2 rotateVec2(vec2 v, float r) { return vec2(v.x*cos(r)-v.y*sin(r),v.x*sin(r)+v.y*cos(r)); }\nvoid main() { gl_FragColor=vec4(rotateVec2(vec4(1,0,0,1),1.0),0,1); }");
+    let _ = pipeline().compile(&request).expect("legacy function calls consume the declared vector prefix");
+}
+
+#[test]
+fn pipeline_shares_vector_uniform_with_scalar_prefix_in_other_stage() {
+    let request = interface_request(
+        "uniform vec2 u_size;\nattribute vec2 a_Position;\nvoid main() { gl_Position=vec4(a_Position*u_size,0,1); }",
+        "uniform float u_size;\nvoid main() { gl_FragColor=vec4(u_size); }");
+    let _ = pipeline().compile(&request).expect("stage-local scalar view of a shared vector uniform");
+}
+
 fn pipeline() -> DefaultShaderPipeline<InMemoryShaderSourceProvider> {
     DefaultShaderPipeline::new(
         InMemoryShaderSourceProvider::new().with_source(

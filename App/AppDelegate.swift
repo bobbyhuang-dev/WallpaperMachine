@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var displayChangeObserver: NSObjectProtocol?
     private var desktopWallpaperSync: DesktopWallpaperSync?
     private var webWallpaperHost: WebWallpaperHost?
+    private var sceneMediaCoordinator: SceneMediaCoordinator?
     private var nativeVideoHost: NativeVideoWallpaperHost?
     private var presentationPolicy: WallpaperPresentationPolicy?
     private var store: BridgeStore?
@@ -79,6 +80,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
             let webHost = WebWallpaperHost(bridge: store.bridge)
             webWallpaperHost = webHost
+            let sceneMedia = SceneMediaCoordinator(bridge: store.bridge)
+            sceneMediaCoordinator = sceneMedia
+            store.sceneMediaAvailability = { [weak sceneMedia] in
+                sceneMedia?.availability ?? .unavailable(reason: String(localized: "Media integration has not been started."))
+            }
+            sceneMedia.start()
             // The panel distinguishes the user's setting from what is actually
             // being delivered, which only the host knows.
             store.webWallpaperDeliveryStatus = { [weak webHost] in
@@ -229,6 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         presentationPolicy = nil
         desktopWallpaperSync?.stop()
         webWallpaperHost?.shutdown()
+        sceneMediaCoordinator?.stop()
         nativeVideoHost?.shutdown()
         if let displayChangeObserver {
             NotificationCenter.default.removeObserver(displayChangeObserver)
@@ -263,6 +271,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 desktopWallpaperSync?.stop()
                 desktopWallpaperSync = nil
                 webWallpaperHost?.shutdown()
+                sceneMediaCoordinator?.stop()
+                sceneMediaCoordinator = nil
                 webWallpaperHost = nil
             } catch {
                 lastError = error

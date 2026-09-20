@@ -45,6 +45,12 @@ public:
     float       subdivision { 3.0f };
     float       minlength { 0.0f };
     float       segments { 10.0f };
+    float       uvscale { 1.0f };
+    bool        uvscrolling { false };
+    bool        uvsmoothing { false };
+    nlohmann::json uvscale_setting;
+    nlohmann::json uvscrolling_setting;
+    nlohmann::json uvsmoothing_setting;
 };
 
 class Initializer {

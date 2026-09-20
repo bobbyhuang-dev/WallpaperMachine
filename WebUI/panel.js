@@ -387,8 +387,8 @@ function renderAudioAndMedia(options, lock) {
         : delivering === false
           ? t('On, but this wallpaper has not registered an audio listener, so it receives nothing. That is the wallpaper\u2019s choice, not a fault.')
           : t('On for this wallpaper. Delivery starts only once the wallpaper registers an audio listener; with no desktop wallpaper running, the panel cannot tell whether it has.');
-  const media = !web ? '' : check('mediaIntegrationEnabled', t('Media integration'), options.mediaIntegrationEnabled)
-    + note(t('Off by default. macOS publishes no API for reading what another application is playing. This uses a private interface that is restricted on current macOS, so it may well report unavailable.'))
+  const media = options.kind === 'Video' ? '' : check('mediaIntegrationEnabled', t('Media integration'), options.mediaIntegrationEnabled)
+    + note(t('Share song titles, artists and artwork from system Now Playing. Supports Spotify, Apple Music and compatible browsers and local players.'))
     + status(!options.mediaIntegrationEnabled
       ? t('Off. The wallpaper is told media integration is disabled and receives no media events.')
       : options.mediaAvailable === true

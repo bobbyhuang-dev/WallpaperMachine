@@ -35,6 +35,7 @@
 #include <Eigen/Dense>
 
 #include <algorithm>
+#include <limits>
 #include <charconv>
 #include <chrono>
 #include <deque>
@@ -94,6 +95,13 @@ static_assert((uint32_t)wallpaper::metal::MetalPixelFormat::BGRA8Unorm == MTLPix
               "");
 static_assert((uint32_t)wallpaper::metal::MetalPixelFormat::BGRA8Unorm_sRGB ==
                   MTLPixelFormatBGRA8Unorm_sRGB,
+              "");
+static_assert((uint32_t)wallpaper::metal::MetalPixelFormat::Depth32Float ==
+                  MTLPixelFormatDepth32Float,
+              "");
+static_assert((uint32_t)wallpaper::metal::MetalDepthCompare::Never == MTLCompareFunctionNever, "");
+static_assert((uint32_t)wallpaper::metal::MetalDepthCompare::LessEqual ==
+                  MTLCompareFunctionLessEqual,
               "");
 
 namespace wallpaper::metal
@@ -340,8 +348,10 @@ std::string BuildMetalResourcePlan(const std::vector<SceneMetalStage>& stages,
 {
     out.texture_slots.assign(texture_count, MetalRenderTextureSlotBinding {});
     // A slot the shader declares but never samples needs no texture behind it:
-    // Metal leaves an unused argument unbound. One it does sample, with nothing
-    // in the material to bind, is a genuine failure and stays one.
+    // the GLSL preprocessor already dropped it from SPIR-V, Vulkan skips an
+    // empty material name, and Metal leaves an unused argument unbound. Naga's
+    // MSL writer may still name that argument. One the shader does sample, with
+    // nothing in the material to bind, is a genuine failure and stays one.
     const auto sampled = [&active_texture_slots](std::size_t slot) {
         return std::find(active_texture_slots.begin(), active_texture_slots.end(),
                          static_cast<uint32_t>(slot)) != active_texture_slots.end();
@@ -352,12 +362,19 @@ std::string BuildMetalResourcePlan(const std::vector<SceneMetalStage>& stages,
             if (binding.set != 0) {
                 return "a shader binds a resource outside descriptor set 0";
             }
-            if (uniform_block != nullptr && binding.name == uniform_block->name) {
+            // SPIR-V drops an unused uniform block; Naga's MSL writer may still
+            // name `GlobalUniforms` as a buffer argument. Vulkan has nothing to
+            // bind then. Match that: bind the block when reflection kept it,
+            // otherwise leave the argument unbound.
+            if (binding.name == "GlobalUniforms" ||
+                (uniform_block != nullptr && binding.name == uniform_block->name)) {
                 if (binding.slot_kind != SceneMetalSlotKind::Buffer) {
                     return "a shader binds its uniform block as something other than a buffer";
                 }
-                (vertex_stage ? out.vertex_uniform_slot : out.fragment_uniform_slot) =
-                    static_cast<int>(binding.slot);
+                if (uniform_block != nullptr) {
+                    (vertex_stage ? out.vertex_uniform_slot : out.fragment_uniform_slot) =
+                        static_cast<int>(binding.slot);
+                }
                 continue;
             }
             if (const auto chroma = VideoChromaTextureSlot(binding.name); chroma.has_value()) {
@@ -388,8 +405,8 @@ std::string BuildMetalResourcePlan(const std::vector<SceneMetalStage>& stages,
             }
             const auto texture_slot = vulkan::detail::CustomShaderTextureSlot(binding.name);
             if (texture_slot.has_value()) {
+                if (! sampled(*texture_slot)) continue;
                 if (*texture_slot >= out.texture_slots.size()) {
-                    if (! sampled(*texture_slot)) continue;
                     return "a shader samples texture slot " + std::to_string(*texture_slot) +
                            ", which the material does not have";
                 }
@@ -407,8 +424,8 @@ std::string BuildMetalResourcePlan(const std::vector<SceneMetalStage>& stages,
             }
             const auto sampler_slot = vulkan::detail::CustomShaderSamplerSlot(binding.name);
             if (sampler_slot.has_value()) {
+                if (! sampled(*sampler_slot)) continue;
                 if (*sampler_slot >= out.texture_slots.size()) {
-                    if (! sampled(*sampler_slot)) continue;
                     return "a shader samples texture slot " + std::to_string(*sampler_slot) +
                            ", which the material does not have";
                 }
@@ -611,6 +628,10 @@ public:
         descriptor.vertexDescriptor             = vertex_descriptor;
         descriptor.rasterSampleCount            = key.sample_count;
         descriptor.alphaToCoverageEnabled       = key.blend.alpha_to_coverage;
+        if (key.depth_format != MetalPixelFormat::Invalid) {
+            descriptor.depthAttachmentPixelFormat =
+                static_cast<MTLPixelFormat>(key.depth_format);
+        }
 
         MTLRenderPipelineColorAttachmentDescriptor* attachment = descriptor.colorAttachments[0];
         attachment.pixelFormat = static_cast<MTLPixelFormat>(key.color_format);
@@ -1213,6 +1234,8 @@ struct MetalRender::Impl
         std::vector<NSUInteger>            vertex_buffer_slots;
         id<MTLBuffer>                      index_buffer { nil };
         uint32_t                           index_count { 0 };
+        MTLIndexType                       index_type { MTLIndexTypeUInt16 };
+        NSUInteger                         index_element_size { sizeof(uint16_t) };
         std::vector<SceneMesh::DrawRange>  draw_ranges;
         uint32_t                           vertex_count { 0 };
 
@@ -1245,6 +1268,9 @@ struct MetalRender::Impl
         /// itself is one uploaded image (or one per `imageId`), never a
         /// per-frame upload.
         sprite_map_t                       sprites;
+        id<MTLDepthStencilState>           depth_stencil { nil };
+        bool                               depth_test { false };
+        bool                               depth_write { false };
     };
 
     std::vector<ScenePassDescription>                   descriptions;
@@ -1255,6 +1281,12 @@ struct MetalRender::Impl
     /// copy plan at runtime has to know which images to give back and which to
     /// allocate again.
     std::unordered_set<std::string>                     owned_targets;
+    /// Depth attachments, keyed by the colour target they belong to. Created
+    /// only for targets a pass actually depth-tests, at that target's size
+    /// (which already honours renderScale). Post-process passes that do not
+    /// depth-test do not get one.
+    std::unordered_map<std::string, id<MTLTexture>>     depth_targets;
+    std::unordered_map<uint32_t, id<MTLDepthStencilState>> depth_stencil_states;
     /// Every slot of an imported image, in file order. A plain image has one;
     /// a sprite sheet spread over several images has one per sheet, and the
     /// frame's `imageId` chooses between them.
@@ -1390,6 +1422,8 @@ struct MetalRender::Impl
     bool compile(Scene& scene, rg::RenderGraph& graph);
     void resolveTargetSizes(Scene& scene);
     bool prepareTargets(Scene& scene);
+    bool prepareDepthTargets();
+    id<MTLDepthStencilState> depthStencilFor(bool test, bool write);
     void planCopyElision(Scene& scene);
     void compileStaticCache(Scene& scene);
     void releaseSceneOptimization();
@@ -1509,6 +1543,7 @@ void MetalRender::Impl::releaseGraph()
     descriptions.clear();
     prepared.clear();
     targets.clear();
+    depth_targets.clear();
     images.clear();
     runtime_image_rings.clear();
     runtime_image_keys.clear();
@@ -2083,6 +2118,50 @@ bool MetalRender::Impl::prepareTargets(Scene& scene)
     return clearTargetsOnce();
 }
 
+bool MetalRender::Impl::prepareDepthTargets()
+{
+    depth_targets.clear();
+    std::unordered_set<std::string> needed;
+    for (const auto& desc : descriptions) {
+        if (desc.kind != MetalPassKind::CustomShader || ! desc.depth_test) continue;
+        if (desc.target_key.empty()) continue;
+        needed.insert(desc.target_key);
+    }
+    for (const auto& key : needed) {
+        const auto color = targets.find(key);
+        if (color == targets.end() || color->second == nil) {
+            return fail("a depth-tested pass targets an image that does not exist");
+        }
+        MTLTextureDescriptor* descriptor = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
+                                         width:color->second.width
+                                        height:color->second.height
+                                     mipmapped:NO];
+        descriptor.usage       = MTLTextureUsageRenderTarget;
+        descriptor.storageMode = MTLStorageModePrivate;
+        id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
+        if (texture == nil) return fail("a depth attachment could not be allocated");
+        texture.label = [NSString stringWithFormat:@"%s/depth", key.c_str()];
+        depth_targets.emplace(key, texture);
+    }
+    return true;
+}
+
+id<MTLDepthStencilState> MetalRender::Impl::depthStencilFor(bool test, bool write)
+{
+    if (! test) return nil;
+    const uint32_t key = (test ? 1u : 0u) | (write ? 2u : 0u);
+    if (auto found = depth_stencil_states.find(key); found != depth_stencil_states.end()) {
+        return found->second;
+    }
+    MTLDepthStencilDescriptor* descriptor = [MTLDepthStencilDescriptor new];
+    descriptor.depthCompareFunction       = MTLCompareFunctionLessEqual;
+    descriptor.depthWriteEnabled          = write ? YES : NO;
+    id<MTLDepthStencilState> state = [device newDepthStencilStateWithDescriptor:descriptor];
+    if (state != nil) depth_stencil_states.emplace(key, state);
+    return state;
+}
+
 /// Zeroes every freshly allocated target once, at compile time.
 ///
 /// A private Metal texture's initial contents are undefined. A scene may read a
@@ -2180,6 +2259,12 @@ bool MetalRender::Impl::prepareDraw(Scene& scene, std::size_t index, PreparedPas
     }
 
     // ---- textures
+    const auto missing_image = [&](std::size_t slot) {
+        std::string message = "an image a layer needs could not be loaded: slot " +
+                              std::to_string(slot) + " (" + material->name + ")";
+        if (! desc.texture_keys[slot].empty()) message += ": " + desc.texture_keys[slot];
+        return fail(std::move(message));
+    };
     for (std::size_t i = 0; i < desc.texture_keys.size(); ++i) {
         if (! out.texture_slots[i].bound()) continue;
         id<MTLSamplerState> sampler = nil;
@@ -2187,7 +2272,7 @@ bool MetalRender::Impl::prepareDraw(Scene& scene, std::size_t index, PreparedPas
         // A video texture has no frame yet at compile time, which is not a
         // missing image: the first `beginFrame` produces one.
         if (texture == nil && ! video.owns(desc.texture_keys[i])) {
-            return fail("an image a layer needs could not be loaded: " + desc.texture_keys[i]);
+            return missing_image(i);
         }
         out.samplers[i] = sampler;
         // A sheet spread over several images must have every one of them, or a
@@ -2312,9 +2397,11 @@ bool MetalRender::Impl::prepareDraw(Scene& scene, std::size_t index, PreparedPas
     // ---- indices
     if (submesh.IndexCount() > 0) {
         const auto& indices = submesh.GetIndexArray(0);
-        // The engine packs 16-bit indices into a 32-bit array, which is why the
-        // compatibility backend binds them as UINT16 over two thirds of the
-        // element count.
+        out.index_type         = indices.Width() == SceneIndexWidth::UInt32 ? MTLIndexTypeUInt32
+                                                                           : MTLIndexTypeUInt16;
+        out.index_element_size = indices.ElementSize();
+        // Packed 16-bit indices occupy a 32-bit array; 32-bit indices occupy
+        // one slot each. DrawIndexCount() is the number of indices to draw.
         if (out.dynamic_mesh) {
             out.dynamic_index_capacity = indices.CapacitySizeof();
             if (out.dynamic_index_capacity == 0) {
@@ -2332,12 +2419,19 @@ bool MetalRender::Impl::prepareDraw(Scene& scene, std::size_t index, PreparedPas
             // live particles is a frame that draws nothing, not a failure.
             out.index_count = 0;
         } else {
-            const std::size_t count = (indices.DataCount() * 2) / 3;
-            out.index_count         = static_cast<uint32_t>(count * 3);
-            out.draw_ranges         = submesh.DrawRanges();
+            const uint64_t count = indices.DrawIndexCount();
+            const uint64_t bytes = indices.DrawIndexBytes();
+            if (count > std::numeric_limits<uint32_t>::max()) {
+                return fail("an index buffer is larger than a draw can address");
+            }
+            if (count > 0 && bytes == 0) {
+                return fail("index byte capacity overflowed");
+            }
+            out.index_count = static_cast<uint32_t>(count);
+            out.draw_ranges = submesh.DrawRanges();
             if (out.index_count > 0) {
                 out.index_buffer = [device newBufferWithBytes:indices.Data()
-                                                        length:out.index_count * sizeof(uint16_t)
+                                                        length:static_cast<NSUInteger>(bytes)
                                                        options:MTLResourceStorageModeShared];
                 if (out.index_buffer == nil) return fail("an index buffer could not be allocated");
             }
@@ -2359,13 +2453,28 @@ bool MetalRender::Impl::prepareDraw(Scene& scene, std::size_t index, PreparedPas
         .vertex_layout_id = layout_id,
         .blend            = ToMetalBlendState(desc.blend),
         .color_format     = static_cast<MetalPixelFormat>(target->second.pixelFormat),
+        .depth_format     = desc.depth_test ? MetalPixelFormat::Depth32Float
+                                            : MetalPixelFormat::Invalid,
+        .depth_compare    = desc.depth_test ? MetalDepthCompare::LessEqual
+                                            : MetalDepthCompare::Never,
         .sample_count     = 1,
         .write_alpha      = desc.write_alpha,
+        .depth_test       = desc.depth_test,
+        .depth_write      = desc.depth_write,
     };
     out.pipeline = pipelineFor(key, program->stages, vertex_descriptor);
     if (out.pipeline == nil) return fail(last_error.empty() ? "a shader pipeline could not be "
                                                              "created"
                                                             : last_error);
+    out.depth_test     = desc.depth_test;
+    out.depth_write    = desc.depth_write;
+    out.depth_stencil  = depthStencilFor(desc.depth_test, desc.depth_write);
+    if (desc.depth_test && out.depth_stencil == nil) {
+        return fail("a depth-stencil state could not be created");
+    }
+    if (desc.depth_test && depth_targets.find(desc.target_key) == depth_targets.end()) {
+        return fail("a depth-tested pass has no depth attachment");
+    }
     // Kept for the optional variant, which is built later against the identical
     // vertex layout. The descriptor is finished at this point and nothing
     // mutates it afterwards.
@@ -2549,8 +2658,14 @@ void MetalRender::Impl::pumpVideoPlaneVariants(Scene& scene, bool planes_enabled
             .vertex_layout_id = pass.vertex_layout_id,
             .blend            = ToMetalBlendState(desc.blend),
             .color_format     = static_cast<MetalPixelFormat>(target->second.pixelFormat),
+            .depth_format     = desc.depth_test ? MetalPixelFormat::Depth32Float
+                                                : MetalPixelFormat::Invalid,
+            .depth_compare    = desc.depth_test ? MetalDepthCompare::LessEqual
+                                                : MetalDepthCompare::Never,
             .sample_count     = 1,
             .write_alpha      = desc.write_alpha,
+            .depth_test       = desc.depth_test,
+            .depth_write      = desc.depth_write,
         };
 
         if (variant_queue == nullptr) {
@@ -2668,8 +2783,16 @@ bool MetalRender::Impl::uploadDynamicMesh(PreparedPass& pass, const ScenePassDes
     const bool indexed = ! pass.dynamic_index_ring.empty();
     if (indexed) {
         const auto& indices = submesh.GetIndexArray(0);
-        pass.index_count =
-            static_cast<uint32_t>(((indices.RenderDataCount() * 2) / 3) * 3);
+        if (indices.Width() != (pass.index_type == MTLIndexTypeUInt32 ? SceneIndexWidth::UInt32
+                                                                      : SceneIndexWidth::UInt16)) {
+            return set_error("a dynamic mesh changed its index width after preparation");
+        }
+        const uint64_t count = indices.DrawIndexCount();
+        const uint64_t bytes = indices.DrawIndexBytes();
+        if (count > std::numeric_limits<uint32_t>::max() || (count > 0 && bytes == 0)) {
+            return set_error("a dynamic mesh's index count is not addressable");
+        }
+        pass.index_count = static_cast<uint32_t>(count);
         pass.draw_ranges = submesh.DrawRanges();
     } else {
         pass.vertex_count = static_cast<uint32_t>(submesh.GetVertexArray(0).VertexCount());
@@ -2702,14 +2825,16 @@ bool MetalRender::Impl::uploadDynamicMesh(PreparedPass& pass, const ScenePassDes
     }
 
     if (indexed) {
-        const std::size_t index_bytes =
-            static_cast<std::size_t>(pass.index_count) * sizeof(uint16_t);
+        const auto&       live_indices = submesh.GetIndexArray(0);
+        const std::size_t index_bytes  = live_indices.DrawIndexBytes();
         if (index_bytes > pass.dynamic_index_capacity) {
             return set_error("a dynamic mesh outgrew the index storage prepared for it");
         }
+        if (pass.index_count > 0 && index_bytes == 0) {
+            return set_error("a dynamic mesh's index byte capacity overflowed");
+        }
         if (index_bytes > 0) {
-            std::memcpy(pass.dynamic_index_ring[slot].contents,
-                        submesh.GetIndexArray(0).Data(), index_bytes);
+            std::memcpy(pass.dynamic_index_ring[slot].contents, live_indices.Data(), index_bytes);
         }
     }
     if (slot < pass.dynamic_uploaded_generation.size()) {
@@ -3105,6 +3230,7 @@ bool MetalRender::Impl::applySceneOptimizationSetting(Scene& scene, id<MTLComman
     // Last, because reuse is decided over the targets that now exist. A fresh
     // table has rendered nothing, so the first frame after the change redraws
     // everything instead of trusting pixels an earlier plan produced.
+    if (! prepareDepthTargets()) return false;
     compileStaticCache(scene);
     optimization_applied = enabled;
     return true;
@@ -3249,8 +3375,10 @@ vulkan::StaticPassSample MetalRender::Impl::frameSample(Scene& scene, std::size_
         // exactly when the target it writes is.
         return sample;
     }
-    sample.visible =
-        desc.visibility_node == nullptr || desc.visibility_node->EffectiveVisible();
+    sample.visible = desc.visibility_node == nullptr ||
+                    desc.visibility_node->EffectiveVisible() ||
+                    (desc.visibility_node->MustProduce() && ! desc.target_key.empty() &&
+                     desc.target_key != wallpaper::SpecTex_Default);
 
     uint64_t hash = 0xcbf29ce484222325ULL;
     if (desc.node != nullptr) {
@@ -3387,6 +3515,7 @@ bool MetalRender::Impl::compile(Scene& scene, rg::RenderGraph& graph)
     planCopyElision(scene);
 
     if (! prepareTargets(scene)) return false;
+    if (! prepareDepthTargets()) return false;
 
     for (std::size_t i = 0; i < descriptions.size(); ++i) {
         if (descriptions[i].kind != MetalPassKind::Copy) continue;
@@ -3833,6 +3962,7 @@ bool MetalRender::drawFrame(Scene& scene, bool* presented)
             [blit endEncoding];
         };
 
+        std::unordered_set<std::string> depth_cleared;
         for (std::size_t i = 0; i < impl.prepared.size(); ++i) {
             auto&       pass = impl.prepared[i];
             const auto& desc = impl.descriptions[i];
@@ -3888,6 +4018,17 @@ bool MetalRender::drawFrame(Scene& scene, bool* presented)
             pass_descriptor.colorAttachments[0].clearColor  = MTLClearColorMake(
                 desc.clear_color[0], desc.clear_color[1], desc.clear_color[2],
                 desc.clear_color[3]);
+            if (pass.depth_test) {
+                const auto depth = impl.depth_targets.find(desc.target_key);
+                if (depth != impl.depth_targets.end()) {
+                    const bool first = depth_cleared.insert(desc.target_key).second;
+                    pass_descriptor.depthAttachment.texture     = depth->second;
+                    pass_descriptor.depthAttachment.loadAction  =
+                        first ? MTLLoadActionClear : MTLLoadActionLoad;
+                    pass_descriptor.depthAttachment.storeAction = MTLStoreActionStore;
+                    pass_descriptor.depthAttachment.clearDepth  = 1.0;
+                }
+            }
 
             id<MTLRenderCommandEncoder> encoder =
                 [command renderCommandEncoderWithDescriptor:pass_descriptor];
@@ -3900,7 +4041,9 @@ bool MetalRender::drawFrame(Scene& scene, bool* presented)
             // load action still applies: the target is cleared or preserved
             // exactly as the graph decided, so the next writer starts from the
             // same state it would have started from.
-            if (desc.visibility_node != nullptr && ! desc.visibility_node->EffectiveVisible()) {
+            if (desc.visibility_node != nullptr && ! desc.visibility_node->EffectiveVisible() &&
+                ! (desc.visibility_node->MustProduce() && ! desc.target_key.empty() &&
+                   desc.target_key != wallpaper::SpecTex_Default)) {
                 [encoder endEncoding];
                 if (desc.generate_mipmaps) generate_mipmaps(target->second);
                 continue;
@@ -3922,6 +4065,9 @@ bool MetalRender::drawFrame(Scene& scene, bool* presented)
                 i < impl.video_plane_active.size() && impl.video_plane_active[i] != 0;
             [encoder setRenderPipelineState:planes_active ? pass.video_planes.pipeline
                                                           : pass.pipeline];
+            if (pass.depth_stencil != nil) {
+                [encoder setDepthStencilState:pass.depth_stencil];
+            }
 
             const std::size_t geometry_slot =
                 static_cast<std::size_t>(impl.frame_slot) % kFramesInFlight;
@@ -4022,16 +4168,22 @@ bool MetalRender::drawFrame(Scene& scene, bool* presented)
             if (index_buffer != nil && pass.index_count > 0) {
                 if (! pass.draw_ranges.empty()) {
                     for (const auto& range : pass.draw_ranges) {
+                        uint64_t offset_bytes = 0;
+                        if (! CheckedMulU64(range.indexOffset, pass.index_element_size,
+                                            offset_bytes) ||
+                            offset_bytes > std::numeric_limits<NSUInteger>::max()) {
+                            continue;
+                        }
                         [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                             indexCount:range.indexCount
-                                             indexType:MTLIndexTypeUInt16
+                                             indexType:pass.index_type
                                            indexBuffer:index_buffer
-                                     indexBufferOffset:range.indexOffset * sizeof(uint16_t)];
+                                     indexBufferOffset:static_cast<NSUInteger>(offset_bytes)];
                     }
                 } else {
                     [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                         indexCount:pass.index_count
-                                         indexType:MTLIndexTypeUInt16
+                                         indexType:pass.index_type
                                        indexBuffer:index_buffer
                                  indexBufferOffset:0];
                 }

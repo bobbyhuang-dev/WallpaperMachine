@@ -123,6 +123,8 @@ void WPShaderValueUpdater::InitUniforms(SceneNode* pNode, uint32_t material_slot
     info.has_ETVPI              = existsOp(G_ETVPI);
 
     info.has_VP = existsOp(G_VP);
+    info.has_layer_model = existsOp("g_LayerModelMatrix");
+    info.has_effect_mvp = existsOp("g_EffectModelViewProjectionMatrix");
 
     info.has_BONES            = existsOp(G_BONES);
     info.has_TIME             = existsOp(G_TIME);
@@ -133,6 +135,9 @@ void WPShaderValueUpdater::InitUniforms(SceneNode* pNode, uint32_t material_slot
     info.has_TEXELSIZEHALF    = existsOp(G_TEXELSIZEHALF);
     info.has_SCREEN           = existsOp(G_SCREEN);
     info.has_LP               = existsOp(G_LP);
+    info.has_ORIENTATIONUP      = existsOp(G_ORIENTATIONUP);
+    info.has_ORIENTATIONRIGHT   = existsOp(G_ORIENTATIONRIGHT);
+    info.has_ORIENTATIONFORWARD = existsOp(G_ORIENTATIONFORWARD);
     info.has_AudioSpectrum16Left = existsOp(G_AUDIO_SPECTRUM16_LEFT);
     info.has_AudioSpectrum16Right = existsOp(G_AUDIO_SPECTRUM16_RIGHT);
     info.has_AudioSpectrum32Left = existsOp(G_AUDIO_SPECTRUM32_LEFT);
@@ -197,6 +202,26 @@ void WPShaderValueUpdater::UpdateUniforms(SceneNode* pNode, uint32_t material_sl
         if (data_it != slot_data.end()) nodeData = &data_it->second;
     }
     bool hasNodeData = nodeData != nullptr;
+    if (info.has_layer_model || info.has_effect_mvp) {
+        auto* owner = hasNodeData && nodeData->effect_owner != nullptr
+            ? nodeData->effect_owner : pNode;
+        owner->UpdateTrans();
+        const Matrix4d layer_model = owner->ModelTrans();
+        if (info.has_layer_model) {
+            updateOp("g_LayerModelMatrix", ShaderValue::fromMatrix(layer_model));
+        }
+        if (info.has_effect_mvp && m_scene->activeCamera != nullptr) {
+            Matrix4d effect_model = layer_model;
+            // Intermediate passes use a unit quad; final passes use the layer card.
+            if (hasNodeData && nodeData->effect_owner != nullptr && cam_name == "effect") {
+                effect_model = layer_model * Affine3d(Scaling(
+                    double(nodeData->effect_extent.x()) * 0.5,
+                    double(nodeData->effect_extent.y()) * 0.5, 1.0)).matrix();
+            }
+            updateOp("g_EffectModelViewProjectionMatrix", ShaderValue::fromMatrix(
+                Matrix4d(m_scene->activeCamera->GetViewProjectionMatrix() * effect_model)));
+        }
+    }
     if (hasNodeData) {
         for (const auto& el : nodeData->renderTargets) {
             if (m_scene->renderTargets.count(el.second) == 0) continue;
@@ -239,6 +264,26 @@ void WPShaderValueUpdater::UpdateUniforms(SceneNode* pNode, uint32_t material_sl
 
     if (info.has_VP) {
         updateOp(G_VP, ShaderValue::fromMatrix(viewProTrans));
+    }
+    if (info.has_ORIENTATIONUP || info.has_ORIENTATIONRIGHT || info.has_ORIENTATIONFORWARD) {
+        // Screen-facing particles read the camera node's world axes. The parser
+        // writes a constant screen-XY basis; that is only right for an unrotated
+        // camera looking down -Z, so the live camera replaces it here.
+        const auto axes = camera->GetAxes();
+        if (info.has_ORIENTATIONRIGHT) {
+            updateOp(G_ORIENTATIONRIGHT,
+                     std::array { (float)axes.right.x(), (float)axes.right.y(),
+                                  (float)axes.right.z() });
+        }
+        if (info.has_ORIENTATIONUP) {
+            updateOp(G_ORIENTATIONUP,
+                     std::array { (float)axes.up.x(), (float)axes.up.y(), (float)axes.up.z() });
+        }
+        if (info.has_ORIENTATIONFORWARD) {
+            updateOp(G_ORIENTATIONFORWARD,
+                     std::array { (float)axes.forward.x(), (float)axes.forward.y(),
+                                  (float)axes.forward.z() });
+        }
     }
     if (reqM || reqMVP || reqMI || reqMVPI) {
         Matrix4d modelTrans = samples_screen_background ? pNode->ModelTrans() : pNode->RenderTrans();

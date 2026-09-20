@@ -10,6 +10,7 @@
 #include "VulkanRender/AllPasses.hpp"
 #include "PrePass.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <sstream>
 #include <type_traits>
@@ -198,12 +199,36 @@ struct ExtraInfo {
     Map<size_t, rg::TexNode*>  id_link_map {};
     Map<size_t, rg::TexNode*>  id_base_output_link_map {};
     Set<size_t>                ids_with_effect_graph {};
+    Set<size_t>                referenced_ids {};
     std::vector<DelayLinkInfo> link_info {};
     Set<SceneNode*> cleared_effect_inputs {};
     rg::RenderGraph*           rgraph { nullptr };
     Scene*                     scene { nullptr };
     bool                       use_mipmap_framebuffer { false };
 };
+
+static std::string IsolateReferencedLayerOutput(
+    Scene& scene, ExtraInfo& extra, i32 imgId, std::string output, SceneImageEffectLayer* imgeff,
+    bool is_resolved_final) {
+    if (imgId == 0 || extra.referenced_ids.count((size_t)imgId) == 0) return output;
+    // The pre-effect card of a chain stays on ping-pong A. A compose-routed
+    // final stays on the compose target. SpecTex_Default is the scene
+    // framebuffer: isolate it so a referenced source -- plain card or the
+    // node ResolveEffect resolves onto -- is not sampled from `_rt_default`.
+    if (imgeff != nullptr) return output;
+    if (output != SpecTex_Default) return output;
+    (void)is_resolved_final;
+    const auto key = LayerCompositeTargetKey(imgId);
+    if (! scene.HasRenderTarget(key)) {
+        const auto* defaults = scene.FindRenderTarget(std::string(SpecTex_Default));
+        SceneRenderTarget target;
+        target.width      = defaults != nullptr ? defaults->width : std::max(1, scene.ortho[0]);
+        target.height     = defaults != nullptr ? defaults->height : std::max(1, scene.ortho[1]);
+        target.allowReuse = true;
+        scene.renderTargets[key] = target;
+    }
+    return key;
+}
 
 static void AddCustomShaderGraphPass(
     rg::RenderGraph& rgraph,
@@ -218,7 +243,8 @@ static void AddCustomShaderGraphPass(
     std::string camera_override,
     std::size_t submesh_index,
     uint32_t material_slot,
-    bool register_base_link_output = false) {
+    bool register_base_link_output = false,
+    bool capture_as_layer_link = false) {
     rgraph.addPass<vulkan::CustomShaderPass>(
         material.name,
         rg::PassNode::Type::CustomShader,
@@ -234,7 +260,8 @@ static void AddCustomShaderGraphPass(
          camera_override,
          submesh_index,
          material_slot,
-         register_base_link_output](
+         register_base_link_output,
+         capture_as_layer_link](
             rg::RenderGraphBuilder& builder, vulkan::CustomShaderPass::Desc& pdesc) {
             const auto& pass = builder.workPassNode();
             const auto  pass_output = output_override.empty()
@@ -290,8 +317,17 @@ static void AddCustomShaderGraphPass(
                                                           .type = rg::TexNode::TexType::Temp },
                                       true);
             builder.write(output_node);
-            if (resolved_output == SpecTex_Default) {
+            if (sstart_with(resolved_output, WE_IMAGE_LAYER_COMPOSITE_PREFIX) ||
+                (capture_as_layer_link && resolved_output != SpecTex_Default)) {
                 extra.id_link_map[(usize)imgId] = output_node;
+            } else if (resolved_output == SpecTex_Default) {
+                // A referenced source's composite is never `_rt_default`; that is
+                // the scene framebuffer, including after ResolveEffect rewrites
+                // the last ping-pong onto it.
+                if (! exists(extra.id_link_map, (usize)imgId) &&
+                    extra.referenced_ids.count((size_t)imgId) == 0) {
+                    extra.id_link_map[(usize)imgId] = output_node;
+                }
             } else if (register_base_link_output) {
                 extra.id_base_output_link_map[(usize)imgId] = output_node;
             }
@@ -375,46 +411,66 @@ static void ToGraphPass(
     }
 
     if (mode != GraphPassMode::EffectsOnly && !node->SkipRenderPass()) {
+        const bool resolved_final =
+            IsResolvedImageEffectFinalNode(scene, node, visibility_node);
+        const auto draw_output = IsolateReferencedLayerOutput(
+            scene, extra, imgId, output, imgeff, resolved_final);
+        const bool capture_link =
+            extra.referenced_ids.count((size_t)imgId) != 0 &&
+            draw_output != SpecTex_Default &&
+            (resolved_final ||
+             sstart_with(draw_output, WE_IMAGE_LAYER_COMPOSITE_PREFIX));
         const auto& submeshes = mesh->Submeshes();
-        if (submeshes.size() > 1) {
-            for (std::size_t submesh_index = 0; submesh_index < submeshes.size(); ++submesh_index) {
-                const auto material_slot = submeshes[submesh_index].material_slot;
-                auto* submesh_material = mesh->MaterialForSlot(material_slot);
-                if (submesh_material == nullptr) continue;
-                if (ShouldDebugSkipGraphPass(node, submesh_material->name)) continue;
-                AddCustomShaderGraphPass(
-                    rgraph,
-                    scene,
-                    extra,
-                    node,
-                    visibility_node,
-                    *submesh_material,
-                    output,
-                    submeshes[submesh_index].output_override,
-                    imgId,
-                    camera_override,
-                    submesh_index,
-                    material_slot,
-                    imgeff != nullptr);
+        auto add_draws = [&](const std::string& target, bool register_base, bool capture) {
+            if (submeshes.size() > 1) {
+                for (std::size_t submesh_index = 0; submesh_index < submeshes.size(); ++submesh_index) {
+                    const auto material_slot = submeshes[submesh_index].material_slot;
+                    auto* submesh_material = mesh->MaterialForSlot(material_slot);
+                    if (submesh_material == nullptr) continue;
+                    if (ShouldDebugSkipGraphPass(node, submesh_material->name)) continue;
+                    AddCustomShaderGraphPass(
+                        rgraph,
+                        scene,
+                        extra,
+                        node,
+                        visibility_node,
+                        *submesh_material,
+                        target,
+                        submeshes[submesh_index].output_override,
+                        imgId,
+                        camera_override,
+                        submesh_index,
+                        material_slot,
+                        register_base,
+                        capture);
+                }
+            } else {
+                auto* material = mesh->MaterialForSlot(0);
+                if (material == nullptr) return;
+                if (!ShouldDebugSkipGraphPass(node, material->name)) {
+                    AddCustomShaderGraphPass(
+                        rgraph,
+                        scene,
+                        extra,
+                        node,
+                        visibility_node,
+                        *material,
+                        target,
+                        {},
+                        imgId,
+                        camera_override,
+                        0,
+                        0,
+                        register_base,
+                        capture);
+                }
             }
-        } else {
-            auto* material = mesh->MaterialForSlot(0);
-            if (material == nullptr) return;
-            if (!ShouldDebugSkipGraphPass(node, material->name)) {
-                AddCustomShaderGraphPass(
-                    rgraph,
-                    scene,
-                    extra,
-                    node,
-                    visibility_node,
-                    *material,
-                    output,
-                    {},
-                    imgId,
-                    camera_override,
-                    0,
-                    0,
-                    imgeff != nullptr);
+        };
+        add_draws(draw_output, imgeff != nullptr, capture_link);
+        if (draw_output != output && output == SpecTex_Default) {
+            auto* vis = visibility_node != nullptr ? visibility_node : node;
+            if (vis == nullptr || vis->EffectiveVisible()) {
+                add_draws(output, false, false);
             }
         }
     }
@@ -426,6 +482,9 @@ static void ToGraphPass(
 std::unique_ptr<rg::RenderGraph> wallpaper::sceneToRenderGraph(Scene& scene) {
     std::unique_ptr<rg::RenderGraph> rgraph = std::make_unique<rg::RenderGraph>();
     ExtraInfo                        extra { .rgraph = rgraph.get(), .scene = &scene };
+    for (const auto id : scene.layer_texture_sources) {
+        extra.referenced_ids.insert(static_cast<size_t>(id));
+    }
     std::function<void(SceneNode*)> build_graph = [&extra, &build_graph](SceneNode* node) {
         if (node == nullptr) return;
 

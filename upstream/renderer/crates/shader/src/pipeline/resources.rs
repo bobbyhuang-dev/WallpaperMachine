@@ -39,6 +39,7 @@ impl ProgramResourceLayout {
         let mut reservations = ProgramBindingReservations::default();
         let mut explicit_uniform_binding = None;
         let mut uniform_members = Vec::<UniformMember>::new();
+        let mut uniform_stages = BTreeMap::new();
         let mut textures = Vec::new();
 
         for kind in [ShaderStageKind::Vertex, ShaderStageKind::Fragment] {
@@ -65,11 +66,22 @@ impl ProgramResourceLayout {
                                 .position(|previous| previous.name == member.name)
                             {
                                 if !member.has_same_layout(&uniform_members[previous]) {
-                                    return Err(ShaderError::invalid_request(
-                                        "conflicting GlobalUniforms member declarations",
-                                    ));
+                                    let old = &mut uniform_members[previous];
+                                    let widths = LegacyTypeName::new(old.ty.as_str()).vector_width()
+                                        .zip(LegacyTypeName::new(member.ty.as_str()).vector_width());
+                                    if let Some((old_width, new_width)) = widths
+                                        && old.array_suffix.is_none() && member.array_suffix.is_none()
+                                        && !member.name.starts_with("g_")
+                                        && uniform_stages.get(&member.name) != Some(&kind) {
+                                        if new_width > old_width { old.ty = member.ty.clone(); }
+                                    } else {
+                                        return Err(ShaderError::invalid_request(
+                                            "conflicting GlobalUniforms member declarations",
+                                        ));
+                                    }
                                 }
                             } else {
+                                let _ = uniform_stages.insert(member.name.clone(), kind);
                                 uniform_members.push(member.into_uniform_member());
                             }
                             if let Some(binding) = explicit_binding {

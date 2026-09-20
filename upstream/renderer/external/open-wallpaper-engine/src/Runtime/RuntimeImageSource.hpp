@@ -111,6 +111,13 @@ public:
         image->slots.push_back(std::move(slot));
 
         std::lock_guard lock(m_mutex);
+        if (name == "$mediaThumbnail") {
+            const auto previous = m_runtime_images.find(name);
+            const bool cleared = width == 1 && height == 1 && rgba[3] == 0;
+            m_runtime_images["$mediaPreviousThumbnail"] =
+                !cleared && previous != m_runtime_images.end() ? previous->second : image;
+            m_versions["$mediaPreviousThumbnail"] = version;
+        }
         m_versions[name]                  = version;
         m_runtime_images[std::move(name)] = std::move(image);
     }

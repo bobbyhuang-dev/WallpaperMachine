@@ -45,7 +45,7 @@ TEST(SceneScriptMediaEventSmoke, ExportedHandlerAndSceneCallbackReceivePlaybackE
     fixture.runtime->RegisterSceneScript(
         R"JS(
 function mediaPlaybackChanged(event) {
-  if (event.state === 0) {
+  if (event.state === MediaPlaybackEvent.PLAYBACK_PLAYING) {
     scene.getObject('exportedProbe').visible = true;
   }
 }
@@ -107,6 +107,34 @@ TEST(SceneScriptMediaEventSmoke, VideoPlaybackControlsResolveWrappedState) {
     EXPECT_TRUE(state.paused);
     EXPECT_FLOAT_EQ(state.rate, 0.0f);
     EXPECT_DOUBLE_EQ(state.scene_elapsed_seconds, 1.5);
+}
+
+TEST(SceneScriptMediaEventSmoke, VideoControlScriptCanRestoreHiddenLayerAfterStopping) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto node = std::make_shared<SceneNode>();
+    runtime->RegisterNode("clip", node.get());
+    runtime->RegisterNodeVideoTexture("clip", "textures/clip.mp4");
+    runtime->SetVideoTextureDuration("textures/clip.mp4", 3.0);
+    runtime->RegisterNodeVisibility("clip", node.get(), ResolveBoolSetting(*runtime, {
+        {"value", true}, {"script", R"JS(
+let video;
+export function init() {
+    thisLayer.visible = false;
+    video = thisLayer.getVideoTexture();
+    video.stop();
+    if (video.isPlaying()) throw new Error('stop did not pause');
+}
+export function update() {
+    if (!video.isPlaying()) video.play();
+    thisLayer.visible = video.isPlaying();
+    thisLayer.origin = new Vec3(2, 4, 6).mix(new Vec3(6, 8, 10), 0.25);
+}
+)JS"}}, "clip"));
+    runtime->Tick(0.1);
+    EXPECT_TRUE(node->Visible());
+    EXPECT_TRUE(runtime->NodeVideoTextureIsPlaying("clip"));
+    EXPECT_FALSE(runtime->NodeVideoTextureIsPlaying("missing"));
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 
 TEST(SceneScriptMediaEventSmoke, VideoPlaybackControlsApplyToAllTexturesOnSameNode) {

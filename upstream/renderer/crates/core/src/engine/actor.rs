@@ -848,6 +848,14 @@ impl Message<messages::SetAudioResponseEnabled> for EngineActor {
     }
 }
 
+impl Message<messages::UpdateMedia> for EngineActor {
+    type Reply = Result<(), EngineError>;
+    async fn handle(&mut self, msg: messages::UpdateMedia,
+        _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        self.with_scene_mut(msg.handle, |scene| scene.update_media(msg.enabled, &msg.state))
+    }
+}
+
 impl Message<messages::SetAudioVolume> for EngineActor {
     type Reply = Result<(), EngineError>;
 

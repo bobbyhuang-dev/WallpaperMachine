@@ -3093,8 +3093,43 @@ impl<E: EngineFacade + Clone> Message<SetMediaIntegrationEnabled> for BridgeActo
             .wallpaper_draft_mut(&msg.wallpaper_id)?
             .set_media_integration_enabled_immediate(msg.enabled);
         self.save_wallpaper(msg.wallpaper_id.clone(), wallpaper_config)?;
+        if !msg.enabled {
+            let mut state = crate::api::BridgeMediaSnapshot { playback_state: 2, ..Default::default() }.into_state()?;
+            state.events[0] = wallpaper_core::media::MediaIntegrationEvent::StatusChanged { enabled: false };
+            for handle in self.wallpaper_handles(&msg.wallpaper_id, true) {
+                self.engine.update_media(handle, false, state.clone()).await
+                    .map_err(|error| BridgeError::engine(error.to_string()))?;
+            }
+        }
         self.bump_generation();
         self.wallpaper_bundle(msg.wallpaper_id)
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<messages::GetSceneMediaWallpapers> for BridgeActor<E> {
+    type Reply = Result<Vec<String>, BridgeError>;
+    async fn handle(&mut self, _msg: messages::GetSceneMediaWallpapers,
+        _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        if self.playback_paused() { return Ok(Vec::new()); }
+        Ok(self.state.library.iter().filter(|entry| {
+            entry.kind == crate::api::BridgeWallpaperKind::ProjectScene
+                && self.state.wallpaper_configs.get(&entry.id).is_some_and(|c| c.media_integration_enabled)
+                && !self.wallpaper_handles(&entry.id, true).is_empty()
+        }).map(|entry| entry.id.clone()).collect())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<messages::UpdateSceneMedia> for BridgeActor<E> {
+    type Reply = Result<(), BridgeError>;
+    async fn handle(&mut self, msg: messages::UpdateSceneMedia,
+        _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        if self.playback_paused() || !self.state.wallpaper_configs.get(&msg.wallpaper_id)
+            .is_some_and(|c| c.media_integration_enabled) { return Ok(()); }
+        for handle in self.wallpaper_handles(&msg.wallpaper_id, true) {
+            self.engine.update_media(handle, true, msg.state.clone()).await
+                .map_err(|error| BridgeError::engine(error.to_string()))?;
+        }
+        Ok(())
     }
 }
 

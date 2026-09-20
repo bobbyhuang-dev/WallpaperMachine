@@ -21,6 +21,12 @@ pub(super) struct TakePointerNotificationsForTest;
 
 pub struct Ping;
 
+pub struct UpdateMedia {
+    pub handle: SceneHandle,
+    pub enabled: bool,
+    pub state: crate::media::MediaPollResult,
+}
+
 #[cfg(test)]
 pub struct DisplayRecordCountForTest;
 

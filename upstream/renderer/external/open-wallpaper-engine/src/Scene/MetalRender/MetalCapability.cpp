@@ -32,22 +32,6 @@ namespace
 /// that is rejected.
 constexpr std::string_view kBonesUniform { "g_Bones" };
 
-/// Whether the camera the scene actually renders through is a perspective one.
-///
-/// `Scene::activeCamera` is a raw pointer with no default, so it is validated
-/// against the camera table before it is dereferenced. A scene built by hand --
-/// in a test, or by a future caller -- must not make this read uninitialised
-/// memory.
-bool SceneUsesPerspective(const Scene& scene)
-{
-    for (const auto& [name, camera] : scene.cameras) {
-        (void)name;
-        if (camera == nullptr || camera.get() != scene.activeCamera) continue;
-        return camera->IsPerspective();
-    }
-    return false;
-}
-
 /// Whether this per-frame mesh is the four-corner card a text layer's relayout
 /// rewrites.
 ///
@@ -246,10 +230,6 @@ std::string RejectNodes(const Scene& scene, const SceneNode* node)
 {
     if (node == nullptr) return {};
 
-    if (const auto* camera = FindCamera(scene, node->Camera()); camera != nullptr) {
-        if (camera->IsPerspective()) return "the scene uses a perspective 3D camera";
-    }
-
     if (auto* mesh = const_cast<SceneNode*>(node)->Mesh(); mesh != nullptr) {
         if (mesh->Dynamic()) {
             if (auto reason = RejectDynamicMesh(*mesh); ! reason.empty()) return reason;
@@ -262,6 +242,9 @@ std::string RejectNodes(const Scene& scene, const SceneNode* node)
             const auto& material = *slot;
             const auto* shader   = material.customShader.shader.get();
             if (shader == nullptr) return "a layer has no shader";
+            if (material.depth_compare_unsupported) {
+                return "a material uses a depth compare the native renderer does not support";
+            }
         }
     }
 
@@ -410,7 +393,10 @@ std::string SceneMetalStructuralRejection(const Scene& scene)
         }
     }
 
-    if (SceneUsesPerspective(scene)) return "the scene uses a perspective 3D camera";
+    // A perspective camera is not a refusal on its own. The node's camera --
+    // named, overridden per pass, or the scene's active camera -- is the one
+    // the value updater already writes, and an unused entry in `scene.cameras`
+    // does not change what is drawn.
 
     // Effect chains and post-processing are ordinary multi-pass work here, so
     // neither is rejected wholesale any more. What this backend can execute is
@@ -424,6 +410,9 @@ std::string SceneMetalStructuralRejection(const Scene& scene)
 
 SceneBackendSelection EvaluateMetalSupport(const Scene& scene)
 {
+    if (! scene.layer_texture_error.empty()) {
+        return SceneBackendSelection { SceneBackend::LegacyVulkan, scene.layer_texture_error };
+    }
     if (auto reason = SceneMetalStructuralRejection(scene); ! reason.empty()) {
         return SceneBackendSelection { SceneBackend::LegacyVulkan, std::move(reason) };
     }
@@ -516,12 +505,21 @@ std::string MetalGraphRejection(const Scene& scene, const rg::RenderGraph& graph
         steps.push_back(std::move(step));
     }
 
-    // Depth and multisampled attachments are the two target shapes this backend
-    // has no allocation for. Checked against the targets the graph actually
-    // names, so an unused declaration in the project file cannot reject a scene.
+    // Multisampled attachments are the target shape this backend has no
+    // allocation for. A depth buffer is created only for passes that actually
+    // depth-test, so `withDepth` on a target is not itself a refusal -- sampling
+    // that depth as a texture still is, below. Checked against the targets the
+    // graph actually names, so an unused declaration cannot reject a scene.
     const auto unrenderable = [&scene](const std::string& key) {
         const auto* target = scene.FindRenderTarget(key);
-        return target != nullptr && (target->withDepth || target->sample_count > 1);
+        return target != nullptr && target->sample_count > 1;
+    };
+    const auto samples_depth = [&scene](const std::string& key) {
+        const auto* target = scene.FindRenderTarget(key);
+        // A colour target may carry a depth attachment for its own draws; that
+        // colour is still a colour sample. A target that is only a depth buffer
+        // has no colour to sample, which this backend cannot bind.
+        return target != nullptr && target->withDepth && target->width <= 0;
     };
 
     std::unordered_set<std::string> written;
@@ -532,6 +530,9 @@ std::string MetalGraphRejection(const Scene& scene, const rg::RenderGraph& graph
         for (const auto& read : steps[i].reads) {
             if (unrenderable(read)) {
                 return "an effect uses a render-target format the native renderer cannot create";
+            }
+            if (samples_depth(read)) {
+                return "an effect samples a depth buffer";
             }
             // The graph breaks a read-while-write by copying the target first,
             // so a pass still naming its own output has a cycle nothing broke.

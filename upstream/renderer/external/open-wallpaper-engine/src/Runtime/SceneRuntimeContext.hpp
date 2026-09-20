@@ -231,6 +231,7 @@ public:
     bool                          SetNodeTextureFrame(std::string_view name, double frame);
     double                        NodeTextureFrame(std::string_view name) const;
     bool                          NodeHasVideoTexture(std::string_view name) const;
+    bool                          NodeVideoTextureIsPlaying(std::string_view name) const;
     bool                          PlayNodeVideoTexture(std::string_view name);
     bool                          PauseNodeVideoTexture(std::string_view name);
     bool   SetNodeVideoTextureCurrentTime(std::string_view name, double seconds);

@@ -11,6 +11,15 @@ Proceed with private experimentation. Revisit licensing once the implementation 
 
 ## Projects and evidence
 
+### System music information: ungive/mediaremote-adapter
+
+- Repository: https://github.com/ungive/mediaremote-adapter
+- Pinned revision: `73f14ab1568371e6e3c44063f21c34c5e2712c4d`.
+- License: BSD 3-Clause, retained at `upstream/mediaremote-adapter/LICENSE` and
+  bundled in the application resources as `LICENSE`.
+- Unmodified vendored source; Xcode builds its adapter framework and embeds it
+  without linking it into the host. See `upstream/provenance.json`.
+
 ### Workshop browser: Unayung/wallpaper-engine-mac
 
 - Repository: https://github.com/Unayung/wallpaper-engine-mac

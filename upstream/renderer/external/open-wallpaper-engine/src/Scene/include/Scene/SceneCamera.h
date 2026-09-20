@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <vector>
 #include <memory>
+#include <optional>
 #include <Eigen/Dense>
 #include "SceneImageEffectLayer.h"
 
@@ -60,6 +61,16 @@ public:
     Eigen::Matrix4d GetViewMatrix() const;
     Eigen::Matrix4d GetViewProjectionMatrix() const;
 
+    /// World-space axes of the attached node, which is the basis the particle
+    /// shaders read as `g_Orientation*`. Identity when no node is attached,
+    /// matching the constants the parser writes for an unrotated camera.
+    struct Axes {
+        Eigen::Vector3d right { 1.0, 0.0, 0.0 };
+        Eigen::Vector3d up { 0.0, 1.0, 0.0 };
+        Eigen::Vector3d forward { 0.0, 0.0, 1.0 };
+    };
+    Axes GetAxes() const;
+
     std::shared_ptr<SceneNode> GetAttachedNode() const { return m_node; }
 
     void Clone(const SceneCamera& cam) {
@@ -90,4 +101,12 @@ private:
     std::shared_ptr<SceneImageEffectLayer> m_imgEffect { nullptr };
     bool                                   m_isComposeLayer { false };
 };
+
+/// Intersects the camera ray through NDC `(ndc_x, ndc_y)` with `node`'s local
+/// z = 0 plane. NDC is the shared clip space after the perspective divide,
+/// x/y in [-1, 1], with this engine's near = 0 and far = 1. Returns local
+/// coordinates on the plane, or nullopt if the inverse is degenerate, the ray
+/// is parallel to the plane, or the hit lies outside the clip volume.
+[[nodiscard]] std::optional<Eigen::Vector3d> IntersectNdcWithNodePlane(
+    const SceneCamera& camera, SceneNode& node, double ndc_x, double ndc_y);
 } // namespace wallpaper

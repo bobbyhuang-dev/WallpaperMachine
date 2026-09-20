@@ -77,6 +77,7 @@ public:
         vvk::Framebuffer   fb;
         PipelineParameters pipeline;
         u32                draw_count { 0 };
+        VkIndexType        index_type { VK_INDEX_TYPE_UINT16 };
         std::vector<SceneMesh::DrawRange> draw_ranges;
 
         // uniforms

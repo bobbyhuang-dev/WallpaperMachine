@@ -105,6 +105,23 @@ bool ParticleRender::FromJson(const nlohmann::json& json) {
 
     if (sstart_with(name, "rope")) {
         GET_JSON_NAME_VALUE_NOWARN(json, "subdivision", subdivision);
+        if (json.contains("uvscale")) {
+            uvscale_setting = json.at("uvscale");
+            const auto& source = unwrap_setting(uvscale_setting);
+            if (source.is_number()) uvscale = source.get<float>();
+        }
+        if (json.contains("uvscrolling")) {
+            uvscrolling_setting = json.at("uvscrolling");
+            const auto& source  = unwrap_setting(uvscrolling_setting);
+            if (source.is_boolean()) uvscrolling = source.get<bool>();
+            else if (source.is_number()) uvscrolling = source.get<float>() != 0.0f;
+        }
+        if (json.contains("uvsmoothing")) {
+            uvsmoothing_setting = json.at("uvsmoothing");
+            const auto& source  = unwrap_setting(uvsmoothing_setting);
+            if (source.is_boolean()) uvsmoothing = source.get<bool>();
+            else if (source.is_number()) uvsmoothing = source.get<float>() != 0.0f;
+        }
     }
     if (name == "spritetrail") {
         GET_JSON_NAME_VALUE_NOWARN(json, "length", length);

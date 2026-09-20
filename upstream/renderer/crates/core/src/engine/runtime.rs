@@ -140,6 +140,7 @@ impl NativePointerInputState {
 }
 
 pub struct SceneRuntime {
+    last_media: Option<crate::media::MediaPollResult>,
     /// Last descriptor used to configure the renderer scene.
     pub desc: SceneDesc,
     /// Stable handle used when reporting renderer lifecycle events.
@@ -272,6 +273,7 @@ impl SceneRuntime {
         )?;
         let descriptor_state = SceneRuntimeState::try_from(desc)?;
         let mut runtime = Self {
+            last_media: None,
             desc: desc.clone(),
             handle,
             first_frame_callback,
@@ -455,6 +457,7 @@ impl SceneRuntime {
             return Err(error);
         }
         let mut old_renderer = std::mem::replace(&mut self.renderer, renderer);
+        self.last_media = None;
         self.generation = self.generation.saturating_add(1);
         let old_relay = std::mem::replace(&mut self.pointer_relay, pointer_relay);
         self.pointer_input = NativePointerInputState::new(self.pointer_relay.renderer_instance.clone());
@@ -567,6 +570,20 @@ impl SceneRuntime {
         self.renderer.set_audio_response_enabled(enabled)?;
         self.audio_response_enabled = enabled;
         self.desc.audio_response_enabled = enabled;
+        Ok(())
+    }
+
+    pub fn update_media(&mut self, enabled: bool, state: &crate::media::MediaPollResult) -> Result<(), EngineError> {
+        self.renderer.set_media_integration_enabled(true)?;
+        if let Some(artwork) = &state.artwork
+            && self.last_media.as_ref().and_then(|previous| previous.artwork.as_ref()) != Some(artwork) {
+            self.renderer.apply_system_media_artwork(artwork)?;
+        }
+        for event in state.changed_events(self.last_media.as_ref()) {
+            self.renderer.submit_media_event(event)?;
+        }
+        self.renderer.set_media_integration_enabled(enabled)?;
+        self.last_media = Some(state.clone());
         Ok(())
     }
 

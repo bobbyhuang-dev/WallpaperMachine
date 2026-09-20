@@ -13,7 +13,7 @@ pub use types::{
     BridgeDisplayConfigRow, BridgeDisplayMode, BridgeDisplayMutationBundle,
     BridgeDisplaySettingsRow, BridgeFileFilter, BridgeLibraryScanStatus, BridgeLibrarySnapshot,
     BridgeLockScreenScene, BridgeLogLevel, BridgeLogStatus, BridgeMonitorInfoRow,
-    BridgeNativeVideoWallpaper,
+    BridgeNativeVideoWallpaper, BridgeMediaSnapshot,
     BridgeMonitorInformationSnapshot, BridgePlaybackState, BridgePropertyDescriptor,
     BridgePropertyKind, BridgePropertyValue, BridgeRendererCountersReport,
     BridgeRendererSurfaceCounters, BridgeScalingMode, BridgeSceneBackendReport,
@@ -415,6 +415,10 @@ impl ArcEngineFacade {
 }
 
 impl EngineFacade for ArcEngineFacade {
+    fn update_media(&self, handle: wallpaper_core::project::SceneHandle, enabled: bool,
+        state: wallpaper_core::media::MediaPollResult) -> futures_util::future::BoxFuture<'static, Result<(), wallpaper_core::EngineError>> {
+        self.0.update_media(handle, enabled, state)
+    }
     fn reconcile_scenes(
         &self,
         scenes: Vec<wallpaper_core::project::SceneDesc>,
@@ -1492,6 +1496,17 @@ impl WallpaperBridge {
     #[must_use]
     pub fn current_system_media_state(&self) -> Option<String> {
         self.system_media.current_state_json()
+    }
+
+    /// Running scene wallpapers whose users enabled music information.
+    pub async fn scene_media_wallpaper_ids(&self) -> Result<Vec<String>, BridgeError> {
+        self.actor.ask(crate::actor::messages::GetSceneMediaWallpapers).await
+    }
+
+    /// Publishes a bounded player snapshot; delivery rechecks per-wallpaper consent.
+    pub async fn update_scene_media(&self, wallpaper_id: String, snapshot: BridgeMediaSnapshot) -> Result<(), BridgeError> {
+        let state = snapshot.into_state()?;
+        self.actor.ask(crate::actor::messages::UpdateSceneMedia { wallpaper_id, state }).await
     }
 
     /// Stores the path the host staged for a file or directory property, or

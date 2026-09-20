@@ -80,6 +80,149 @@ recorded as blocked rather than failed:
 **No power number, watt figure or saving percentage is reported anywhere in this
 document.** Counters and unit tests bound what is claimed.
 
+## Round 14 — 32-bit particle indices, layer as texture, perspective cameras, rope UV
+
+Feature round, same discipline as rounds 5–13: implement, wire to production,
+keep it building, fix what this round broke. Native Metal stays a manual choice
+and Compatibility stays the default. Visual output on real wallpapers, desktop
+behaviour and power are the user's to accept. **No power measurement of any
+kind was taken and no saving is claimed anywhere below.** Agreement between
+this application's two renderers is not a comparison with Wallpaper Engine.
+
+| Feature | State | Default |
+|---|---|---|
+| Rope trail / sprite meshes past 16 384 quads | Implemented; authored renderer kept, 32-bit indices on both backends | Always |
+| Payload > 1 GiB or 64-bit size overflow | Particle object skipped with an error; effect type unchanged | Always |
+| Layer as texture `_rt_imageLayerComposite_<id>[_a|_b]` | Implemented in the shared front end; both backends consume `_rt_link_<id>` | Always |
+| Hidden source still produces; same-frame self-read snapshot | Implemented | Always |
+| Missing / duplicate / cycle / previous-frame (`_b`) | Explicit refusal strings on both backends | Always |
+| Effect-chain source composite | Implemented; the node ResolveEffect resolves onto, not `_rt_default` | Always |
+| Unused perspective cameras in `scene.cameras` | Not a refusal | Always |
+| Per-layer / per-pass / active perspective camera for supported layers | Implemented; the runtime's own camera, not a second Metal timeline | Follows **Scene renderer** |
+| Perspective projection (FOV, aspect, near/far, homogeneous divide) | Implemented via `SceneCamera` and the existing Metal clip-space fold | Same |
+| Depth test/write | Only for passes whose material asks; translucent layers do not write depth | Same |
+| Screen-facing particle orientation | `g_Orientation*` follows the camera node's axes | Same |
+| Perspective click/hover unprojection onto the layer plane | Implemented for perspective cameras; ortho path unchanged | Same |
+| Rope / rope-trail `uvscale` | Geometry-encoded in trail length (no author uniform) | Always |
+| Rope / rope-trail `uvscrolling` | V against mesh/history capacity so a growing rope unrolls | Always |
+| Rope / rope-trail `uvsmoothing` | smoothstep on trail-position | Always |
+| Runtime `SetRopeUv` | Implemented without re-parsing | Always |
+| Poster | Unchanged: the same final composition | Same |
+
+`segments` is an implementation default of 10 when the project omits the field.
+That default is not observed from Wallpaper Engine; the shipped rope-trail
+preview omits it.
+
+Packed 16-bit remains the default index width. Subdivision is not reduced to
+fit. Both backends share the 1 GiB vertex+index budget, so switching renderer
+is not a fix. Sprite systems above 16 384 particles take the same 32-bit path.
+The implicit Rope Trail → Sprite Trail replacement is gone.
+
+Camera selection uses the node's named camera, a per-pass override, or
+`activeCamera`. An unused `global_perspective` entry — which every parsed scene
+has — is not a refusal. Projection is `SceneCamera::GetViewProjectionMatrix()`
+(the engine's `Perspective()`, not an orthographic scale). Metal still folds
+clip space through `MetalClipSpaceFold`, which remains the identity. Depth is
+allocated per colour target that a pass actually depth-tests, at that target's
+size (already `renderScale`). `"the scene uses a perspective 3D camera"` is no
+longer a fallback reason.
+
+Upright/Fixed particle orientations are not parsed, so they are not a distinct
+fallback; particles that declare `g_Orientation*` receive the camera basis.
+
+`_rt_imageLayerComposite_<id>` is the source layer's composite after its
+effects. In installed wallpaper 3226487183 the referenced hidden layer is id
+14942; that layer has no effect chain. A source that does have a chain links
+from the isolated composite of the node ResolveEffect resolves onto, not from
+`_rt_default`. Hidden sources do not dual-draw that composite onto the scene
+framebuffer.
+
+### What the tree actually did before this round
+
+- Particle meshes past 16 384 quads could not keep their authored rope-trail
+  renderer: the parser reduced subdivision or rewrote the trail as a sprite
+  trail, and both GPU backends bound 16-bit packed indices.
+- `_rt_imageLayerComposite_<id>` was rewritten to `_rt_link_<id>` by regex
+  without missing/duplicate/cycle/history reasons, and a hidden source was
+  dropped.
+- Any active perspective camera refused the whole scene.
+- Rope UV scale/scroll/smooth had no runtime path.
+
+### Tests added
+
+- `scene_mesh_tests`: index-width / overflow / geometry-budget cases.
+- `particle_rope_geometry_test`: packed 16-bit boundary, uint32 past the old
+  cap, order across instances, ParticleRopeUv scale/scroll/smooth.
+- `layer_texture_reference_test`: authored composite syntax, forward ref,
+  duplicate name, missing target, cycle, history `_b`, file name vs layer name,
+  invisible source kept, producer-before-consumer, effect-chain source not
+  linked from `_rt_default`.
+- `metal_backend_test`: unused / per-layer / active perspective cameras
+  accepted; unsupported depth compare refused; pipeline key distinguishes
+  depth; perspective FOV/homogeneous divide; NDC unprojection onto a layer
+  plane; camera axes follow the attached node; a colour target with `withDepth`
+  is not a graph refusal.
+- `metal_scene_draw_smoke.APerspectiveCameraDrawsThroughTheAuthoredShader`: a
+  parsed card drawn through `global_perspective`, rotated, must foreshorten.
+- `metal_scene_draw_smoke.ARopeTrailPastTheOldSixteenBitIndexLimitStaysARopeTrail`.
+
+### Local wallpapers run through the Metal gate
+
+`WE_TEST_METAL_PROJECTS` with `MetalSceneDraw.LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBackend`.
+Packages were read in place; nothing was copied into the repository. Select
+accepted Native Metal. After the empty-key prepare fix, exact printed lines:
+
+- 3226487183: `Native Metal, 120 frames drawn, 14968995 bytes differ between the first and the last`
+- 3680252478: `Native Metal, 120 frames drawn, 2552368 bytes differ between the first and the last`
+- 3800629364: `Native Metal, 120 frames drawn, 2814309 bytes differ between the first and the last`
+
+The byte counts are first vs last offscreen frame, not a comparison with
+Wallpaper Engine. Layer 14942 in 3226487183 has no effect chain.
+3680252478's `effects/shimmer` still failed to translate (`Unknown function
+'rotateVec2'`, Naga GLSL parse: the `common.h` helper never reached Naga).
+That effect is absent from the native draw; the rest of the scene prepared.
+HEAD had already failed 3226487183 and 3800629364 at prepare with an empty
+texture key, and rejected 3680252478 for perspective.
+
+### Still falls back as a whole scene
+
+Lit particles, 3D models, dynamic lighting, history-feedback effects, HDR or
+10-bit video, plain video wallpapers, shaders that do not translate, RGB8
+images, block-compressed images on a device without them, sheets that are also
+videos, non-triangle primitives, any other per-frame geometry, a skinning
+shader whose bone array or inputs do not match its mesh, a rope or trail mesh
+that does not have its generator's layout, MSAA targets, sampling a depth
+buffer, unsupported depth compare, and scenes loaded before Native Metal was
+selected. The lock-screen extension stays on Compatibility. A scene is never
+drawn with a layer missing: every one of these is the whole scene. Perspective
+cameras for the layer types Native Metal already draws, and same-frame layer
+texture references, are no longer on this list.
+Installed 3226487183 / 3680252478 / 3800629364 no longer fall back as a
+whole scene on this tree; an empty unsampled material slot is not a Metal
+prepare failure.
+
+### Interface
+
+No new switches. **Scene renderer**'s description now lists perspective cameras
+for the supported layer types and same-frame layer links as drawn natively, and
+no longer names perspective cameras as a whole-scene fallback, in both
+languages. The per-wallpaper "Drawn by" list still reports the backend each
+running wallpaper actually got with the renderer's own reason.
+
+### Not verified
+
+- Nothing was displayed. No wallpaper was shown on a desktop, no output was
+  judged by a person against Wallpaper Engine, and no power, energy or thermal
+  measurement was taken.
+- Visual equivalence with Wallpaper Engine is not claimed.
+- Rope UV appearance against the real engine was not compared.
+- The three local wallpapers were drawn offscreen only, 120 frames each. No
+  frame was judged against the authored result, and `effects/shimmer` is
+  absent from 3680252478's native draw.
+- `shared_video_session_test.AFrameStaysValidAfterTheDecoderMovesOn` and the two
+  pointer `scene_schema_tests` Wait-timeout cases fail on HEAD as well as on
+  this tree; their assertions were not modified.
+
 ## Round 13 — two-dimensional puppets, sprite trails, ropes and rope trails on Metal
 
 Feature round, same discipline as rounds 5–12: implement, wire to production,

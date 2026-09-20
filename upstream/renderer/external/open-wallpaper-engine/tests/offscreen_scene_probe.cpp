@@ -8,6 +8,7 @@
 #include "Fs/VFS.h"
 #include "Project/ProjectProperties.hpp"
 #include "Runtime/SceneRuntimeContext.hpp"
+#include "Runtime/RuntimeImageSource.hpp"
 #include "Runtime/VirtualAssetRegistry.hpp"
 #include "Scene/Scene.h"
 #include "Scene/SceneNode.h"
@@ -33,6 +34,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <thread>
 
@@ -212,6 +214,11 @@ int main() {
         auto source = vfs.Open("/assets/" + paths.pkg_entry);
         Check(source != nullptr, "scene source");
         const auto scene_source = source->ReadAllStr();
+        if (const char* asset = std::getenv("WE_TEST_ASSET_PATH")) {
+            auto file = vfs.Open(std::string("/assets/") + asset);
+            Check(file != nullptr, "diagnostic asset");
+            std::ofstream(out / "asset.txt") << file->ReadAllStr();
+        }
         if (std::getenv("WE_TEST_DUMP_SOURCE"))
             std::ofstream(out / "scene.json") << scene_source;
         WPSceneParser parser;
@@ -222,6 +229,20 @@ int main() {
         }, scene_source, vfs, sound);
         Check(scene != nullptr, "parse scene");
         milestone("parsed");
+        if (const char* media = std::getenv("WE_TEST_MEDIA_JSON")) {
+            const auto events = nlohmann::json::parse(media);
+            Check(events.is_array(), "WE_TEST_MEDIA_JSON must be an event array");
+            scene->runtime->SetMediaIntegrationEnabled(true);
+            for (const auto& event : events) scene->runtime->DispatchMediaEventJson(event.dump());
+        }
+        if (std::getenv("WE_TEST_MEDIA_ARTWORK")) {
+            auto* images = dynamic_cast<RuntimeImageSource*>(scene->imageParser.get());
+            Check(images != nullptr, "runtime artwork source");
+            const uint8_t pixels[] = {255, 0, 0, 255, 0, 255, 0, 255,
+                                      0, 0, 255, 255, 255, 255, 0, 255};
+            images->SetRgbaImage("$mediaThumbnail", 2, 2, pixels, sizeof(pixels));
+            scene->runtime->DispatchMediaEventJson(R"({"type":"mediaThumbnailChanged","hasThumbnail":true})");
+        }
         if (audio_hz_env) {
             const char* enabled = std::getenv("WE_TEST_AUDIO_ENABLED");
             scene->runtime->SetAudioResponseEnabled(! enabled || std::string_view(enabled) != "0");
@@ -481,6 +502,8 @@ int main() {
                               << " visible="
                               << (!d.visibility_node || d.visibility_node->EffectiveVisible());
                         if (auto* slot = d.node->Mesh()->MaterialForSlot(d.material_slot)) {
+                            trace << " material=" << slot->name << " textures=";
+                            for (const auto& texture : slot->textures) trace << '[' << texture << ']';
                             for (const auto& [name, value] : slot->customShader.constValues) {
                                 trace << ' ' << name << "=[";
                                 for (std::size_t c = 0; c < value.size(); ++c) {

@@ -9,7 +9,7 @@ pub struct ShaderPipelineRevision(u64);
 
 impl ShaderPipelineRevision {
     /// Current default pipeline revision.
-    pub const CURRENT: Self = Self(5);
+    pub const CURRENT: Self = Self(6);
 
     /// Creates a typed pipeline revision.
     #[must_use]

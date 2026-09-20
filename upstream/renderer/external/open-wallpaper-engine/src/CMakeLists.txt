@@ -82,6 +82,7 @@ add_library(
   Scene/Parse/WPParticleParser.cpp
   Scene/Parse/WPShaderParser.cpp
   Scene/Parse/WPSceneParser.cpp
+  Scene/SceneLayerReference.cpp
   Scene/WPShaderValueUpdater.cpp
   Scene/Parse/WPTexImageParser.cpp
   Scene/Parse/WPSoundParser.cpp

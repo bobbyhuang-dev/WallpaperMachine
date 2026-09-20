@@ -410,9 +410,16 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
         }
 
         if (submesh.IndexCount() > 0) {
-            auto&  indice     = submesh.GetIndexArray(0);
-            size_t count      = (indice.DataCount() * 2) / 3;
-            m_desc.draw_count = (u32)count * 3;
+            auto&          indice = submesh.GetIndexArray(0);
+            const uint64_t count  = indice.DrawIndexCount();
+            const uint64_t bytes  = indice.DrawIndexBytes();
+            if (count > std::numeric_limits<u32>::max() || (count > 0 && bytes == 0)) {
+                LOG_ERROR("index buffer is larger than a draw can address");
+                return;
+            }
+            m_desc.draw_count  = (u32)count;
+            m_desc.index_type  = indice.Width() == SceneIndexWidth::UInt32 ? VK_INDEX_TYPE_UINT32
+                                                                          : VK_INDEX_TYPE_UINT16;
             m_desc.draw_ranges = submesh.DrawRanges();
             auto& buf         = m_desc.index_buf;
             if (! m_desc.dyn_vertex) {
@@ -512,6 +519,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
         auto& vertex_bufs = m_desc.vertex_bufs;
         auto& draw_count  = m_desc.draw_count;
         auto& index_buf   = m_desc.index_buf;
+        auto& index_type  = m_desc.index_type;
         auto& draw_ranges = m_desc.draw_ranges;
         auto& uploaded_generation = m_desc.uploaded_mesh_dirty_generation;
         const auto index_count = submesh.IndexCount();
@@ -528,6 +536,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
                              &vertex_bufs,
                              &draw_count,
                              &index_buf,
+                             &index_type,
                              &draw_ranges,
                              &uploaded_generation,
                              dyn_buf,
@@ -572,7 +581,19 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
                 if (! dyn_buf->writeToBuf(index_buf,
                                           { (uint8_t*)indice.Data(), indice.DataSizeOf() }))
                     return false;
-                draw_count = (u32)((indice.RenderDataCount() * 2) / 3) * 3;
+                const uint64_t live = indice.DrawIndexCount();
+                const uint64_t bytes = indice.DrawIndexBytes();
+                if (live > std::numeric_limits<u32>::max() || (live > 0 && bytes == 0)) {
+                    LOG_ERROR("dynamic mesh index count is not addressable");
+                    return false;
+                }
+                const auto expected = index_type == VK_INDEX_TYPE_UINT32 ? SceneIndexWidth::UInt32
+                                                                         : SceneIndexWidth::UInt16;
+                if (indice.Width() != expected) {
+                    LOG_ERROR("dynamic mesh changed its index width after preparation");
+                    return false;
+                }
+                draw_count = (u32)live;
                 draw_ranges = current.DrawRanges();
             }
             uploaded_generation = dirty_generation;
@@ -744,8 +765,10 @@ CustomPassRenderInfo CustomShaderPass::renderInfo() const {
 }
 
 bool CustomShaderPass::updateFrame(const Device&, RenderingResources&) {
-    m_frame_visible =
-        m_desc.visibility_node == nullptr || m_desc.visibility_node->EffectiveVisible();
+    m_frame_visible = m_desc.visibility_node == nullptr ||
+                      m_desc.visibility_node->EffectiveVisible() ||
+                      (m_desc.visibility_node->MustProduce() && ! m_desc.output.empty() &&
+                       m_desc.output != SpecTex_Default);
     m_frame_clear_only = ! m_frame_visible && m_desc.clear_on_first_use;
     if (! m_frame_visible) return true;
     // A skipped pass keeps the pixels it wrote last frame, so re-uploading its
@@ -825,8 +848,10 @@ StaticPassDesc CustomShaderPass::staticPassDesc(const Scene& scene) const {
 
 StaticPassSample CustomShaderPass::frameSample() const {
     StaticPassSample sample;
-    sample.visible =
-        m_desc.visibility_node == nullptr || m_desc.visibility_node->EffectiveVisible();
+    sample.visible = m_desc.visibility_node == nullptr ||
+                    m_desc.visibility_node->EffectiveVisible() ||
+                    (m_desc.visibility_node->MustProduce() && ! m_desc.output.empty() &&
+                     m_desc.output != SpecTex_Default);
 
     uint64_t hash = 0xcbf29ce484222325ULL;
     auto* node = m_desc.node;
@@ -996,7 +1021,7 @@ void CustomShaderPass::recordDrawWithPipeline(
         cmd.BindVertexBuffers((u32)i, 1, &gpu_buf, &buf.offset);
     }
     if (m_desc.index_buf) {
-        cmd.BindIndexBuffer(gpu_buf, m_desc.index_buf.offset, VK_INDEX_TYPE_UINT16);
+        cmd.BindIndexBuffer(gpu_buf, m_desc.index_buf.offset, m_desc.index_type);
         if (!m_desc.draw_ranges.empty()) {
             for (const auto& range : m_desc.draw_ranges) {
                 cmd.DrawIndexed(range.indexCount, 1, range.indexOffset, 0, 0);

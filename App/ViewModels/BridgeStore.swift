@@ -31,6 +31,7 @@ final class BridgeStore {
     /// the panel reports as unknown rather than as "nothing is being
     /// delivered".
     @ObservationIgnored var webWallpaperDeliveryStatus: (@MainActor () -> WebWallpaperHost.DeliveryStatus)?
+    @ObservationIgnored var sceneMediaAvailability: (@MainActor () -> SystemMediaAvailability)?
     let editorState = WallpaperEditorState()
     private(set) var activatingWallpaperID: String?
     private(set) var applyingWallpaperID: String?

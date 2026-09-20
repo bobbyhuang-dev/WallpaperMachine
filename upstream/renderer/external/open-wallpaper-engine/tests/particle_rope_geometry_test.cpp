@@ -59,7 +59,8 @@ void AddRopeParticleMesh(SceneMesh& mesh, uint32_t capacity, bool thick, bool tr
     }
     attrs.push_back({ WE_IN_COLOR.data(), VertexType::FLOAT4 });
     mesh.AddVertexArray(SceneVertexArray(attrs, capacity * 4));
-    mesh.AddIndexArray(SceneIndexArray(capacity));
+    const auto layout = PlanParticleIndexLayout(capacity);
+    mesh.AddIndexArray(SceneIndexArray(capacity, layout.width));
     mesh.GetVertexArray(0).SetOption(WE_PRENDER_ROPE, true);
     mesh.GetVertexArray(0).SetOption(WE_CB_THICK_FORMAT, thick);
     if (trail) {
@@ -614,6 +615,218 @@ TEST(ParticleTrailHistory, RespawnedParticleRestartsTrailHistoryAtNewBirth) {
     ASSERT_EQ(cap->slots.size(), 1u);
     ASSERT_EQ(cap->slots[0].trail_count, 1u);
     ExpectVec3(cap->slots[0].trail[0].data(), { 9.0f, 8.0f, 7.0f });
+}
+
+uint32_t IndexAt(const SceneIndexArray& array, usize i) {
+    if (array.Width() == SceneIndexWidth::UInt32) return array.Data()[i];
+    return reinterpret_cast<const uint16_t*>(array.Data())[i];
+}
+
+void ExpectQuadIndices(const SceneIndexArray& array, uint32_t quad) {
+    const uint32_t base = quad * 4;
+    const usize    at   = usize(quad) * 6;
+    EXPECT_EQ(IndexAt(array, at + 0), base);
+    EXPECT_EQ(IndexAt(array, at + 1), base + 1);
+    EXPECT_EQ(IndexAt(array, at + 2), base + 3);
+    EXPECT_EQ(IndexAt(array, at + 3), base + 1);
+    EXPECT_EQ(IndexAt(array, at + 4), base + 2);
+    EXPECT_EQ(IndexAt(array, at + 5), base + 3) << quad;
+}
+
+void AddSpriteParticleMesh(SceneMesh& mesh, uint32_t capacity) {
+    std::vector<SceneVertexArray::SceneVertexAttribute> attrs {
+        { WE_IN_POSITION.data(), VertexType::FLOAT3 },
+        { WE_IN_TEXCOORDVEC4.data(), VertexType::FLOAT4 },
+        { WE_IN_COLOR.data(), VertexType::FLOAT4 },
+        { WE_IN_TEXCOORDC2.data(), VertexType::FLOAT2 },
+    };
+    const auto layout = PlanParticleIndexLayout(capacity);
+    mesh.AddVertexArray(SceneVertexArray(attrs, static_cast<std::size_t>(layout.vertex_count)));
+    mesh.AddIndexArray(SceneIndexArray(capacity, layout.width));
+    mesh.GetVertexArray(0).SetOption(WE_PRENDER_SPRITE, true);
+}
+
+std::unique_ptr<ParticleInstance> MakeLiveSprites(uint32_t count) {
+    auto instance = std::make_unique<ParticleInstance>();
+    auto& particles = instance->ParticlesVec();
+    particles.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        particles.push_back(LiveAt({ float(i), 0.0f, 0.0f }));
+    }
+    return instance;
+}
+
+TEST(ParticleIndex, GeneratorKeepsPackedUInt16AtSixteenBitBoundary) {
+    SceneMesh mesh(MeshUpdate::PerFrame);
+    AddSpriteParticleMesh(mesh, static_cast<uint32_t>(kMaxPackedUInt16Quads));
+    std::vector<std::unique_ptr<ParticleInstance>> instances;
+    instances.push_back(MakeLiveSprites(static_cast<uint32_t>(kMaxPackedUInt16Quads)));
+    ParticleRenderScale scale;
+    GenRope(instances, mesh, scale); // GenGLData via existing helper name
+
+    const auto& indices = mesh.GetIndexArray(0);
+    EXPECT_EQ(indices.Width(), SceneIndexWidth::UInt16);
+    EXPECT_EQ(indices.DrawIndexCount(), kMaxPackedUInt16Quads * 6);
+    ExpectQuadIndices(indices, 0);
+    ExpectQuadIndices(indices, static_cast<uint32_t>(kMaxPackedUInt16Quads - 1));
+    EXPECT_EQ(IndexAt(indices, (kMaxPackedUInt16Quads - 1) * 6 + 5), 65535u);
+}
+
+TEST(ParticleIndex, GeneratorWritesUInt32IndicesPastOldPackedLimit) {
+    constexpr uint32_t kQuads = static_cast<uint32_t>(kMaxPackedUInt16Quads + 1);
+    SceneMesh mesh(MeshUpdate::PerFrame);
+    AddSpriteParticleMesh(mesh, kQuads);
+    std::vector<std::unique_ptr<ParticleInstance>> instances;
+    instances.push_back(MakeLiveSprites(kQuads));
+    ParticleRenderScale scale;
+    GenRope(instances, mesh, scale);
+
+    const auto& indices = mesh.GetIndexArray(0);
+    EXPECT_EQ(indices.Width(), SceneIndexWidth::UInt32);
+    EXPECT_EQ(indices.DrawIndexCount(), uint64_t(kQuads) * 6);
+    ExpectQuadIndices(indices, 0);
+    ExpectQuadIndices(indices, kMaxPackedUInt16Quads);
+    EXPECT_EQ(IndexAt(indices, kMaxPackedUInt16Quads * 6), 65536u);
+}
+
+TEST(ParticleIndex, GeneratorPreservesQuadOrderAcrossInstancesOnUInt32Mesh) {
+    constexpr uint32_t kFirst  = 10000;
+    constexpr uint32_t kSecond = static_cast<uint32_t>(kMaxPackedUInt16Quads + 1 - kFirst);
+    SceneMesh mesh(MeshUpdate::PerFrame);
+    AddSpriteParticleMesh(mesh, kFirst + kSecond);
+    std::vector<std::unique_ptr<ParticleInstance>> instances;
+    instances.push_back(MakeLiveSprites(kFirst));
+    instances.push_back(MakeLiveSprites(kSecond));
+    ParticleRenderScale scale;
+    GenRope(instances, mesh, scale);
+
+    const auto& indices = mesh.GetIndexArray(0);
+    EXPECT_EQ(indices.Width(), SceneIndexWidth::UInt32);
+    EXPECT_EQ(indices.DrawIndexCount(), uint64_t(kFirst + kSecond) * 6);
+    ExpectQuadIndices(indices, 0);
+    ExpectQuadIndices(indices, kFirst - 1);
+    ExpectQuadIndices(indices, kFirst);
+    ExpectQuadIndices(indices, kFirst + kSecond - 1);
+}
+
+float RopeShaderV(float trail_length, float trail_position, float mix_y) {
+    const float usable = trail_length - 1.0f;
+    const float uv_min = 1.0f - trail_position / usable;
+    const float uv_delta = -1.0f / usable;
+    return uv_min + uv_delta * mix_y;
+}
+
+TEST(ParticleRopeUv, ScaleDoublesRepeatsAlongTheRope) {
+    auto span_for = [](float uv_scale, float* authored_length) {
+        SceneMesh mesh(MeshUpdate::PerFrame);
+        AddRopeParticleMesh(mesh, kMeshCapacity, false);
+        std::vector<std::unique_ptr<ParticleInstance>> instances;
+        instances.push_back(MakeInstance({ LiveAt({ 0.0f, 0.0f, 0.0f }),
+                                           LiveAt({ 10.0f, 0.0f, 0.0f }),
+                                           LiveAt({ 20.0f, 0.0f, 0.0f }) }));
+        ParticleRenderScale scale;
+        scale.rope_subdivision = 1;
+        scale.uv_scale         = uv_scale;
+        GenRope(instances, mesh, scale);
+        const auto& vertices = mesh.GetVertexArray(0);
+        *authored_length     = QuadVertex(vertices, 0, 0)[7];
+        const float* first = QuadVertex(vertices, 0, 0);
+        const float* last  = QuadVertex(vertices, 1, 0);
+        return RopeShaderV(first[7], first[11], 0.0f) - RopeShaderV(last[7], last[11], 1.0f);
+    };
+    float length1 = 0;
+    float length2 = 0;
+    EXPECT_NEAR(span_for(1.0f, &length1), 1.0f, 1.0e-5f);
+    EXPECT_NEAR(span_for(2.0f, &length2), 2.0f, 1.0e-5f);
+    EXPECT_FLOAT_EQ(length1, 3.0f);
+    EXPECT_FLOAT_EQ(length2, 2.0f);
+}
+
+TEST(ParticleRopeUv, SubdivisionDoesNotIncreaseRepeats) {
+    auto run = [](uint32_t subdiv) {
+        SceneMesh mesh(MeshUpdate::PerFrame);
+        AddRopeParticleMesh(mesh, kMeshCapacity, false);
+        std::vector<std::unique_ptr<ParticleInstance>> instances;
+        instances.push_back(MakeInstance({ LiveAt({ 0.0f, 0.0f, 0.0f }),
+                                           LiveAt({ 10.0f, 0.0f, 0.0f }),
+                                           LiveAt({ 20.0f, 0.0f, 0.0f }) }));
+        ParticleRenderScale scale;
+        scale.rope_subdivision = subdiv;
+        scale.uv_scale         = 2.0f;
+        GenRope(instances, mesh, scale);
+        const auto& vertices = mesh.GetVertexArray(0);
+        const std::size_t quads = vertices.VertexCount() / 4;
+        const float* first = QuadVertex(vertices, 0, 0);
+        const float* last  = QuadVertex(vertices, quads - 1, 0);
+        return RopeShaderV(first[7], first[11], 0.0f) - RopeShaderV(last[7], last[11], 1.0f);
+    };
+    EXPECT_NEAR(run(1), run(3), 1.0e-5f);
+    EXPECT_NEAR(run(1), 2.0f, 1.0e-5f);
+}
+
+TEST(ParticleRopeUv, ScrollingUsesCapacityInsteadOfLiveCount) {
+    SceneMesh mesh(MeshUpdate::PerFrame);
+    AddRopeParticleMesh(mesh, kMeshCapacity, false);
+    std::vector<std::unique_ptr<ParticleInstance>> instances;
+    instances.push_back(MakeInstance({ LiveAt({ 0.0f, 0.0f, 0.0f }),
+                                       LiveAt({ 10.0f, 0.0f, 0.0f }),
+                                       LiveAt({ 20.0f, 0.0f, 0.0f }) }));
+    ParticleRenderScale scale;
+    scale.rope_subdivision = 1;
+    scale.uv_scrolling     = true;
+    GenRope(instances, mesh, scale);
+    const auto& vertices = mesh.GetVertexArray(0);
+    EXPECT_FLOAT_EQ(QuadVertex(vertices, 0, 0)[7],
+                    EncodeRopeTrailLength(static_cast<float>(kMeshCapacity) + 1.0f, 1.0f));
+    EXPECT_NE(QuadVertex(vertices, 0, 0)[7], 3.0f);
+}
+
+TEST(ParticleRopeUv, SmoothingEasesInteriorTrailPosition) {
+    SceneMesh mesh(MeshUpdate::PerFrame);
+    AddRopeParticleMesh(mesh, kMeshCapacity, false);
+    std::vector<std::unique_ptr<ParticleInstance>> instances;
+    instances.push_back(MakeInstance({ LiveAt({ 0.0f, 0.0f, 0.0f }),
+                                       LiveAt({ 10.0f, 0.0f, 0.0f }),
+                                       LiveAt({ 20.0f, 0.0f, 0.0f }),
+                                       LiveAt({ 30.0f, 0.0f, 0.0f }) }));
+    ParticleRenderScale scale;
+    scale.rope_subdivision = 1;
+    scale.uv_smoothing     = true;
+    GenRope(instances, mesh, scale);
+    const auto& vertices = mesh.GetVertexArray(0);
+    EXPECT_FLOAT_EQ(QuadVertex(vertices, 0, 0)[11], 0.0f);
+    EXPECT_GT(QuadVertex(vertices, 1, 0)[11], 0.0f);
+    EXPECT_LT(QuadVertex(vertices, 1, 0)[11], 1.0f);
+}
+
+TEST(ParticleRopeUv, WidthUStaysInUnitIntervalForAtlasDomain) {
+    SceneMesh mesh(MeshUpdate::PerFrame);
+    AddRopeParticleMesh(mesh, kMeshCapacity, false);
+    std::vector<std::unique_ptr<ParticleInstance>> instances;
+    instances.push_back(MakeInstance({ LiveAt({ 0.0f, 0.0f, 0.0f }),
+                                       LiveAt({ 10.0f, 0.0f, 0.0f }),
+                                       LiveAt({ 20.0f, 0.0f, 0.0f }) }));
+    ParticleRenderScale scale;
+    scale.uv_scale = 4.0f;
+    GenRope(instances, mesh, scale);
+    ExpectUvCorners(mesh.GetVertexArray(0), 0, false);
+    ExpectUvCorners(mesh.GetVertexArray(0), 1, false);
+}
+
+TEST(ParticleRopeUv, RuntimeScaleChangeRewritesLengthWithoutNewParticles) {
+    SceneMesh mesh(MeshUpdate::PerFrame);
+    AddRopeParticleMesh(mesh, kMeshCapacity, false);
+    std::vector<std::unique_ptr<ParticleInstance>> instances;
+    instances.push_back(MakeInstance({ LiveAt({ 0.0f, 0.0f, 0.0f }),
+                                       LiveAt({ 10.0f, 0.0f, 0.0f }),
+                                       LiveAt({ 20.0f, 0.0f, 0.0f }) }));
+    ParticleRenderScale scale;
+    GenRope(instances, mesh, scale);
+    EXPECT_FLOAT_EQ(QuadVertex(mesh.GetVertexArray(0), 0, 0)[7], 3.0f);
+    scale.uv_scale = 2.0f;
+    GenRope(instances, mesh, scale);
+    EXPECT_FLOAT_EQ(QuadVertex(mesh.GetVertexArray(0), 0, 0)[7], 2.0f);
+    ASSERT_EQ(instances[0]->Particles().size(), 3u);
 }
 
 } // namespace

@@ -2142,6 +2142,49 @@ TEST(ShaderValueUpdaterCompat, SlotRenderTargetUniformsUseSlotShaderValueData) {
     scene.activeCamera = nullptr;
 }
 
+TEST(ShaderValueUpdaterCompat, EffectMatricesRetainOwnerScaleAndMapQuadToLayer) {
+    Scene scene;
+    auto camera = std::make_shared<SceneCamera>(1920, 1080, -1.0f, 1.0f);
+    scene.activeCamera = camera.get();
+    scene.cameras["effect"] = std::make_shared<SceneCamera>(2, 2, -1.0f, 1.0f);
+    SceneNode owner;
+    owner.SetScale(Eigen::Vector3f(0.8f, 0.6f, 1.0f));
+    owner.SetTranslate(Eigen::Vector3f(100.0f, 200.0f, 0.0f));
+    owner.UpdateTrans();
+    auto node = std::make_shared<SceneNode>();
+    auto mesh = std::make_shared<SceneMesh>();
+    mesh->AddMaterial(SceneMaterial {});
+    node->AddMesh(mesh);
+    node->SetCamera("effect");
+    WPShaderValueData data;
+    data.effect_owner = &owner;
+    data.effect_extent = Eigen::Vector2f(280, 300);
+    WPShaderValueUpdater updater(&scene);
+    updater.SetNodeData(node.get(), data);
+    updater.InitUniforms(node.get(), [](std::string_view name) {
+        return name == "g_LayerModelMatrix" || name == "g_EffectModelViewProjectionMatrix";
+    });
+    sprite_map_t sprites;
+    std::unordered_map<std::string, ShaderValue> values;
+    auto capture = [&](std::string_view name, const ShaderValue& value) {
+        values[std::string(name)] = value;
+    };
+    updater.UpdateUniforms(node.get(), sprites, capture);
+    ASSERT_TRUE(values.contains("g_LayerModelMatrix"));
+    EXPECT_NEAR(values.at("g_LayerModelMatrix")[0], 0.8f, 1e-6f);
+    Eigen::Matrix4d extent = Eigen::Matrix4d::Identity();
+    extent(0, 0) = 140;
+    extent(1, 1) = 150;
+    const Eigen::Matrix4d expected = camera->GetViewProjectionMatrix() * owner.ModelTrans() * extent;
+    for (int i = 0; i < 16; ++i)
+        EXPECT_NEAR(values.at("g_EffectModelViewProjectionMatrix")[i], expected.data()[i], 1e-5);
+    node->SetCamera("");
+    updater.UpdateUniforms(node.get(), sprites, capture);
+    const Eigen::Matrix4d final_expected = camera->GetViewProjectionMatrix() * owner.ModelTrans();
+    for (int i = 0; i < 16; ++i)
+        EXPECT_NEAR(values.at("g_EffectModelViewProjectionMatrix")[i], final_expected.data()[i], 1e-5);
+}
+
 TEST(ScriptRuntimeCompat, CompiledExportsIgnoreSourceTextAndRecognizePlainFunctions) {
     auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
     auto node = std::make_shared<SceneNode>();

@@ -428,6 +428,92 @@ TEST_F(MetalSceneDraw, TranslatedAuthorShaderCompilesAndDrawsTheScene)
     }
 }
 
+TEST_F(MetalSceneDraw, APerspectiveCameraDrawsThroughTheAuthoredShader)
+{
+    // A scene that last round was refused only for a perspective camera: the
+    // same author card, drawn through `global_perspective` rather than the
+    // ortho global camera. The shader writes clip from g_MVP, so a rotated
+    // card must foreshorten -- left and right edges different heights -- which
+    // is what rules out "orthographic plus a constant scale".
+    const auto project = WriteFixture(root_ / "perspective-project", "0.30");
+    LoadedScene loaded;
+    std::string error;
+    ASSERT_TRUE(LoadScene(project, root_ / "cache-perspective", loaded, error)) << error;
+
+    auto* node = FirstDrawableNode(loaded.scene->sceneGraph.get());
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(loaded.scene->cameras["global_perspective"], nullptr);
+    node->SetCamera("global_perspective");
+    node->SetRotation(Eigen::Vector3f { 0.0f, 0.55f, 0.0f });
+
+    const auto selection = SelectSceneBackend(*loaded.scene);
+    ASSERT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+
+    @autoreleasepool {
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        CAMetalLayer* layer  = [CAMetalLayer layer];
+        layer.device          = device;
+        layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize    = CGSizeMake(384, 256);
+        layer.framebufferOnly = NO;
+
+        MetalRender         render;
+        MetalRenderInitInfo info {
+            .metal_layer          = (__bridge void*)layer,
+            .width                = 384,
+            .height               = 256,
+            .render_width         = 384,
+            .render_height        = 256,
+            .display_scale_factor = 1.0,
+        };
+        ASSERT_TRUE(render.init(info)) << render.lastError();
+
+        auto graph = sceneToRenderGraph(*loaded.scene);
+        ASSERT_NE(graph, nullptr);
+        ASSERT_TRUE(render.compileRenderGraph(*loaded.scene, *graph)) << render.lastError();
+        render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTFIT);
+
+        ASSERT_TRUE(render.drawFrame(*loaded.scene)) << render.lastError();
+
+        std::vector<uint8_t> pixels;
+        uint32_t             width = 0;
+        uint32_t             height = 0;
+        ASSERT_TRUE(render.ReadRenderTargetForTests(
+            loaded.scene->ResolveRenderTargetName(SpecTex_Default), pixels, width, height));
+        ASSERT_EQ(width, 384u);
+        ASSERT_EQ(height, 256u);
+
+        auto column_height = [&](uint32_t x) {
+            int min_y = -1;
+            int max_y = -1;
+            for (uint32_t y = 0; y < height; ++y) {
+                const std::size_t i = (static_cast<std::size_t>(y) * width + x) * 4;
+                const auto        b = pixels[i + 2];
+                if (b >= 65 && b <= 90) {
+                    if (min_y < 0) min_y = static_cast<int>(y);
+                    max_y = static_cast<int>(y);
+                }
+            }
+            return min_y < 0 ? 0 : max_y - min_y + 1;
+        };
+
+        uint32_t left = 0;
+        uint32_t right = width - 1;
+        while (left < width && column_height(left) == 0) ++left;
+        while (right > 0 && column_height(right) == 0) --right;
+        ASSERT_LT(left, right) << "the perspective card produced no shader pixels";
+        const int left_h  = column_height(left + (right - left) / 8);
+        const int right_h = column_height(right - (right - left) / 8);
+        EXPECT_NE(left_h, 0);
+        EXPECT_NE(right_h, 0);
+        EXPECT_GT(std::abs(left_h - right_h), 4)
+            << "a rotated card under a perspective camera must foreshorten; left height "
+            << left_h << " right height " << right_h;
+
+        render.destroy();
+    }
+}
+
 TEST_F(MetalSceneDraw, AnIntermediateTargetIsDrawnCopiedAndResampledInOneFrame)
 {
     // The shape an effect chain lowers to: the author's layer drawn into an
@@ -3276,16 +3362,16 @@ TEST_F(MetalSceneDraw, TheShippedImageShaderSkinsAPuppetThroughTheNativeBackend)
     }
 }
 
-TEST_F(MetalSceneDraw, ARopeTrailTooLargeForItsIndexBudgetIsStillDrawnAsItWasBefore)
+TEST_F(MetalSceneDraw, ARopeTrailPastTheOldSixteenBitIndexLimitStaysARopeTrail)
 {
-    // Sixteen-bit indices hold 16 383 quads. A rope trail that cannot fit even
-    // without subdivision is not dropped: it is loaded the way every rope trail
-    // was before rope trails existed, as a sprite trail, and the log says so.
+    // 5 000 particles x 10 segments x authored subdivision 3 is 150 000 quads,
+    // past the old packed 16-bit cap of 16 384. It must remain a rope trail
+    // with 32-bit indices, not a sprite trail and not a reduced subdivision.
     const auto assets  = LocalSceneAssetsRoot();
     const auto preview = assets / "scenes/particleelementpreviews/ropetrail";
     if (assets.empty() || ! std::filesystem::is_regular_file(preview / "project.json")) {
         GTEST_SKIP() << "Wallpaper Engine's shipped assets are not installed here; the rope trail "
-                        "budget fallback was not exercised";
+                        "index-width path was not exercised";
     }
 
     const auto directory = root_ / "big-ropetrail";
@@ -3298,7 +3384,6 @@ TEST_F(MetalSceneDraw, ARopeTrailTooLargeForItsIndexBudgetIsStillDrawnAsItWasBef
         ASSERT_TRUE(input.good());
         particle = nlohmann::json::parse(input);
     }
-    // 5000 particles x 10 segments is 50 000 quads at subdivision 1.
     particle["maxcount"] = 5000;
     std::ofstream(particle_path) << particle.dump();
 
@@ -3322,16 +3407,20 @@ TEST_F(MetalSceneDraw, ARopeTrailTooLargeForItsIndexBudgetIsStillDrawnAsItWasBef
                                 source->ReadAllStr(), loaded.vfs, loaded.sound);
     ASSERT_NE(loaded.scene, nullptr);
     ASSERT_TRUE(loaded.scene->paritileSys->HasEmitters())
-        << "the over-budget rope trail was dropped instead of drawn";
+        << "the rope trail past the old 16-bit cap was dropped";
 
     auto* node = FirstDrawableNode(loaded.scene->sceneGraph.get());
     ASSERT_NE(node, nullptr);
     ASSERT_GT(node->Mesh()->VertexCount(), 0u);
     const auto& vertices = node->Mesh()->GetVertexArray(0);
-    EXPECT_TRUE(vertices.GetOption(WE_PRENDER_SPRITE));
+    EXPECT_TRUE(vertices.GetOption(WE_PRENDER_ROPE));
     EXPECT_TRUE(vertices.GetOption(WE_PRENDER_TRAIL));
-    EXPECT_FALSE(vertices.GetOption(WE_PRENDER_ROPE));
-    EXPECT_FALSE(vertices.GetOption(WE_PRENDER_ROPETRAIL));
+    EXPECT_TRUE(vertices.GetOption(WE_PRENDER_ROPETRAIL));
+    EXPECT_FALSE(vertices.GetOption(WE_PRENDER_SPRITE));
+    ASSERT_GT(node->Mesh()->IndexCount(), 0u);
+    const auto& indices = node->Mesh()->GetIndexArray(0);
+    EXPECT_EQ(indices.Width(), SceneIndexWidth::UInt32);
+    EXPECT_GT(indices.QuadCapacity(), kMaxPackedUInt16Quads);
 
     const auto selection = SelectSceneBackend(*loaded.scene);
     EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;

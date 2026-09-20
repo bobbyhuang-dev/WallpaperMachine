@@ -204,6 +204,9 @@ constexpr char kVectorBootstrap[] = R"JS(
     Vector.prototype.subtract = function(rhs) {
       return createFromBinary(this, rhs, function(lhs, other) { return lhs - other; });
     };
+    Vector.prototype.mix = function(rhs, amount) {
+      return createFromBinary(this, rhs, function(lhs, other) { return lhs * (1 - amount) + other * amount; });
+    };
     Vector.prototype.multiply = function(rhs) {
       return createFromBinary(this, rhs, function(lhs, other) { return lhs * other; });
     };
@@ -1093,6 +1096,8 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
         << "    };\n"
         << "  }\n"
         << "  globalThis.isRunningInEditor = false;\n"
+        << "  globalThis.MediaPlaybackEvent = Object.freeze({ PLAYBACK_PLAYING: 0, "
+           "PLAYBACK_PAUSED: 1, PLAYBACK_STOPPED: 2 });\n"
         << "  engine.isScreensaver = engine.isScreensaver || function() { return false; };\n"
         << "  globalThis.editorInfo = [];\n"
         << "  globalThis.debugMode = false;\n"
@@ -1236,6 +1241,7 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
         << "    if (!globalThis.__videoTextureCache[name]) {\n"
         << "      globalThis.__videoTextureCache[name] = {\n"
         << "        play: function() { __videoPlay(name); },\n"
+        << "        isPlaying: function() { return __videoIsPlaying(name); },\n"
         << "        pause: function() { __videoPause(name); },\n"
         << "        stop: function() { __videoPause(name); __videoSetCurrentTime(name, 0); },\n"
         << "        getCurrentTime: function() { return __videoGetCurrentTime(name); },\n"
@@ -2211,6 +2217,19 @@ JSValue JsTextureGetFrame(JSContext* context, JSValueConst, int argc, JSValueCon
     return JS_NewFloat64(context, frame);
 }
 
+JSValue JsVideoIsPlaying(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
+    auto* bridge = GetBridgeState(context);
+    bool playing = false;
+    if (argc > 0 && bridge != nullptr && bridge->runtime != nullptr) {
+        const char* name = JS_ToCString(context, argv[0]);
+        if (name != nullptr) {
+            playing = bridge->runtime->NodeVideoTextureIsPlaying(name);
+            JS_FreeCString(context, name);
+        }
+    }
+    return JS_NewBool(context, playing);
+}
+
 JSValue JsVideoPlay(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_UNDEFINED;
     auto* bridge = GetBridgeState(context);
@@ -2647,6 +2666,8 @@ bool EnsureSharedHostBindings(JSContext* context, SceneRuntimeContext* runtime,
         JS_SetPropertyStr(context, global_object,
                           "__videoPlay",
                           JS_NewCFunction(context, JsVideoPlay, "__videoPlay", 1));
+        JS_SetPropertyStr(context, global_object, "__videoIsPlaying",
+                          JS_NewCFunction(context, JsVideoIsPlaying, "__videoIsPlaying", 1));
         JS_SetPropertyStr(context,
                           global_object,
                           "__videoPause",

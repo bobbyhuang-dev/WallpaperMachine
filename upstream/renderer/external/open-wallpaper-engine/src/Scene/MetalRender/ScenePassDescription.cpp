@@ -105,8 +105,12 @@ std::size_t MetalPipelineKeyHash::operator()(const MetalPipelineKey& key) const 
     hash          = HashMix(hash, key.program_id);
     hash          = HashMix(hash, key.vertex_layout_id);
     hash          = HashMix(hash, static_cast<uint64_t>(key.color_format));
+    hash          = HashMix(hash, static_cast<uint64_t>(key.depth_format));
+    hash          = HashMix(hash, static_cast<uint64_t>(key.depth_compare));
     hash          = HashMix(hash, key.sample_count);
     hash          = HashMix(hash, key.write_alpha ? 1u : 0u);
+    hash          = HashMix(hash, key.depth_test ? 1u : 0u);
+    hash          = HashMix(hash, key.depth_write ? 1u : 0u);
     hash          = HashMix(hash, key.blend.blending_enabled ? 1u : 0u);
     hash          = HashMix(hash, static_cast<uint64_t>(key.blend.rgb_operation));
     hash          = HashMix(hash, static_cast<uint64_t>(key.blend.alpha_operation));
@@ -206,6 +210,12 @@ bool BuildScenePassDescriptions(Scene& scene, const rg::RenderGraph& graph,
             desc.camera_override = src.camera_override;
             desc.blend           = material->blenmode;
             desc.write_alpha     = src.write_alpha;
+            desc.depth_test      = material->depth_test;
+            // Transparent coverage must not occlude later content. Additive
+            // and translucent layers keep painter's-algorithm order.
+            desc.depth_write =
+                material->depth_write && material->blenmode != BlendMode::Translucent &&
+                material->blenmode != BlendMode::Additive;
             desc.target_key      = scene.ResolveRenderTargetName(src.output);
             desc.load_action = ResolveLoadAction(src.preserve_target_contents,
                                                  src.clear_on_first_use);

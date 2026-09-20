@@ -109,7 +109,7 @@ final class WebWallpaperHost {
                 try await bridge.setWebAudioSubscribed(
                     wallpaperId: wallpaperId, displayId: displayId, subscribed: subscribed)
             },
-            mediaProvider: MediaRemoteMediaProvider(),
+            mediaProvider: AdapterSystemMediaProvider(),
             assetStore: { UserAssetStore(projectURL: $0, wallpaperId: $1) })
     }
 

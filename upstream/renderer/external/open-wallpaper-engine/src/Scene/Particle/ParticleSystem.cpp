@@ -1,4 +1,5 @@
 #include "ParticleSystem.h"
+#include "Interface/IParticleRawGener.h"
 #include "Core/Literals.hpp"
 #include "Scene/Scene.h"
 #include "Scene/SceneNode.h"
@@ -74,6 +75,21 @@ void ParticleSubSystem::SetRopeSubdivision(u32 subdivision) {
     m_rope_subdivision = std::max<u32>(1, subdivision);
 }
 
+void ParticleSubSystem::SetRopeUv(float scale, bool scrolling, bool smoothing) {
+    m_uv_scale     = RopeUvScaleOrOne(scale);
+    m_uv_scrolling = scrolling;
+    m_uv_smoothing = smoothing;
+    if (m_trail.enabled() && m_mesh != nullptr && m_mesh->Material() != nullptr) {
+        auto& constValues = m_mesh->Material()->customShader.constValues;
+        auto  it          = constValues.find("g_RenderVar0");
+        if (it != constValues.end() && it->second.size() >= 4) {
+            it->second[3] =
+                EncodeRopeTrailLength(static_cast<float>(m_trail.samples), m_uv_scale);
+        }
+    }
+    if (m_mesh != nullptr) m_mesh->SetDirty();
+}
+
 void ParticleSubSystem::SetTrail(ParticleTrailConfig config) {
     m_trail       = config;
     m_trail_timer = 0.0;
@@ -102,6 +118,9 @@ ParticleRenderScale ParticleSubSystem::RenderScale() const {
         ParticleRenderScale scale {};
         scale.rope_subdivision = m_rope_subdivision;
         scale.trail_fraction   = TrailPeriodFraction();
+        scale.uv_scale         = m_uv_scale;
+        scale.uv_scrolling     = m_uv_scrolling;
+        scale.uv_smoothing     = m_uv_smoothing;
         return scale;
     }
 
@@ -116,6 +135,9 @@ ParticleRenderScale ParticleSubSystem::RenderScale() const {
         .isotropic_inverse = InverseScaleOrIdentity((scale_x + scale_y) * 0.5f),
         .rope_subdivision  = m_rope_subdivision,
         .trail_fraction    = TrailPeriodFraction(),
+        .uv_scale          = m_uv_scale,
+        .uv_scrolling      = m_uv_scrolling,
+        .uv_smoothing      = m_uv_smoothing,
     };
 }
 

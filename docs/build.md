@@ -94,6 +94,10 @@ python3 scripts/build.py --renderer-only          # renderer + bindings only
 4. **Xcode build** — `xcodebuild -project mac-wallpaper-engine.xcodeproj -scheme
    MacWallpaperEngine -configuration <cfg> -derivedDataPath build build`. The app
    target embeds the `MacWallpaperExtension` ExtensionKit extension.
+   It also builds and embeds the unlinked `MediaRemoteAdapter.framework` from
+   the pinned BSD-3-Clause sources under `upstream/mediaremote-adapter`, and
+   includes its Perl entry point and license as app resources. Building or
+   testing does not launch that helper.
 
 Products:
 

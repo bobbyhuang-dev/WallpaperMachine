@@ -57,6 +57,7 @@ pub struct RendererVideoPipelineState {
 pub use wallpaper_core::SceneRuntimeReport;
 
 pub trait EngineFacade: Send + Sync + 'static {
+    fn update_media(&self, handle: SceneHandle, enabled: bool, state: wallpaper_core::media::MediaPollResult) -> EngineFuture<()>;
     fn reconcile_scenes(&self, scenes: Vec<SceneDesc>) -> EngineFuture<Vec<SceneResult>>;
     fn refresh_displays(&self) -> EngineFuture<()>;
     fn display_snapshot(&self) -> Vec<DisplaySnapshotEntry>;
@@ -235,6 +236,10 @@ impl RealEngineFacade {
 }
 
 impl EngineFacade for RealEngineFacade {
+    fn update_media(&self, handle: SceneHandle, enabled: bool, state: wallpaper_core::media::MediaPollResult) -> EngineFuture<()> {
+        let engine = self.engine.clone();
+        async move { engine.update_media(handle, enabled, state).await }.boxed()
+    }
     fn reconcile_scenes(&self, scenes: Vec<SceneDesc>) -> EngineFuture<Vec<SceneResult>> {
         let engine = self.engine.clone();
         let ready_frames = self.ready_frames.clone();
@@ -668,6 +673,7 @@ impl AudioCaptureWorker {
 #[cfg(test)]
 #[derive(Clone, Default)]
 pub struct FakeEngineFacade {
+    media_calls: Arc<ArcSwap<Vec<(SceneHandle, bool, wallpaper_core::media::MediaPollResult)>>>,
     calls: Arc<ArcSwap<Vec<Vec<SceneDesc>>>>,
     rendered_scenes: Arc<ArcSwap<Vec<SceneDesc>>>,
     snapshot: Arc<ArcSwap<Vec<DisplaySnapshotEntry>>>,
@@ -789,6 +795,9 @@ impl ReconcileDone {
 
 #[cfg(test)]
 impl FakeEngineFacade {
+    pub fn media_calls(&self) -> Vec<(SceneHandle, bool, wallpaper_core::media::MediaPollResult)> {
+        load_log(&self.media_calls)
+    }
     #[must_use]
     pub fn calls(&self) -> Vec<Vec<SceneDesc>> {
         load_log(&self.calls)
@@ -1117,6 +1126,10 @@ impl FakeEngineFacade {
 
 #[cfg(test)]
 impl EngineFacade for FakeEngineFacade {
+    fn update_media(&self, handle: SceneHandle, enabled: bool, state: wallpaper_core::media::MediaPollResult) -> EngineFuture<()> {
+        let fake = self.clone();
+        async move { push_log(&fake.media_calls, (handle, enabled, state)); Ok(()) }.boxed()
+    }
     fn reconcile_scenes(&self, scenes: Vec<SceneDesc>) -> EngineFuture<Vec<SceneResult>> {
         let fake = self.clone();
         async move {

@@ -6,7 +6,7 @@ pub mod layout;
 pub mod resources;
 pub mod types;
 
-use std::borrow::Cow;
+use std::{borrow::Cow, fmt::Write as _};
 
 pub(crate) use functions::FunctionEntry;
 pub(crate) use interface::{
@@ -261,6 +261,22 @@ impl<'src> DeclarationPlan<'src> {
             | PlannedDeclaration::Texture(_) => None,
         })?;
         (!members.is_empty()).then_some(UniformBlock { members, binding })
+    }
+
+    /// Legacy shaders may consume a scalar prefix of a shared vector uniform.
+    pub(crate) fn emit_uniform_prefix_aliases(&self, output: &mut String) -> ShaderResult<()> {
+        for entry in &self.entries {
+            let PlannedDeclaration::UniformMember(local) = &entry.kind else { continue; };
+            let Some(shared) = self.resource_layout.uniform_members.iter().find(|m| m.name == local.name) else { continue; };
+            let widths = LegacyTypeName::new(local.ty.as_str()).vector_width()
+                .zip(LegacyTypeName::new(shared.ty.as_str()).vector_width());
+            if let Some((local_width, shared_width)) = widths && local_width < shared_width {
+                let prefix = &"xyzw"[..usize::from(local_width)];
+                writeln!(output, "#define {} ({}.{})", local.name, local.name, prefix)
+                    .map_err(super::emission::SourceEmitter::write_error)?;
+            }
+        }
+        Ok(())
     }
 
     /// Iterates texture declarations that need explicit descriptor bindings.

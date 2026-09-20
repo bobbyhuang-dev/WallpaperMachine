@@ -30,6 +30,8 @@ struct WPUniformInfo {
     bool has_ETVP { false };
     bool has_ETVPI { false };
     bool has_VP { false };
+    bool has_layer_model { false };
+    bool has_effect_mvp { false };
 
     bool has_BONES { false };
     bool has_TIME { false };
@@ -40,6 +42,9 @@ struct WPUniformInfo {
     bool has_TEXELSIZEHALF { false };
     bool has_SCREEN { false };
     bool has_LP { false };
+    bool has_ORIENTATIONUP { false };
+    bool has_ORIENTATIONRIGHT { false };
+    bool has_ORIENTATIONFORWARD { false };
     bool has_AudioSpectrum16Left { false };
     bool has_AudioSpectrum16Right { false };
     bool has_AudioSpectrum32Left { false };
@@ -55,6 +60,8 @@ struct WPUniformInfo {
 };
 
 struct WPShaderValueData {
+    SceneNode* effect_owner { nullptr };
+    Eigen::Vector2f effect_extent { 2.0f, 2.0f };
     std::array<float, 2> parallaxDepth { 0.0f, 0.0f };
     // index + name
     std::vector<std::pair<usize, std::string>> renderTargets;

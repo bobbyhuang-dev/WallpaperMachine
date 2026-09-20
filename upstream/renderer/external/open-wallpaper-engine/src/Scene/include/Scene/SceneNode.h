@@ -48,6 +48,8 @@ public:
     bool        SkipRenderPass() const { return m_skipRenderPass; }
     const auto& TextureFrame() const { return m_textureFrame; }
     void SetTextureFrame(double frame) { m_textureFrame = frame; }
+    bool        MustProduce() const { return m_must_produce; }
+    void        SetMustProduce(bool produce) { m_must_produce = produce; }
     bool        EffectiveVisible() const {
         return m_visible && (m_parent == nullptr || m_parent->EffectiveVisible());
     }
@@ -113,6 +115,7 @@ private:
     std::string m_name;
     bool        m_visible { true };
     bool        m_skipRenderPass { false };
+    bool        m_must_produce { false };
     std::optional<double> m_textureFrame;
 
     bool            m_dirty;

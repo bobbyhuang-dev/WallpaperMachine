@@ -52,6 +52,24 @@ public:
     }
 };
 
+TEST(MediaThumbnailTexture, KeepsPreviousCoverAndClearsBothWhenDisabled) {
+    RuntimeImageSource images(std::make_unique<NullImageParser>());
+    const uint8_t first[] = {255, 0, 0, 255};
+    const uint8_t second[] = {0, 255, 0, 255};
+    const uint8_t empty[] = {0, 0, 0, 0};
+    images.SetRgbaImage("$mediaThumbnail", 1, 1, first, sizeof(first));
+    auto old_cover = images.Parse("$mediaThumbnail");
+    images.SetRgbaImage("$mediaThumbnail", 1, 1, second, sizeof(second));
+    EXPECT_EQ(images.Parse("$mediaPreviousThumbnail"), old_cover);
+    EXPECT_NE(images.Parse("$mediaThumbnail"), old_cover);
+    images.SetRgbaImage("$mediaThumbnail", 1, 1, empty, sizeof(empty));
+    EXPECT_EQ(images.Parse("$mediaPreviousThumbnail"), images.Parse("$mediaThumbnail"));
+    std::vector<std::string> textures;
+    ApplySystemUserTextures(textures, {{.name = "$mediaPreviousThumbnail", .type = "system"}});
+    ASSERT_EQ(textures.size(), 1u);
+    EXPECT_EQ(textures[0], "$mediaPreviousThumbnail");
+}
+
 std::unique_ptr<DynamicValue> BoundValue(SceneRuntimeContext& runtime,
                                          std::string_view     property_name,
                                          std::unique_ptr<DynamicValue> value) {

@@ -17,6 +17,12 @@ use crate::{
 
 pub struct Bootstrap;
 
+pub struct GetSceneMediaWallpapers;
+pub struct UpdateSceneMedia {
+    pub wallpaper_id: String,
+    pub state: wallpaper_core::media::MediaPollResult,
+}
+
 pub struct GetAllSnapshots;
 
 pub struct GetAppSnapshot;

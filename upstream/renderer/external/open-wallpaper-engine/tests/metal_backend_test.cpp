@@ -26,6 +26,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <memory>
 #include <string>
@@ -371,6 +372,57 @@ TEST(MetalCapability, AcceptsAMinimalTwoDimensionalImageScene)
     EXPECT_FALSE(selection.fell_back());
 }
 
+TEST(MetalCapability, AnUnusedPerspectiveCameraDoesNotRejectTheScene)
+{
+    // Every parsed scene carries `global_perspective`. It is not a reason to
+    // refuse Native Metal unless a layer actually draws through it -- and even
+    // then only the rest of the gate decides.
+    ImageScene fixture;
+    ASSERT_NE(fixture.scene.cameras["global_perspective"], nullptr);
+    ASSERT_TRUE(fixture.scene.cameras["global_perspective"]->IsPerspective());
+    ASSERT_EQ(fixture.scene.activeCamera, fixture.global.get());
+    const auto selection = EvaluateMetalSupport(fixture.scene);
+    EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+}
+
+TEST(MetalCapability, ASupportedLayerWithAPerspectiveCameraIsAccepted)
+{
+    ImageScene fixture;
+    fixture.node->SetCamera("global_perspective");
+    ASSERT_NE(fixture.scene.activeCamera, fixture.global_perspective.get());
+    const auto selection = EvaluateMetalSupport(fixture.scene);
+    EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+}
+
+TEST(MetalCapability, AnActivePerspectiveCameraIsAcceptedForSupportedLayers)
+{
+    ImageScene fixture;
+    fixture.scene.activeCamera = fixture.global_perspective.get();
+    const auto selection = EvaluateMetalSupport(fixture.scene);
+    EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+}
+
+TEST(MetalCapability, ASpriteParticleLayerWithAPerspectiveCameraIsAccepted)
+{
+    ImageScene fixture;
+    auto       mesh = ParticleMesh("genericparticle");
+    auto       node = std::make_shared<SceneNode>();
+    node->AddMesh(std::move(mesh));
+    node->SetCamera("global_perspective");
+    fixture.scene.sceneGraph->AppendChild(node);
+    fixture.scene.paritileSys->subsystems.push_back(nullptr);
+    const auto selection = EvaluateMetalSupport(fixture.scene);
+    EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
+}
+
+TEST(MetalCapability, AnUnsupportedDepthCompareIsRefusedWithItsOwnReason)
+{
+    ImageScene fixture;
+    fixture.material().depth_compare_unsupported = true;
+    EXPECT_EQ(RejectionFor(fixture),
+              "a material uses a depth compare the native renderer does not support");
+}
+
 TEST(MetalCapability, EveryUnsupportedConstructHasItsOwnReason)
 {
     std::vector<std::pair<std::string, std::string>> reasons;
@@ -428,11 +480,6 @@ TEST(MetalCapability, EveryUnsupportedConstructHasItsOwnReason)
             .url = "sheet.tex", .isVideo = true, .isSprite = true
         };
         reasons.emplace_back("video sprite sheet", RejectionFor(fixture));
-    }
-    {
-        ImageScene fixture;
-        fixture.scene.activeCamera = fixture.global_perspective.get();
-        reasons.emplace_back("perspective", RejectionFor(fixture));
     }
     {
         ImageScene fixture;
@@ -729,6 +776,15 @@ TEST(MetalGraph, ATargetThisBackendCannotAllocateRejectsTheWholeScene)
               "an effect uses a render-target format the native renderer cannot create");
 }
 
+TEST(MetalGraph, ADepthAttachmentOnAColourTargetIsNotARefusal)
+{
+    ImageScene fixture;
+    fixture.scene.renderTargets[std::string(SpecTex_Default)].withDepth = true;
+    rg::RenderGraph graph;
+    AddDraw(graph, std::string(SpecTex_Default), { "materials/card.tex" });
+    EXPECT_TRUE(MetalGraphRejection(fixture.scene, graph).empty());
+}
+
 TEST(MetalCapability, RecognisedPassKindsAreClassifiedAndAnythingElseFallsBack)
 {
     EXPECT_EQ(ClassifyMetalPassKind(static_cast<int>(rg::PassNode::Type::CustomShader)),
@@ -839,9 +895,15 @@ TEST(MetalPipelineKey, DistinguishesBlendModesAndTargetFormats)
     srgb.color_format = MetalPixelFormat::RGBA8Unorm_sRGB;
     auto opaque        = base;
     opaque.write_alpha = false;
+    auto depth              = base;
+    depth.depth_format      = MetalPixelFormat::Depth32Float;
+    depth.depth_test        = true;
+    depth.depth_compare     = MetalDepthCompare::LessEqual;
+    auto depth_write        = depth;
+    depth_write.depth_write = true;
 
     const MetalPipelineKeyHash hash;
-    for (const auto& other : { additive, normal, bgra, srgb, opaque }) {
+    for (const auto& other : { additive, normal, bgra, srgb, opaque, depth, depth_write }) {
         EXPECT_FALSE(base == other);
         EXPECT_NE(hash(base), hash(other));
     }
@@ -919,6 +981,90 @@ TEST(MetalProjection, NegativeHeightViewportsCoverTheSameWindowRows)
     EXPECT_DOUBLE_EQ(metal.origin_y, 40.0);
     EXPECT_DOUBLE_EQ(metal.width, 320.0);
     EXPECT_DOUBLE_EQ(metal.height, 200.0);
+}
+
+TEST(MetalProjection, PerspectiveUsesFovAspectNearFarAndAHomogeneousDivide)
+{
+    // Same placement the parser uses for `global_perspective`: one metre in
+    // front of the authored canvas, far plane well beyond it.
+    SceneCamera camera(16.0f / 9.0f, 0.1f, 10000.0f, 50.0f);
+    auto        node = std::make_shared<SceneNode>(
+        Eigen::Vector3f { 0.0f, 0.0f, 1000.0f }, Eigen::Vector3f { 1.0f, 1.0f, 1.0f },
+        Eigen::Vector3f::Zero());
+    camera.AttatchNode(node);
+
+    const Eigen::Matrix4d vp = camera.GetViewProjectionMatrix();
+    const Eigen::Vector4d centre = vp * Eigen::Vector4d { 0.0, 0.0, 0.0, 1.0 };
+    ASSERT_NE(centre.w(), 0.0);
+    EXPECT_GT(std::abs(centre.w() - 1.0), 1e-6) << "a perspective projection must not be affine";
+    EXPECT_NEAR(centre.x() / centre.w(), 0.0, 1e-9);
+    EXPECT_NEAR(centre.y() / centre.w(), 0.0, 1e-9);
+    EXPECT_TRUE(MetalDepthInClipRange(centre.z(), centre.w()));
+
+    const Eigen::Vector4d off = vp * Eigen::Vector4d { 100.0, 0.0, 0.0, 1.0 };
+    const double          ndc_x = off.x() / off.w();
+
+    SceneCamera tighter(16.0f / 9.0f, 0.1f, 10000.0f, 20.0f);
+    tighter.AttatchNode(node);
+    const Eigen::Vector4d tight =
+        tighter.GetViewProjectionMatrix() * Eigen::Vector4d { 100.0, 0.0, 0.0, 1.0 };
+    EXPECT_GT(std::abs(tight.x() / tight.w()), std::abs(ndc_x))
+        << "a narrower FOV must enlarge the same world offset";
+
+    // 0.05 in front of the camera, nearer than the 0.1 near plane.
+    const Eigen::Vector4d close = vp * Eigen::Vector4d { 0.0, 0.0, 999.95, 1.0 };
+    EXPECT_FALSE(MetalDepthInClipRange(close.z(), close.w()))
+        << "a point in front of the near plane must fail the clip range";
+
+    const Eigen::Matrix4d metal_vp = MetalViewProjection(vp);
+    EXPECT_TRUE(metal_vp.isApprox(vp, 1e-12))
+        << "the Metal clip-space fold is the identity; a flip or scale here is a second correction";
+}
+
+TEST(MetalProjection, UnprojectingNdcHitsTheLayerPlane)
+{
+    SceneCamera camera(16.0f / 9.0f, 0.1f, 10000.0f, 50.0f);
+    auto        cam_node = std::make_shared<SceneNode>(
+        Eigen::Vector3f { 0.0f, 0.0f, 1000.0f }, Eigen::Vector3f { 1.0f, 1.0f, 1.0f },
+        Eigen::Vector3f::Zero());
+    camera.AttatchNode(cam_node);
+
+    SceneNode layer(Eigen::Vector3f::Zero(), Eigen::Vector3f { 1.0f, 1.0f, 1.0f },
+                    Eigen::Vector3f::Zero());
+    const auto centre = IntersectNdcWithNodePlane(camera, layer, 0.0, 0.0);
+    ASSERT_TRUE(centre.has_value());
+    EXPECT_NEAR(centre->x(), 0.0, 1e-6);
+    EXPECT_NEAR(centre->y(), 0.0, 1e-6);
+    EXPECT_NEAR(centre->z(), 0.0, 1e-6);
+
+    const Eigen::Vector4d world { 40.0, -15.0, 0.0, 1.0 };
+    const Eigen::Vector4d clip = camera.GetViewProjectionMatrix() * world;
+    ASSERT_NE(clip.w(), 0.0);
+    const auto hit =
+        IntersectNdcWithNodePlane(camera, layer, clip.x() / clip.w(), clip.y() / clip.w());
+    ASSERT_TRUE(hit.has_value());
+    EXPECT_NEAR(hit->x(), 40.0, 1e-4);
+    EXPECT_NEAR(hit->y(), -15.0, 1e-4);
+    EXPECT_NEAR(hit->z(), 0.0, 1e-4);
+
+    SceneNode rotated(Eigen::Vector3f { 0.0f, 0.0f, 0.0f }, Eigen::Vector3f { 1.0f, 1.0f, 1.0f },
+                      Eigen::Vector3f { 0.4f, 0.0f, 0.0f });
+    const auto rotated_hit = IntersectNdcWithNodePlane(camera, rotated, 0.0, 0.0);
+    ASSERT_TRUE(rotated_hit.has_value());
+    EXPECT_NEAR(rotated_hit->z(), 0.0, 1e-6);
+}
+
+TEST(MetalProjection, CameraAxesFollowTheAttachedNode)
+{
+    SceneCamera camera(16.0f / 9.0f, 0.1f, 1000.0f, 50.0f);
+    auto        node = std::make_shared<SceneNode>(
+        Eigen::Vector3f { 10.0f, 20.0f, 30.0f }, Eigen::Vector3f { 1.0f, 1.0f, 1.0f },
+        Eigen::Vector3f { 0.0f, static_cast<float>(EIGEN_PI / 2.0), 0.0f });
+    camera.AttatchNode(node);
+    const auto axes = camera.GetAxes();
+    EXPECT_NEAR(axes.right.x(), 0.0, 1e-5);
+    EXPECT_NEAR(std::abs(axes.right.z()), 1.0, 1e-5);
+    EXPECT_NEAR(axes.up.y(), 1.0, 1e-5);
 }
 
 // ---------------------------------------------------------------------------

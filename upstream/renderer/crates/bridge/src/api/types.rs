@@ -1,3 +1,50 @@
+/// Player data read by the native host. Artwork is bounded RGBA8, never a path or URL.
+#[derive(Clone, Debug, Default, uniffi::Record)]
+pub struct BridgeMediaSnapshot {
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub playback_state: u8,
+    pub position: f64,
+    pub duration: f64,
+    pub artwork_width: u32,
+    pub artwork_height: u32,
+    pub artwork_rgba: Vec<u8>,
+}
+
+impl BridgeMediaSnapshot {
+    pub(crate) fn into_state(self) -> Result<wallpaper_core::media::MediaPollResult, super::BridgeError> {
+        use wallpaper_core::media::{MediaIntegrationEvent as Event, MediaPlaybackState, MediaProperties, MediaPollResult, MediaThumbnailRgba};
+        let state = match self.playback_state {
+            0 => MediaPlaybackState::Playing,
+            1 => MediaPlaybackState::Paused,
+            2 => MediaPlaybackState::Stopped,
+            _ => return Err(super::BridgeError::invalid_input("invalid media playback state")),
+        };
+        if !self.position.is_finite() || !self.duration.is_finite() || self.position < 0.0 || self.duration < 0.0 {
+            return Err(super::BridgeError::invalid_input("invalid media timeline"));
+        }
+        let has_artwork = !self.artwork_rgba.is_empty();
+        let artwork = if has_artwork {
+            if self.artwork_width > 512 || self.artwork_height > 512 {
+                return Err(super::BridgeError::invalid_input("media artwork exceeds 512 pixels"));
+            }
+            MediaThumbnailRgba::new(self.artwork_width, self.artwork_height, self.artwork_rgba)
+                .map_err(super::BridgeError::invalid_input)?
+        } else {
+            MediaThumbnailRgba::new(1, 1, vec![0, 0, 0, 0]).expect("transparent pixel")
+        };
+        let mut events = vec![Event::StatusChanged { enabled: true },
+            Event::PropertiesChanged(MediaProperties { title: Some(self.title), artist: Some(self.artist), album_title: Some(self.album) }),
+            Event::PlaybackChanged { state },
+            Event::ThumbnailChanged { has_thumbnail: has_artwork, primary_color: [0.0; 3], text_color: [1.0; 3] }];
+        if self.duration > 0.0 {
+            events.push(Event::TimelineChanged { duration: self.duration, position: self.position.min(self.duration) });
+        }
+        Ok(MediaPollResult { events, artwork: Some(artwork) })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum BridgeWallpaperKind {
     ProjectScene,

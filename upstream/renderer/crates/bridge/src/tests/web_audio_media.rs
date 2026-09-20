@@ -31,6 +31,46 @@ fn display_snapshot(display_id: u32) -> DisplaySnapshotEntry {
     }
 }
 
+#[tokio::test]
+async fn scene_media_requires_consent_and_clears_on_disable() {
+    use crate::api::BridgeMediaSnapshot;
+    let engine = FakeEngineFacade::default();
+    let mut display = display_snapshot(7);
+    display.handle = Some(wallpaper_core::project::SceneHandle::new(7));
+    engine.set_snapshot(vec![display]);
+    let bridge = BridgeBuilder::new(engine.clone())
+        .with_state(crate::actor::state::BridgeActorState::default()).build().unwrap();
+    bridge.inject_scene_project_for_test("301", "Scene",
+        r#"{"type":"scene","title":"Scene","file":"scene.json"}"#).await;
+    bridge.set_display_config_enabled("301".into(), "7".into(), true).await.unwrap();
+    bridge.apply_wallpaper_options("301".into()).await.unwrap();
+    let snapshot = BridgeMediaSnapshot { title: "Track".into(), playback_state: 0, ..Default::default() };
+    bridge.update_scene_media("301".into(), snapshot.clone()).await.unwrap();
+    assert!(engine.media_calls().is_empty());
+    assert!(bridge.scene_media_wallpaper_ids().await.unwrap().is_empty());
+    bridge.set_media_integration_enabled("301".into(), true).await.unwrap();
+    assert_eq!(bridge.scene_media_wallpaper_ids().await.unwrap(), vec!["301"]);
+    bridge.update_scene_media("301".into(), snapshot.clone()).await.unwrap();
+    assert_eq!(engine.media_calls().len(), 1);
+    bridge.set_media_integration_enabled("301".into(), false).await.unwrap();
+    let calls = engine.media_calls();
+    assert!(!calls.last().unwrap().1);
+    assert_eq!(calls.last().unwrap().2.artwork.as_ref().unwrap().rgba, vec![0, 0, 0, 0]);
+    bridge.update_scene_media("301".into(), snapshot).await.unwrap();
+    assert_eq!(engine.media_calls().len(), calls.len());
+}
+
+#[test]
+fn scene_media_rejects_invalid_artwork_and_timeline() {
+    use crate::api::BridgeMediaSnapshot;
+    assert!(BridgeMediaSnapshot { duration: f64::NAN, ..Default::default() }.into_state().is_err());
+    assert!(BridgeMediaSnapshot { playback_state: 3, ..Default::default() }.into_state().is_err());
+    assert!(BridgeMediaSnapshot { artwork_width: 1024, artwork_height: 1024,
+        artwork_rgba: vec![1], ..Default::default() }.into_state().is_err());
+    assert!(BridgeMediaSnapshot { artwork_width: 2, artwork_height: 2,
+        artwork_rgba: vec![1], ..Default::default() }.into_state().is_err());
+}
+
 /// One web wallpaper committed to display 7, with audio response left at its
 /// default of on.
 async fn web_bridge(engine: &FakeEngineFacade) -> WallpaperBridge {

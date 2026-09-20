@@ -40,6 +40,14 @@ enum class MetalPixelFormat : uint32_t
     RGBA8Unorm_sRGB = 71,
     BGRA8Unorm = 80,
     BGRA8Unorm_sRGB = 81,
+    Depth32Float = 252,
+};
+
+/// Mirror of `MTLCompareFunction` for the two values this backend writes.
+enum class MetalDepthCompare : uint32_t
+{
+    Never = 0,
+    LessEqual = 3,
 };
 
 /// One step of the frame, in terms a backend can execute without knowing how
@@ -85,6 +93,8 @@ struct ScenePassDescription
     std::string              camera_override;
     BlendMode                blend { BlendMode::Disable };
     bool                     write_alpha { true };
+    bool                     depth_test { false };
+    bool                     depth_write { false };
     /// One entry per material texture slot, in slot order. An empty string is
     /// a slot the material leaves unbound, which must stay an empty slot
     /// rather than collapsing and shifting every later binding.
@@ -107,8 +117,12 @@ struct MetalPipelineKey
     uint64_t         vertex_layout_id { 0 };
     MetalBlendState  blend {};
     MetalPixelFormat color_format { MetalPixelFormat::Invalid };
+    MetalPixelFormat depth_format { MetalPixelFormat::Invalid };
+    MetalDepthCompare depth_compare { MetalDepthCompare::Never };
     uint32_t         sample_count { 1 };
     bool             write_alpha { true };
+    bool             depth_test { false };
+    bool             depth_write { false };
 
     friend bool operator==(const MetalPipelineKey&, const MetalPipelineKey&) = default;
 };

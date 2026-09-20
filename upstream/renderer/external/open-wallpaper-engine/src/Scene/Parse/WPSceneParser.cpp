@@ -1,5 +1,6 @@
 #include "WPSceneParser.hpp"
 #include "WPJson.hpp"
+#include "Scene/SceneIndexArray.h"
 
 #include "Utils/String.h"
 #include "Utils/Logging.h"
@@ -8,6 +9,7 @@
 #include "Core/StringHelper.hpp"
 #include "Core/ArrayHelper.hpp"
 #include "SpecTexs.hpp"
+#include "Scene/SceneLayerReference.hpp"
 
 #include "WPShaderParser.hpp"
 #include "WPTexImageParser.hpp"
@@ -51,6 +53,7 @@
 #include <optional>
 #include <regex>
 #include <span>
+#include <limits>
 #include <variant>
 #include <Eigen/Dense>
 
@@ -86,6 +89,7 @@ struct PendingMetalTranslation {
 /// Parsing is single-threaded per scene but several scenes may parse at once,
 /// so the queue is per-thread rather than global.
 thread_local std::vector<PendingMetalTranslation> g_pending_metal_translations;
+thread_local const LayerObjectIndex* g_parse_layer_index { nullptr };
 
 bool MetalTranslationRequested() {
     return CurrentSceneRendererPreference() == SceneRendererPreference::NativeMetalPreferred;
@@ -158,6 +162,7 @@ void CaptureVideoPlaneInputs(Scene& scene, PendingMetalTranslation& request,
 void FlushPendingMetalTranslations(Scene& scene) {
     auto pending = std::move(g_pending_metal_translations);
     g_pending_metal_translations.clear();
+    g_parse_layer_index = nullptr;
     if (pending.empty()) return;
     if (! metal::SceneMetalStructuralRejection(scene).empty()) return;
 
@@ -259,6 +264,7 @@ struct ParseContext {
     std::unordered_map<std::string, uint32_t>               layer_name_counts;
     std::unordered_map<int32_t, std::string>                object_runtime_names;
     std::unordered_map<std::string, uint32_t>               text_name_counts;
+    std::unordered_set<int32_t>                             referenced_layer_ids;
 
     ShaderValueMap             global_base_uniforms;
     std::shared_ptr<SceneNode> effect_camera_node;
@@ -854,6 +860,11 @@ void GenPassthroughClipSpaceMesh(SceneMesh& mesh, const std::array<uint16_t, 2> 
     mesh.AddVertexArray(std::move(vertex));
 }
 
+void AddParticleIndexArray(SceneMesh& mesh, uint32_t count) {
+    const auto layout = PlanParticleIndexLayout(count);
+    mesh.AddIndexArray(SceneIndexArray(count, layout.width));
+}
+
 void SetParticleMesh(SceneMesh& mesh, const wpscene::Particle& particle, uint32_t count,
                      bool thick_format) {
     (void)particle;
@@ -866,8 +877,9 @@ void SetParticleMesh(SceneMesh& mesh, const wpscene::Particle& particle, uint32_
         attrs.push_back({ WE_IN_TEXCOORDVEC4C1.data(), VertexType::FLOAT4 });
     }
     attrs.push_back({ WE_IN_TEXCOORDC2.data(), VertexType::FLOAT2 });
-    mesh.AddVertexArray(SceneVertexArray(attrs, count * 4));
-    mesh.AddIndexArray(SceneIndexArray(count));
+    const auto layout = PlanParticleIndexLayout(count);
+    mesh.AddVertexArray(SceneVertexArray(attrs, static_cast<std::size_t>(layout.vertex_count)));
+    AddParticleIndexArray(mesh, count);
     mesh.GetVertexArray(0).SetOption(WE_PRENDER_SPRITE, true);
     mesh.GetVertexArray(0).SetOption(WE_CB_THICK_FORMAT, thick_format);
 }
@@ -889,8 +901,9 @@ void SetRopeParticleMesh(SceneMesh& mesh, const wpscene::Particle& particle, uin
         attrs.push_back({ WE_IN_TEXCOORDC3.data(), VertexType::FLOAT4 });
     }
     attrs.push_back({ WE_IN_COLOR.data(), VertexType::FLOAT4 });
-    mesh.AddVertexArray(SceneVertexArray(attrs, count * 4));
-    mesh.AddIndexArray(SceneIndexArray(count));
+    const auto layout = PlanParticleIndexLayout(count);
+    mesh.AddVertexArray(SceneVertexArray(attrs, static_cast<std::size_t>(layout.vertex_count)));
+    AddParticleIndexArray(mesh, count);
     mesh.GetVertexArray(0).SetOption(WE_PRENDER_ROPE, true);
     mesh.GetVertexArray(0).SetOption(WE_CB_THICK_FORMAT, thick_format);
 }
@@ -991,8 +1004,29 @@ BlendMode ParseBlendMode(std::string_view str) {
     return bm;
 }
 
-void ParseSpecTexName(std::string& name, const wpscene::WPMaterial& wpmat,
-                      const WPShaderInfo& sinfo) {
+void ApplyMaterialDepth(SceneMaterial& material, const wpscene::WPMaterial& wpmat) {
+    const auto& test = wpmat.depthtest;
+    if (test.empty() || test == "disabled") {
+        material.depth_test = false;
+    } else if (test == "enabled" || test == "less" || test == "lessorequal") {
+        material.depth_test = true;
+    } else {
+        material.depth_compare_unsupported = true;
+    }
+    material.depth_write = wpmat.depthwrite == "enabled";
+}
+
+void ParseSpecTexName(std::string& name, Scene& scene, fs::VFS& vfs,
+                      const wpscene::WPMaterial& wpmat, const WPShaderInfo& sinfo) {
+    static const LayerObjectIndex kEmptyIndex;
+    const auto& index = g_parse_layer_index != nullptr ? *g_parse_layer_index : kEmptyIndex;
+    auto resolved = ResolveLayerTextureName(name, index, &vfs);
+    if (resolved.is_layer) {
+        LOG_INFO("link tex \"%s\"", name.c_str());
+        if (resolved.source_id != 0) scene.layer_texture_sources.insert(resolved.source_id);
+        name = resolved.resolved;
+        return;
+    }
     if (IsSpecTex(name)) {
         if (sstart_with(name, WE_ALIAS_PREFIX)) {
         } else if (name == "_rt_FullFrameBuffer") {
@@ -1003,15 +1037,6 @@ void ParseSpecTexName(std::string& name, const wpscene::WPMaterial& wpmat,
                 name = "_rt_ParticleRefract";
             }
             */
-        } else if (sstart_with(name, WE_IMAGE_LAYER_COMPOSITE_PREFIX)) {
-            LOG_INFO("link tex \"%s\"", name.c_str());
-            int         wpid { -1 };
-            std::regex  reImgId { R"(_rt_imageLayerComposite_([0-9]+))" };
-            std::smatch match;
-            if (std::regex_search(name, match, reImgId)) {
-                STRTONUM(std::string(match[1]), wpid);
-            }
-            name = GenLinkTex((u32)wpid);
         } else if (sstart_with(name, WE_MIP_MAPPED_FRAME_BUFFER)) {
         } else if (sstart_with(name, WE_EFFECT_PPONG_PREFIX)) {
         } else if (sstart_with(name, WE_HALF_COMPO_BUFFER_PREFIX)) {
@@ -1090,13 +1115,13 @@ std::vector<WPShaderTexInfo> BuildShaderTexInfos(
     return texinfos;
 }
 
-void RegisterMaterialTexture(Scene& scene, SceneMaterial& material,
+void RegisterMaterialTexture(Scene& scene, fs::VFS& vfs, SceneMaterial& material,
                              SceneMaterialCustomShader& materialShader,
                              WPShaderValueData& svData, const wpscene::WPMaterial& wpmat,
                              WPShaderInfo& shader_info,
                              std::unordered_map<std::string, ImageHeader>& texHeaders,
                              std::string name, usize slot) {
-    ParseSpecTexName(name, wpmat, shader_info);
+    ParseSpecTexName(name, scene, vfs, wpmat, shader_info);
     svData.renderTargets.erase(
         std::remove_if(
             svData.renderTargets.begin(),
@@ -1170,7 +1195,7 @@ void RegisterMaterialTexture(Scene& scene, SceneMaterial& material,
     }
 }
 
-void RegisterMaterialTextures(Scene& scene, SceneMaterial& material,
+void RegisterMaterialTextures(Scene& scene, fs::VFS& vfs, SceneMaterial& material,
                               SceneMaterialCustomShader& materialShader, WPShaderValueData& svData,
                               const wpscene::WPMaterial& wpmat, WPShaderInfo& shader_info,
                               std::unordered_map<std::string, ImageHeader>& texHeaders,
@@ -1179,6 +1204,7 @@ void RegisterMaterialTextures(Scene& scene, SceneMaterial& material,
     material.defines.resize(textures.size());
     for (usize i = 0; i < textures.size(); i++) {
         RegisterMaterialTexture(scene,
+                                vfs,
                                 material,
                                 materialShader,
                                 svData,
@@ -1274,6 +1300,7 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::WPMaterial& wpmat, Scene* pScene,
         pWPShaderInfo->combos       = base_combos;
 
         RegisterMaterialTextures(*pScene,
+                                 vfs,
                                  material,
                                  materialShader,
                                  svData,
@@ -1326,6 +1353,7 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::WPMaterial& wpmat, Scene* pScene,
     shader->default_uniforms = pWPShaderInfo->svs;
 
     material.blenmode = ParseBlendMode(wpmat.blending);
+    ApplyMaterialDepth(material, wpmat);
 
     for (uint i = 0; i < material.textures.size(); i++) {
         if (! exists(sd_units[1].preprocess_info.active_tex_slots, i)) material.textures[i].clear();
@@ -3016,6 +3044,18 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
         LoadAlignment(*spImgNode, wpimgobj.alignment, { wpimgobj.size[0], wpimgobj.size[1] });
     }
     spImgNode->ID() = wpimgobj.id;
+    if (context.referenced_layer_ids.contains(wpimgobj.id)) {
+        spImgNode->SetMustProduce(true);
+        const auto extent = ResolveImageRenderExtent(wpimgobj, context);
+        const auto key    = LayerCompositeTargetKey(wpimgobj.id);
+        if (! context.scene->HasRenderTarget(key)) {
+            context.scene->renderTargets[key] = SceneRenderTarget {
+                .width      = extent[0],
+                .height     = extent[1],
+                .allowReuse = true,
+            };
+        }
+    }
 
     const bool skipComposeRender = isCompose && ! hasEffect;
     if (skipComposeRender) {
@@ -3368,6 +3408,9 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
                     ShaderValue::fromMatrix(Eigen::Matrix4f::Identity());
                 SceneMaterial     material;
                 WPShaderValueData svData;
+                svData.effect_owner = spImgNode.get();
+                svData.effect_extent = Eigen::Vector2f(
+                    float(render_extent[0]), float(render_extent[1]));
                 if (! LoadMaterial(vfs,
                                    wpmat,
                                    context.scene.get(),
@@ -3622,7 +3665,14 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
     u32 maxcount = particle_obj.maxcount;
     maxcount     = std::min(maxcount, 20000u);
 
-    const u32 mesh_maxcount = maxcount * (u32)child_ptr.max_instancecount;
+    uint64_t mesh_maxcount = 0;
+    if (! CheckedMulU64(maxcount, uint64_t(child_ptr.max_instancecount), mesh_maxcount)) {
+        LOG_ERROR("particle mesh for \"%s\" instance product overflows maxcount=%u instances=%zu",
+                  wppartobj.name.c_str(),
+                  maxcount,
+                  child_ptr.max_instancecount);
+        return;
+    }
     if (mesh_maxcount == 0) {
         LOG_INFO("skip zero-capacity particle mesh for \"%s\" child type=\"%s\" maxcount=%u "
                  "instances=%zu",
@@ -3633,55 +3683,29 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
         return;
     }
 
-    // Indices are 16-bit, so one mesh holds at most this many quads. Decided
-    // here, before the shader is chosen, because a rope trail that cannot fit
-    // is drawn the way it was before rope trails existed rather than dropped.
-    constexpr uint64_t kMaxIndexedQuads = 16383;
-    uint64_t           needed_quads     = mesh_maxcount;
+    // Keep the author's renderer. A rope trail that no longer fits in one
+    // 16-bit index buffer is still a rope trail: the mesh uses 32-bit indices
+    // rather than becoming a sprite trail or dropping subdivision.
+    uint64_t needed_quads = mesh_maxcount;
     if (render_rope) {
-        const auto rope_quads = [&] {
-            return rope_trail ? uint64_t(mesh_maxcount) * trail_segments * subdivision
-                              : uint64_t(mesh_maxcount) * subdivision;
-        };
-        needed_quads                   = rope_quads();
-        const u32  authored_subdivision = subdivision;
-        const auto authored_quads       = needed_quads;
-        // Only smoothness is ever given up to fit: particles and segments are
-        // the author's content, subdivision is how finely it is drawn.
-        while (needed_quads > kMaxIndexedQuads && subdivision > 1) {
-            --subdivision;
-            needed_quads = rope_quads();
-        }
-        if (subdivision != authored_subdivision) {
-            LOG_INFO("rope subdivision reduced for \"%s\": authored=%u used=%u quads=%llu (was %llu)",
-                     wppartobj.name.c_str(),
-                     authored_subdivision,
-                     subdivision,
-                     (unsigned long long)needed_quads,
-                     (unsigned long long)authored_quads);
-        }
-        if (needed_quads > kMaxIndexedQuads && rope_trail) {
-            // What every rope trail was until this round: the sprite trail the
-            // project parser used to rename it to. Still drawn, and said so.
-            LOG_ERROR("rope trail \"%s\" needs %llu quads (limit %llu) even without subdivision; "
-                      "drawing it as a sprite trail",
+        if (rope_trail) {
+            if (! CheckedMulU64(needed_quads, trail_segments, needed_quads) ||
+                ! CheckedMulU64(needed_quads, subdivision, needed_quads)) {
+                LOG_ERROR("rope trail \"%s\" quad count overflows maxcount=%u instances=%zu "
+                          "segments=%u subdivision=%u",
+                          wppartobj.name.c_str(),
+                          maxcount,
+                          child_ptr.max_instancecount,
+                          trail_segments,
+                          subdivision);
+                return;
+            }
+        } else if (! CheckedMulU64(needed_quads, subdivision, needed_quads)) {
+            LOG_ERROR("rope \"%s\" quad count overflows maxcount=%u instances=%zu subdivision=%u",
                       wppartobj.name.c_str(),
-                      (unsigned long long)needed_quads,
-                      (unsigned long long)kMaxIndexedQuads);
-            render_rope    = false;
-            rope_trail     = false;
-            subdivision    = 1;
-            trail_segments = 0;
-            needed_quads   = mesh_maxcount;
-        } else if (needed_quads > kMaxIndexedQuads) {
-            LOG_ERROR("skip particle mesh for \"%s\" child type=\"%s\" maxcount=%u "
-                      "instances=%zu quads=%llu limit=%llu",
-                      wppartobj.name.c_str(),
-                      child_data.type.c_str(),
                       maxcount,
                       child_ptr.max_instancecount,
-                      (unsigned long long)needed_quads,
-                      (unsigned long long)kMaxIndexedQuads);
+                      subdivision);
             return;
         }
     }
@@ -3722,7 +3746,7 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
                 (float)samples,
                 0.0f,
                 0.0f,
-                (float)samples,
+                EncodeRopeTrailLength((float)samples, wppartRenderer.uvscale),
             };
         } else {
             shaderInfo.baseConstSvs["g_RenderVar0"] = std::array {
@@ -3756,6 +3780,12 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
         LOG_ERROR("load particleobj '%s' material faild", wppartobj.name.c_str());
         return;
     }
+    if (render_rope && material.hasSprite &&
+        (std::abs(wppartRenderer.uvscale - 1.0f) > 1.0e-6f || wppartRenderer.uvscrolling)) {
+        LOG_ERROR("rope UV scale/scroll on '%s' cannot stay inside a sprite-sheet frame; "
+                  "genericropeparticle samples the whole texture",
+                  wppartobj.name.c_str());
+    }
     LoadConstvalue(material, particle_obj.material, shaderInfo);
     // The particle step rewrites every vertex of this mesh on every tick.
     auto  spMesh             = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
@@ -3766,11 +3796,23 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
     (void)hasSprite;
 
     bool thick_format = material.hasSprite || hastrail;
+    const uint64_t floats_per_vertex =
+        render_rope ? (thick_format ? 28ull : 24ull) : (thick_format ? 20ull : 16ull);
+    const auto index_layout = PlanParticleIndexLayout(needed_quads);
+    if (! index_layout.ok || needed_quads > std::numeric_limits<uint32_t>::max() ||
+        ! ParticleGeometryFits(needed_quads, floats_per_vertex)) {
+        LOG_ERROR("particle mesh for \"%s\" exceeds geometry capacity: quads=%llu "
+                  "byte_limit=%llu (effect type unchanged)",
+                  wppartobj.name.c_str(),
+                  (unsigned long long)needed_quads,
+                  (unsigned long long)kMaxParticleGeometryBytes);
+        return;
+    }
     {
         if (render_rope)
             SetRopeParticleMesh(mesh, particle_obj, (u32)needed_quads, thick_format);
         else
-            SetParticleMesh(mesh, particle_obj, mesh_maxcount, thick_format);
+            SetParticleMesh(mesh, particle_obj, (u32)needed_quads, thick_format);
         // PRENDER_SPRITE / PRENDER_ROPE name the generator; PRENDER_TRAIL marks
         // any trail; PRENDER_ROPETRAIL is a rope trail that follows one
         // particle's recorded path. Combos are gone by the time a renderer runs.
@@ -3802,6 +3844,38 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
             }
         });
     particleSub->SetRopeSubdivision(rope_trail ? 1 : subdivision);
+    particleSub->SetRopeUv(wppartRenderer.uvscale, wppartRenderer.uvscrolling,
+                           wppartRenderer.uvsmoothing);
+    if (context.scene->runtime != nullptr && render_rope) {
+        auto*      sub          = particleSub.get();
+        const auto runtime_name = LayerRuntimeName(context, wppartobj);
+        auto&      runtime      = *context.scene->runtime;
+        const auto is_dynamic   = [](const nlohmann::json& setting) {
+            return setting.is_object() &&
+                   (setting.contains("user") || setting.contains("script"));
+        };
+        if (is_dynamic(wppartRenderer.uvscale_setting)) {
+            runtime.RegisterDynamicValueListener(
+                ResolveFloatSetting(runtime, wppartRenderer.uvscale_setting, runtime_name),
+                [sub](const DynamicValue& value) {
+                    sub->SetRopeUv(value.getFloat(), sub->UvScrolling(), sub->UvSmoothing());
+                });
+        }
+        if (is_dynamic(wppartRenderer.uvscrolling_setting)) {
+            runtime.RegisterDynamicValueListener(
+                ResolveBoolSetting(runtime, wppartRenderer.uvscrolling_setting, runtime_name),
+                [sub](const DynamicValue& value) {
+                    sub->SetRopeUv(sub->UvScale(), value.getBool(), sub->UvSmoothing());
+                });
+        }
+        if (is_dynamic(wppartRenderer.uvsmoothing_setting)) {
+            runtime.RegisterDynamicValueListener(
+                ResolveBoolSetting(runtime, wppartRenderer.uvsmoothing_setting, runtime_name),
+                [sub](const DynamicValue& value) {
+                    sub->SetRopeUv(sub->UvScale(), sub->UvScrolling(), value.getBool());
+                });
+        }
+    }
     if (rope_trail && wppartRenderer.length > 0) {
         particleSub->SetTrail({ .samples = samples,
                                 .period  = (double)wppartRenderer.length / samples });
@@ -3908,52 +3982,10 @@ bool HasDynamicVisible(const wpscene::WPParticleObject& object) { return object.
 
 bool HasDynamicVisible(const wpscene::WPTextObject&) { return true; }
 
-bool HasDynamicVisibleSetting(const nlohmann::json& object) {
-    return object.contains("visible") && HasDynamicSetting(object.at("visible"));
-}
-
-bool IsReachabilityRoot(const nlohmann::json& object) {
-    if (! object.contains("image") || object.at("image").is_null()) return false;
-    if (! object.contains("visible") || HasDynamicVisibleSetting(object)) return true;
-
-    bool visible = true;
-    GET_JSON_NAME_VALUE_NOWARN(object, "visible", visible);
-    return visible;
-}
-
-std::unordered_set<int32_t> CollectReachableDependencyIds(const nlohmann::json& objects) {
-    std::unordered_map<int32_t, std::vector<int32_t>> dependencies_by_id;
-    std::vector<int32_t>                              pending;
-
-    for (const auto& object : objects) {
-        int32_t object_id = 0;
-        GET_JSON_NAME_VALUE_NOWARN(object, "id", object_id);
-        if (object_id == 0) continue;
-
-        auto& dependencies = dependencies_by_id[object_id];
-        if (object.contains("dependencies") && object.at("dependencies").is_array()) {
-            for (const auto& dependency : object.at("dependencies")) {
-                if (dependency.is_number_integer()) {
-                    dependencies.push_back(dependency.get<int32_t>());
-                }
-            }
-        }
-        if (IsReachabilityRoot(object)) {
-            pending.insert(pending.end(), dependencies.begin(), dependencies.end());
-        }
-    }
-
-    std::unordered_set<int32_t> reachable_dependency_ids;
-    while (! pending.empty()) {
-        const auto dependency_id = pending.back();
-        pending.pop_back();
-        if (! reachable_dependency_ids.insert(dependency_id).second) continue;
-
-        const auto iterator = dependencies_by_id.find(dependency_id);
-        if (iterator == dependencies_by_id.end()) continue;
-        pending.insert(pending.end(), iterator->second.begin(), iterator->second.end());
-    }
-    return reachable_dependency_ids;
+std::unordered_set<int32_t> CollectReachableDependencyIds(const nlohmann::json& objects,
+                                                          const LayerObjectIndex& index,
+                                                          fs::VFS& vfs) {
+    return CollectReachableLayerIds(objects, index, &vfs);
 }
 
 template<typename T>
@@ -3988,9 +4020,10 @@ void wallpaper::ApplySystemUserTextures(std::vector<std::string>&               
                                         const std::vector<wpscene::WPUserTexture>& usertextures) {
     for (std::size_t index = 0; index < usertextures.size(); ++index) {
         const auto& user_texture = usertextures[index];
-        if (user_texture.type == "system" && user_texture.name == "$mediaThumbnail") {
+        if (user_texture.type == "system" &&
+            (user_texture.name == "$mediaThumbnail" || user_texture.name == "$mediaPreviousThumbnail")) {
             if (textures.size() <= index) textures.resize(index + 1);
-            textures[index] = "$mediaThumbnail";
+            textures[index] = user_texture.name;
         }
     }
 }
@@ -4007,6 +4040,7 @@ std::shared_ptr<Scene> WPSceneParser::Parse(const SceneParseRequest& request,
     // A previous parse that returned early would otherwise leave records
     // pointing at a VFS that is gone.
     g_pending_metal_translations.clear();
+    g_parse_layer_index = nullptr;
     nlohmann::json json;
     if (! PARSE_JSON(buf, json)) return nullptr;
     wpscene::WPScene sc;
@@ -4016,7 +4050,13 @@ std::shared_ptr<Scene> WPSceneParser::Parse(const SceneParseRequest& request,
     ParseContext context;
     context.request     = &request;
     context.object_list = &json.at("objects");
-    const auto reachable_dependency_ids = CollectReachableDependencyIds(json.at("objects"));
+    const auto layer_index = BuildLayerObjectIndex(json.at("objects"));
+    const auto layer_refs  = CollectLayerTextureRefs(json.at("objects"), layer_index, &vfs);
+    const auto reachable_dependency_ids =
+        CollectReachableDependencyIds(json.at("objects"), layer_index, vfs);
+    for (const auto& ref : layer_refs) {
+        if (ref.source_id != 0) context.referenced_layer_ids.insert(ref.source_id);
+    }
 
     std::vector<WPObjectVar> wp_objs;
 
@@ -4104,6 +4144,9 @@ std::shared_ptr<Scene> WPSceneParser::Parse(const SceneParseRequest& request,
     }
 
     InitContext(context, vfs, sc);
+    g_parse_layer_index = &layer_index;
+    context.scene->layer_texture_error = ClassifyLayerTextureReferences(layer_refs, layer_index);
+    context.scene->layer_texture_sources = context.referenced_layer_ids;
     ParseLayerNodes(context, json.at("objects"));
     ParseCamera(context, sc.general);
     if (context.scene->runtime != nullptr && json.at("general").contains("zoom")) {

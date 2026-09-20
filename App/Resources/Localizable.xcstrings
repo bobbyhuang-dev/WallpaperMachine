@@ -3196,6 +3196,9 @@
     "This system has no service for reporting what is playing." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This system has no service for reporting what is playing."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此系统未提供用于报告正在播放内容的服务。"}}}
     },
+    "The system media service is unavailable." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The system media service is unavailable."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "系统媒体服务不可用。请关闭再开启媒体集成重试。"}}}
+    },
     "The system media service on this machine does not provide %@." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The system media service on this machine does not provide %@."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此设备上的系统媒体服务未提供 %@。"}}}
     },

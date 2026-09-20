@@ -93,6 +93,10 @@ public:
     /// Rope renderers only: how many straight pieces join two connected
     /// particles. Values below one are treated as one.
     void SetRopeSubdivision(u32 subdivision);
+    void SetRopeUv(float scale, bool scrolling, bool smoothing);
+    float UvScale() const { return m_uv_scale; }
+    bool  UvScrolling() const { return m_uv_scrolling; }
+    bool  UvSmoothing() const { return m_uv_smoothing; }
     /// Rope trail renderers only: makes every particle record its own path.
     /// The history is simulation state, advanced once per `Emitt()` with the
     /// same time step the particles move by, so pausing the simulation pauses
@@ -128,6 +132,9 @@ private:
     std::function<double()> m_rate_multiplier;
 
     u32                 m_rope_subdivision { 1 };
+    float               m_uv_scale { 1.0f };
+    bool                m_uv_scrolling { false };
+    bool                m_uv_smoothing { false };
     ParticleTrailConfig m_trail {};
     double              m_trail_timer { 0.0 };
 

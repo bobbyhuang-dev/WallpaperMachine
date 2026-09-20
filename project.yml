@@ -18,6 +18,27 @@ settings:
     ONLY_ACTIVE_ARCH: YES
     ENABLE_DEBUG_DYLIB: NO
 targets:
+  MediaRemoteAdapter:
+    type: framework
+    platform: macOS
+    sources:
+      - path: upstream/mediaremote-adapter/src
+        excludes:
+          - test
+      - path: upstream/mediaremote-adapter/include
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.mac-wallpaper-engine.MediaRemoteAdapter
+        GENERATE_INFOPLIST_FILE: YES
+        CLANG_ENABLE_OBJC_ARC: YES
+        GCC_SYMBOLS_PRIVATE_EXTERN: NO
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/upstream/mediaremote-adapter/include"
+          - "$(SRCROOT)/upstream/mediaremote-adapter/src"
+    dependencies:
+      - sdk: Foundation.framework
+      - sdk: AppKit.framework
+      - sdk: UniformTypeIdentifiers.framework
   MacWallpaperEngine:
     type: application
     platform: macOS
@@ -38,7 +59,14 @@ targets:
       - path: Resources/StarterWallpaper
         type: folder
         buildPhase: resources
+      - path: upstream/mediaremote-adapter/bin/mediaremote-adapter.pl
+        buildPhase: resources
+      - path: upstream/mediaremote-adapter/LICENSE
+        buildPhase: resources
     dependencies:
+      - target: MediaRemoteAdapter
+        embed: true
+        link: false
       - target: MacWallpaperExtension
         embed: true
     settings:

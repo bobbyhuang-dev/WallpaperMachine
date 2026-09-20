@@ -399,6 +399,22 @@ fileprivate class UniffiHandleMap<T> {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
+    typealias FfiType = UInt8
+    typealias SwiftType = UInt8
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt8 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: UInt8, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -522,6 +538,24 @@ fileprivate struct FfiConverterString: FfiConverter {
         let len = Int32(value.utf8.count)
         writeInt(&buf, len)
         writeBytes(&buf, value.utf8)
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
     }
 }
 
@@ -739,6 +773,11 @@ public protocol WallpaperBridgeProtocol : AnyObject {
      * Returns an error when the wallpaper or property id is unknown.
      */
     func restorePropertyDefault(wallpaperId: String, propertyId: String) async throws  -> BridgeWallpaperMutationBundle
+    
+    /**
+     * Running scene wallpapers whose users enabled music information.
+     */
+    func sceneMediaWallpaperIds() async throws  -> [String]
     
     /**
      * # Errors
@@ -1149,6 +1188,11 @@ public protocol WallpaperBridgeProtocol : AnyObject {
      * media event tag.
      */
     func submitSystemMediaEvent(json: String) throws 
+    
+    /**
+     * Publishes a bounded player snapshot; delivery rechecks per-wallpaper consent.
+     */
+    func updateSceneMedia(wallpaperId: String, snapshot: BridgeMediaSnapshot) async throws 
     
     /**
      * # Errors
@@ -1812,6 +1856,26 @@ open func restorePropertyDefault(wallpaperId: String, propertyId: String)async t
             completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
             freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeBridgeWallpaperMutationBundle.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Running scene wallpapers whose users enabled music information.
+     */
+open func sceneMediaWallpaperIds()async throws  -> [String] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_scene_media_wallpaper_ids(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceString.lift,
             errorHandler: FfiConverterTypeBridgeError.lift
         )
 }
@@ -2769,6 +2833,26 @@ open func submitSystemMediaEvent(json: String)throws  {try rustCallWithError(Ffi
         FfiConverterString.lower(json),$0
     )
 }
+}
+    
+    /**
+     * Publishes a bounded player snapshot; delivery rechecks per-wallpaper consent.
+     */
+open func updateSceneMedia(wallpaperId: String, snapshot: BridgeMediaSnapshot)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_update_scene_media(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(wallpaperId),FfiConverterTypeBridgeMediaSnapshot.lower(snapshot)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_void,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_void,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
 }
     
     /**
@@ -3902,6 +3986,131 @@ public func FfiConverterTypeBridgeLogStatus_lift(_ buf: RustBuffer) throws -> Br
 #endif
 public func FfiConverterTypeBridgeLogStatus_lower(_ value: BridgeLogStatus) -> RustBuffer {
     return FfiConverterTypeBridgeLogStatus.lower(value)
+}
+
+
+/**
+ * Player data read by the native host. Artwork is bounded RGBA8, never a path or URL.
+ */
+public struct BridgeMediaSnapshot {
+    public var title: String
+    public var artist: String
+    public var album: String
+    public var playbackState: UInt8
+    public var position: Double
+    public var duration: Double
+    public var artworkWidth: UInt32
+    public var artworkHeight: UInt32
+    public var artworkRgba: Data
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(title: String, artist: String, album: String, playbackState: UInt8, position: Double, duration: Double, artworkWidth: UInt32, artworkHeight: UInt32, artworkRgba: Data) {
+        self.title = title
+        self.artist = artist
+        self.album = album
+        self.playbackState = playbackState
+        self.position = position
+        self.duration = duration
+        self.artworkWidth = artworkWidth
+        self.artworkHeight = artworkHeight
+        self.artworkRgba = artworkRgba
+    }
+}
+
+
+
+extension BridgeMediaSnapshot: Equatable, Hashable {
+    public static func ==(lhs: BridgeMediaSnapshot, rhs: BridgeMediaSnapshot) -> Bool {
+        if lhs.title != rhs.title {
+            return false
+        }
+        if lhs.artist != rhs.artist {
+            return false
+        }
+        if lhs.album != rhs.album {
+            return false
+        }
+        if lhs.playbackState != rhs.playbackState {
+            return false
+        }
+        if lhs.position != rhs.position {
+            return false
+        }
+        if lhs.duration != rhs.duration {
+            return false
+        }
+        if lhs.artworkWidth != rhs.artworkWidth {
+            return false
+        }
+        if lhs.artworkHeight != rhs.artworkHeight {
+            return false
+        }
+        if lhs.artworkRgba != rhs.artworkRgba {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(title)
+        hasher.combine(artist)
+        hasher.combine(album)
+        hasher.combine(playbackState)
+        hasher.combine(position)
+        hasher.combine(duration)
+        hasher.combine(artworkWidth)
+        hasher.combine(artworkHeight)
+        hasher.combine(artworkRgba)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeMediaSnapshot: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeMediaSnapshot {
+        return
+            try BridgeMediaSnapshot(
+                title: FfiConverterString.read(from: &buf), 
+                artist: FfiConverterString.read(from: &buf), 
+                album: FfiConverterString.read(from: &buf), 
+                playbackState: FfiConverterUInt8.read(from: &buf), 
+                position: FfiConverterDouble.read(from: &buf), 
+                duration: FfiConverterDouble.read(from: &buf), 
+                artworkWidth: FfiConverterUInt32.read(from: &buf), 
+                artworkHeight: FfiConverterUInt32.read(from: &buf), 
+                artworkRgba: FfiConverterData.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BridgeMediaSnapshot, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.title, into: &buf)
+        FfiConverterString.write(value.artist, into: &buf)
+        FfiConverterString.write(value.album, into: &buf)
+        FfiConverterUInt8.write(value.playbackState, into: &buf)
+        FfiConverterDouble.write(value.position, into: &buf)
+        FfiConverterDouble.write(value.duration, into: &buf)
+        FfiConverterUInt32.write(value.artworkWidth, into: &buf)
+        FfiConverterUInt32.write(value.artworkHeight, into: &buf)
+        FfiConverterData.write(value.artworkRgba, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeMediaSnapshot_lift(_ buf: RustBuffer) throws -> BridgeMediaSnapshot {
+    return try FfiConverterTypeBridgeMediaSnapshot.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeMediaSnapshot_lower(_ value: BridgeMediaSnapshot) -> RustBuffer {
+    return FfiConverterTypeBridgeMediaSnapshot.lower(value)
 }
 
 
@@ -8123,6 +8332,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_restore_property_default() != 28754) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_scene_media_wallpaper_ids() != 29687) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_select_wallpaper() != 23020) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8232,6 +8444,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_submit_system_media_event() != 344) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_update_scene_media() != 57302) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_wallpaper_options_snapshot() != 45708) {

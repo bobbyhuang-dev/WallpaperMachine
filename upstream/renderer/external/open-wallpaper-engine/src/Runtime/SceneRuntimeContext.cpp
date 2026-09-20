@@ -177,21 +177,51 @@ Eigen::Vector3f CursorHitTestWorldPosition(const ScriptHostContext& host_context
     return host_context.cursor_world_position;
 }
 
+Eigen::Vector2d CursorWorldToNdc(const CursorViewport& viewport, const Eigen::Vector3f& cursor) {
+    if (viewport.content_size.x() == 0.0f || viewport.content_size.y() == 0.0f) {
+        return Eigen::Vector2d { 0.0, 0.0 };
+    }
+    return Eigen::Vector2d {
+        2.0 * (static_cast<double>(cursor.x()) - viewport.content_origin.x()) /
+                viewport.content_size.x() -
+            1.0,
+        2.0 * (static_cast<double>(cursor.y()) - viewport.content_origin.y()) /
+                viewport.content_size.y() -
+            1.0,
+    };
+}
+
+const SceneCamera* CameraForHitNode(const Scene& scene, const SceneNode& node) {
+    if (! node.Camera().empty()) {
+        const auto found = scene.cameras.find(node.Camera());
+        if (found != scene.cameras.end()) return found->second.get();
+    }
+    return scene.activeCamera;
+}
+
 // Hit tests in the node's local plane so rotated and flipped layers keep
 // their authored rectangle, then consults the coverage mask when present.
+// A perspective camera unprojects the click through the real view-projection
+// onto that plane; an ortho camera keeps the existing canvas-space inverse.
 bool HitTestNode(SceneNode& node, Eigen::Vector2f size, const Eigen::Vector3f& cursor,
-                 const NodeHitMask* mask) {
+                 const NodeHitMask* mask, const SceneCamera* camera, Eigen::Vector2d ndc) {
     node.UpdateTrans();
     if (size.x() <= 0.0f && size.y() <= 0.0f) {
         size = Eigen::Vector2f(100.0f, 100.0f);
     }
 
-    const Eigen::Matrix4d model = node.ModelTrans();
-    if (! std::isfinite(model.determinant()) || std::abs(model.determinant()) < 1e-12) {
-        return false;
+    Eigen::Vector4d local;
+    if (camera != nullptr && camera->IsPerspective()) {
+        const auto hit = IntersectNdcWithNodePlane(*camera, node, ndc.x(), ndc.y());
+        if (! hit) return false;
+        local = Eigen::Vector4d(hit->x(), hit->y(), hit->z(), 1.0);
+    } else {
+        const Eigen::Matrix4d model = node.ModelTrans();
+        if (! std::isfinite(model.determinant()) || std::abs(model.determinant()) < 1e-12) {
+            return false;
+        }
+        local = model.inverse() * Eigen::Vector4d(cursor.x(), cursor.y(), cursor.z(), 1.0);
     }
-    const Eigen::Vector4d local =
-        model.inverse() * Eigen::Vector4d(cursor.x(), cursor.y(), cursor.z(), 1.0);
 
     const double half_width  = static_cast<double>(size.x()) * 0.5;
     const double half_height = static_cast<double>(size.y()) * 0.5;
@@ -1803,6 +1833,16 @@ bool SceneRuntimeContext::PlayNodeVideoTexture(std::string_view name) {
     return controlled;
 }
 
+bool SceneRuntimeContext::NodeVideoTextureIsPlaying(std::string_view name) const {
+    const auto iterator = m_node_video_textures.find(std::string(name));
+    if (iterator == m_node_video_textures.end()) return false;
+    for (const auto& key : iterator->second) {
+        const auto playback = m_video_texture_playback.find(key);
+        if (playback != m_video_texture_playback.end() && !playback->second.paused) return true;
+    }
+    return false;
+}
+
 bool SceneRuntimeContext::PauseNodeVideoTexture(std::string_view name) {
     const auto iterator = m_node_video_textures.find(std::string(name));
     if (iterator == m_node_video_textures.end()) return false;
@@ -2025,10 +2065,16 @@ bool SceneRuntimeContext::CursorHitsLayer(std::string_view name) const {
     const auto         mask_iterator = m_node_hit_masks.find(key);
     const NodeHitMask* mask =
         mask_iterator == m_node_hit_masks.end() ? nullptr : &mask_iterator->second;
+    const SceneCamera* camera =
+        m_scene != nullptr ? CameraForHitNode(*m_scene, *node_iterator->second) : nullptr;
+    const Eigen::Vector2d ndc =
+        CursorWorldToNdc(m_cursor_viewport, CursorHitTestWorldPosition(*m_host_context));
     return HitTestNode(*node_iterator->second,
                        NodeSize(name),
                        CursorHitTestWorldPosition(*m_host_context),
-                       mask);
+                       mask,
+                       camera,
+                       ndc);
 }
 
 bool SceneRuntimeContext::CursorHitsScriptLayer(const ScriptedDynamicValue& value) const {

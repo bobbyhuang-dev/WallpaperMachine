@@ -86,6 +86,9 @@ constexpr std::string_view G_TEXELSIZEHALF { "g_TexelSizeHalf" };
 constexpr std::string_view G_BONES { "g_Bones" };
 constexpr std::string_view G_SCREEN { "g_Screen" };
 constexpr std::string_view G_PARALLAXPOSITION { "g_ParallaxPosition" };
+constexpr std::string_view G_ORIENTATIONUP { "g_OrientationUp" };
+constexpr std::string_view G_ORIENTATIONRIGHT { "g_OrientationRight" };
+constexpr std::string_view G_ORIENTATIONFORWARD { "g_OrientationForward" };
 
 constexpr std::string_view SpecTex_Default { "_rt_default" };
 constexpr std::string_view SpecTex_Link { "_rt_link_" };
@@ -111,5 +114,8 @@ inline uint32_t ParseLinkTex(const std::string_view name) {
     return result;
 }
 inline std::string GenLinkTex(idx id) { return std::string(SpecTex_Link) + std::to_string(id); }
+inline std::string LayerCompositeTargetKey(idx id) {
+    return std::string(WE_IMAGE_LAYER_COMPOSITE_PREFIX) + std::to_string(id);
+}
 
 } // namespace wallpaper

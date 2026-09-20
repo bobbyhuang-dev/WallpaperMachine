@@ -221,7 +221,7 @@ gtest_discover_tests(
     DISCOVERY_TIMEOUT 60
 )
 add_executable(scenescript_media_event_smoke scenescript_media_event_smoke.cpp)
-target_link_libraries(scenescript_media_event_smoke PRIVATE ${PROJECT_NAME} wpScene GTest::gtest_main)
+target_link_libraries(scenescript_media_event_smoke PRIVATE ${PROJECT_NAME} wpScene nlohmann_json::nlohmann_json GTest::gtest_main)
 target_include_directories(scenescript_media_event_smoke PRIVATE .)
 target_compile_features(scenescript_media_event_smoke PRIVATE cxx_std_20)
 gtest_discover_tests(
@@ -304,6 +304,15 @@ target_include_directories(particle_rope_geometry_test PRIVATE .)
 target_compile_features(particle_rope_geometry_test PRIVATE cxx_std_20)
 gtest_discover_tests(
     particle_rope_geometry_test
+    PROPERTIES TIMEOUT 30
+    DISCOVERY_TIMEOUT 60
+)
+add_executable(layer_texture_reference_test layer_texture_reference_test.cpp)
+target_link_libraries(layer_texture_reference_test PRIVATE ${PROJECT_NAME} wpVulkanRender wpVulkan wpRGraph wpScene wpAudio wpFs nlohmann_json::nlohmann_json GTest::gtest_main)
+target_include_directories(layer_texture_reference_test PRIVATE . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender ${CMAKE_SOURCE_DIR}/src/Scene/RenderGraph/include)
+target_compile_features(layer_texture_reference_test PRIVATE cxx_std_20)
+gtest_discover_tests(
+    layer_texture_reference_test
     PROPERTIES TIMEOUT 30
     DISCOVERY_TIMEOUT 60
 )

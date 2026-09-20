@@ -43,6 +43,8 @@ live under `testing/`.
 
 ## Product features
 
+- [Music information](features/media-integration.md) - system Now Playing metadata and covers in scene and web wallpapers.
+
 | Document | Purpose |
 |---|---|
 | [features/control-panel.md](features/control-panel.md) | Window and panel UX, tabs, inspector, interaction reference |

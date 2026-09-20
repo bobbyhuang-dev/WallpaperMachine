@@ -154,32 +154,14 @@ than a match.
 
 ## Media integration
 
-Per wallpaper, off by default, and the inspector says why. macOS publishes no API
-for reading what another application is playing. The private `MediaRemote`
-framework has one; its symbols resolve on this machine, but Apple restricted it
-in macOS 15.4 to processes holding a private entitlement this app does not have,
-so the expected outcome is that nothing can report a track. That statement comes
-from the framework's documented behaviour and a symbol-resolution check: the
-private interface was never called, and no runtime unavailability was observed
-here.
+Off by default, per wallpaper. The bundled provider delivers system Now Playing
+metadata and artwork; supported sources, lifetime, failure behavior and tests
+are documented in [media-integration.md](media-integration.md).
 
-The panel separates the two: whether the user enabled media integration, and
-whether a provider can answer at all. When one cannot, the panel shows the
-provider's own reason instead of a blank field; with no desktop wallpaper running
-it says it cannot tell rather than asserting unavailability it did not observe.
-
-The status listener reports the user's own setting, not the system's capability.
-With the setting on and no provider available, status stays `enabled: true` while
-properties are empty, playback is `PLAYBACK_STOPPED`, and the timeline listener
-does not fire at all. No title, artist, artwork, position or duration is ever
-supplied in place of one, in the page or in the panel. Not every player supplies
-a timeline, so a wallpaper must work if that listener never fires.
-
-The panel shows the setting and what it does not promise. It does not show a live
-availability reason: the provider is owned privately by `WebWallpaperHost`, its
-availability is meaningful only while a page is consuming it, and nothing
-publishes it to the control panel. Rather than add a field nothing populates, the
-panel states the measured position above.
+The status listener describes the user's setting, independently of provider
+availability. With integration enabled but no data, properties are empty,
+playback is stopped and there is no timeline. An empty thumbnail string clears
+the previous cover. Pages must tolerate absent metadata and timelines.
 
 ## User-selected files and folders
 

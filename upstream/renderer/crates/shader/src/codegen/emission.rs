@@ -92,6 +92,7 @@ impl SourceEmitter<'_, '_> {
             block.emit_with_array_suffix_resolver(output, |suffix| {
                 leading_defines.resolved_array_suffix(suffix)
             })?;
+            self.declarations.emit_uniform_prefix_aliases(output)?;
             writeln!(output).map_err(Self::write_error)?;
         }
 

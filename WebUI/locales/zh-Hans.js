@@ -2,6 +2,11 @@
    and data-i18n in WebUI/; see docs/localization.md for how a catalog is maintained. */
 
 export default {
+  // Actions a wallpaper's user can bind one of its shortcut buttons to.
+  'No action': '\u65e0\u52a8\u4f5c',
+  'Play / Pause': '\u64ad\u653e / \u6682\u505c',
+  'Next Track': '\u4e0b\u4e00\u9996',
+  'Previous Track': '\u4e0a\u4e00\u9996',
   // Shell
   'Main navigation': '主导航',
   'Discover': '发现',

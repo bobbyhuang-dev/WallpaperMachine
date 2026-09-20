@@ -13,6 +13,13 @@ private final class TestMediaStream: SystemMediaStreaming {
         self.ended = ended
     }
     func stop() { stops += 1 }
+    /// Transport commands this stream was asked to carry out, in order.
+    private(set) var commands: [Int] = []
+    var acceptsCommands = true
+    func send(command: Int) async -> Bool {
+        commands.append(command)
+        return acceptsCommands
+    }
     func send(_ payload: [String: Any]) throws {
         var data = try JSONSerialization.data(withJSONObject: ["type": "data", "diff": false, "payload": payload])
         data.append(10)
@@ -101,5 +108,55 @@ final class AdapterSystemMediaProviderTests: XCTestCase {
         guard case .unavailable = provider.availability else { return XCTFail("exit must report unavailable") }
         XCTAssertEqual(stream.starts, 1)
         provider.removeConsumer()
+    }
+}
+
+@MainActor
+final class SystemMediaTransportTests: XCTestCase {
+    /// The wallpaper's user binds a button to an action; this is the only
+    /// place the action becomes a MediaRemote command, so the mapping has to
+    /// be the one the adapter's own header documents.
+    func testBoundActionsReachTheAdapterAsTheirMediaRemoteCommands() async {
+        let stream = TestMediaStream()
+        let provider = AdapterSystemMediaProvider(stream: stream)
+
+        for (command, identifier) in [
+            (SystemMediaCommand.togglePlayPause, 2),
+            (SystemMediaCommand.nextTrack, 4),
+            (SystemMediaCommand.previousTrack, 5),
+        ] {
+            let sent = await provider.send(command)
+            XCTAssertTrue(sent)
+            XCTAssertEqual(stream.commands.last, identifier)
+        }
+        XCTAssertEqual(stream.commands.count, 3, "a press was dropped or duplicated")
+    }
+
+    func testAPlayerThatRefusesIsReportedRatherThanAssumed() async {
+        let stream = TestMediaStream()
+        stream.acceptsCommands = false
+        let provider = AdapterSystemMediaProvider(stream: stream)
+
+        let sent = await provider.send(.nextTrack)
+        XCTAssertFalse(sent, "a command nothing took was reported as delivered")
+    }
+
+    /// A command aimed at Music while Spotify is playing changes the wrong
+    /// thing, so it has to follow whichever provider is answering.
+    func testTheCommandFollowsTheProviderThatIsAnswering() async {
+        let primary = RecordingSystemMediaProvider(
+            availability: .unavailable(reason: "nothing to read"))
+        let fallback = RecordingSystemMediaProvider(availability: .available)
+        let scheduler = ManualMediaTimerScheduler()
+        let provider = FallbackSystemMediaProvider(
+            primary: primary, fallback: fallback, scheduler: scheduler)
+
+        provider.addConsumer()
+        scheduler.fireDelayed()
+        let sent = await provider.send(.togglePlayPause)
+
+        XCTAssertTrue(sent)
+        XCTAssertEqual(fallback.commands, [.togglePlayPause])
+        XCTAssertTrue(primary.commands.isEmpty, "the command went to the silent provider")
     }
 }

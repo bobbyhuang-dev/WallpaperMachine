@@ -705,6 +705,35 @@ public protocol WallpaperBridgeProtocol : AnyObject {
     func nativeVideoWallpapers() async throws  -> [BridgeNativeVideoWallpaper]
     
     /**
+     * Which applied desktop scenes have consented to now-playing.
+     *
+     * The host starts and stops its system media source from this, so a
+     * machine whose wallpapers all have the setting off is never asked for
+     * Automation permission and nothing reads what is playing. A handle that
+     * was not in the previous answer is a scene with no media state yet, which
+     * is what tells the host to replay what it already knows.
+     *
+     * # Errors
+     *
+     * Returns an error when the bridge actor is gone.
+     * Waits for the next `engine.openUserShortcut` request from a wallpaper
+     * whose user has consented to media integration.
+     *
+     * Long-polls rather than returning immediately: a press is rare, and a
+     * caller that had to ask repeatedly would burn wakeups finding nothing.
+     * The wait happens outside the actor, so it stalls no other request.
+     *
+     * Requests from wallpapers without that consent are dropped here rather
+     * than handed on -- a wallpaper the user has not let near their media must
+     * not reach a media player through this.
+     *
+     * # Errors
+     *
+     * Returns an error when the engine has shut the channel.
+     */
+    func nextUserShortcut() async throws  -> BridgeUserShortcut
+    
+    /**
      * # Errors
      *
      * Returns an error when pending options cannot be applied or persisted.
@@ -1199,19 +1228,6 @@ public protocol WallpaperBridgeProtocol : AnyObject {
      */
     func submitSystemMediaEvent(json: String) async throws 
     
-    /**
-     * Which applied desktop scenes have consented to now-playing.
-     *
-     * The host starts and stops its system media source from this, so a
-     * machine whose wallpapers all have the setting off is never asked for
-     * Automation permission and nothing reads what is playing. A handle that
-     * was not in the previous answer is a scene with no media state yet, which
-     * is what tells the host to replay what it already knows.
-     *
-     * # Errors
-     *
-     * Returns an error when the bridge actor is gone.
-     */
     func systemMediaSceneHandles() async throws  -> [UInt64]
     
     /**
@@ -1691,6 +1707,50 @@ open func nativeVideoWallpapers()async throws  -> [BridgeNativeVideoWallpaper] {
             completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
             freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
             liftFunc: FfiConverterSequenceTypeBridgeNativeVideoWallpaper.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Which applied desktop scenes have consented to now-playing.
+     *
+     * The host starts and stops its system media source from this, so a
+     * machine whose wallpapers all have the setting off is never asked for
+     * Automation permission and nothing reads what is playing. A handle that
+     * was not in the previous answer is a scene with no media state yet, which
+     * is what tells the host to replay what it already knows.
+     *
+     * # Errors
+     *
+     * Returns an error when the bridge actor is gone.
+     * Waits for the next `engine.openUserShortcut` request from a wallpaper
+     * whose user has consented to media integration.
+     *
+     * Long-polls rather than returning immediately: a press is rare, and a
+     * caller that had to ask repeatedly would burn wakeups finding nothing.
+     * The wait happens outside the actor, so it stalls no other request.
+     *
+     * Requests from wallpapers without that consent are dropped here rather
+     * than handed on -- a wallpaper the user has not let near their media must
+     * not reach a media player through this.
+     *
+     * # Errors
+     *
+     * Returns an error when the engine has shut the channel.
+     */
+open func nextUserShortcut()async throws  -> BridgeUserShortcut {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_next_user_shortcut(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBridgeUserShortcut.lift,
             errorHandler: FfiConverterTypeBridgeError.lift
         )
 }
@@ -2895,19 +2955,6 @@ open func submitSystemMediaEvent(json: String)async throws  {
         )
 }
     
-    /**
-     * Which applied desktop scenes have consented to now-playing.
-     *
-     * The host starts and stops its system media source from this, so a
-     * machine whose wallpapers all have the setting off is never asked for
-     * Automation permission and nothing reads what is playing. A handle that
-     * was not in the previous answer is a scene with no media state yet, which
-     * is what tells the host to replay what it already knows.
-     *
-     * # Errors
-     *
-     * Returns an error when the bridge actor is gone.
-     */
 open func systemMediaSceneHandles()async throws  -> [UInt64] {
     return
         try  await uniffiRustCallAsync(
@@ -6222,6 +6269,87 @@ public func FfiConverterTypeBridgeStorageStatus_lower(_ value: BridgeStorageStat
 
 
 /**
+ * One `engine.openUserShortcut` request from a running wallpaper.
+ *
+ * `value` is what the wallpaper's user chose for that property, and is the
+ * only thing a host may act on: the property's name is the author's, not the
+ * user's, so acting on it would be deciding for them.
+ */
+public struct BridgeUserShortcut {
+    public var sceneHandle: UInt64
+    public var property: String
+    public var value: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(sceneHandle: UInt64, property: String, value: String) {
+        self.sceneHandle = sceneHandle
+        self.property = property
+        self.value = value
+    }
+}
+
+
+
+extension BridgeUserShortcut: Equatable, Hashable {
+    public static func ==(lhs: BridgeUserShortcut, rhs: BridgeUserShortcut) -> Bool {
+        if lhs.sceneHandle != rhs.sceneHandle {
+            return false
+        }
+        if lhs.property != rhs.property {
+            return false
+        }
+        if lhs.value != rhs.value {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(sceneHandle)
+        hasher.combine(property)
+        hasher.combine(value)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeUserShortcut: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeUserShortcut {
+        return
+            try BridgeUserShortcut(
+                sceneHandle: FfiConverterUInt64.read(from: &buf), 
+                property: FfiConverterString.read(from: &buf), 
+                value: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BridgeUserShortcut, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.sceneHandle, into: &buf)
+        FfiConverterString.write(value.property, into: &buf)
+        FfiConverterString.write(value.value, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeUserShortcut_lift(_ buf: RustBuffer) throws -> BridgeUserShortcut {
+    return try FfiConverterTypeBridgeUserShortcut.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeUserShortcut_lower(_ value: BridgeUserShortcut) -> RustBuffer {
+    return FfiConverterTypeBridgeUserShortcut.lower(value)
+}
+
+
+/**
  * Which renderer is actually playing the video on one display.
  *
  * `backend` reports what is running, not what was asked for. `fallback_reason`
@@ -8423,6 +8551,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_native_video_wallpapers() != 32035) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_next_user_shortcut() != 52775) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_ok_wallpaper_options() != 57862) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8564,7 +8695,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_submit_system_media_event() != 19034) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_system_media_scene_handles() != 16061) {
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_system_media_scene_handles() != 58499) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_update_scene_media() != 57302) {

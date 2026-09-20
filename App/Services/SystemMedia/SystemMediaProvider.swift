@@ -64,6 +64,17 @@ struct SystemMediaTimeline: Equatable, Sendable {
 /// Each callback fires only when its own part of the state changed, matching the
 /// protocol's promise that a listener is called when that specific part changes.
 @MainActor
+/// A transport command a wallpaper's user can bind one of its buttons to.
+///
+/// Deliberately the three Wallpaper Engine wallpapers ask for, not the whole
+/// MediaRemote command set: a wallpaper cannot name a command, only the
+/// property its user bound, and these are the bindings this host offers.
+enum SystemMediaCommand: String, Sendable {
+    case togglePlayPause = "media:playpause"
+    case nextTrack = "media:next"
+    case previousTrack = "media:previous"
+}
+
 protocol SystemMediaProvider: AnyObject {
     var availability: SystemMediaAvailability { get }
     var onPropertiesChanged: ((SystemMediaProperties) -> Void)? { get set }
@@ -75,4 +86,15 @@ protocol SystemMediaProvider: AnyObject {
     /// Re-emits whatever is currently known, for a page that registered its listeners
     /// after the state was first delivered.
     func replayCurrentState()
+    /// Asks the player this provider is reading to carry out `command`.
+    ///
+    /// Returns whether the command was handed to a player. A provider that
+    /// cannot control playback answers `false` rather than pretending, so the
+    /// caller can say nothing happened instead of claiming a press landed.
+    func send(_ command: SystemMediaCommand) async -> Bool
+}
+
+extension SystemMediaProvider {
+    /// Reading what is playing does not imply being able to change it.
+    func send(_ command: SystemMediaCommand) async -> Bool { false }
 }

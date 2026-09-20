@@ -25,6 +25,16 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — A bound wallpaper button now reaches a real media player
+
+The Swift side takes presses off the bridge's long poll and carries them out through whichever provider is currently answering. The three combos default to no action, so the buttons stay inert until the user binds them in the wallpaper's own properties -- which is what Wallpaper Engine has them do, and what keeps a wallpaper from choosing on their behalf.
+
+- Transport is a capability of the provider seam: the adapter stream runs one short-lived `perl … send N` off the main actor, the AppleScript runner tells the player it is currently reading, and a provider that cannot control playback answers false rather than pretending
+- `SystemMediaTransportTests` (3) — the three actions reach the adapter as MRCommand 2, 4 and 5 from its own header; a refusing player is reported rather than assumed; the command follows the provider that is answering rather than a fixed one
+- Combo labels now go through `t()` in the panel, with the four actions in the zh-Hans catalogue. "No action" rather than "None" — that key already means deselect-all
+- `scripts/test.py` — 526 passed, 0 failed, 11 skipped of 537; `cargo test --release -p wallpaper-bridge --lib` 317 passed
+- Unverified: no desktop run. Whether a press moves a real player was not observed here, only that the command is handed to the adapter the state comes from
+
 ## 2026-09-21 — A wallpaper's shortcut press now reaches the host, gated on the user's media consent
 
 The engine pushes each request to an installed observer instead of holding it, because a request no host has taken is a press the user already stopped waiting for. WallpaperBridge::next_user_shortcut long-polls a bounded channel outside the actor, so waiting for a rare press stalls no other request and costs no idle wakeup, and it drops requests from wallpapers missing from system_media_scene_handles.
@@ -106,12 +116,3 @@ As first written, WithdrawingConsentDropsWhatWasRetained passed with the whole f
 - Re-sequenced to enable → event → disable → enable again → attach: retaining without clearing replays the stale event on the second enable, which is the only way that sequence can reveal the probe
 - Verified by deleting just the `clear()` in `SET_MEDIA_INTEGRATION_ENABLED` — the test fails with "consent was withdrawn and what was playing then was replayed anyway" and passes with it restored
 - `scene_schema_tests` — 74 passed, plus the two pre-existing 5 s pointer-capability timeouts recorded in renderer.md; neither gate builds this suite
-
-## 2026-09-20 — Corrected: a settings change reloads on the same object, and the harness exists
-
-Two claims in the entry below were wrong. A property change does not produce a new scene handle: set_property_override sets a property on the existing object and SceneWallpaper turns it into LOAD_SCENE on that same object, so the host's fedHandles diff is empty and there is no replay at all — the old runtime is discarded with the old Scene and the new one starts blank. The null-runtime window the entry described is the wallpaper-switch case. Retaining every live event and replaying on attach covers both, and depends on no host timing.
-
-- Also wrong: a headless SceneWallpaper harness does exist — `SceneWallpaperInputTestAccess::PostScene` posts SET_SCENE with a parsed scene and no renderer
-- `SceneSchema.MediaStateSurvivesTheSceneItArrivedBefore` — submits `mediaPlaybackChanged` before any scene, attaches a scene whose script reveals a node on it, asserts the node is visible. Fails on the previous commit with "a scene attached after the event never learned what was playing"
-- `SceneSchema.MediaStateIsNotReplayedAfterConsentIsWithdrawn` — the same sequence with media integration turned off in between leaves the node hidden
-- Still uncovered: publishing the surface size (`publishScreenResolution`), which needs a RenderInitInfo the harness does not supply

@@ -47,6 +47,12 @@ final class FallbackSystemMediaProvider: SystemMediaProvider {
         bind(primary)
     }
 
+    /// Sends through whichever provider is currently answering, so a command
+    /// cannot land on a player that is not the one being reported.
+    func send(_ command: SystemMediaCommand) async -> Bool {
+        await (usingFallback ? fallback : primary).send(command)
+    }
+
     func addConsumer() {
         consumers += 1
         guard consumers == 1 else { return }

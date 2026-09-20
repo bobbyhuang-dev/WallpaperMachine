@@ -304,6 +304,13 @@ final class RecordingSystemMediaProvider: SystemMediaProvider {
     func removeConsumer() { removeCount += 1 }
     func replayCurrentState() {}
     func emitProperties() { onPropertiesChanged?(properties) }
+
+    /// Commands this provider was asked to carry out, in order.
+    private(set) var commands: [SystemMediaCommand] = []
+    func send(_ command: SystemMediaCommand) async -> Bool {
+        commands.append(command)
+        return true
+    }
 }
 
 @MainActor
@@ -317,6 +324,14 @@ final class FakeAppleScriptRunner: AppleScriptRunning {
     var artworkFetches: Int { appleEventArtworkFetches + urlArtworkFetches }
 
     func runningPlayers() -> [AppleScriptPlayer] { running }
+
+    /// Players told to do something, and what.
+    private(set) var controls: [(AppleScriptPlayer, SystemMediaCommand)] = []
+    var acceptsControl = true
+    func control(_ player: AppleScriptPlayer, _ command: SystemMediaCommand) async -> Bool {
+        controls.append((player, command))
+        return acceptsControl
+    }
 
     func query(_ player: AppleScriptPlayer) async -> AppleScriptNowPlaying? {
         queries[player, default: 0] += 1

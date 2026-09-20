@@ -484,7 +484,7 @@ function renderProperty(id, property, lock) {
   switch (property.kind) {
     case 'boolean': control = `<label class="check-label"><input type="checkbox" ${attributes}${checked(value)}>${escapeHTML(t('Enabled'))}</label>`; break;
     case 'slider': control = `<div class="range-field"><input type="range" ${attributes} min="${Number(property.min ?? 0)}" max="${Number(property.max ?? 100)}" step="${Number(property.step) > 0 ? Number(property.step) : 'any'}" value="${Number(value)}"><output>${escapeHTML(value)}</output></div>`; break;
-    case 'combo': control = `<select ${attributes}>${(property.options || []).map(option => `<option value="${escapeHTML(JSON.stringify(option.value))}"${JSON.stringify(value) === JSON.stringify(option.value) ? ' selected' : ''}>${escapeHTML(option.label)}</option>`).join('')}</select>`; break;
+    case 'combo': control = `<select ${attributes}>${(property.options || []).map(option => `<option value="${escapeHTML(JSON.stringify(option.value))}"${JSON.stringify(value) === JSON.stringify(option.value) ? ' selected' : ''}>${escapeHTML(t(option.label))}</option>`).join('')}</select>`; break;
     case 'color': control = `<input type="color" ${attributes} value="${/^#[0-9a-f]{6}$/i.test(value) ? value : '#ffffff'}">`; break;
     case 'textInput': control = `<input type="text" ${attributes} data-input="property" value="${escapeHTML(value)}" autocomplete="off">`; break;
     // A scene texture is not a user-chosen file: it keeps the image picker it always had.

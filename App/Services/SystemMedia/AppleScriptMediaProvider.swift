@@ -48,6 +48,8 @@ protocol AppleScriptRunning: AnyObject {
     func fetchArtwork(from player: AppleScriptPlayer) async -> Data?
     /// Downloads a cover the player described by URL.
     func fetchArtwork(at url: URL) async -> Data?
+    /// Asks one player to carry out a transport command.
+    func control(_ player: AppleScriptPlayer, _ command: SystemMediaCommand) async -> Bool
 }
 
 /// Asks the music players the user already has open what they are playing.
@@ -72,6 +74,9 @@ final class AppleScriptMediaProvider: SystemMediaProvider {
     private var consumers = 0
     private var ticker: (any MediaTimerToken)?
     private var properties = SystemMediaProperties()
+    /// The player whose state is currently being reported, and so the one a
+    /// transport command belongs to.
+    private var reading: AppleScriptPlayer?
     private var thumbnail: SystemMediaThumbnail?
     private var playback = SystemMediaPlaybackState.stopped
     private var timeline: SystemMediaTimeline?
@@ -167,7 +172,16 @@ final class AppleScriptMediaProvider: SystemMediaProvider {
         availability = .unavailable(reason: reason)
     }
 
+    /// Controls the player this provider is reading, not a fixed one: a
+    /// command aimed at Music while Spotify is playing would change the wrong
+    /// thing, or nothing.
+    func send(_ command: SystemMediaCommand) async -> Bool {
+        guard let player = reading else { return false }
+        return await runner.control(player, command)
+    }
+
     private func apply(_ snapshot: AppleScriptNowPlaying) {
+        reading = snapshot.player
         if snapshot.properties != properties {
             properties = snapshot.properties
             onPropertiesChanged?(snapshot.properties)
@@ -252,6 +266,23 @@ final class NSAppleScriptNowPlayingRunner: AppleScriptRunning {
             (response as? HTTPURLResponse).map({ $0.statusCode < 400 }) ?? true
         else { return nil }
         return data
+    }
+
+    /// Tells one player to carry out a transport command.
+    ///
+    /// Both players understand the same three verbs, so the command maps
+    /// directly. Run off the main thread like every other Apple Event here: a
+    /// busy player can take a while to answer.
+    func control(_ player: AppleScriptPlayer, _ command: SystemMediaCommand) async -> Bool {
+        let verb = switch command {
+        case .togglePlayPause: "playpause"
+        case .nextTrack: "next track"
+        case .previousTrack: "previous track"
+        }
+        // Addressed by bundle identifier, as every other script here is: a
+        // name can be localised or claimed by something else.
+        let source = "tell application id \"\(player.bundleIdentifier)\" to \(verb)"
+        return await offMainThread { Self.run(source) != nil }
     }
 
     private func offMainThread<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {

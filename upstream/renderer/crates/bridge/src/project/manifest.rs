@@ -596,7 +596,9 @@ mod tests {
 /// button does nothing, which is what an unbound shortcut already did.
 fn user_shortcut_options() -> Vec<ComboOption> {
     vec![
-        ComboOption { label: "None".to_owned(), value: String::new() },
+        // Not "None": the panel already uses that for deselecting, and this
+        // is a button that does nothing rather than an empty selection.
+        ComboOption { label: "No action".to_owned(), value: String::new() },
         ComboOption { label: "Play / Pause".to_owned(), value: "media:playpause".to_owned() },
         ComboOption { label: "Next Track".to_owned(), value: "media:next".to_owned() },
         ComboOption { label: "Previous Track".to_owned(), value: "media:previous".to_owned() },

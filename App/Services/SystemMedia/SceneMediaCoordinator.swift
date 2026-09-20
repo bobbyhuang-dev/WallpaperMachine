@@ -6,6 +6,7 @@ final class SceneMediaCoordinator {
     private let bridge: WallpaperBridge
     private let provider: any SystemMediaProvider
     private var task: Task<Void, Never>?
+    private var shortcuts: Task<Void, Never>?
     private var consuming = false
     private var properties = SystemMediaProperties()
     private var playback = SystemMediaPlaybackState.stopped
@@ -38,12 +39,50 @@ final class SceneMediaCoordinator {
                 do { try await Task.sleep(for: .seconds(1)) } catch { break }
             }
         }
+        startShortcuts()
     }
 
     func stop() {
         task?.cancel()
         task = nil
+        shortcuts?.cancel()
+        shortcuts = nil
         if consuming { provider.removeConsumer(); consuming = false }
+    }
+
+    /// Waits for wallpaper button presses and carries out what their user bound
+    /// them to.
+    ///
+    /// A long wait, not a poll: the bridge returns only when a press arrives,
+    /// so an untouched wallpaper costs nothing. The loop ends rather than spins
+    /// if the bridge stops reporting.
+    private func startShortcuts() {
+        guard shortcuts == nil else { return }
+        shortcuts = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let bridge = self?.bridge else { return }
+                let event: BridgeUserShortcut
+                do {
+                    event = try await bridge.nextUserShortcut()
+                } catch {
+                    AppLog.warn("Stopped waiting for wallpaper shortcuts.")
+                    return
+                }
+                guard let self, !Task.isCancelled else { return }
+                await self.perform(event)
+            }
+        }
+    }
+
+    /// Carries out one press, or nothing.
+    ///
+    /// The value is the user's own choice for that property; a wallpaper that
+    /// names a property its user left unbound gets silence, which is what an
+    /// unbound button already did.
+    private func perform(_ event: BridgeUserShortcut) async {
+        guard let command = SystemMediaCommand(rawValue: event.value) else { return }
+        if await provider.send(command) { return }
+        AppLog.warn("No media player took a wallpaper's transport command.")
     }
 
     private func refresh() async {

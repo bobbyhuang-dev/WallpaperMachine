@@ -4,6 +4,12 @@ import Foundation
 protocol SystemMediaStreaming: AnyObject {
     func start(receive: @escaping (Data) -> Void, ended: @escaping () -> Void) throws
     func stop()
+    /// Asks the now-playing application to carry out one `MRCommand`.
+    ///
+    /// Separate from the stream it shares a process image with: reading what is
+    /// playing runs for as long as a wallpaper wants it, and changing it is one
+    /// short-lived invocation.
+    func send(command: Int) async -> Bool
 }
 
 /// Runs the bundled, pinned adapter only while a wallpaper consumes media data.
@@ -45,6 +51,31 @@ final class BundledSystemMediaStream: SystemMediaStreaming {
         process = task
         output = pipe
         do { try task.run() } catch { stop(); throw error }
+    }
+
+    /// One short-lived process, never on the main actor: a player that is slow
+    /// to answer must not stall the UI, and this must not disturb the stream a
+    /// wallpaper is already reading.
+    func send(command: Int) async -> Bool {
+        guard let script = bundle.url(forResource: "mediaremote-adapter", withExtension: "pl"),
+              let frameworks = bundle.privateFrameworksURL else { return false }
+        let framework = frameworks.appendingPathComponent("MediaRemoteAdapter.framework").path
+        let path = script.path
+        return await Task.detached(priority: .userInitiated) {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+            task.arguments = [path, framework, "send", String(command)]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+            do {
+                try task.run()
+            } catch {
+                AppLog.warn("The media adapter could not run a transport command.")
+                return false
+            }
+            task.waitUntilExit()
+            return task.terminationStatus == 0
+        }.value
     }
 
     func stop() {
@@ -125,6 +156,23 @@ final class AdapterSystemMediaProvider: SystemMediaProvider {
         if let thumbnail { onThumbnailChanged?(thumbnail) }
         onPlaybackChanged?(playback)
         emitTimeline()
+    }
+
+    /// Hands the command to whichever application is currently now-playing.
+    ///
+    /// The same bundled, pinned adapter that reports the state, asked once to
+    /// change it.
+    func send(_ command: SystemMediaCommand) async -> Bool {
+        await stream.send(command: Self.adapterCommand(for: command))
+    }
+
+    /// `MRCommand` identifiers, from the adapter's own header.
+    private static func adapterCommand(for command: SystemMediaCommand) -> Int {
+        switch command {
+        case .togglePlayPause: 2
+        case .nextTrack: 4
+        case .previousTrack: 5
+        }
     }
 
     private func fail() {

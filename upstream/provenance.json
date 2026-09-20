@@ -6,7 +6,7 @@
     "license": "BSD-3-Clause",
     "directory": "upstream/mediaremote-adapter",
     "modified": false,
-    "note": "Built as an embedded, unlinked arm64 framework by project.yml. The bundled Perl entry point reads system now-playing metadata only while a wallpaper has media integration enabled. The test client and playback-control commands are not invoked."
+    "note": "Built as an embedded, unlinked arm64 framework by project.yml. The bundled Perl entry point reads system now-playing metadata only while a wallpaper has media integration enabled. Its `send` command is now invoked as well, but only for the three transport actions a user can bind to a wallpaper's own `usershortcut` property (TogglePlayPause, NextTrack, PreviousTrack), only for a wallpaper listed by system_media_scene_handles, and only as a short-lived process off the main actor. A wallpaper cannot name a command: it names one of its own properties, and the value its user chose decides what happens. The test client is not invoked."
   },
   "sceneMediaChanges": "2026-09-20: SceneScript video.isPlaying, vector.mix and MediaPlaybackEvent compatibility; native host media snapshots routed through the bridge and core actor to scene scripts, $mediaThumbnail and $mediaPreviousThumbnail. Effect shaders receive owner layer and screen projection matrices; empty scenes initialize their camera pointer. Shader pipeline revision 6 reserves array varying locations, narrows unambiguous vector function arguments, and shares compatible custom uniform vector prefixes across stages. Synthetic media events/artwork and asset inspection options added to the offscreen probe. Regression coverage in Swift, bridge, shader and C++ tests.",
   "project": "mac-wallpaper-engine",

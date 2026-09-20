@@ -25,6 +25,15 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — Corrected: the deployment target had to move, not disappear
+
+The fix below dropped MACOSX_DEPLOYMENT_TARGET from cargo's environment outright. That variable is also what cmake-rs turns into CMAKE_OSX_DEPLOYMENT_TARGET for the C++ engine, so dropping it silently rebuilt the engine against the SDK default instead of the app's minimum. The 55 s build that looked like a success had reused C++ objects from an earlier run built with the pin.
+
+- Measured on a clean build of the renderer crate: with the variable the engine archive reports `minos 26.0`, without it `minos 27.0`
+- The pin is renamed rather than removed -- `cargo_environment()` exports `OWE_MACOSX_DEPLOYMENT_TARGET`, and the crate build script passes it as CMAKE_OSX_DEPLOYMENT_TARGET with rerun-if-env-changed, so the host proc-macro dylibs stay loadable and the engine keeps the app\s minimum
+- `cargo clean --release` then `cargo build --release --workspace` — clean build passes, archive at minos 26.0
+- `scripts/check_renderer.py` clean — 10 generated cases pixels_equal=True; `scripts/tests` 99 passed
+
 ## 2026-09-21 — A pinned deployment target was breaking every release renderer build
 
 scripts/build.py handed cargo a MACOSX_DEPLOYMENT_TARGET. Cargo builds proc-macro crates and build scripts for the host and then dlopens them in the running compiler, and the pinned host dylibs this toolchain produces are rejected at load with "mis-aligned LINKEDIT" -- which rustc reports as `can't find crate for <macro>`, so arc-swap, tokio, zerocopy, miette, futures-util and uniffi_meta all failed to compile. Any renderer release build was dead; --swift-only hid it by skipping cargo.
@@ -109,13 +118,3 @@ Two fixes the reported symptoms pointed at. MEDIA_EVENT_JSON was dropped wheneve
 - `python3 scripts/test.py` — 523 passed, 0 failed, 11 skipped of 534. The first run failed `ControlPanelShellTests.testFirstRunGuideCovers…`, which passes 10/10 targeted both with and without these changes and is flaky under the new parallel runner, not a regression here
 - `python3 scripts/check_renderer.py` — exit 0, adaptive-20260920-215805; `python3 scripts/build.py --configuration Release` — exit 0
 - Not covered by an automated test: the SceneWallpaper half of both fixes (retain/replay, and publishing the surface size). No harness constructs SceneWallpaper with a surface and a runtime — the binding tests never load a scene and the Metal smoke drives MetalRender directly
-
-## 2026-09-20 — Attributing the per-scene diffs behind the annotation-default fix
-
-The entry below reported three scenes changing and called them wall-clock text. Re-measured with both probe binaries built first and run back to back, which is the only way the clock and the async text layout hold still.
-
-- 3665954520 — text layers identical, 0.509% changed at max delta 9 (sub-perceptual); the 5.39% first measured was a minute roll plus that scene`s time-varying grain
-- 3662790108 — not the clock: the same binary run twice changes 0.531% at max 765 and its text layers still disagree on raster size for identical strings, so that scene is unstable run to run through the text layout worker
-- 2998757800 — 205 px, a clock digit
-- Unchanged: 6 of 10 scenes byte-identical; the only attributable change is 3280146735`s cover at 0.54%
-- `layer_texture_reference_test` — 11 passed. The regression test now pins both halves: with the combo off the authored slot 0 survives and the defaulted slot 1 is left unbound. It fails on both assertions with the parser change reverted

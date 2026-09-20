@@ -63,18 +63,21 @@ def build_environment():
 
 
 def cargo_environment():
-    """The build environment with the deployment target left off.
+    """The build environment with the deployment target renamed for cargo.
 
     Cargo builds proc-macro crates and build scripts for the host and then
-    dlopens them in the running compiler. Pinning a deployment target applies
-    to those host dylibs too, and the ones this toolchain then produces are
+    dlopens them in the running compiler. A pinned deployment target applies to
+    those host dylibs too, and the ones this toolchain then produces are
     rejected at load with "mis-aligned LINKEDIT" -- which the compiler reports
     as `can't find crate for <macro>`, so every crate behind a derive fails to
-    build. Xcode still sets its own deployment target for the app, and the
-    crates ship a staticlib the app links, so nothing here needs the pin.
+    build.
+
+    The pin is not dropped, only moved: the renderer crate's build script reads
+    `OWE_MACOSX_DEPLOYMENT_TARGET` and hands it to CMake, so the C++ engine is
+    still built for the same minimum as the app that links it.
     """
     result = build_environment()
-    result.pop("MACOSX_DEPLOYMENT_TARGET", None)
+    result["OWE_MACOSX_DEPLOYMENT_TARGET"] = result.pop("MACOSX_DEPLOYMENT_TARGET", "26.0")
     return result
 
 

@@ -33,13 +33,24 @@ fn main() {
     // only primitive C-compatible parameters around OWE renderer methods.
     generate_owe_backend_bindings(&owe_bindings_header);
 
-    let dst = cmake::Config::new(&owe_source)
+    // The deployment target is passed under its own name rather than through
+    // MACOSX_DEPLOYMENT_TARGET. Cargo also builds proc-macro crates for the
+    // host and dlopens them in the running compiler, and a host dylib linked
+    // against a pinned target is rejected at load -- reported as `can't find
+    // crate`, which takes out every crate behind a derive. Keeping the pin out
+    // of cargo's environment and re-supplying it here leaves the C++ engine
+    // built for the same minimum as the app that links it.
+    println!("cargo:rerun-if-env-changed=OWE_MACOSX_DEPLOYMENT_TARGET");
+    let mut config = cmake::Config::new(&owe_source);
+    config
         .out_dir(&cmake_out_dir)
         .define("BUILD_TESTING", "OFF")
         .define("BUILD_TESTS", "OFF")
-        .define("RUST_SHADER_FFI", "ON")
-        .build_target("wescene-renderer")
-        .build();
+        .define("RUST_SHADER_FFI", "ON");
+    if let Some(target) = env::var_os("OWE_MACOSX_DEPLOYMENT_TARGET") {
+        config.define("CMAKE_OSX_DEPLOYMENT_TARGET", target);
+    }
+    let dst = config.build_target("wescene-renderer").build();
     debug_assert_eq!(dst, cmake_out_dir);
 
     emit_static_link_flags(&cmake_build_dir);

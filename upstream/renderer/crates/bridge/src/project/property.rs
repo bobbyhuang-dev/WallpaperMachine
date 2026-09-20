@@ -74,14 +74,7 @@ pub enum PropertyMetadata {
         filter: FileFilter,
         mode: DirectoryMode,
     },
-    Texture {
-        /// Whether this project's manifest says a scene texture may be a video.
-        ///
-        /// Wallpaper Engine lets a wallpaper accept a video where it accepts an
-        /// image, and offering only images is how a user ends up unable to pick
-        /// the file the wallpaper was built around.
-        accepts_video: bool,
-    },
+    Texture,
     Unknown,
 }
 

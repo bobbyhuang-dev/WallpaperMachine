@@ -86,15 +86,6 @@ impl ProjectModel {
             .filter(|file| !file.is_empty())
             .map(str::to_string);
 
-        // `supportsvideo` is the manifest saying a scene texture may be a
-        // video file, not only an image.
-        let accepts_video = obj
-            .get("general")
-            .and_then(Value::as_object)
-            .and_then(|general| general.get("supportsvideo"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-
         let properties = obj
             .get("general")
             .and_then(Value::as_object)
@@ -200,7 +191,7 @@ impl ProjectModel {
                             filter: parse_file_filter(object),
                             mode: parse_directory_mode(object),
                         },
-                        PropertyKind::Texture => PropertyMetadata::Texture { accepts_video },
+                        PropertyKind::Texture => PropertyMetadata::Texture,
                         PropertyKind::Unknown(_) => PropertyMetadata::Unknown,
                     };
                     let label_html = object
@@ -490,10 +481,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(m.properties[0].kind, PropertyKind::Texture);
-        assert_eq!(
-            m.properties[0].metadata,
-            PropertyMetadata::Texture { accepts_video: false }
-        );
+        assert_eq!(m.properties[0].metadata, PropertyMetadata::Texture);
         assert_eq!(
             m.properties[0].default_value,
             PropertyValue::String(String::new())
@@ -504,29 +492,6 @@ mod tests {
             PropertyValue::String("materials/x.tex".into())
         );
     }
-
-    #[test]
-    fn a_manifest_that_supports_video_says_so_on_its_texture_pickers() {
-        // Wallpaper Engine lets a wallpaper take a video wherever it takes an
-        // image, declared once for the project. A picker that does not know
-        // cannot offer the file the wallpaper was built around.
-        let m = ProjectModel::parse(
-            "1",
-            r#"{
-            "type":"scene","general":{"supportsvideo":true,"properties":{
-                "backgroundimage":{"type":"scenetexture","value":"","order":1,"text":"Custom Image"}
-            }}
-        }"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            m.properties[0].metadata,
-            PropertyMetadata::Texture { accepts_video: true },
-            "a project that accepts video left its picker offering images only"
-        );
-    }
-
 
     #[test]
     fn file_and_directory_properties_carry_their_filters_and_modes() {

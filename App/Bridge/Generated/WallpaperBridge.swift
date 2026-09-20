@@ -4665,11 +4665,6 @@ public struct BridgePropertyDescriptor {
      * Present only on directory properties.
      */
     public var directoryMode: BridgeDirectoryMode?
-    /**
-     * Scene-texture properties only: this project's manifest says a video file
-     * is as acceptable here as an image.
-     */
-    public var textureAcceptsVideo: Bool
     public var dirty: Bool
     public var canRestoreDefaults: Bool
     public var enabled: Bool
@@ -4699,11 +4694,7 @@ public struct BridgePropertyDescriptor {
          */fileFilter: BridgeFileFilter?, 
         /**
          * Present only on directory properties.
-         */directoryMode: BridgeDirectoryMode?, 
-        /**
-         * Scene-texture properties only: this project's manifest says a video file
-         * is as acceptable here as an image.
-         */textureAcceptsVideo: Bool, dirty: Bool, canRestoreDefaults: Bool, enabled: Bool, 
+         */directoryMode: BridgeDirectoryMode?, dirty: Bool, canRestoreDefaults: Bool, enabled: Bool, 
         /**
          * File and directory properties only: the app holds its own copy of this
          * property's assets in managed storage, so deleting or re-downloading the
@@ -4726,7 +4717,6 @@ public struct BridgePropertyDescriptor {
         self.comboOptions = comboOptions
         self.fileFilter = fileFilter
         self.directoryMode = directoryMode
-        self.textureAcceptsVideo = textureAcceptsVideo
         self.dirty = dirty
         self.canRestoreDefaults = canRestoreDefaults
         self.enabled = enabled
@@ -4767,9 +4757,6 @@ extension BridgePropertyDescriptor: Equatable, Hashable {
         if lhs.directoryMode != rhs.directoryMode {
             return false
         }
-        if lhs.textureAcceptsVideo != rhs.textureAcceptsVideo {
-            return false
-        }
         if lhs.dirty != rhs.dirty {
             return false
         }
@@ -4801,7 +4788,6 @@ extension BridgePropertyDescriptor: Equatable, Hashable {
         hasher.combine(comboOptions)
         hasher.combine(fileFilter)
         hasher.combine(directoryMode)
-        hasher.combine(textureAcceptsVideo)
         hasher.combine(dirty)
         hasher.combine(canRestoreDefaults)
         hasher.combine(enabled)
@@ -4828,7 +4814,6 @@ public struct FfiConverterTypeBridgePropertyDescriptor: FfiConverterRustBuffer {
                 comboOptions: FfiConverterSequenceTypeBridgeComboOption.read(from: &buf), 
                 fileFilter: FfiConverterOptionTypeBridgeFileFilter.read(from: &buf), 
                 directoryMode: FfiConverterOptionTypeBridgeDirectoryMode.read(from: &buf), 
-                textureAcceptsVideo: FfiConverterBool.read(from: &buf), 
                 dirty: FfiConverterBool.read(from: &buf), 
                 canRestoreDefaults: FfiConverterBool.read(from: &buf), 
                 enabled: FfiConverterBool.read(from: &buf), 
@@ -4848,7 +4833,6 @@ public struct FfiConverterTypeBridgePropertyDescriptor: FfiConverterRustBuffer {
         FfiConverterSequenceTypeBridgeComboOption.write(value.comboOptions, into: &buf)
         FfiConverterOptionTypeBridgeFileFilter.write(value.fileFilter, into: &buf)
         FfiConverterOptionTypeBridgeDirectoryMode.write(value.directoryMode, into: &buf)
-        FfiConverterBool.write(value.textureAcceptsVideo, into: &buf)
         FfiConverterBool.write(value.dirty, into: &buf)
         FfiConverterBool.write(value.canRestoreDefaults, into: &buf)
         FfiConverterBool.write(value.enabled, into: &buf)

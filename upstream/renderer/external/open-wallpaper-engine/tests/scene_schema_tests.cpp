@@ -31,6 +31,7 @@
 #include "wpscene/WPImageObject.h"
 #include "wpscene/WPMiscObject.hpp"
 #include "wpscene/WPParticleObject.h"
+#include "Scene/Parse/WPSoundParser.hpp"
 #include "wpscene/WPSoundObject.h"
 #include "wpscene/WPScene.h"
 #include "Utils/Logging.h"
@@ -4392,10 +4393,18 @@ TEST(SceneSchema, WithdrawingConsentDropsWhatWasRetained) {
         << "consent was withdrawn and what was playing then was replayed anyway";
 }
 
-TEST(SceneSchema, ASoundVolumeBoundToASliderFollowsTheUsersChoice) {
-    // A slider-bound volume arrives as an object, not a number. Reading only
-    // the number kept the author's default, so the "Buttons Volume" slider on
-    // this kind of wallpaper moved nothing.
+TEST(SceneSchema, ASoundFollowsTheSliderValueTheUserActuallyHas) {
+    // scene.json carries the author's number beside the binding. Reading only
+    // that number gives a sound whose volume is whatever the wallpaper shipped
+    // with, so the user's own slider changes nothing. The binding names the
+    // property; the property is where the user's value lives.
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {
+        .project_properties = {
+            { "buttonsvolume", RuntimeScalarValue::Float(0.9f) },
+        },
+    });
+    ASSERT_NE(runtime, nullptr);
+
     wpscene::WPSoundObject object;
     fs::VFS               vfs;
     const auto            json = nlohmann::json::parse(R"({
@@ -4404,21 +4413,32 @@ TEST(SceneSchema, ASoundVolumeBoundToASliderFollowsTheUsersChoice) {
       "playbackmode": "single",
       "volume": {"user": "buttonsvolume", "value": 0.3}
     })");
-
     ASSERT_TRUE(object.FromJson(json, vfs));
-    EXPECT_FLOAT_EQ(object.volume, 0.3f) << "the author's value was lost with the binding";
-    EXPECT_EQ(object.volume_user, "buttonsvolume")
-        << "the slider this sound follows was not recorded, so it can never follow it";
+    EXPECT_FLOAT_EQ(object.volume, 0.3f) << "the author's number is still read";
+    EXPECT_EQ(object.volume_user, "buttonsvolume");
+
+    audio::SoundManager sound_manager;
+    WPSoundParser::Parse(object, vfs, sound_manager, runtime.get());
+
+    ASSERT_TRUE(runtime->HasSoundLayer("button_press"));
+    EXPECT_FLOAT_EQ(runtime->SoundLayerVolume("button_press"), 0.9f)
+        << "the sound kept the number scene.json shipped with instead of the user's slider";
 }
 
-TEST(SceneSchema, APlainSoundVolumeIsStillANumber) {
+TEST(SceneSchema, ASoundWithNoBindingKeepsTheAuthorsVolume) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    ASSERT_NE(runtime, nullptr);
+
     wpscene::WPSoundObject object;
     fs::VFS               vfs;
     const auto            json = nlohmann::json::parse(R"({
       "name": "click", "sound": ["a.ogg"], "volume": 0.75
     })");
-
     ASSERT_TRUE(object.FromJson(json, vfs));
-    EXPECT_FLOAT_EQ(object.volume, 0.75f);
     EXPECT_TRUE(object.volume_user.empty());
+
+    audio::SoundManager sound_manager;
+    WPSoundParser::Parse(object, vfs, sound_manager, runtime.get());
+    EXPECT_FLOAT_EQ(runtime->SoundLayerVolume("click"), 0.75f);
 }
+

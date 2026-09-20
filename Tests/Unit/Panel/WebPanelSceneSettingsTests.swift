@@ -429,7 +429,7 @@ final class WebPanelAssetProvenanceTests: XCTestCase {
   ) -> BridgePropertyDescriptor {
     BridgePropertyDescriptor(
       id: id, kind: .file, labelHtml: id, value: value, defaultValue: .empty, slider: nil,
-      comboOptions: [], fileFilter: nil, directoryMode: nil, textureAcceptsVideo: false, dirty: false,
+      comboOptions: [], fileFilter: nil, directoryMode: nil, dirty: false,
       canRestoreDefaults: false, enabled: true, assetManaged: assetManaged,
       assetMissing: assetMissing, assetSourcePath: assetSourcePath)
   }

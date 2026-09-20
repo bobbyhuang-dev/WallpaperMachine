@@ -178,13 +178,6 @@ impl BridgeActorState {
                             ),
                             _ => (None, None),
                         };
-                        // A texture the manifest says may be a video: offering
-                        // only images is how a user ends up unable to pick the
-                        // file their wallpaper was built around.
-                        let texture_accepts_video = matches!(
-                            property.metadata,
-                            PropertyMetadata::Texture { accepts_video: true }
-                        );
                         // Only file and directory properties have a user asset behind
                         // them; a texture picker names a path inside the package, which
                         // the app never imports and must never report as missing.
@@ -225,7 +218,6 @@ impl BridgeActorState {
                             combo_options,
                             file_filter,
                             directory_mode,
-                            texture_accepts_video,
                             dirty,
                             can_restore_defaults: dirty,
                             enabled: true,

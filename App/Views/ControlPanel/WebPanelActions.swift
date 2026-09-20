@@ -211,17 +211,13 @@ extension WebPanelController {
       let propertyID = try request.string("propertyID")
       let options = try await store.wallpaperOptionsSnapshotAsync(wallpaperId: id)
       guard
-        let property = options.properties.first(where: {
+        options.properties.contains(where: {
           $0.id == propertyID && $0.enabled && $0.kind == .texture
         })
       else { throw WebPanelRequest.invalid }
       let panel = NSOpenPanel()
-      // A wallpaper whose manifest declares `supportsvideo` accepts a video
-      // wherever it accepts an image. Offering only images is how a user ends
-      // up unable to pick the file the wallpaper was built around.
-      panel.title = property.textureAcceptsVideo
-        ? String(localized: "Choose Image or Video") : String(localized: "Choose Image")
-      panel.allowedContentTypes = property.textureAcceptsVideo ? [.image, .movie] : [.image]
+      panel.title = "Choose Image"
+      panel.allowedContentTypes = [.image]
       if await choose(panel), let url = panel.url {
         try await store.editPropertyAsync(
           wallpaperId: id, propertyId: propertyID, value: .string(value: url.path))

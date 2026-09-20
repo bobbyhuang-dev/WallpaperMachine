@@ -15,6 +15,16 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — engine.openUserShortcut existed nowhere, so every transport button threw
+
+This wallpaper's play/pause, next and previous buttons each have a cursorDown handler whose only statement is engine.openUserShortcut("<property>"). That member was not registered on the engine object at all, so the call threw TypeError, the handler aborted, and the press did nothing -- which is the whole of the reported 切歌无效, not a missing media permission.
+
+- The binding resolves the named property against the wallpaper\s own declared properties and queues the request with that property\s VALUE; the three properties here are usershortcut-typed with empty values, so acting on the name would be the host deciding for the user
+- `OpenUserShortcutCarriesTheValueTheUserChose` — two presses arrive in order with their configured values, an unbound one still reports with nothing to run, and taking twice does not replay
+- `OpenUserShortcutRefusesAPropertyTheWallpaperDoesNotDeclare` — naming a property the wallpaper does not declare raises a script error instead of passing silently
+- `UndrainedShortcutRequestsKeepTheNewestPresses` — 40 requests with no drain keep at most 16, and the newest survives
+- `scenescript_media_event_smoke` 19 passed; `scene_schema_tests` 74 passed plus the two known 5 s pointer timeouts
+
 ## 2026-09-21 — Corrected: two separate Metal divergences, and the blobs are not the clouds' negative space
 
 The entry below overstated what was measured. It headlined the clouds pass while admitting the flattening pass was unknown; what was actually shown is that the clouds pass's INPUT is identical on both backends (white 6520x3460 card) -- its output was never read back on either. It also claimed the blob structure agrees and only tone differs, which no measurement supported.

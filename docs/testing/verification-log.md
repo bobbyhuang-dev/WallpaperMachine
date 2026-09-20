@@ -25,6 +25,15 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — Corrected: two sound claims were wrong, and the video picker promised what cannot work
+
+Three things in the entries below do not survive checking. The sound volume was never dropped -- _GetJsonValue reads a node's `value` when it is an object (WPJson.cpp:47-50), so 0.3 parsed fine; what was actually wrong is narrower, and the volume now follows the user's live property instead of the number scene.json shipped with. The negative check cited was a compile failure on the old header, which only shows a field exists.
+
+- Replaced with `ASoundFollowsTheSliderValueTheUserActuallyHas`, which parses through WPSoundParser and reads the registered stream: reverting only the resolution in Parse (header kept) fails it with "the sound kept the number scene.json shipped with instead of the user\s slider"
+- The video-picker change is reverted. This scene binds `"usertextures": ["backgroundimage"]` — a plain property name — and ApplySystemUserTextures substitutes only `$mediaThumbnail`/`$mediaPreviousThumbnail`, so a chosen path never reaches the material. There is also no VFS mount for user-chosen files, so an absolute path could not load even if it did
+- Widening the file filter alone ships a picker that accepts a video and changes nothing, which is a promise the app cannot keep. The real work is property-named texture substitution plus a user-asset mount with the path and permission rules that boundary needs, and video into a texture slot
+- `scripts/test.py` 526 passed; `cargo test --release` core 213 / bridge 317; `scene_schema_tests` 76 passed plus the two known pointer timeouts
+
 ## 2026-09-21 — Release build carrying the transport, sound and video-picker fixes
 
 python3 scripts/build.py --configuration Release, after the full gate.
@@ -103,13 +112,3 @@ SceneWallpaper drains the runtime's requests after the tick that produced them a
 - Enabling that send changes the bundled adapter from read-only to control, which the mediaremote-adapter provenance note currently states is not done -- that note has to change with it
 - `scripts/test.py` — 523 passed, 0 failed, 11 skipped of 534
 - First run failed on CodeSign with "resource fork, Finder information, or similar detritus not allowed" on the Debug app; `xattr -cr` on the product cleared it, unrelated to any change here
-
-## 2026-09-21 — engine.openUserShortcut existed nowhere, so every transport button threw
-
-This wallpaper's play/pause, next and previous buttons each have a cursorDown handler whose only statement is engine.openUserShortcut("<property>"). That member was not registered on the engine object at all, so the call threw TypeError, the handler aborted, and the press did nothing -- which is the whole of the reported 切歌无效, not a missing media permission.
-
-- The binding resolves the named property against the wallpaper\s own declared properties and queues the request with that property\s VALUE; the three properties here are usershortcut-typed with empty values, so acting on the name would be the host deciding for the user
-- `OpenUserShortcutCarriesTheValueTheUserChose` — two presses arrive in order with their configured values, an unbound one still reports with nothing to run, and taking twice does not replay
-- `OpenUserShortcutRefusesAPropertyTheWallpaperDoesNotDeclare` — naming a property the wallpaper does not declare raises a script error instead of passing silently
-- `UndrainedShortcutRequestsKeepTheNewestPresses` — 40 requests with no drain keep at most 16, and the newest survives
-- `scenescript_media_event_smoke` 19 passed; `scene_schema_tests` 74 passed plus the two known 5 s pointer timeouts

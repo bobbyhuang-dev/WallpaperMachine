@@ -31,6 +31,7 @@
 #include "wpscene/WPImageObject.h"
 #include "wpscene/WPMiscObject.hpp"
 #include "wpscene/WPParticleObject.h"
+#include "wpscene/WPSoundObject.h"
 #include "wpscene/WPScene.h"
 #include "Utils/Logging.h"
 #include "Scripting/ScriptEngine.hpp"
@@ -4389,4 +4390,35 @@ TEST(SceneSchema, WithdrawingConsentDropsWhatWasRetained) {
 
     EXPECT_FALSE(scene->runtime->NodeVisible("probe"))
         << "consent was withdrawn and what was playing then was replayed anyway";
+}
+
+TEST(SceneSchema, ASoundVolumeBoundToASliderFollowsTheUsersChoice) {
+    // A slider-bound volume arrives as an object, not a number. Reading only
+    // the number kept the author's default, so the "Buttons Volume" slider on
+    // this kind of wallpaper moved nothing.
+    wpscene::WPSoundObject object;
+    fs::VFS               vfs;
+    const auto            json = nlohmann::json::parse(R"({
+      "name": "button_press",
+      "sound": ["sounds/button_press.ogg"],
+      "playbackmode": "single",
+      "volume": {"user": "buttonsvolume", "value": 0.3}
+    })");
+
+    ASSERT_TRUE(object.FromJson(json, vfs));
+    EXPECT_FLOAT_EQ(object.volume, 0.3f) << "the author's value was lost with the binding";
+    EXPECT_EQ(object.volume_user, "buttonsvolume")
+        << "the slider this sound follows was not recorded, so it can never follow it";
+}
+
+TEST(SceneSchema, APlainSoundVolumeIsStillANumber) {
+    wpscene::WPSoundObject object;
+    fs::VFS               vfs;
+    const auto            json = nlohmann::json::parse(R"({
+      "name": "click", "sound": ["a.ogg"], "volume": 0.75
+    })");
+
+    ASSERT_TRUE(object.FromJson(json, vfs));
+    EXPECT_FLOAT_EQ(object.volume, 0.75f);
+    EXPECT_TRUE(object.volume_user.empty());
 }

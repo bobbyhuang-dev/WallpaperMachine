@@ -15,6 +15,15 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-20 — Native Metal draws this scene's cloud background wrong, and the harnesses were not comparable
+
+The extra frosted shape beside the media card reproduces offscreen, and only on Native Metal. At a matched 5120x2160 raster the Metal background is huge bright blobs (p99 luma 202) where Vulkan is a smooth grey wash (p99 121); the scene's own media card and clock are correct on both. The two harnesses were not comparable until now: the Vulkan probe never set texel size, so every neighbour-tap effect it drew sampled at a 1920x1080 step, and the Metal smoke rasterized 960x540 against a 5120x2160 scene target.
+
+- Ruled out by measurement, not by reading: texel size (mean 82.2 vs 82.3 once the probe reports it honestly), static subgraph reuse (21k of 11M pixels differ with WE_TEST_SCENE_OPTIMIZATION=0), shader translation (every program compiles; the array varying `v_TexCoord[13]` reaches MSL with distinct taps at loc0..loc12), and the uniform values themselves
+- Traced both backends at the clouds pass: g_Color1=[0,0,0], g_Color2=[0.141176,...], g_CloudScales=[1,1,1,0.5], g_Texture0Resolution=[6520,3460,...] agree exactly, and every one resolves to a real reflection member on Metal
+- Repro: `WE_TEST_METAL_SURFACE=5120x2160 WE_TEST_METAL_PROJECTS=<project.json> metal_scene_draw_smoke --gtest_filter=*LocalProjectsNamed*` against `WE_TEST_FRAMES=120 offscreen_scene_probe`
+- `metal_scene_draw_smoke` 33 passed; not yet isolated, so nothing is claimed fixed
+
 ## 2026-09-20 — The consent test now pins the clear it is named for
 
 As first written, WithdrawingConsentDropsWhatWasRetained passed with the whole fix removed: while the setting is off both the replay and the runtime's own gate refuse to dispatch, so the assertion could not tell retention-with-clear from no retention at all.

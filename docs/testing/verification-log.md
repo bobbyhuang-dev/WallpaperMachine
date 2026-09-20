@@ -25,6 +25,15 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — The button-click handler does not throw; its volume slider was the thing that did nothing
+
+The reported throw from thisScene.getLayer('button_press').play() does not reproduce: registered as a layer script and driven with a cursor-down, the handler runs with zero script errors. play() on a layer that is not a sound layer sets a local flag rather than raising, so nothing there can throw.
+
+- What is really broken on this wallpaper: both of its sound layers bind volume to the `buttonsvolume` slider as {"user": …, "value": …}, and the parser read only numbers -- so the binding was dropped, the sounds kept the author default, and moving that slider changed nothing
+- `ASoundVolumeBoundToASliderFollowsTheUsersChoice` and `APlainSoundVolumeIsStillANumber` — the bound form keeps both the value and the property it follows, the plain form still parses as a number
+- `PressingAButtonWhoseSoundExistsPlaysIt` — the wallpaper\s own handler, run for real, reports no script error
+- `scene_schema_tests` 76 passed plus the two known pointer timeouts; `scenescript_media_event_smoke` 20 passed
+
 ## 2026-09-21 — Release build carrying the whole shortcut chain
 
 python3 scripts/build.py --configuration Release, the first full renderer release build since the deployment-target fix -- which is what made it possible at all.
@@ -106,12 +115,3 @@ Dumping every render target on the Metal side found the clouds layer's own input
 - Ruled out additionally this round: mip availability (clouds_256.tex ships 7 levels, both backends size the image and the sampler from image_slot.mipmaps.size()), the alpha write mask (write_alpha is output != _rt_default on both), and the Normal blend factors (One/Zero on both)
 - Still open: which pass compresses the range on Vulkan and not on Metal -- the post-processing layer runs blurprecise, bokeh_blur, blur, two color_grading instances and dithering
 - `scripts/check_renderer.py` clean -- 10 generated cases, pixels_equal=True, diagnostics=0 -- confirming the probe texel-size change shifted no expectation; `metal_scene_draw_smoke` 33 passed
-
-## 2026-09-20 — Native Metal draws this scene's cloud background wrong, and the harnesses were not comparable
-
-The extra frosted shape beside the media card reproduces offscreen, and only on Native Metal. At a matched 5120x2160 raster the Metal background is huge bright blobs (p99 luma 202) where Vulkan is a smooth grey wash (p99 121); the scene's own media card and clock are correct on both. The two harnesses were not comparable until now: the Vulkan probe never set texel size, so every neighbour-tap effect it drew sampled at a 1920x1080 step, and the Metal smoke rasterized 960x540 against a 5120x2160 scene target.
-
-- Ruled out by measurement, not by reading: texel size (mean 82.2 vs 82.3 once the probe reports it honestly), static subgraph reuse (21k of 11M pixels differ with WE_TEST_SCENE_OPTIMIZATION=0), shader translation (every program compiles; the array varying `v_TexCoord[13]` reaches MSL with distinct taps at loc0..loc12), and the uniform values themselves
-- Traced both backends at the clouds pass: g_Color1=[0,0,0], g_Color2=[0.141176,...], g_CloudScales=[1,1,1,0.5], g_Texture0Resolution=[6520,3460,...] agree exactly, and every one resolves to a real reflection member on Metal
-- Repro: `WE_TEST_METAL_SURFACE=5120x2160 WE_TEST_METAL_PROJECTS=<project.json> metal_scene_draw_smoke --gtest_filter=*LocalProjectsNamed*` against `WE_TEST_FRAMES=120 offscreen_scene_probe`
-- `metal_scene_draw_smoke` 33 passed; not yet isolated, so nothing is claimed fixed

@@ -25,12 +25,24 @@ struct WPSoundObject {
     bool                     startsilent { false };
     bool                     visible { true };
     std::string              name;
+    /// Project property this sound's volume follows, when the user bound one.
+    std::string              volume_user;
     std::vector<std::string> sound;
     std::vector<int32_t>     dependencies;
     nlohmann::json           field_bindings;
 
     bool FromJson(const nlohmann::json& json, fs::VFS&) {
-        GET_JSON_NAME_VALUE(json, "volume", volume);
+        // A slider-bound volume arrives as {"user": …, "value": …} rather than
+        // a number. Reading only the number kept the author's default and left
+        // the user's own slider doing nothing to this sound.
+        if (json.contains("volume") && json.at("volume").is_object()) {
+            GET_JSON_NAME_VALUE_NOWARN(json.at("volume"), "value", volume);
+            if (json.at("volume").contains("user") && json.at("volume").at("user").is_string()) {
+                volume_user = json.at("volume").at("user").get<std::string>();
+            }
+        } else {
+            GET_JSON_NAME_VALUE(json, "volume", volume);
+        }
         GET_JSON_NAME_VALUE_NOWARN(json, "muted", muted);
         GET_JSON_NAME_VALUE_NOWARN(json, "startsilent", startsilent);
         GET_JSON_NAME_VALUE(json, "playbackmode", playbackmode);

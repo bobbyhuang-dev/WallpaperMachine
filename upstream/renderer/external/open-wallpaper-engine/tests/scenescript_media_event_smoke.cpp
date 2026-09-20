@@ -652,5 +652,31 @@ TEST(SceneScriptMediaEventSmoke, UndrainedShortcutRequestsKeepTheNewestPresses) 
     EXPECT_EQ(requests.back().second, "39") << "the press still being waited on was dropped";
 }
 
+TEST(SceneScriptMediaEventSmoke, PressingAButtonWhoseSoundExistsPlaysIt) {
+    // The wallpaper's buttons click by asking the scene for the sound layer by
+    // name and playing it. A layer that is not a sound layer has no business
+    // being played, and a name that is one has to actually reach it.
+    auto runtime = wallpaper::CreateSceneRuntimeContext(wallpaper::SceneRuntimeBootstrap {});
+    ASSERT_NE(runtime, nullptr);
+
+    auto button = std::make_shared<wallpaper::SceneNode>();
+    runtime->RegisterNode("Button", button.get());
+    runtime->RegisterSceneScript(
+        R"JS(
+export function cursorDown(event) {
+    if (thisLayer.visible) {
+        thisScene.getLayer('button_press').play();
+    }
+}
+)JS",
+        "Button");
+
+    runtime->DispatchCursorDown();
+    runtime->Tick(1.0 / 60.0);
+
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u)
+        << "a button's click handler threw instead of playing its sound";
+}
+
 } // namespace
 } // namespace wallpaper

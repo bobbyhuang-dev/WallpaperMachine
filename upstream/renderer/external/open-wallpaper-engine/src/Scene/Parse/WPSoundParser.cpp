@@ -2,6 +2,7 @@
 
 #include "Audio/SampleMath.h"
 #include "Fs/VFS.h"
+#include "Runtime/DynamicValue.hpp"
 #include "Runtime/SceneRuntimeContext.hpp"
 #include "Utils/Logging.h"
 #include "wpscene/WPSoundObject.h"
@@ -149,9 +150,19 @@ std::size_t WPSoundStream::LoopIndex() {
 
 void WPSoundParser::Parse(const wpscene::WPSoundObject& obj, fs::VFS& vfs, audio::SoundManager& sm,
                           SceneRuntimeContext* runtime) {
+    // The user's own slider wins over the author's default when the author
+    // bound one: that binding is the whole point of the slider.
+    float volume = obj.volume;
+    if (runtime != nullptr && ! obj.volume_user.empty()) {
+        if (const auto* bound = runtime->FindPropertyValue(obj.volume_user);
+            bound != nullptr && bound->getType() == DynamicValue::UnderlyingType::Float) {
+            volume = bound->getFloat();
+        }
+    }
+
     WPSoundStream::Config config { .maxtime     = obj.maxtime,
                                    .mintime     = obj.mintime,
-                                   .volume      = audio::ClampVolume(obj.volume),
+                                   .volume      = audio::ClampVolume(volume),
                                    .muted       = obj.muted,
                                    .startsilent = obj.startsilent,
                                    .mode        = ParseSoundPlaybackMode(obj.playbackmode) };

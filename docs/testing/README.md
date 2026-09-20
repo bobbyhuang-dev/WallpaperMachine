@@ -8,7 +8,8 @@ How this project is verified, which layer a new test belongs in, and what
 - [manual-smoke.md](manual-smoke.md) — manual release smoke checklist
   (requires authorization; not automated).
 - [verification-log.md](verification-log.md) — dated history of what was
-  verified, with results and explicit gaps.
+  verified, with results and explicit gaps; the ten newest entries, with older
+  ones in [archive/](archive/).
 - [wallpaper-corpus.md](wallpaper-corpus.md) — local regression corpus
   checklist and the environment variables that point tests at private assets.
 
@@ -217,7 +218,9 @@ Mission Control cache refresh, and any visual timing. Those stay on
 5. **Use original synthetic fixtures** when you need content; do not check in
    Workshop packages or other copyrighted assets.
 6. **Record the result** in [verification-log.md](verification-log.md) with the
-   counts, the command, and what you did not verify.
+   counts, the command, and what you did not verify. Keep it to about ten
+   lines; a fact that outlives the round belongs in the doc that owns it, not
+   in the log.
 
 Naming, style and review rules are in [../conventions.md](../conventions.md);
 the contributor workflow is in [../../CONTRIBUTING.md](../../CONTRIBUTING.md).

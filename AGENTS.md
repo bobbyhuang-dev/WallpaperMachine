@@ -69,6 +69,9 @@ Read only task-relevant sections; keep this file to durable rules and routing.
   the user to quit/reopen. Never launch/quit automatically. Failed/blocked builds ≠ delivery.
 - Update the owning docs; index new/removed documents in [docs/README.md](docs/README.md).
   Record commands, results, skips and gaps newest-first in the
-  [verification log](docs/testing/verification-log.md). Historical results aren't current proof.
+  [verification log](docs/testing/verification-log.md), about ten lines per entry;
+  it keeps the ten newest, older ones move to `docs/testing/archive/`. Historical
+  results aren't current proof, so promote anything durable (known-failing tests,
+  recurring traps) into the owning doc instead of leaving it in the log.
   Report shared-workspace blockers and unchecked visual behavior explicitly.
 

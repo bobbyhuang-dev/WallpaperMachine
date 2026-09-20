@@ -583,7 +583,9 @@ conversion. Shader pipeline revision 4 invalidates previously compiled programs.
 ## Rust crates
 
 Run from `upstream/renderer` with the Homebrew environment from
-`scripts/build.py`:
+`scripts/build.py`. The first `cargo test` after that environment changes fails
+in its CMake configure step and succeeds on an unchanged retry, so a single
+configure failure is not a result:
 
 ```sh
 cargo test --release -p wallpaper-core --lib
@@ -653,11 +655,50 @@ SceneScript views.
   references undeclared `scriptProperties` and fails with the original
   `ScriptEngine.cpp` as well. It is not a regression; do not report it as one
   and do not claim it is fixed by excluding it.
+- **Pre-existing failures:** `SceneSchema.PointerCapabilityFollowsActualCommitsWithoutFirstFrame`
+  and `SceneSchema.MouseButtonCommitBaselineKeepsVideoGatingFromStickingNativeLatch`
+  in `scene_schema_tests` time out (`Wait`) waiting for a pointer-capability
+  callback after a scene commit. Both were reproduced on an unmodified HEAD
+  worktree, and both build a `Scene` by hand under the default Compatibility
+  preference, where `SelectSceneBackend` returns before any capability code.
+  `scene_schema_tests` is not in `scripts/check_renderer.py`; when you run it by
+  hand, expect these two and do not attribute them to your change.
+- **Stale decode cache, not a regression:** `video_source_input_test` shares
+  `$TMPDIR/wallpaper-engine-video` with the app and with earlier runs.
+  `ConcurrentPackagedOpensPublishExactlyOneFile` and
+  `EvictingTheCacheDoesNotDisturbAnOpenSource` count published files, so
+  leftovers from a previous run make them fail (`added.size()==2`). Delete that
+  directory and re-run the same binary before investigating.
+- **`tex_schema_tests` does not compile here.** `tests/tex_schema_tests.cpp`
+  includes `<lz4.h>`, but `src/CMakeLists.txt` links `PkgConfig::LZ4` `PRIVATE`
+  and `tests/CMakeLists.txt` does not link it for this executable, so the
+  include directory never propagates. It is outside
+  `scripts/check_renderer.py`'s target list, so the gate is unaffected; the
+  JPEG/EXIF orientation coverage it owns is therefore unexercised until the
+  target links LZ4 itself.
 - Asset-dependent `shader` pipeline cases (for example `genericimage4` and a
   Workshop package) are excluded when their referenced files are absent.
 - Some locally installed scenes emit pre-existing MDLA, Rust `light_map` compile
   and shader-value alias errors. Those predate current work; verify only that
-  no *new* diagnostics appear.
+  no *new* diagnostics appear. Named cases seen so far: Wallpaper Engine's own
+  `clipping_mask` fails to translate (`!float` in the translated vertex
+  shader); Music Visualizer | iOS Style's `gaussian` (`float *= bool * 6.0`),
+  `cutout_vignette` (`vec3 - vec2`, HLSL-style truncation) and
+  `effects/refract` (empty default texture) fail to compile, so that
+  wallpaper's cover blur is not authored-accurate. A `ShaderValue: … not found
+  in glsl` line is authored leftovers, not a binding failure.
+- `thisLayer.getParent()` is unimplemented in SceneScript. A layer whose script
+  uses it logs `cannot read property … of undefined` once per update and keeps
+  its authored value, so the picture is usually unaffected and the errors are
+  not a regression.
+- **3D content in a perspective scene is not drawn.** Models that parse, are
+  effective-visible and sit in front of a perspective camera at small authored
+  scales still produce no pixels; the 2D layers of the same scene render.
+  Observed on Live Solar System – SYKM (`3662790108`) with its authored intro
+  disabled: sampled frames are byte-identical, with no stars, orbits or bodies.
+  The `engine.screenResolution` and active-camera fixes repaired that scene's
+  scripts and 2D layers only; the perspective/scale path is a separate
+  unfinished problem.
 - GPU elapsed measurements vary substantially between repeated runs on this
   hardware. Treat them as samples, not as proof of a GPU-time improvement or
   regression, and never as power or battery measurements.

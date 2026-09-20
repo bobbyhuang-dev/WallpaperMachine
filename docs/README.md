@@ -38,7 +38,8 @@ live under `testing/`.
 | [testing/renderer.md](testing/renderer.md) | Headless renderer/GPU checks, probe environment variables, known regressions |
 | [testing/manual-smoke.md](testing/manual-smoke.md) | Manual release smoke checklist |
 | [testing/power-benchmark.md](testing/power-benchmark.md) | Configuration manifest, runtime counters, condition matrix and comparison rules for power claims |
-| [testing/verification-log.md](testing/verification-log.md) | Dated verification history |
+| [testing/verification-log.md](testing/verification-log.md) | Dated verification history, ten newest entries |
+| [testing/archive/verification-log-2026-09.md](testing/archive/verification-log-2026-09.md) | Retired verification entries; historical only |
 | [testing/wallpaper-corpus.md](testing/wallpaper-corpus.md) | Local regression corpus checklist |
 
 ## Product features

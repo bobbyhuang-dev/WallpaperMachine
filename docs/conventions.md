@@ -160,8 +160,13 @@ The rules that bind every change:
 - Adding or removing a document means updating [README.md](README.md), the index.
 - Ground every statement in the repository: real paths, real flags, real test
   names. Delete a claim you cannot confirm instead of softening it.
-- [testing/verification-log.md](testing/verification-log.md) is append-only,
-  newest entry first. Never rewrite history there.
+- [testing/verification-log.md](testing/verification-log.md) is newest-entry
+  first and keeps the ten newest entries. An entry is a heading, optional short
+  context and a bullet per command with exit status, counts and skips — about
+  ten lines. Never edit a recorded result. Trimming is a separate act: move the
+  oldest entries verbatim into `testing/archive/` and promote anything still
+  true about the current tree into the doc that owns it first. A durable fact
+  left only in the log is a fact nobody will find.
 - Never cite a path under `artifacts/` or `build/` as durable evidence: both are
   Git-ignored and are deleted by `python3 scripts/clean.py`. Describe what was
   exercised and what the run showed.

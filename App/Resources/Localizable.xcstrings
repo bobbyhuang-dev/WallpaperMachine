@@ -847,6 +847,21 @@
     "Scene assets" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scene assets"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "场景资源"}}}
     },
+    "Steam sign-in" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam sign-in"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 登录"}}}
+    },
+    "Signed in to Steam" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Signed in to Steam"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已登录 Steam"}}}
+    },
+    "Preparing a private SteamCMD sign-in…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Preparing a private SteamCMD sign-in…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在准备私有的 SteamCMD 登录…"}}}
+    },
+    "Signed in; closing SteamCMD…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Signed in; closing SteamCMD…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已登录；正在关闭 SteamCMD…"}}}
+    },
+    "Sign-in could not finish" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Sign-in could not finish"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "登录未能完成"}}}
+    },
     "Dismiss download activity" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Dismiss download activity"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "关闭下载活动"}}}
     },

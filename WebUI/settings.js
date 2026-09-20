@@ -293,6 +293,7 @@ function draw(view) {
     + (settings.sceneAssetsWarning ? `<div class="settings-notice" role="status">${e(settings.sceneAssetsWarning)}</div>` : '')
     + sceneSummary
     + row('steam-account', t('Steam account'), state.savedAccount ? button(t('Log out…'), 'logOutSteam', {}, anyDownload || busy, 'settings-destructive') : `<span class="settings-note">${e(t('Not signed in'))}</span>`, state.savedAccount ? `${t('Signed in as {account}', { account: state.savedAccount })}${anyDownload ? t(' · log out once downloads finish') : ''}` : t('You sign in when a download starts.'))
+    + row('welcome-guide', t('Welcome guide'), button(t('Show again'), 'openWelcome'), t('Shown on first launch: language and appearance, Steam sign-in, preferences and tips.'))
     + disclosure('library-context', t('Setup, compatibility & account privacy'), `${paragraphs(t('Scene wallpapers need shared resources from a purchased Wallpaper Engine installation. Videos do not. Locate its assets folder or download the shared assets once through Steam. Scene support is experimental; effects and scripts may differ from Windows.'), t('Steam downloads the Windows version to temporary storage; only shared assets are kept. Windows programs are never run. Allow several GB of temporary space. Imports are copied; original files and your Steam library stay untouched.'), t('SteamCMD is Valve’s download tool. Install it without signing in. Downloading requires a Steam account that owns Wallpaper Engine; Steam enforces access. Passwords and Steam Guard codes go directly to the private SteamCMD terminal and are not saved by this app. “Keep me signed in” saves Steam-issued sign-in cache on this Mac. Logging out removes only this Mac’s saved sign-in; other Steam devices stay signed in.'), t('Approve Steam Guard in the Steam mobile app, or enter the fresh code when requested. Steam may require a new sign-in after expiry or security changes. If Steam reports too many attempts, wait before retrying.'), t('Security approval applies only to the exact downloaded SteamCMD copy after native confirmation. It does not disable Gatekeeper or signature checks.'))}${settings.assetsPath ? `<div class="settings-path">${e(settings.assetsPath)}</div>` : ''}<div class="settings-help-links">${button(t('Wallpaper Engine on Steam'), 'openExternal', { url: 'https://store.steampowered.com/app/431960/Wallpaper_Engine/' })}${button(t('Rosetta installation'), 'openExternal', { url: 'https://support.apple.com/en-us/102527' })}${button(t('macOS app security'), 'openExternal', { url: 'https://support.apple.com/en-us/102445' })}</div>`);
   // Nil released-bytes means no purge has run this session; 0 means one ran and
   // found nothing. They read differently on purpose.
@@ -455,6 +456,7 @@ async function onClick(view, event) {
   }
   if (action === 'requestSceneAssets') { await view.helpers.requestAssets(button); return; }
   if (action === 'openSceneDialog') { view.helpers.openDownloadDialog('scene-assets', button); return; }
+  if (action === 'openWelcome') { view.helpers.openWelcome(); return; }
   await perform(view, action, action, args);
 }
 

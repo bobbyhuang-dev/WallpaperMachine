@@ -1,0 +1,413 @@
+import { t } from './i18n.js';
+
+// First-run guide: five full-window pages shown once per Mac, and again on request from
+// Settings → Library & Steam. Language and appearance apply the moment they are chosen (Skip
+// puts back what was there when the guide opened); preferences are drafts committed by Continue;
+// the Steam page runs a sign-in-only SteamCMD session through the same job pipeline as a
+// download, so Steam's own password and Steam Guard prompts are answered right here.
+// The password never leaves this module except as the answer to Steam's password prompt.
+export const SIGN_IN_ID = 'steam-sign-in';
+const STEPS = [
+  ['language', 'Language & appearance'],
+  ['steam', 'Steam'],
+  ['preferences', 'Preferences'],
+  ['tips', 'Tips'],
+  ['start', 'Start'],
+];
+const PREFERENCES = [
+  ['launchAtLogin', 'power', 'Launch at login', 'Wallpapers come back on their own after a restart.'],
+  ['pauseOnBattery', 'pause', 'Pause on battery', 'Stops playback while your Mac runs on battery, so wallpapers cost nothing on the go.'],
+  ['batteryProfileEnabled', 'batteryCharging', 'Reduced quality on battery', 'Renders at a lower scale and frame rate on battery instead of pausing.'],
+  ['keepWindowsOnWallpaperClick', 'mousePointerClick', 'Keep windows in place when clicking the wallpaper', 'Turns off macOS’s “Click wallpaper to reveal desktop” so clicks reach interactive wallpapers.'],
+];
+const TIPS = [
+  ['search', 'Discover is the whole Workshop', 'Search, sort and filter by type, resolution and tags. Looking around needs no account.'],
+  ['download', 'Download, then apply', 'Downloads land in Installed. Select a wallpaper and press Apply wallpaper, or double-click it, to put it on the chosen display.'],
+  ['monitor', 'One wallpaper per display', 'Pick the target display in the top bar. Settings → Displays sets scaling, frame rate and audio per screen.'],
+  ['plus', 'Import your own', 'Installed → Import copies wallpaper folders or files into your library and leaves the originals untouched.'],
+  ['pause', 'Pause any time', 'The control at the bottom pauses playback; Pause on battery does it for you.'],
+];
+const STEAM_JOIN_URL = 'https://store.steampowered.com/join/';
+const STEAM_STORE_URL = 'https://store.steampowered.com/app/431960/Wallpaper_Engine/';
+const ACCOUNT_PATTERN = /^[a-z0-9_]+$/i;
+
+export function createWelcome(helpers) {
+  const { container, send, run, escapeHTML: e, icon, button, morph, busy } = helpers;
+  let open = false;
+  let decided = false;
+  let step = 0;
+  let state = null;
+  // What the guide found when it opened, so Skip on the first page can put it back.
+  let initial = null;
+  // Sign-in draft. `secret` is held only between Sign in and Steam's password prompt.
+  const signIn = { account: '', remember: true, secret: null, reveal: false };
+  // A finished sign-in job stays in the downloads list; once the user signs out it no longer counts.
+  let dismissedJob = false;
+  let setupRequested = false;
+  const prefs = new Map();
+  const pending = new Set();
+  let error = '';
+  let lastStepRendered = -1;
+
+  const signInJob = () => (state?.downloads || []).find(item => item.id === SIGN_IN_ID) || null;
+  const signInRequest = () => (state?.downloadRequests || []).find(item => item.id === SIGN_IN_ID) || null;
+  const signedIn = () => {
+    const job = signInJob();
+    if (job?.pending) return '';
+    if (job && !dismissedJob) return !job.error && !job.cancelled ? job.account : '';
+    return state?.savedAccount || '';
+  };
+  const languageOptions = () => [['system', t('System (Auto)'), t('Follows the macOS language')], ...((state?.language?.options || []).map(option => [option.id, option.name, '']))];
+  const themeMode = () => state?.theme?.mode || window.__appTheme?.mode || 'system';
+  const languageValue = () => state?.language?.preference || 'system';
+
+  function isOpen() { return open; }
+  function openGuide() {
+    if (open) return;
+    open = true;
+    step = 0;
+    error = '';
+    lastStepRendered = -1;
+    prefs.clear();
+    signIn.secret = null;
+    signIn.reveal = false;
+    signIn.remember = state?.rememberSession ?? true;
+    if (!signIn.account) signIn.account = state?.account || '';
+    setupRequested = false;
+    initial = state ? { mode: themeMode(), language: languageValue() } : null;
+    helpers.closePopover?.(false);
+    render(state);
+  }
+  function openIfUndecided() { if (!decided) openGuide(); }
+  function close() {
+    if (!open) return;
+    open = false;
+    decided = true;
+    signIn.secret = null;
+    render(state);
+    if (state?.welcomeSeen === false) run(send('welcomeSeen'));
+  }
+  function go(next) {
+    step = Math.max(0, Math.min(STEPS.length - 1, next));
+    error = '';
+    render(state);
+  }
+
+  async function perform(key, action, args = {}) {
+    if (pending.has(key)) return null;
+    pending.add(key);
+    error = '';
+    render(state);
+    try {
+      return await send(action, args);
+    } catch (failure) {
+      error = failure?.message || String(failure);
+      // The panel's own banner sits behind the guide; the message is shown here instead.
+      helpers.clearError?.();
+      return null;
+    } finally {
+      pending.delete(key);
+      render(state);
+    }
+  }
+
+  function render(next) {
+    state = next ?? state;
+    container.hidden = !open;
+    if (!open || !state) return;
+    if (!initial) initial = { mode: themeMode(), language: languageValue() };
+    driveSignIn();
+    morph(container, shell());
+    if (lastStepRendered !== step) {
+      lastStepRendered = step;
+      const target = container.querySelector('.welcome-page input:not([disabled]):not([type="checkbox"])') || container.querySelector('#welcome-title');
+      target?.focus({ preventScroll: false });
+      container.querySelector('.welcome-body')?.scrollTo(0, 0);
+    }
+  }
+
+  // Steam's password prompt is answered with the held secret exactly once; anything else
+  // Steam asks (Steam Guard code, mobile approval) is put in front of the user.
+  function driveSignIn() {
+    const job = signInJob();
+    if (!job?.pending) { if (job && signIn.secret) signIn.secret = null; return; }
+    if (job.prompt && job.securePrompt && signIn.secret && !busy('downloadInput', { id: job.id })) {
+      const value = signIn.secret;
+      signIn.secret = null;
+      run(send('downloadInput', { id: job.id, value }));
+    }
+  }
+
+  function shell() {
+    const done = signedIn();
+    const progress = STEPS.map(([key, label], index) => `<li data-key="progress-${key}"><button type="button" data-action="go" data-step="${index}" class="welcome-step${index === step ? ' current' : index < step ? ' done' : ''}"${index === step ? ' aria-current="step"' : ''}><span class="welcome-step-dot" aria-hidden="true">${index < step ? icon('check', 11) : ''}</span><span class="welcome-step-label">${e(t(label))}</span></button></li>`).join('');
+    const pages = [pageLanguage, pageSteam, pagePreferences, pageTips, pageStart];
+    return `<div class="welcome-bar" data-key="bar"><ol class="welcome-progress" aria-label="${e(t('Setup progress'))}">${progress}</ol></div><div class="welcome-body" data-key="body"><section class="welcome-page" data-key="page-${step}" data-step="${STEPS[step][0]}" aria-labelledby="welcome-title">${pages[step](done)}</section></div><div class="welcome-footer" data-key="footer"><div class="welcome-footer-row">${footer(done)}</div></div>`;
+  }
+
+  function footer(done) {
+    const back = step > 0 ? button(t('Back'), 'back', {}, { icon: 'chevronLeft', className: 'quiet' }) : '<span></span>';
+    const next = (label, action, extra = {}) => button(label, action, {}, { icon: 'arrowRight', className: 'primary welcome-continue', ...extra });
+    switch (step) {
+      case 0: return `${back}<span class="welcome-footer-actions">${button(t('Skip'), 'skipLanguage', {}, { className: 'quiet' })}${next(t('Continue'), 'continue', { disabled: pending.size > 0 })}</span>`;
+      case 1: {
+        const job = signInJob();
+        const running = Boolean(job?.pending);
+        return `${back}<span class="welcome-footer-actions">${done ? next(t('Continue'), 'continue') : button(running ? t('Skip and cancel sign-in') : t('Skip for now'), 'skipSteam', {}, { className: 'quiet' })}</span>`;
+      }
+      case 2: return `${back}<span class="welcome-footer-actions">${button(t('Skip'), 'skipPreferences', {}, { className: 'quiet' })}${next(t('Continue'), 'savePreferences', { disabled: pending.has('preferences') })}</span>`;
+      case 3: return `${back}<span class="welcome-footer-actions">${next(t('Continue'), 'continue')}</span>`;
+      default: return `${back}<span class="welcome-footer-actions">${button(t('Start using the app'), 'finish', {}, { icon: 'check', className: 'primary welcome-continue' })}</span>`;
+    }
+  }
+
+  const head = (title, lead) => `<header class="welcome-head"><h1 id="welcome-title" tabindex="-1">${e(title)}</h1>${lead ? `<p class="welcome-lead">${e(lead)}</p>` : ''}</header>`;
+  const option = (action, value, checked, body, off) => `<button type="button" role="radio" aria-checked="${checked}" data-action="${action}" data-value="${e(value)}" class="welcome-option" data-key="${action}-${e(value)}"${off ? ' disabled' : ''}>${body}<span class="welcome-option-check" aria-hidden="true">${icon('check', 13)}</span></button>`;
+
+  function pageLanguage() {
+    const languageBusy = pending.has('language');
+    const themeBusy = pending.has('theme');
+    const language = languageOptions().map(([id, name, note]) => option('language', id, id === languageValue(), `<span class="welcome-option-title">${e(name)}</span>${note ? `<span class="welcome-option-note">${e(note)}</span>` : ''}`, languageBusy)).join('');
+    const appearance = [['system', 'sunMoon', 'System (Auto)', 'Follows macOS light and dark'], ['light', 'sun', 'Light', ''], ['dark', 'moon', 'Dark', '']]
+      .map(([id, glyph, title, note]) => option('theme', id, id === themeMode(), `<span class="welcome-swatch" data-appearance="${id}" aria-hidden="true"><span></span></span><span class="welcome-option-title">${icon(glyph, 14)}${e(t(title))}</span>${note ? `<span class="welcome-option-note">${e(t(note))}</span>` : ''}`, themeBusy)).join('');
+    return `${head(t('Welcome to MacWallpaperEngine'), t('Steam Workshop wallpapers on your Mac’s desktop. Two quick choices first; both can be changed later in Settings.'))}
+      <fieldset class="welcome-choice"><legend>${icon('languages', 15)}${e(t('Language'))}</legend><div class="welcome-options" role="radiogroup" aria-label="${e(t('Language'))}">${language}</div><p class="welcome-note">${e(t('The interface switches at once. Menus and dialogs follow the next time you open the app.'))}</p></fieldset>
+      <fieldset class="welcome-choice"><legend>${icon('sunMoon', 15)}${e(t('Appearance'))}</legend><div class="welcome-options" role="radiogroup" aria-label="${e(t('Appearance'))}">${appearance}</div></fieldset>
+      ${error ? `<p class="notice error" role="alert">${e(error)}</p>` : ''}`;
+  }
+
+  function pageSteam(done) {
+    const job = signInJob();
+    const request = signInRequest();
+    const setup = state.setup || {};
+    const lead = t('Browsing is free. Downloading needs a Steam account that owns Wallpaper Engine, because Steam only hands Workshop files to accounts that own it. Sign in now, or skip and sign in when your first download starts.');
+    const links = `<div class="welcome-steam-links"><div class="welcome-steam-link"><p><b>${e(t('No Steam account yet?'))}</b> ${e(t('Creating one is free.'))}</p>${button(t('Create a Steam account'), 'openExternal', { url: STEAM_JOIN_URL }, { icon: 'external', className: 'link' })}</div><div class="welcome-steam-link"><p><b>${e(t('Don’t own Wallpaper Engine?'))}</b> ${e(t('It is a one-time purchase on Steam.'))}</p>${button(t('Buy Wallpaper Engine'), 'openExternal', { url: STEAM_STORE_URL }, { icon: 'external', className: 'link' })}</div></div>`;
+    let body;
+    if (done) {
+      body = statusCard('check', t('Signed in as {account}', { account: done }), t('Downloads will use this sign-in. Steam may still ask you to approve a new device in its mobile app.'), `${job?.warning ? `<p class="notice warning">${e(job.warning)}</p>` : ''}<div class="welcome-status-actions">${button(t('Use a different account'), 'signOut', {}, { className: 'link', disabled: busy('logOutSteam') })}</div>`, 'success');
+    } else if (request) {
+      body = setupCard(request, setup);
+    } else if (job?.pending) {
+      body = signingInCard(job);
+    } else {
+      body = signInForm(job, setup);
+    }
+    return `${head(t('Sign in to Steam'), lead)}${body}${done ? '' : links}`;
+  }
+
+  const statusCard = (glyph, title, text, extra = '', tone = '') => `<section class="welcome-status${tone ? ` ${tone}` : ''}" data-key="status" aria-live="polite"><span class="dialog-guide-icon">${icon(glyph, 20)}</span><div class="welcome-status-body"><p class="welcome-status-title">${e(title)}</p>${text ? `<p class="welcome-status-text">${e(text)}</p>` : ''}${extra}</div></section>`;
+
+  function setupCard(request, setup) {
+    const stage = request.stage;
+    if (stage === 'setup') {
+      const progress = setup.busy ? `<progress max="1"${Number.isFinite(setup.progress) ? ` value="${Math.max(0, Math.min(1, setup.progress))}"` : ''} aria-label="${e(t('SteamCMD installation progress'))}"></progress>` : '';
+      // Installation normally starts with the sign-in; a guide reopened on a waiting request, or
+      // a failed install, gets the same two ways forward as Settings.
+      const actions = setup.canApprove
+        ? button(t('Allow this SteamCMD'), 'setupApprove', {}, { icon: 'shield', className: 'primary' })
+        : !setup.busy ? `${button(setup.error ? t('Try again') : t('Install SteamCMD'), 'setupInstall', {}, { icon: setup.error ? 'refresh' : 'download', className: 'primary' })}${button(t('Locate a copy'), 'setupLocate', {}, { icon: 'folder' })}` : '';
+      const text = setup.canApprove ? t('macOS needs your approval before this downloaded copy of SteamCMD can run. Only this exact copy is allowed.') : t('SteamCMD is Valve’s free download tool. It is being installed into this app’s own folder; the sign-in follows on its own.');
+      return statusCard('download', setup.status || t('Installing SteamCMD…'), text, `${progress}${setup.error ? `<p class="notice error" role="alert">${e(setup.error)}</p>` : ''}<div class="welcome-status-actions">${actions}${button(t('Cancel'), 'cancelSignIn', {}, { className: 'quiet' })}</div>`);
+    }
+    // `account`: the downloader refused the name; the form returns with the reason.
+    return signInForm(null, setup);
+  }
+
+  function signingInCard(job) {
+    const account = job.account || signIn.account;
+    if (job.queued) return statusCard('logIn', job.status, t('The sign-in starts as soon as the current download is done.'), `<progress aria-label="${e(t('Waiting'))}"></progress><div class="welcome-status-actions">${button(t('Cancel'), 'cancelSignIn', {}, { className: 'quiet' })}</div>`);
+    const guide = helpers.signInGuide(job, account);
+    const cancel = button(t('Cancel'), 'cancelSignIn', {}, { className: 'quiet', disabled: busy('downloadCancel', { id: job.id }) });
+    if (job.prompt) {
+      const working = busy('downloadInput', { id: job.id });
+      const secure = Boolean(job.securePrompt);
+      const help = guide?.phone ? button(t('Get the Steam mobile app'), 'openExternal', { url: 'https://store.steampowered.com/mobile' }, { icon: 'external', className: 'link' }) : guide?.mail ? button(t('Help with emailed codes'), 'openExternal', { url: 'https://help.steampowered.com/en/wizard/HelpWithSteamGuardCode' }, { icon: 'external', className: 'link' }) : '';
+      const explain = secure ? statusCard('lock', t('Steam asks for your password'), t('Enter it below. It goes straight to Steam and is never stored by this app.')) : guide ? helpers.guideMarkup(guide) : '';
+      return `${explain}<form class="welcome-form" data-form="prompt" data-id="${e(job.id)}" data-key="prompt-${e(job.prompt)}"><label class="field" for="welcome-response">${e(job.prompt)}<input id="welcome-response" name="response" type="${secure ? 'password' : 'text'}" autocomplete="${secure ? 'current-password' : 'one-time-code'}" spellcheck="false" autocapitalize="off" required${working ? ' disabled' : ''}></label><div class="welcome-form-actions"><button type="submit" class="primary"${working ? ' disabled' : ''}>${icon(secure ? 'lock' : 'keyRound')}<span class="button-label">${e(t('Submit'))}</span></button>${cancel}${help}</div></form>`;
+    }
+    if (job.challenge) {
+      return `${helpers.guideMarkup(guide, `<progress aria-label="${e(t('Waiting for Steam'))}"></progress>`)}<div class="welcome-status-actions">${cancel}${guide?.phone ? button(t('Get the Steam mobile app'), 'openExternal', { url: 'https://store.steampowered.com/mobile' }, { icon: 'external', className: 'link' }) : ''}</div>`;
+    }
+    return statusCard('logIn', job.status || t('Contacting Steam…'), t('Any password or Steam Guard request appears here.'), `<progress aria-label="${e(t('Connecting to Steam'))}"></progress><div class="welcome-status-actions">${cancel}</div>`);
+  }
+
+  function signInForm(job, setup) {
+    const working = pending.has('signIn');
+    const failure = error || job?.error || (job?.cancelled ? t('The sign-in was cancelled.') : '');
+    const label = setup.ready ? t('Sign in') : t('Install SteamCMD and sign in');
+    return `<form class="welcome-form" data-form="signIn" data-key="sign-in-form" novalidate>
+      <label class="field" for="welcome-account">${e(t('Steam account name'))}<input id="welcome-account" name="account" type="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="${e(t('The name you log in with'))}" value="${e(signIn.account)}"${working ? ' disabled' : ''}><span class="welcome-field-note">${e(t('Your login name, not the profile name other players see.'))}</span></label>
+      <label class="field" for="welcome-password">${e(t('Password'))}<span class="welcome-password"><input id="welcome-password" name="password" type="${signIn.reveal ? 'text' : 'password'}" autocomplete="current-password" spellcheck="false" autocapitalize="off" data-key="password"${working ? ' disabled' : ''}>${button('', 'reveal', {}, { icon: signIn.reveal ? 'eyeOff' : 'eye', title: signIn.reveal ? t('Hide password') : t('Show password'), className: 'quiet icon-button', disabled: working })}</span></label>
+      <label class="check-label welcome-remember" data-key="remember"><input type="checkbox" name="remember"${signIn.remember ? ' checked' : ''}${working ? ' disabled' : ''}><span>${e(t('Keep me signed in on this Mac'))}<span class="welcome-field-note">${e(t('Saves Steam’s own sign-in files on this Mac so downloads don’t ask again. Never your password.'))}</span></span></label>
+      ${failure ? `<p class="notice error" role="alert">${e(failure)}</p>` : ''}
+      <div class="welcome-form-actions"><button type="submit" class="primary"${working ? ' disabled' : ''}>${icon('logIn')}<span class="button-label">${e(label)}</span></button></div>
+      <p class="welcome-note">${e(setup.ready ? t('Your password goes straight to Valve’s SteamCMD and is never stored by this app. Steam Guard requests appear here.') : t('SteamCMD is Valve’s free download tool. It is installed into this app’s own folder the first time. Your password goes straight to it and is never stored by this app.'))}</p>
+    </form>`;
+  }
+
+  function pagePreferences() {
+    const settings = state.settings;
+    const unavailable = !settings;
+    const rows = PREFERENCES.map(([key, glyph, title, note]) => {
+      const off = unavailable || pending.has('preferences') || (key === 'launchAtLogin' && !settings?.launchAtLoginAvailable);
+      const value = prefs.has(key) ? prefs.get(key) : Boolean(settings?.[key]);
+      const extra = key === 'launchAtLogin' && settings && !settings.launchAtLoginAvailable ? ` ${t('Move the app to Applications to enable.')}` : '';
+      return `<label class="welcome-pref" data-key="pref-${key}"><span class="dialog-guide-icon">${icon(glyph, 18)}</span><span class="welcome-pref-body"><span class="welcome-pref-title">${e(t(title))}</span><span class="welcome-pref-note">${e(t(note))}${e(extra)}</span></span><span class="settings-switch"><input type="checkbox" role="switch" data-pref="${key}" aria-label="${e(t(title))}"${value ? ' checked' : ''}${off ? ' disabled' : ''}><span aria-hidden="true"></span></span></label>`;
+    }).join('');
+    return `${head(t('A few preferences'), t('Sensible defaults are already set. Change what you like; everything here lives in Settings too.'))}${unavailable ? `<p class="notice">${e(t('Settings are unavailable right now. You can set these later in Settings.'))}</p>` : ''}<div class="welcome-prefs">${rows}</div>${error ? `<p class="notice error" role="alert">${e(error)}</p>` : ''}`;
+  }
+
+  function pageTips() {
+    const repository = helpers.safeLink(state.repositoryURL);
+    const tips = TIPS.map(([glyph, title, text]) => `<li><span class="dialog-guide-icon">${icon(glyph, 18)}</span><div class="welcome-tip-body"><p class="welcome-tip-title">${e(t(title))}</p><p class="welcome-tip-text">${e(t(text))}</p></div></li>`).join('');
+    const github = repository ? `<section class="welcome-github" aria-label="GitHub"><span class="welcome-github-mark">${icon('github', 22)}</span><div class="welcome-github-body"><p class="welcome-tip-title">${e(t('MacWallpaperEngine is open source'))}</p><p class="welcome-tip-text">${e(t('Source code, releases and the issue tracker live on GitHub. Found a bug or have an idea? Open an issue.'))}</p><div class="welcome-status-actions">${button(t('Open on GitHub'), 'openExternal', { url: repository }, { icon: 'external' })}${button(t('Report an issue'), 'openExternal', { url: `${repository.replace(/\/$/, '')}/issues` }, { icon: 'external', className: 'quiet' })}</div></div></section>` : '';
+    return `${head(t('Good to know'), t('Five things that make the first hour easier.'))}<ol class="welcome-tips">${tips}</ol>${github}`;
+  }
+
+  function pageStart(done) {
+    const language = languageOptions().find(([id]) => id === languageValue());
+    const mode = { system: 'System (Auto)', light: 'Light', dark: 'Dark' }[themeMode()] || 'System (Auto)';
+    const recap = `<dl class="welcome-recap"><div><dt>${e(t('Language'))}</dt><dd>${e(language ? language[1] : t('System (Auto)'))}</dd></div><div><dt>${e(t('Appearance'))}</dt><dd>${e(t(mode))}</dd></div><div><dt>${e(t('Steam'))}</dt><dd>${e(done ? t('Signed in as {account}', { account: done }) : t('Not signed in — Steam asks at your first download'))}</dd></div></dl>`;
+    return `${head(t('You’re ready'), t('Pick where to begin. Nothing reaches your desktop until you apply a wallpaper.'))}${recap}<div class="welcome-start"><button type="button" class="welcome-start-option" data-action="browse"><span class="dialog-guide-icon">${icon('search', 18)}</span><span class="welcome-pref-body"><span class="welcome-pref-title">${e(t('Browse the Workshop'))}</span><span class="welcome-pref-note">${e(t('Open Discover and look through Steam’s catalogue.'))}</span></span>${icon('chevronRight', 16)}</button><button type="button" class="welcome-start-option" data-action="import"><span class="dialog-guide-icon">${icon('plus', 18)}</span><span class="welcome-pref-body"><span class="welcome-pref-title">${e(t('Import wallpapers'))}</span><span class="welcome-pref-note">${e(t('Bring in wallpaper folders or files you already have.'))}</span></span>${icon('chevronRight', 16)}</button></div><p class="welcome-note">${e(t('Read this guide again any time from Settings → Library & Steam.'))}</p>`;
+  }
+
+  // Actions
+  async function chooseLanguage(value) {
+    if (value === languageValue()) return;
+    await perform('language', 'languageSetting', { value: String(value) });
+  }
+  async function chooseTheme(value) {
+    if (value === themeMode()) return;
+    await perform('theme', 'themeSetting', { key: 'mode', value: String(value) });
+  }
+  async function skipLanguage() {
+    if (initial) {
+      if (themeMode() !== initial.mode) await perform('theme', 'themeSetting', { key: 'mode', value: initial.mode });
+      if (languageValue() !== initial.language) await perform('language', 'languageSetting', { value: initial.language });
+    }
+    go(step + 1);
+  }
+  async function submitSignIn(form) {
+    const account = String(form.elements.account.value || '').trim();
+    const password = String(form.elements.password.value || '');
+    signIn.account = account;
+    signIn.remember = Boolean(form.elements.remember.checked);
+    if (!account || account.toLowerCase() === 'anonymous' || !ACCOUNT_PATTERN.test(account)) {
+      error = t('Enter your Steam account name: the login name, not the profile name. Letters, numbers and underscores only.');
+      form.elements.account.focus();
+      render(state);
+      return;
+    }
+    if (!password) {
+      error = t('Enter your Steam password.');
+      form.elements.password.focus();
+      render(state);
+      return;
+    }
+    form.elements.password.value = '';
+    signIn.secret = password;
+    signIn.reveal = false;
+    dismissedJob = false;
+    setupRequested = false;
+    const result = await perform('signIn', 'steamSignIn', { account, rememberSession: signIn.remember });
+    if (!result) { signIn.secret = null; return; }
+    // Without SteamCMD the request waits at the setup stage; installing it is part of signing in.
+    const request = signInRequest();
+    const setup = state?.setup || {};
+    if (request?.stage === 'setup' && !setup.busy && !setup.ready && !setup.candidatePath && !setupRequested) {
+      setupRequested = true;
+      await perform('setup', 'setupInstall');
+    }
+  }
+  async function cancelSignIn() {
+    signIn.secret = null;
+    const job = signInJob();
+    const request = signInRequest();
+    if (request) {
+      await perform('cancel', 'removeDownloadRequest', { id: SIGN_IN_ID });
+      if (state?.setup?.busy && setupRequested) await perform('setupCancel', 'setupCancel');
+    }
+    if (job?.pending) await perform('cancel', 'downloadCancel', { id: job.id });
+  }
+  async function savePreferences() {
+    const changed = [...prefs].filter(([key, value]) => Boolean(state.settings?.[key]) !== value);
+    if (!changed.length) { go(step + 1); return; }
+    pending.add('preferences');
+    render(state);
+    try {
+      for (const [key, value] of changed) await send('setting', { key, value });
+      prefs.clear();
+      pending.delete('preferences');
+      go(step + 1);
+    } catch (failure) {
+      pending.delete('preferences');
+      error = failure?.message || String(failure);
+      helpers.clearError?.();
+      render(state);
+    }
+  }
+
+  container.addEventListener('click', event => {
+    const control = event.target.closest('[data-action]');
+    if (!control || control.disabled) return;
+    const action = control.dataset.action;
+    switch (action) {
+      case 'go': go(Number(control.dataset.step)); return;
+      case 'back': go(step - 1); return;
+      case 'continue': go(step + 1); return;
+      case 'skipLanguage': run(skipLanguage()); return;
+      case 'skipPreferences': prefs.clear(); go(step + 1); return;
+      case 'savePreferences': run(savePreferences()); return;
+      case 'skipSteam': run(cancelSignIn().then(() => go(step + 1))); return;
+      case 'language': run(chooseLanguage(control.dataset.value)); return;
+      case 'theme': run(chooseTheme(control.dataset.value)); return;
+      case 'reveal': signIn.reveal = !signIn.reveal; render(state); container.querySelector('#welcome-password')?.focus(); return;
+      case 'cancelSignIn': run(cancelSignIn()); return;
+      case 'signOut': run(perform('signOut', 'logOutSteam').then(result => { if (result && !result.savedAccount) dismissedJob = true; render(state); })); return;
+      case 'setupApprove': case 'setupInstall': case 'setupLocate': run(perform(action, action)); return;
+      case 'openExternal': run(send('openExternal', { url: control.dataset.url })); return;
+      case 'browse': close(); run(helpers.navigate('discover')); return;
+      case 'import': close(); run(helpers.openImport()); return;
+      case 'finish': close(); return;
+      default: return;
+    }
+  });
+  container.addEventListener('mousedown', event => {
+    // The top strip stands in for the title bar while the guide covers it.
+    if (event.button === 0 && event.target.closest('.welcome-bar') && !event.target.closest('button')) { event.preventDefault(); helpers.dragWindow?.(); }
+  });
+  container.addEventListener('input', event => {
+    const element = event.target;
+    if (element.name === 'account') signIn.account = element.value;
+  });
+  container.addEventListener('change', event => {
+    const element = event.target;
+    if (element.name === 'remember') signIn.remember = element.checked;
+    if (element.dataset.pref) { prefs.set(element.dataset.pref, element.checked); render(state); }
+  });
+  container.addEventListener('submit', event => {
+    event.preventDefault();
+    const form = event.target;
+    if (form.dataset.form === 'signIn') run(submitSignIn(form));
+    if (form.dataset.form === 'prompt') {
+      const input = form.elements.response;
+      const value = input.value;
+      if (!value) return;
+      // The answer belongs to Steam alone and never survives the submit.
+      input.value = '';
+      run(send('downloadInput', { id: form.dataset.id, value }));
+    }
+  });
+  container.addEventListener('keydown', event => {
+    const control = event.target.closest('.welcome-option');
+    if (!control || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+    event.preventDefault();
+    const options = [...control.parentElement.querySelectorAll('.welcome-option:not([disabled])')];
+    const index = options.indexOf(control);
+    const next = options[(index + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1) + options.length) % options.length];
+    next?.focus();
+    next?.click();
+  });
+
+  return { isOpen, open: openGuide, openIfUndecided, close, render, currentStep: () => step };
+}

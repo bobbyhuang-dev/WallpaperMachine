@@ -26,7 +26,8 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
       defaults: defaults)
     let navigation = ControlPanelNavigation()
     let controller = WebPanelController(
-      store: fixture.store, navigation: navigation, workshop: workshop, appLanguage: .english())
+      store: fixture.store, navigation: navigation, workshop: workshop,
+      defaults: defaults, appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 960, height: 640))
@@ -92,7 +93,8 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
       defaults: defaults)
     let navigation = ControlPanelNavigation()
     let controller = WebPanelController(
-      store: fixture.store, navigation: navigation, workshop: workshop, appLanguage: .english())
+      store: fixture.store, navigation: navigation, workshop: workshop,
+      defaults: defaults, appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 960, height: 640))
@@ -154,7 +156,8 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
       defaults: defaults)
     let navigation = ControlPanelNavigation()
     let controller = WebPanelController(
-      store: fixture.store, navigation: navigation, workshop: workshop, appLanguage: .english())
+      store: fixture.store, navigation: navigation, workshop: workshop,
+      defaults: defaults, appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 960, height: 640))
@@ -246,6 +249,7 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
       defaults: defaults)
     let controller = WebPanelController(
       store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
+      defaults: defaults,
       appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
@@ -420,6 +424,7 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
       defaults: defaults)
     let controller = WebPanelController(
       store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
+      defaults: defaults,
       appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
@@ -532,7 +537,7 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
       defaults: defaults)
     let controller = WebPanelController(
       store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
-      assets: assets, appLanguage: .english())
+      defaults: defaults, assets: assets, appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 960, height: 640))

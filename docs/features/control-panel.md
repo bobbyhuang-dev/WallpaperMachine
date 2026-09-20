@@ -59,6 +59,70 @@ resets `contentMinSize` once it attaches.
 Arrow keys, `Home` and `End` move focus across the grid; `Escape` closes an open
 filter disclosure or popover.
 
+## First run
+
+The first time the panel opens, a guide covers the whole window, top bar
+included (`WebUI/welcome.js` + `welcome.css`; `#welcome` is fixed-position
+over the app, pure black or white by the resolved appearance, and its top strip
+stands in for the title bar: draggable and clear of the traffic lights). It is
+a page, not a modal dialog; the download dialog can still open over it for an
+unrelated job. A five-step indicator at the top names the pages and jumps
+between them; every page has **Back**, and the pages that decide something have
+**Skip**:
+
+1. **Language & appearance.** Radio tiles for the language (**System (Auto)**
+   plus every shipped language under its own name) and the appearance mode
+   (**System (Auto)**, **Light**, **Dark**, each with a drawn miniature). A
+   choice applies at once through the `languageSetting` / `themeSetting`
+   actions, so the page repaints in the chosen language and theme. **Skip**
+   puts back whatever was in force when the guide opened and moves on.
+2. **Steam.** Explains in plain words that browsing is free and that downloading
+   needs a Steam account that owns Wallpaper Engine, with **Create a Steam
+   account** (`store.steampowered.com/join/`) and **Buy Wallpaper Engine** (the
+   store page) beside that explanation. The form takes the account name (login
+   name, not profile name), the password (with a show/hide toggle) and **Keep me
+   signed in on this Mac** (on by default). **Sign in** sends only the account
+   name and the remember choice (`steamSignIn`); the password is held in the
+   page until Steam's own password prompt arrives on the sign-in job and is then
+   submitted through `downloadInput` exactly once, so it is never part of a
+   snapshot, an action payload or the DOM markup. Without SteamCMD the button
+   reads **Install SteamCMD and sign in** and the page installs it first
+   (`setupInstall`, with the Gatekeeper approval and locate-a-copy paths when
+   they apply). Steam Guard (mobile approval, authenticator or emailed code)
+   is shown with the same guides as the download dialog; **Cancel** stops the
+   session. Success shows **Signed in as …** with **Use a different account**
+   (`logOutSteam`); a saved sign-in from an earlier run shows the same state
+   straight away. **Skip for now** (or **Skip and cancel sign-in** while one
+   runs) leaves Steam for the first download to ask about. See [Steam sign-in](workshop-downloads.md#steam-sign-in)
+   for the sign-in-only session itself.
+3. **Preferences.** Launch at login, Pause on battery, Reduced quality on
+   battery and Keep windows in place when clicking the wallpaper, as switches
+   with one-line explanations. They are drafts: **Continue** commits only the
+   ones that changed (`setting` actions), **Skip** discards them. Launch at
+   login is disabled with its reason while the app is outside Applications;
+   when renderer settings are unavailable the page says so and disables the
+   switches.
+4. **Tips.** Five short usage tips (Discover, download then apply, one
+   wallpaper per display, import, pause) and the open-source pointer with
+   **Open on GitHub** and **Report an issue** (`state.repositoryURL` and its
+   `/issues` page).
+5. **Start.** A recap of what the guide set (language, appearance, Steam) and
+   the two ways in: **Browse the Workshop** opens Discover, **Import
+   wallpapers** opens the import popover on Installed; **Start using the app**
+   simply closes it.
+
+Leaving the guide by any of the closing actions is stored natively
+(`WebPanelController.welcomeSeenKey`, sent as the `welcomeSeen` action and
+reported in every snapshot), so the guide is shown on its own exactly once per
+Mac. **Settings → Library & Steam → Welcome guide → Show again** brings it
+back from the first page; closing it then does not touch the stored flag. Every
+link passes the same external-URL allowlist as every other link in the panel,
+and the whole guide is translated with the rest of the UI. While the guide is
+open the panel's document-level handlers stay out of `#welcome`; the guide owns
+its own events, and the download dialog does not surface the sign-in job's
+prompts (the guide answers them). A finished sign-in-only job is not listed as
+a download.
+
 ## Tabs
 
 - **Discover** browses the Steam Workshop. See

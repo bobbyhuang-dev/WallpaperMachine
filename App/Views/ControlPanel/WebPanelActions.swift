@@ -71,6 +71,12 @@ extension WebPanelController {
       filtersCollapsed[page] = collapsed
       defaults.set(collapsed, forKey: key)
       return
+    case "welcomeSeen":
+      // Reading, skipping or simply starting to use the app all count; the welcome is
+      // offered once and afterwards only on request from Settings.
+      welcomeSeen = true
+      defaults.set(true, forKey: Self.welcomeSeenKey)
+      return
     case "workshopSelect":
       guard let id = body["id"] as? String, let item = workshop.workshopItem(id: id) else {
         throw WebPanelRequest.invalid
@@ -374,6 +380,13 @@ extension WebPanelController {
           id: try request.string("id"), account: account, rememberSession: remembersSession,
           includeResources: try request.boolean("includeResources"), bridge: store)
       else { throw WebPanelRequest.invalid }
+      try checkDownloadError()
+    case "steamSignIn":
+      // The welcome guide and Settings verify an account ahead of any download. The password is
+      // never part of this message: Steam asks for it through the job's own prompt.
+      let account = try request.string("account")
+      remembersSession = try request.boolean("rememberSession")
+      workshop.requestSignIn(account: account, rememberSession: remembersSession, bridge: store)
       try checkDownloadError()
     case "removeDownloadRequest":
       // Dismissal is idempotent: a request that just started is already gone from the queue.

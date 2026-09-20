@@ -195,6 +195,84 @@ final class DownloaderLifecycleTests: DownloaderTestCase {
     }
   }
 
+  /// A sign-in-only session runs `+login … +quit` with no download command, answers Steam's own
+  /// prompts, saves the accepted sign-in for later downloads, and leaves nothing behind.
+  func testSignInOnlySessionSavesTheSignInAndDownloadsNothing() async throws {
+    let root = try makeRuntime(
+      """
+      for argument in "$@"; do
+        case "$argument" in +workshop_download_item|+app_update) exit 70 ;; esac
+      done
+      printf '%s\\n' "$*" > ../arguments.txt
+      printf 'password: '
+      IFS= read -r password
+      [ "$password" = 'local-password' ] || exit 71
+      printf '\\nLogging in user localtest to Steam Public...OK\\nWaiting for user info...OK\\n'
+      mkdir -p config
+      printf 'token:localtest' > config/config.vdf
+      chmod 644 config/config.vdf
+      """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let downloader = WorkshopDownloader(
+      sessionDirectory: root.appendingPathComponent("SteamSession"),
+      runtimeProvider: ShellRuntimeProvider(), networkMonitor: FixtureNetworkMonitor())
+    var signedIn = 0
+    downloader.signIn(
+      username: "LocalTest", executable: root.appendingPathComponent("runtime/steamcmd"),
+      root: root, rememberSession: true
+    ) { signedIn += 1 }
+    do {
+      XCTAssertTrue(downloader.isSigningInOnly)
+      XCTAssertFalse(downloader.isInstallingAssets)
+      try await waitUntil { downloader.prompt == .password || !downloader.isRunning }
+      XCTAssertEqual(downloader.prompt, .password, downloader.errorMessage ?? "")
+      downloader.submitSecret("local-password")
+      try await waitUntil { !downloader.isRunning }
+      XCTAssertNil(downloader.errorMessage)
+      XCTAssertEqual(signedIn, 1)
+      XCTAssertEqual(downloader.phase, .finishing)
+      XCTAssertNil(downloader.downloadedID, "Nothing is downloaded")
+      XCTAssertEqual(downloader.savedAccount, "localtest", "The accepted sign-in is saved for later downloads")
+      let arguments = try String(contentsOf: root.appendingPathComponent("arguments.txt"), encoding: .utf8)
+      XCTAssertTrue(arguments.contains("+login localtest +quit"), "Login is followed straight by quit: \(arguments)")
+      try assertNoStaging(in: root)
+      try assertPrivateSession(in: root)
+    } catch {
+      await downloader.shutdown()
+      throw error
+    }
+  }
+
+  /// Steam closing the session before it confirms the sign-in is a sign-in failure the user can
+  /// retry, never a success.
+  func testSignInOnlySessionThatEndsUnconfirmedFails() async throws {
+    let root = try makeRuntime(
+      """
+      printf 'password: '
+      IFS= read -r password
+      printf '\\nLogging in user localtest to Steam Public...\\n'
+      """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let downloader = WorkshopDownloader(
+      sessionDirectory: root.appendingPathComponent("SteamSession"),
+      runtimeProvider: ShellRuntimeProvider(), networkMonitor: FixtureNetworkMonitor())
+    downloader.signIn(
+      username: "localtest", executable: root.appendingPathComponent("runtime/steamcmd"),
+      root: root, rememberSession: true)
+    do {
+      try await waitUntil { downloader.prompt == .password || !downloader.isRunning }
+      downloader.submitSecret("local-password")
+      try await waitUntil { !downloader.isRunning }
+      XCTAssertNotNil(downloader.errorMessage)
+      XCTAssertTrue(downloader.canRetryAuthentication)
+      XCTAssertNil(downloader.savedAccount)
+      try assertNoStaging(in: root)
+    } catch {
+      await downloader.shutdown()
+      throw error
+    }
+  }
+
   func testPhaseFollowsEachSteamCMDStepBeforeAndAfterTheTransfer() async throws {
     let root = try makeRuntime(
       """

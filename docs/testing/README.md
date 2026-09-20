@@ -113,6 +113,14 @@ path. A test that passes alone but fails in the gate is the symptom; reproduce
 it with `python3 scripts/test.py --serial` and fix the shared state rather than
 the scheduling. UI runs are always serial: they drive one desktop.
 
+The per-test `UserDefaults` suite is not only a parallelism concern: the unit
+bundle runs inside the real app as its test host, so `UserDefaults.standard`
+*is* `app.mac-wallpaper-engine`, the preferences of the installed app. Any
+`WebPanelController` (or other store) built without `defaults:` writes there —
+the first-run welcome's `welcomeSeen` flag, sidebar choices, favorites — and
+silently changes what the app does at the next launch. Pass the test's own
+suite everywhere; `PanelFixture` does.
+
 ## Verification tiers
 
 The full gate compiles the Debug app and test bundle and then runs ~530 native

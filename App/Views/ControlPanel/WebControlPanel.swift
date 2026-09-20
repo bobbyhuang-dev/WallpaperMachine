@@ -74,6 +74,10 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
   /// Each library page (`discover`, `installed`) hides its filter sidebar when the user
   /// closes it with the toolbar's Filter button; the choice outlives the page.
   var filtersCollapsed: [String: Bool]
+  /// Whether the first-run welcome has been dismissed. The page shows the welcome over
+  /// the content while this is false and reports `welcomeSeen` once the user has read or
+  /// skipped it, or started using the app; it is never shown again on its own.
+  var welcomeSeen: Bool
   /// Folder sizes and dates for Installed's sort menu, measured off the main thread.
   let libraryMetrics: LibraryMetricsService
   let defaults: UserDefaults
@@ -100,6 +104,7 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
     "discover": "MacWallpaperEngine.workshopFiltersCollapsed",
     "installed": "MacWallpaperEngine.installedFiltersCollapsed",
   ]
+  static let welcomeSeenKey = "MacWallpaperEngine.welcomeSeen"
   /// Earlier builds stored a dragged inspector width here; the width now follows the
   /// window alone, so the key is cleared rather than read.
   static let legacyInspectorWidthKey = "MacWallpaperEngine.inspectorWidth"
@@ -127,6 +132,7 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
     self.theme = theme ?? .shared
     self.defaults = defaults
     filtersCollapsed = Self.filtersCollapsedKeys.mapValues { defaults.bool(forKey: $0) }
+    welcomeSeen = defaults.bool(forKey: Self.welcomeSeenKey)
     self.libraryMetrics = libraryMetrics ?? LibraryMetricsService()
     defaults.removeObject(forKey: Self.legacyInspectorWidthKey)
     favoriteIDs = Set(
@@ -504,8 +510,8 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
   let thumbnailCache: WorkshopThumbnailCache
   private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
   private static let files: Set<String> = [
-    "index.html", "panel.js", "panel.css", "settings.js", "settings.css", "theme.js", "icons.js",
-    "i18n.js",
+    "index.html", "panel.js", "panel.css", "settings.js", "settings.css", "welcome.js",
+    "welcome.css", "theme.js", "icons.js", "i18n.js",
   ]
   /// One catalog module per shipped language, served as `mwe-ui://app/locales/<tag>.js`.
   private static let localeFiles: Set<String> = Set(

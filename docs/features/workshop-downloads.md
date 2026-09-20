@@ -297,6 +297,25 @@ restarting the app and without downloading that wallpaper again.
 
 ## Steam sign-in
 
+The requirement itself — a Steam account that owns Wallpaper Engine — is stated
+once, with registration and store links, on the panel's
+[first-run guide](control-panel.md#first-run); the download dialog only asks
+for what the current download still needs.
+
+The guide can also sign in ahead of any download. `WorkshopStore.requestSignIn`
+retains a `WorkshopDownloadRequest` with id `WorkshopStore.signInRequestID`
+(`steam-sign-in`) that climbs the same ladder as a download — SteamCMD setup,
+then the account — and never the shared-resources stage, then runs
+`WorkshopDownloader.signIn`: a private SteamCMD session with `+login <account>
++quit` and no download command (`isSigningInOnly`). Steam's password and Steam
+Guard prompts arrive on the job exactly as for a download and are answered
+through `downloadInput`; with **Keep me signed in** the accepted session is
+saved the same way, so the next download starts silently. The job takes a
+queue slot like any other (`WorkshopDownloadManager.signIn`, at most one at a
+time), succeeds only once Steam confirms the sign-in before quitting, and
+reports "Steam sign-in" as its title; the page hides it from the downloads
+list once it has finished.
+
 **Keep me signed in on this Mac** is enabled by default for Workshop downloads
 and for scene-asset installation. After a successful authentication the app
 preserves the Steam-issued cached credentials and machine-authentication files

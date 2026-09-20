@@ -148,6 +148,7 @@ composite put it at x ∈ [0, 312] — never at the layer's world x.
   `lookAt` TypeError in its debug overlay, and `engine.screenResolution` being
   published as the cursor viewport's world extent rather than display pixels.
 
+
 ## 2026-09-20 — `$mediaThumbnail` reaches solid instance layers; the media buttons are inert by design gap
 
 Reported against "Music Visualizer | iOS Style (Media Integration)" (`3280146735`,

@@ -853,6 +853,39 @@ final class WorkshopDownloadIntentTests: XCTestCase {
   }
 
   /// An installed scene wallpaper needs no consent step once its shared assets exist.
+  /// The welcome guide signs in ahead of any download: the intent waits for SteamCMD like a
+  /// download, never asks about shared resources, and runs as a sign-in-only job.
+  func testSignInRequestWaitsForSetupThenSignsInWithoutADownload() async throws {
+    let fixture = try makeFixture()
+    fixture.store.requestSignIn(account: "localtest", rememberSession: true, bridge: fixture.bridge)
+    XCTAssertEqual(fixture.store.downloadRequests.map(\.id), [WorkshopStore.signInRequestID])
+    XCTAssertEqual(try stage(fixture.store), .setup)
+    XCTAssertTrue(fixture.store.downloader.downloads.isEmpty)
+
+    try await makeSetupReady(fixture)
+    fixture.store.resumeDownloadRequests(bridge: fixture.bridge)
+    XCTAssertTrue(fixture.store.downloadRequests.isEmpty, "Finishing setup resumes the sign-in on its own")
+    let job = try XCTUnwrap(fixture.store.downloader.signIn)
+    XCTAssertEqual(fixture.store.downloader.downloads.map(\.id), [WorkshopStore.signInRequestID])
+    XCTAssertTrue(job.isSignIn)
+    XCTAssertNil(job.item)
+    try await waitUntil { !job.isQueued }
+    XCTAssertTrue(job.worker.isSigningInOnly)
+    XCTAssertFalse(job.worker.isInstallingAssets)
+
+    // A second request while one runs shows the running job instead of starting another.
+    fixture.store.requestSignIn(account: "localtest", rememberSession: true, bridge: fixture.bridge)
+    XCTAssertEqual(fixture.store.downloader.downloads.count, 1)
+    XCTAssertEqual(fixture.store.selectedDownloadID, WorkshopStore.signInRequestID)
+
+    // An empty account is refused up front and retained for correction, as for a download.
+    fixture.store.downloader.cancel(job)
+    try await waitUntil { !job.isPending }
+    fixture.store.requestSignIn(account: "", rememberSession: true, bridge: fixture.bridge)
+    XCTAssertEqual(try stage(fixture.store), .account)
+    XCTAssertEqual(fixture.store.downloader.downloads.count, 1, "No job starts without an account")
+  }
+
   func testSceneSkipsResourceConsentWhenAssetsAreReady() async throws {
     let fixture = try makeFixture(sceneAssetsReady: true)
     try await makeSetupReady(fixture)

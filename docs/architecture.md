@@ -57,7 +57,7 @@ Swift hosts it, but the page is app-owned: the renderer never draws into this we
 | `App/Views/ControlPanel/WebControlPanel.swift` | `NSViewRepresentable` over `WKWebView`; `WebPanelController` coordinator, `WebPanelAssets` scheme handler, message proxy |
 | `App/Views/ControlPanel/WebPanelSnapshot.swift` | Builds the single `[String: Any]` state payload handed to the page |
 | `App/Views/ControlPanel/WebPanelActions.swift` | Decodes and executes page-originated actions (`WebPanelRequest`) |
-| `WebUI/index.html`, `panel.js`, `settings.js`, `theme.js`, `panel.css`, `settings.css` | The page itself |
+| `WebUI/index.html`, `panel.js`, `settings.js`, `welcome.js`, `theme.js`, `panel.css`, `settings.css`, `welcome.css` | The page itself; `welcome.js` is the full-window first-run guide |
 | `WebUI/icons.js` | Vendored [Lucide](https://lucide.dev) glyphs (ISC) behind the page's `icon(name)` helper |
 
 Protocol, both directions:

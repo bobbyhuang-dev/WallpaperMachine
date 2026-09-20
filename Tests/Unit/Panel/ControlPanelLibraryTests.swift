@@ -339,6 +339,7 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
       defaults: defaults)
     let controller = WebPanelController(
       store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
+      defaults: defaults,
       appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
@@ -411,6 +412,7 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
       defaults: defaults)
     let controller = WebPanelController(
       store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
+      defaults: defaults,
       appLanguage: .english())
 
     try? await fixture.store.refreshAllAsync()

@@ -24,7 +24,8 @@ enum WorkshopDownloadStage: String, Sendable {
 /// A retained download intent. One click keeps the wallpaper the user asked for while
 /// the runtime, the Steam account, and shared scene assets are resolved in turn.
 struct WorkshopDownloadRequest: Identifiable, Sendable {
-  /// Workshop item id, or `WorkshopStore.sceneAssetsRequestID` for the shared assets download.
+  /// Workshop item id, `WorkshopStore.sceneAssetsRequestID` for the shared assets download, or
+  /// `WorkshopStore.signInRequestID` for a sign-in that downloads nothing.
   let id: String
   let item: WorkshopItem?
   var account: String
@@ -79,6 +80,7 @@ final class WorkshopStore {
   private(set) var downloadRequests: [WorkshopDownloadRequest] = []
 
   static let sceneAssetsRequestID = "scene-assets"
+  static let signInRequestID = WorkshopDownloadManager.signInID
 
   var hasDownloadActivity: Bool { !downloader.downloads.isEmpty || !downloadRequests.isEmpty }
   var selectedDownload: WorkshopDownload? {
@@ -151,6 +153,22 @@ final class WorkshopStore {
       bridge: bridge)
   }
 
+  /// Signs in to Steam without downloading anything, so the account and its saved sign-in are in
+  /// place before the first download. Rides the same ladder as a download: SteamCMD must be set
+  /// up first, and a running sign-in is shown rather than started twice.
+  func requestSignIn(account: String, rememberSession: Bool, bridge: BridgeStore) {
+    if let job = downloader.signIn, job.isPending {
+      showDownload(job)
+      return
+    }
+    username = account
+    resolve(
+      WorkshopDownloadRequest(
+        id: Self.signInRequestID, item: nil, account: account,
+        rememberSession: rememberSession, includesResources: true),
+      bridge: bridge)
+  }
+
   /// Supplies the account and the consent a retained request is waiting on, then resumes it.
   /// Returns `false` when the id names neither a retained request nor a known Workshop item.
   @discardableResult
@@ -159,8 +177,9 @@ final class WorkshopStore {
     includeResources: Bool, bridge: BridgeStore
   ) -> Bool {
     let existing = downloadRequests.first { $0.id == id }
-    let item = id == Self.sceneAssetsRequestID ? nil : existing?.item ?? workshopItem(id: id)
-    guard id == Self.sceneAssetsRequestID || item != nil else { return false }
+    let itemless = id == Self.sceneAssetsRequestID || id == Self.signInRequestID
+    let item = itemless ? nil : existing?.item ?? workshopItem(id: id)
+    guard itemless || item != nil else { return false }
     username = account
     resolve(
       WorkshopDownloadRequest(
@@ -211,6 +230,8 @@ final class WorkshopStore {
   func stage(for request: WorkshopDownloadRequest) -> WorkshopDownloadStage {
     if steamCMDSetup.isBusy || steamCMDSetup.selectedRuntime == nil { return .setup }
     if request.refused || Self.normalizedAccount(request.account).isEmpty { return .account }
+    // A sign-in downloads nothing, so shared resources never come into it.
+    if request.id == Self.signInRequestID { return .ready }
     if !request.includesResources, needsResources(request) { return .resources }
     return .ready
   }
@@ -260,7 +281,12 @@ final class WorkshopStore {
       return
     }
     downloadRequests.removeAll { $0.id == request.id }
-    if let item = request.item {
+    if request.id == Self.signInRequestID {
+      downloader.signIn(
+        username: request.account, executable: runtime.executableURL,
+        root: ClientPaths.libraryURL.deletingLastPathComponent(),
+        rememberSession: request.rememberSession)
+    } else if let item = request.item {
       // Shared assets are queued first and only once: other scenes ride the same job.
       if needsSharedAssets(item), !sharedAssetsPending {
         installAssets(request, runtime: runtime)
@@ -274,7 +300,8 @@ final class WorkshopStore {
     } else {
       installAssets(request, runtime: runtime)
     }
-    if let job = downloader.download(for: request.item?.id), job.isPending {
+    let started = request.id == Self.signInRequestID ? downloader.signIn : downloader.download(for: request.item?.id)
+    if let job = started, job.isPending {
       selectedDownloadID = job.id
     } else if downloader.errorMessage != nil {
       // The downloader refused the inputs; keep the intent so the user can correct them.

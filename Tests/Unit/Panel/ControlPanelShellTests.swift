@@ -71,7 +71,8 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       defaults: defaults)
     let navigation = ControlPanelNavigation()
     let controller = WebPanelController(
-      store: fixture.store, navigation: navigation, workshop: workshop, appLanguage: .english())
+      store: fixture.store, navigation: navigation, workshop: workshop,
+      defaults: defaults, appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 960, height: 640))
@@ -199,6 +200,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
     let languages = AppLanguageStore(defaults: defaults, systemLanguages: ["en"])
     let controller = WebPanelController(
       store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
+      defaults: defaults,
       appLanguage: languages)
     let web = controller.makeWebView()
     defer { controller.stop() }
@@ -296,6 +298,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
     let navigation = ControlPanelNavigation()
     let controller = WebPanelController(
       store: fixture.store, navigation: navigation, workshop: workshop, updater: updater,
+      defaults: defaults,
       appLanguage: .english())
     let idle = try XCTUnwrap(controller.snapshot()["update"] as? [String: Any])
     XCTAssertEqual(idle["status"] as? String, "idle")
@@ -349,6 +352,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
     let navigation = ControlPanelNavigation()
     let controller = WebPanelController(
       store: fixture.store, navigation: navigation, workshop: workshop, updater: updater,
+      defaults: defaults,
       appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
@@ -432,6 +436,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       defaults: defaults)
     let controller = WebPanelController(
       store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop, theme: theme,
+      defaults: defaults,
       appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
@@ -640,4 +645,208 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       }
     }
   }
+
+  /// The first-run guide covers the whole window and walks five pages: language and appearance
+  /// (applied at once, put back by Skip), Steam sign-in (a real sign-in-only session whose
+  /// password prompt is answered from the form), preferences (drafts committed by Continue),
+  /// tips with the GitHub links, and the closing choice. It is shown on its own once per Mac and
+  /// again from Settings.
+  func testFirstRunGuideCoversTheWindowWalksFivePagesAndReturnsFromSettings() async throws {
+    try await withPanel { panel in
+      XCTAssertFalse(panel.controller.welcomeSeen, "A fresh install has not seen the guide")
+      XCTAssertEqual(panel.controller.snapshot()["welcomeSeen"] as? Bool, false)
+      panel.show()
+      try await panel.waitJS("!document.getElementById('welcome').hidden && !!document.querySelector('#welcome .welcome-page')")
+      let first = try await panel.js("""
+        const region = document.getElementById('welcome');
+        const rect = region.getBoundingClientRect();
+        const style = getComputedStyle(region);
+        return {
+          step: region.querySelector('.welcome-page').dataset.step,
+          covers: style.position === 'fixed' && rect.width === window.innerWidth && rect.height === window.innerHeight,
+          background: style.backgroundColor,
+          theme: document.documentElement.dataset.theme,
+          title: region.querySelector('#welcome-title').textContent,
+          languages: [...region.querySelectorAll('[data-action="language"]')].map(b => b.dataset.value),
+          themes: [...region.querySelectorAll('[data-action="theme"]')].map(b => b.dataset.value),
+          checked: [...region.querySelectorAll('[aria-checked="true"]')].map(b => `${b.dataset.action}:${b.dataset.value}`),
+          steps: region.querySelectorAll('.welcome-progress li').length,
+          modal: document.querySelectorAll('dialog[open]').length,
+          focusedTitle: document.activeElement === region.querySelector('#welcome-title'),
+        };
+        """) as? [String: Any]
+      XCTAssertEqual(first?["step"] as? String, "language")
+      XCTAssertEqual(first?["covers"] as? Bool, true, "The guide covers the whole window, top bar included")
+      XCTAssertEqual(
+        first?["background"] as? String, first?["theme"] as? String == "dark" ? "rgb(0, 0, 0)" : "rgb(255, 255, 255)",
+        "Black or white by the resolved appearance, never translucent")
+      XCTAssertEqual(first?["title"] as? String, "Welcome to MacWallpaperEngine")
+      XCTAssertEqual(first?["languages"] as? [String], ["system"] + AppLanguage.supported.map(\.tag))
+      XCTAssertEqual(first?["themes"] as? [String], ["system", "light", "dark"])
+      XCTAssertEqual(first?["checked"] as? [String], ["language:system", "theme:system"], "Defaults are selected")
+      XCTAssertEqual(first?["steps"] as? Int, 5)
+      XCTAssertEqual(first?["modal"] as? Int, 0, "The guide is a page, not a modal dialog")
+      XCTAssertEqual(first?["focusedTitle"] as? Bool, true, "Focus lands on the page title")
+
+      // A choice applies at once; Skip puts the opening values back and moves on.
+      _ = try await panel.js("document.querySelector('#welcome [data-action=\"theme\"][data-value=\"dark\"]').click();")
+      try await panel.waitUntil { panel.theme.preferences.mode == .dark }
+      try await panel.waitJS("document.documentElement.dataset.themeMode === 'dark' && document.querySelector('#welcome [data-action=\"theme\"][data-value=\"dark\"]').getAttribute('aria-checked') === 'true'")
+      _ = try await panel.js("document.querySelector('#welcome [data-action=\"skipLanguage\"]').click();")
+      try await panel.waitUntil { panel.theme.preferences.mode == .system }
+      try await panel.waitJS("document.querySelector('#welcome .welcome-page')?.dataset.step === 'steam'")
+
+      // Steam: the two links the requirement implies, plain validation, then a real sign-in.
+      let steam = try await panel.js("""
+        const region = document.getElementById('welcome');
+        const links = [...region.querySelectorAll('.welcome-steam-links [data-action="openExternal"]')].map(link => link.dataset.url);
+        const before = window.powerProbe.received.length;
+        region.querySelector('form[data-form="signIn"]').requestSubmit();
+        await new Promise(resolve => setTimeout(resolve, 50));
+        return {
+          links,
+          fields: ['welcome-account', 'welcome-password'].map(id => document.getElementById(id)?.type),
+          remember: region.querySelector('input[name="remember"]').checked,
+          error: region.querySelector('form .notice.error')?.textContent || '',
+          snapshots: window.powerProbe.received.length - before,
+          skip: !!region.querySelector('[data-action="skipSteam"]'),
+        };
+        """) as? [String: Any]
+      let links = try XCTUnwrap(steam?["links"] as? [String])
+      XCTAssertEqual(links.count, 2, "Register and buy: the two links the Steam requirement implies")
+      for link in links {
+        let url = try XCTUnwrap(URL(string: link))
+        XCTAssertTrue(WebPanelController.allowedExternalURL(url), "\(link) must pass the external allowlist")
+      }
+      XCTAssertTrue(links.contains { $0.contains("/join") }, "One link registers a Steam account")
+      XCTAssertTrue(links.contains { $0.contains("/app/431960") }, "One link buys Wallpaper Engine")
+      XCTAssertEqual(steam?["fields"] as? [String], ["text", "password"])
+      XCTAssertEqual(steam?["remember"] as? Bool, true, "Keep me signed in is on by default")
+      XCTAssertFalse((steam?["error"] as? String ?? "").isEmpty, "An empty account is refused before anything reaches native")
+      XCTAssertEqual(steam?["snapshots"] as? Int, 0)
+      XCTAssertEqual(steam?["skip"] as? Bool, true, "Signing in is optional")
+
+      panel.workshop.steamCMDSetup.selectExisting(at: panel.executable)
+      try await panel.waitUntil(timeout: 5) { panel.workshop.steamCMDSetup.selectedRuntime != nil }
+      try await panel.waitJS("document.querySelector('#welcome form[data-form=\"signIn\"] button[type=\"submit\"] .button-label')?.textContent === 'Sign in'")
+      _ = try await panel.js("""
+        const region = document.getElementById('welcome');
+        const account = region.querySelector('#welcome-account');
+        account.value = 'LocalTest';
+        account.dispatchEvent(new Event('input', { bubbles: true }));
+        region.querySelector('#welcome-password').value = 'hunter2-secret';
+        region.querySelector('form[data-form="signIn"]').requestSubmit();
+        """)
+      let job = try await panel.waitForSignIn()
+      try await panel.waitUntil(timeout: 10) { !job.isPending }
+      XCTAssertNil(job.errorMessage, "The sign-in-only session succeeds")
+      XCTAssertEqual(
+        try String(contentsOf: panel.root.appendingPathComponent("password"), encoding: .utf8), "hunter2-secret",
+        "The password typed into the guide answers Steam's own prompt")
+      try await panel.waitJS("!!document.querySelector('#welcome .welcome-status.success')")
+      let signedIn = try await panel.js("""
+        const region = document.getElementById('welcome');
+        return {
+          title: region.querySelector('.welcome-status.success .welcome-status-title').textContent,
+          dialog: document.querySelectorAll('dialog[open]').length,
+          passwordField: !!document.getElementById('welcome-password'),
+          continueLabel: region.querySelector('.welcome-footer .primary .button-label')?.textContent,
+          queue: !!document.querySelector('#top-actions [data-action="openDownloads"]'),
+        };
+        """) as? [String: Any]
+      XCTAssertEqual(signedIn?["title"] as? String, "Signed in as localtest")
+      XCTAssertEqual(signedIn?["dialog"] as? Int, 0, "The guide answers the prompt itself; the download dialog stays closed")
+      XCTAssertEqual(signedIn?["passwordField"] as? Bool, false, "The password field is gone with the form")
+      XCTAssertEqual(signedIn?["continueLabel"] as? String, "Continue")
+      XCTAssertEqual(signedIn?["queue"] as? Bool, false, "A finished sign-in is not listed as a download")
+
+      // Preferences are drafts: nothing reaches native until Continue.
+      _ = try await panel.js("document.querySelector('#welcome [data-action=\"continue\"]').click();")
+      try await panel.waitJS("document.querySelector('#welcome .welcome-page')?.dataset.step === 'preferences'")
+      panel.bridge.bundleProvider = {
+        BridgeSnapshotBundle(
+          app: panel.store.appSnapshot, library: panel.store.librarySnapshot, wallpaperOptions: nil,
+          monitorInformation: panel.store.monitorInformationSnapshot, settings: panel.store.settingsSnapshot)
+      }
+      let preferences = try await panel.js("""
+        const region = document.getElementById('welcome');
+        region.querySelector('input[data-pref="pauseOnBattery"]').click();
+        await new Promise(resolve => setTimeout(resolve, 30));
+        return { prefs: region.querySelectorAll('input[data-pref]').length, checked: region.querySelector('input[data-pref="pauseOnBattery"]').checked };
+        """) as? [String: Any]
+      XCTAssertEqual(preferences?["prefs"] as? Int, 4)
+      XCTAssertEqual(preferences?["checked"] as? Bool, true)
+      XCTAssertEqual(panel.bridge.pauseOnBatteryCalls, [], "Toggling a switch is a draft")
+      _ = try await panel.js("document.querySelector('#welcome [data-action=\"savePreferences\"]').click();")
+      try await panel.waitUntil { panel.bridge.pauseOnBatteryCalls == [true] }
+      try await panel.waitJS("document.querySelector('#welcome .welcome-page')?.dataset.step === 'tips'")
+
+      // Tips point at GitHub through the same allowlist as every other link.
+      let tips = try await panel.js("""
+        const region = document.getElementById('welcome');
+        const github = [...region.querySelectorAll('.welcome-github [data-action="openExternal"]')].map(link => link.dataset.url);
+        return { tips: region.querySelectorAll('.welcome-tips li').length, github };
+        """) as? [String: Any]
+      _ = try await panel.js("document.querySelector('#welcome [data-action=\"continue\"]').click();")
+      try await panel.waitJS("document.querySelector('#welcome .welcome-page')?.dataset.step === 'start'")
+      let start = try await panel.js("""
+        const region = document.getElementById('welcome');
+        return { step: region.querySelector('.welcome-page').dataset.step, recap: [...region.querySelectorAll('.welcome-recap dd')].map(node => node.textContent) };
+        """) as? [String: Any]
+      XCTAssertEqual(tips?["tips"] as? Int, 5)
+      let github = try XCTUnwrap(tips?["github"] as? [String])
+      XCTAssertEqual(github.count, 2, "Repository and issue tracker")
+      for link in github {
+        let url = try XCTUnwrap(URL(string: link))
+        XCTAssertEqual(url.host, "github.com", link)
+        XCTAssertTrue(WebPanelController.allowedExternalURL(url), "\(link) must pass the external allowlist")
+      }
+      XCTAssertEqual(start?["step"] as? String, "start")
+      XCTAssertEqual(start?["recap"] as? [String], ["System (Auto)", "System (Auto)", "Signed in as localtest"])
+
+      // The closing choice puts the guide away, tells native, and lands on Discover.
+      _ = try await panel.js("document.querySelector('#welcome [data-action=\"browse\"]').click();")
+      try await panel.waitUntil { panel.controller.welcomeSeen && panel.navigation.selection == .workshop }
+      XCTAssertTrue(panel.defaults.bool(forKey: WebPanelController.welcomeSeenKey), "The choice is stored")
+      try await panel.waitJS("document.getElementById('welcome').hidden")
+      try await panel.quiet()
+      try await panel.expectJS(
+        """
+        const base = window.powerProbe.received.at(-1);
+        window.wallpaperUI.receive(Object.assign({}, base, { welcomeSeen: true }));
+        return document.getElementById('welcome').hidden;
+        """, equals: true)
+      XCTAssertNil(panel.controller.actionError)
+
+      // A relaunch with the same defaults never shows it on its own again.
+      let relaunched = WebPanelController(
+        store: panel.store, navigation: ControlPanelNavigation(), workshop: panel.workshop,
+        theme: panel.theme, defaults: panel.defaults, appLanguage: .english())
+      XCTAssertTrue(relaunched.welcomeSeen)
+      XCTAssertEqual(relaunched.snapshot()["welcomeSeen"] as? Bool, true)
+
+      // Settings → Library & Steam brings it back from the first page; finishing it then asks native nothing.
+      let replay = try await panel.js("""
+        const base = window.powerProbe.received.at(-1);
+        window.wallpaperUI.receive(Object.assign({}, base, { page: 'settings', welcomeSeen: true }));
+        document.querySelector('#settings-content [data-section="library"]').click();
+        const button = document.querySelector('#settings-content [data-action="openWelcome"]');
+        button.click();
+        const region = document.getElementById('welcome');
+        const reopened = !region.hidden && region.querySelector('.welcome-page').dataset.step === 'language';
+        const before = window.powerProbe.received.length;
+        region.querySelector('[data-action="go"][data-step="4"]').click();
+        const last = region.querySelector('.welcome-page').dataset.step;
+        region.querySelector('[data-action="finish"]').click();
+        await new Promise(resolve => setTimeout(resolve, 150));
+        return { hasButton: !!button, reopened, last, closed: region.hidden, snapshots: window.powerProbe.received.length - before };
+        """) as? [String: Any]
+      XCTAssertEqual(replay?["hasButton"] as? Bool, true, "Library & Steam offers the guide again")
+      XCTAssertEqual(replay?["reopened"] as? Bool, true)
+      XCTAssertEqual(replay?["last"] as? String, "start", "The step indicator jumps between pages")
+      XCTAssertEqual(replay?["closed"] as? Bool, true)
+      XCTAssertEqual(replay?["snapshots"] as? Int, 0, "An already-seen guide closes without another round trip")
+    }
+  }
+
 }

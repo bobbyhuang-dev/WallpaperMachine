@@ -73,6 +73,17 @@ final class LayoutSnapshotBridge: WallpaperBridge {
   @MainActor var failedOptionIDs = Set<String>()
   @MainActor var holdOptions = false
   @MainActor var pendingOptions: [CheckedContinuation<BridgeWallpaperOptionsSnapshot, Error>] = []
+  /// Settings writes the panel commits; a provider stands in for the engine's reply.
+  @MainActor var pauseOnBatteryCalls: [Bool] = []
+  @MainActor var bundleProvider: (@MainActor () -> BridgeSnapshotBundle)?
+
+  override func setPauseOnBatteryPower(enabled: Bool) async throws -> BridgeSnapshotBundle {
+    try await MainActor.run {
+      pauseOnBatteryCalls.append(enabled)
+      guard let bundle = bundleProvider?() ?? snapshot else { throw CancellationError() }
+      return bundle
+    }
+  }
 
   override func wallpaperOptionsSnapshot(wallpaperId: String) async throws -> BridgeWallpaperOptionsSnapshot {
     try await option(wallpaperId)
@@ -168,6 +179,7 @@ final class PanelFixture {
   let defaults: UserDefaults
   let previousHome: String?
   let workshop: WorkshopStore
+  let theme: AppThemeStore
   let controller: WebPanelController
   var web: WKWebView
   let executable: URL
@@ -180,9 +192,19 @@ final class PanelFixture {
     previousHome = ProcessInfo.processInfo.environment["MAC_WALLPAPER_ENGINE_HOME"]
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     executable = root.appendingPathComponent("steamcmd")
+    // A download prints its password prompt and blocks until `advance` appears; a sign-in-only
+    // session (no `+workshop_download_item`) reads the password, records it and signs in.
     try Data("""
       #!/bin/sh
+      mode=signin
+      for argument in "$@"; do [ "$argument" = +workshop_download_item ] && mode=download; done
       printf 'Password:\\n'
+      if [ "$mode" = signin ]; then
+        IFS= read -r password
+        printf '%s' "$password" > "\(root.path)/password"
+        printf 'Waiting for user info...OK\\n'
+        exit 0
+      fi
       while [ ! -e "\(root.path)/advance" ]; do /bin/sleep 0.02; done
       printf 'Downloading item 222\\n'
       IFS= read -r hold
@@ -196,10 +218,11 @@ final class PanelFixture {
       downloader: downloader, supportDirectory: root, defaults: defaults,
       runtimeProvider: PanelRuntime(), sceneAssetsAvailable: { false })
     let visibility = self.visibility
+    theme = AppThemeStore(defaults: defaults)
     controller = WebPanelController(
       store: store, navigation: navigation, workshop: workshop,
-      isPresentationVisible: { visibility.visible }, displayTitles: displayTitles,
-      appLanguage: .english())
+      isPresentationVisible: { visibility.visible }, theme: theme, displayTitles: displayTitles,
+      defaults: defaults, appLanguage: .english())
     web = controller.makeWebView()
     web.setFrameSize(NSSize(width: 960, height: 640))
   }
@@ -225,6 +248,12 @@ final class PanelFixture {
         return null;
       };
       """)
+  }
+
+  /// The sign-in-only job once the guide has started it.
+  func waitForSignIn() async throws -> WorkshopDownload {
+    try await waitUntil(timeout: 5) { self.workshop.downloader.signIn != nil }
+    return try XCTUnwrap(workshop.downloader.signIn)
   }
 
   func show() { visibility.visible = true; controller.scheduleUpdate() }

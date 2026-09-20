@@ -1,4 +1,5 @@
 import { renderSettings } from './settings.js';
+import { createWelcome, SIGN_IN_ID } from './welcome.js';
 import { glyphs } from './icons.js';
 import { t, applyStaticText, setLanguage, language } from './i18n.js';
 
@@ -119,7 +120,8 @@ function patch(node, fresh) {
     if (focused && ['value', 'checked'].includes(attribute.name)) continue;
     if (node.getAttribute(attribute.name) !== attribute.value) node.setAttribute(attribute.name, attribute.value);
   }
-  if (node.tagName === 'INPUT') { if (!focused) { if (node.name !== 'response' && node.value !== fresh.value) node.value = fresh.value; node.checked = fresh.checked; } return; }
+  // Secrets are never part of the markup, so a password field keeps what was typed across renders.
+  if (node.tagName === 'INPUT') { if (!focused) { if (node.name !== 'response' && node.type !== 'password' && node.value !== fresh.value) node.value = fresh.value; node.checked = fresh.checked; } return; }
   if (node.tagName === 'TEXTAREA') { if (!focused && node.value !== fresh.value) node.value = fresh.value; return; }
   if (node.tagName === 'SELECT' && focused) return;
   reconcile(node, fresh);
@@ -159,6 +161,10 @@ function receive(snapshot) {
   const shown = language();
   if (snapshot.language?.effective && setLanguage(snapshot.language.effective) !== shown) applyStaticText();
   if (!workshopDraft) workshopDraft = { text: snapshot.workshop?.text || '', sort: snapshot.workshop?.sort || 'trend-year', tags: [...(snapshot.workshop?.tags || [])], excludedTags: [...(snapshot.workshop?.excludedTags || defaultExcludedTags)] };
+  // The first-run guide opens from the first snapshot that reports it unseen and closes for
+  // good once the user finishes or leaves it; a snapshot that arrives before native has
+  // stored that choice cannot reopen it.
+  if (snapshot.welcomeSeen === false) welcome.openIfUndecided();
   render();
 }
 window.wallpaperUI = { receive };
@@ -179,7 +185,7 @@ function render() {
   morph($('top-actions'), `<label class="sr-only" for="target-display">${escapeHTML(t('Target display'))}</label><select id="target-display" data-change="target" aria-label="${escapeHTML(t('Target display'))}"${disabled(state.busy)}>${(state.displays || []).map(display => `<option value="${escapeHTML(display.id)}"${display.id === state.targetDisplayID ? ' selected' : ''}${disabled(!display.enabled || display.mode === 'mirror')}>${escapeHTML(display.title)}${display.mode === 'mirror' ? escapeHTML(t(' (mirrored)')) : !display.enabled ? escapeHTML(t(' (disabled)')) : ''}</option>`).join('')}</select>${queueButton()}`);
   $('library-page').hidden = settings;
   $('settings-content').hidden = !settings;
-  if (settings) renderSettings($('settings-content'), state, { send, escapeHTML, icon, requestAssets: (element) => run(requestDownload(null, element)), openDownloadDialog: (id, element) => openDialog(id, element) });
+  if (settings) renderSettings($('settings-content'), state, { send, escapeHTML, icon, requestAssets: (element) => run(requestDownload(null, element)), openDownloadDialog: (id, element) => openDialog(id, element), openWelcome: () => welcome.open() });
   else {
     // Both library pages share one right-hand filter sidebar; the toolbar's Filter button
     // opens and closes it, and each page remembers its own choice natively.
@@ -192,7 +198,7 @@ function render() {
     renderGrid(discover);
     renderInspector(discover);
   }
-  renderActivity(); renderPopover(); renderDialog(); surfaceAuthRequests();
+  renderActivity(); renderPopover(); renderDialog(); welcome.render(state); surfaceAuthRequests();
 }
 const filtersCollapsed = () => Boolean(state?.filtersCollapsed?.[state.page]);
 const installedFilterCount = () => Number(installed.kind !== 'All types') + Number(installed.favorites) + Number(installed.active);
@@ -529,7 +535,8 @@ function signInGuide(job, account) {
 }
 const guideMarkup = (guide, extra = '') => `<section class="dialog-guide" aria-label="${escapeHTML(guide.title)}"><span class="dialog-guide-icon">${icon(guide.icon, 20)}</span><div class="dialog-guide-body"><p class="dialog-guide-title" role="status">${escapeHTML(guide.title)}</p>${guide.steps?.length ? `<ol class="dialog-steps">${guide.steps.map(step => `<li><span>${step}</span></li>`).join('')}</ol>` : ''}${guide.note ? `<p class="dialog-guide-note">${escapeHTML(guide.note)}</p>` : ''}${extra}</div></section>`;
 function queueState() {
-  const downloads = state.downloads || [];
+  // A finished sign-in-only session is not a download; it only shows while it is running.
+  const downloads = (state.downloads || []).filter(item => item.id !== SIGN_IN_ID || item.pending);
   const requests = state.downloadRequests || [];
   const active = downloads.filter(item => item.pending && !item.queued);
   const queued = downloads.filter(item => item.pending && item.queued);
@@ -725,7 +732,9 @@ function authStep(job) {
 // instead of vanishing, then steps aside on its own.
 function startedStep(job, subject) {
   const shared = job.id !== subject.id;
-  const guide = { icon: 'check', title: shared ? t('Signed in. Shared resources are downloading first') : t('Signed in. {title} is downloading', { title: subject.title }), note: shared ? t('{title} starts automatically once they are installed. You can keep using the app meanwhile.', { title: subject.title }) : t('You can keep using the app. Progress shows on the wallpaper and in the downloads list.') };
+  const guide = job.id === SIGN_IN_ID
+    ? { icon: 'check', title: t('Signed in to Steam'), note: t('Downloads will use this sign-in.') }
+    : { icon: 'check', title: shared ? t('Signed in. Shared resources are downloading first') : t('Signed in. {title} is downloading', { title: subject.title }), note: shared ? t('{title} starts automatically once they are installed. You can keep using the app meanwhile.', { title: subject.title }) : t('You can keep using the app. Progress shows on the wallpaper and in the downloads list.') };
   const progress = Number.isFinite(job.progress) ? `<progress max="1" value="${clamp(job.progress)}" aria-label="${escapeHTML(t('Download progress'))}"></progress>` : `<progress aria-label="${escapeHTML(t('Download in progress'))}"></progress>`;
   return `${guideMarkup(guide, `<p class="dialog-status" role="status">${escapeHTML(job.status)}</p>${progress}`)}<div class="dialog-actions">${button(t('Done'), 'dismissDialog', {}, { icon: 'check', className: 'primary' })}${button(t('Show downloads'), 'showDownloadsFromDialog', {}, { icon: 'download', className: 'quiet' })}</div>`;
 }
@@ -755,7 +764,8 @@ const authKey = (job) => `${job.id}\u0000${job.prompt || job.challenge || ''}`;
 // opens the dialog on its own. A saved sign-in never asks, so routine downloads stay on the tile.
 function surfaceAuthRequests() {
   if (dialogTarget !== null || !state) return;
-  const job = (state.downloads || []).find(item => item.pending && !item.queued && (item.prompt || item.challenge));
+  // The welcome guide answers its own sign-in's prompts while it is open.
+  const job = (state.downloads || []).find(item => item.pending && !item.queued && (item.prompt || item.challenge) && !(item.id === SIGN_IN_ID && welcome.isOpen()));
   if (job && !dismissedAuth.has(authKey(job))) openDialog(job.id, null);
 }
 async function continueDownload(includeResources) {
@@ -837,7 +847,7 @@ document.querySelector('.topbar').addEventListener('mousedown', event => { if (!
 document.querySelector('.topbar').addEventListener('dblclick', event => { if (titleBarGesture(event)) postTitleBarGesture('titleDoubleClick'); });
 function run(promise) { Promise.resolve(promise).catch(error => { localError = error?.message || String(error); renderError(); }); }
 document.addEventListener('click', event => {
-  if (event.target.closest('#settings-content')) return;
+  if (event.target.closest('#settings-content, #welcome')) return;
   const control = event.target.closest('[data-action]');
   if (!control) {
     const tab = event.target.closest('.tabs [data-page]');
@@ -855,7 +865,7 @@ document.addEventListener('click', event => {
 });
 document.addEventListener('input', event => {
   const element = event.target;
-  if (element.closest('#settings-content')) return;
+  if (element.closest('#settings-content, #welcome')) return;
   if (element.type === 'range') { const output = element.parentElement.querySelector('output'); if (output) output.textContent = element.dataset.setting === 'volume' ? `${element.value}%` : element.value; }
   if (element.dataset.input === 'property') { drafts.set(draftKey(element.dataset.id, element.dataset.propertyId), element.value); renderInspector(false); }
   if (element.dataset.input === 'account' && dialogAccount) { dialogAccount.account = element.value; renderDialog(); }
@@ -866,7 +876,7 @@ document.addEventListener('input', event => {
 });
 document.addEventListener('change', event => {
   const element = event.target;
-  if (element.closest('#settings-content')) return;
+  if (element.closest('#settings-content, #welcome')) return;
   const change = element.dataset.change;
   const value = element.type === 'checkbox' ? element.checked : element.type === 'number' || element.type === 'range' ? Number(element.value) : element.value;
   if (element.id === 'import-duplicates') { importDuplicates = value; renderPopover(); return; }
@@ -888,7 +898,7 @@ document.addEventListener('change', event => {
 });
 document.addEventListener('submit', event => {
   const form = event.target;
-  if (form.closest('#settings-content')) return;
+  if (form.closest('#settings-content, #welcome')) return;
   event.preventDefault();
   if (form.dataset.form === 'search' && state.page === 'discover') run(searchWorkshop());
   if (form.dataset.form === 'workshopPage' && state.page === 'discover') {
@@ -908,7 +918,7 @@ document.addEventListener('submit', event => {
   }
 });
 document.addEventListener('keydown', event => {
-  if (event.target.closest('#settings-content')) return;
+  if (event.target.closest('#settings-content, #welcome')) return;
   if (event.key === 'Escape') {
     if (popover) closePopover(true);
     else if ((selection.size || selecting) && !dialogTarget) { selection.clear(); selectionAnchor = null; selecting = false; render(); }
@@ -1021,5 +1031,14 @@ function sampleLivePreviews() {
   }
 }
 $('wallpaper-grid').addEventListener('scroll', () => { clearTimeout(liveScrollTimer); liveScrollTimer = setTimeout(queueLivePreviews, 120); }, { passive: true });
+// The first-run guide draws over the whole window, so it owns its own events and the panel's
+// document-level handlers stay out of it.
+const welcome = createWelcome({
+  container: $('welcome'), send, run, escapeHTML, icon, button, morph, busy, safeLink, signInGuide, guideMarkup,
+  closePopover, dragWindow: () => postTitleBarGesture('dragWindow'),
+  clearError: () => { localError = ''; if (state) { state.error = null; state.downloadError = null; } renderError(); run(send('dismissError')); },
+  navigate: (page) => send('navigate', { page }),
+  openImport: async () => { await send('navigate', { page: 'installed' }); openPopover('import', document.querySelector('#browser-toolbar [data-action="openImport"]')); },
+});
 applyStaticText();
 run(send('ready'));

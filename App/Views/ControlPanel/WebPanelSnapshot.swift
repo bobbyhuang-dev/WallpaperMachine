@@ -256,7 +256,7 @@ extension WebPanelController {
       }
       return [
         "id": job.id, "wallpaperID": job.item?.id as Any? ?? null,
-        "title": job.item?.title ?? "Scene assets", "status": job.status,
+        "title": job.item?.title ?? Self.itemlessTitle(job.id), "status": job.status,
         "preview": job.item?.previewURL?.absoluteString as Any? ?? null,
         "thumbnail": job.item.flatMap(Self.thumbnailAddress) as Any? ?? null, "account": job.account,
         "phase": job.phase?.rawValue as Any? ?? null,
@@ -276,7 +276,7 @@ extension WebPanelController {
     let downloadRequests: [[String: Any]] = workshop.downloadRequests.map { request in
       [
         "id": request.id, "wallpaperID": request.item?.id as Any? ?? null,
-        "title": request.item?.title ?? "Scene assets",
+        "title": request.item?.title ?? Self.itemlessTitle(request.id),
         "preview": request.item?.previewURL?.absoluteString as Any? ?? null,
         "thumbnail": request.item.flatMap(Self.thumbnailAddress) as Any? ?? null,
         "account": request.account, "rememberSession": request.rememberSession,
@@ -349,6 +349,7 @@ extension WebPanelController {
         ? store.latestBridgeErrorMessage : nil) as Any? ?? null,
       "libraryLoading": loading, "favorites": favoriteIDs.sorted(), "wallpapers": wallpapers,
       "filtersCollapsed": filtersCollapsed,
+      "welcomeSeen": welcomeSeen,
       "displays": displays,
       "options": store.wallpaperOptionsSnapshot.map {
         Self.options(
@@ -693,6 +694,12 @@ extension WebPanelController {
   }
 
   /// The panel-local address of the item's cached still thumbnail; nil when Steam gave no preview.
+  /// Title of a job or request that carries no Workshop item: the shared assets or a sign-in.
+  static func itemlessTitle(_ id: String) -> String {
+    id == WorkshopStore.signInRequestID
+      ? String(localized: "Steam sign-in") : String(localized: "Scene assets")
+  }
+
   static func thumbnailAddress(for value: WorkshopItem) -> String? {
     panelAddress(host: "thumbnail", for: value)
   }

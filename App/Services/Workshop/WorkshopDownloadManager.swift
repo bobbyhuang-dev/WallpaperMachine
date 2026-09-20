@@ -53,11 +53,14 @@ final class WorkshopDownload: Identifiable {
   var bytesExpected: Int64? { isQueued ? nil : worker.bytesExpected }
   var bytesPerSecond: Double? { isQueued ? nil : worker.bytesPerSecond }
 
+  /// A job that only signs in and downloads nothing.
+  var isSignIn: Bool { id == WorkshopDownloadManager.signInID }
+
   fileprivate init(
-    item: WorkshopItem?, account: String, rememberSession: Bool, sessionDirectory: URL,
-    runtimeProvider: any SteamCMDRuntimeProviding
+    id: String, item: WorkshopItem?, account: String, rememberSession: Bool,
+    sessionDirectory: URL, runtimeProvider: any SteamCMDRuntimeProviding
   ) {
-    id = item?.id ?? "scene-assets"
+    self.id = id
     self.item = item
     self.account = account
     self.rememberSession = rememberSession
@@ -79,6 +82,8 @@ final class WorkshopDownload: Identifiable {
 @Observable
 final class WorkshopDownloadManager: SteamCMDDownloadActivity {
   static let defaultConcurrentDownloads = 3
+  /// Id of the sign-in-only job; there is at most one, like the shared-assets job.
+  static let signInID = "steam-sign-in"
 
   private(set) var downloads: [WorkshopDownload] = []
   private(set) var savedAccount: String?
@@ -116,11 +121,13 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
     downloads.first { $0.id == (itemID ?? "scene-assets") }
   }
 
+  var signIn: WorkshopDownload? { downloads.first { $0.id == Self.signInID } }
+
   func start(
     item: WorkshopItem, username: String, executable: URL, library: URL,
     rememberSession: Bool = true, onImported: @escaping @MainActor () async throws -> Void
   ) {
-    enqueue(item: item, username: username, rememberSession: rememberSession) { worker, account in
+    enqueue(id: item.id, item: item, username: username, rememberSession: rememberSession) { worker, account in
       worker.start(
         item: item, username: account, executable: executable, library: library,
         rememberSession: rememberSession, onImported: onImported)
@@ -131,10 +138,23 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
     username: String, executable: URL, destination: URL, rememberSession: Bool = true,
     onInstalled: @escaping @MainActor () throws -> Void
   ) {
-    enqueue(item: nil, username: username, rememberSession: rememberSession) { worker, account in
+    enqueue(id: "scene-assets", item: nil, username: username, rememberSession: rememberSession) { worker, account in
       worker.installAssets(
         username: account, executable: executable, destination: destination,
         rememberSession: rememberSession, onInstalled: onInstalled)
+    }
+  }
+
+  /// Signs in without downloading anything. It takes a queue slot like any job, so a batch
+  /// that is already signing in is not asked to sign in twice.
+  func signIn(
+    username: String, executable: URL, root: URL, rememberSession: Bool = true,
+    onSignedIn: @escaping @MainActor () -> Void = {}
+  ) {
+    enqueue(id: Self.signInID, item: nil, username: username, rememberSession: rememberSession) { worker, account in
+      worker.signIn(
+        username: account, executable: executable, root: root,
+        rememberSession: rememberSession, onSignedIn: onSignedIn)
     }
   }
 
@@ -178,10 +198,10 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
   }
 
   private func enqueue(
-    item: WorkshopItem?, username: String, rememberSession: Bool,
+    id: String, item: WorkshopItem?, username: String, rememberSession: Bool,
     begin: @escaping (WorkshopDownloader, String) -> Void
   ) {
-    guard !isShuttingDown, download(for: item?.id)?.isPending != true else { return }
+    guard !isShuttingDown, downloads.first(where: { $0.id == id })?.isPending != true else { return }
     guard let account = WorkshopDownloader.normalizedAccount(username) else {
       errorMessage =
         "Enter your Steam account login name (not your display name). An account that owns Wallpaper Engine is required."
@@ -198,7 +218,7 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
     }
     errorMessage = nil
     let job = WorkshopDownload(
-      item: item, account: account, rememberSession: rememberSession,
+      id: id, item: item, account: account, rememberSession: rememberSession,
       sessionDirectory: sessionDirectory, runtimeProvider: runtimeProvider)
     job.begin = { [weak job] in
       guard let job else { return }

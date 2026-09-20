@@ -260,7 +260,8 @@ small, .muted { color: var(--muted); }
 .top-actions select { max-width: 180px; }
 .error-banner { display: flex; align-items: center; gap: 10px; padding: 9px 18px; color: var(--danger); background: var(--danger-surface); border-bottom: 1px solid var(--danger-line); flex: none; }
 .error-banner p { flex: 1; }
-#main { flex: 1; min-height: 0; overflow: hidden; }
+#main { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+/* The first-run guide lives in welcome.css; it covers the whole window, top bar included. */
 /* The inspector's width is a function of the window width alone: 260px at the 760px
    window minimum, one extra pixel for roughly every 6.7px of window, and a 420px cap
    from about 1830px on. There is no drag handle and nothing is stored; every window

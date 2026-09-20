@@ -26,6 +26,9 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
     private(set) var errorMessage: String?
     private(set) var downloadedID: String?
     private(set) var isInstallingAssets = false
+    /// A session that only signs in (`+login … +quit`) and downloads nothing: the welcome guide
+    /// and Settings use it to verify an account and save its sign-in ahead of any download.
+    private(set) var isSigningInOnly = false
     private(set) var savedAccount: String?
     private(set) var sessionWarning: String?
     @ObservationIgnored private let sessionDirectory: URL
@@ -110,7 +113,17 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         }
     }
 
-    private func download(itemID: String?, username: String, executable: URL, root: URL, rememberSession: Bool,
+    /// Signs in and quits. Steam's own password and Steam Guard prompts arrive exactly as they do
+    /// for a download; with `rememberSession` the accepted sign-in is saved for later downloads.
+    func signIn(username: String, executable: URL, root: URL, rememberSession: Bool = true, onSignedIn: @escaping @MainActor () -> Void = {}) {
+        download(itemID: nil, signInOnly: true, username: username, executable: executable, root: root, rememberSession: rememberSession) { _ in
+            self.phase = .finishing
+            self.status = String(localized: "Signed in to Steam")
+            onSignedIn()
+        }
+    }
+
+    private func download(itemID: String?, signInOnly: Bool = false, username: String, executable: URL, root: URL, rememberSession: Bool,
                           expectedBytes: Int64? = nil, onDownloaded: @escaping @MainActor (URL) async throws -> Void) {
         guard !isRunning else { return }
         guard let account = Self.normalizedAccount(username) else {
@@ -145,10 +158,11 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         prompt = nil
         recentOutput = ""
         isRunning = true
-        isInstallingAssets = itemID == nil
+        isSigningInOnly = signInOnly
+        isInstallingAssets = itemID == nil && !signInOnly
         phase = .preparing
-        status = String(localized: "Preparing a private SteamCMD download…")
-        let label = itemID ?? "shared assets"
+        status = signInOnly ? String(localized: "Preparing a private SteamCMD sign-in…") : String(localized: "Preparing a private SteamCMD download…")
+        let label = itemID ?? (signInOnly ? "sign-in" : "shared assets")
         loggedStatus = ""
         task = Task {
             let staging = root.appendingPathComponent(Self.stagingPrefix + UUID().uuidString, isDirectory: true)
@@ -236,15 +250,22 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                 if let failure { throw WorkshopFailure(message: failure) }
                 guard process?.terminationStatus == 0 else {
                     authenticationFailed = isAuthenticating
+                    if isSigningInOnly {
+                        throw WorkshopFailure(message: "SteamCMD exited before confirming the sign-in. Check the account name and password, approve Steam Guard, and retry. On Apple silicon, SteamCMD may require Rosetta 2.")
+                    }
                     throw WorkshopFailure(message: "SteamCMD exited before completing the download. Confirm this account owns Wallpaper Engine, approve Steam Guard, and retry. On Apple silicon, SteamCMD may require Rosetta 2.")
                 }
                 progress = nil
                 receivesNetwork = false
                 bytesPerSecond = nil
+                if isSigningInOnly && isAuthenticating {
+                    authenticationFailed = true
+                    throw WorkshopFailure(message: "Steam closed the session without confirming the sign-in. Check the account name and password, then retry.")
+                }
                 if isInstallingAssets && !assetsDownloadCompleted {
                     throw WorkshopFailure(message: "Steam exited without confirming a complete Wallpaper Engine installation. Retry installing scene assets; existing assets have not been changed.")
                 }
-                if !isInstallingAssets && !workshopDownloadCompleted {
+                if !isInstallingAssets && !isSigningInOnly && !workshopDownloadCompleted {
                     throw WorkshopFailure(message: "Steam exited without confirming a complete Workshop download. Retry; no partial wallpaper has been added to your library.")
                 }
                 try await onDownloaded(staging)
@@ -259,7 +280,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                 await stopProcess()
                 try? readTerminalOutput()
                 errorMessage = error.localizedDescription
-                status = String(localized: "Download could not finish")
+                status = isSigningInOnly ? String(localized: "Sign-in could not finish") : String(localized: "Download could not finish")
             }
             if rememberSession {
                 do {
@@ -346,9 +367,10 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             throw WorkshopFailure(message: "Could not read SteamCMD’s private terminal without blocking. Restart MacWallpaperEngine and retry.")
         }
         terminal = input
-        let installDirectory = itemID == nil ? staging.appendingPathComponent("wallpaper-engine") : staging
-        let platform = itemID == nil ? ["+@sSteamCmdForcePlatformType", "windows"] : []
-        let command = itemID.map { ["+workshop_download_item", "431960", $0] } ?? ["+app_update", "431960", "validate"]
+        let installDirectory = isInstallingAssets ? staging.appendingPathComponent("wallpaper-engine") : staging
+        let platform = isInstallingAssets ? ["+@sSteamCmdForcePlatformType", "windows"] : []
+        // A sign-in-only session has no command between the login and the quit.
+        let command = isSigningInOnly ? [] : itemID.map { ["+workshop_download_item", "431960", $0] } ?? ["+app_update", "431960", "validate"]
         let arguments = ["-inhibitbootstrap", "+@ShutdownOnFailedCommand", "1"] + platform
             + ["+force_install_dir", installDirectory.path, "+login", account] + command + ["+quit"]
         let temporary = staging.appendingPathComponent("tmp", isDirectory: true)
@@ -518,7 +540,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             receivesNetwork = false
             bytesPerSecond = nil
             phase = .requesting
-            status = isInstallingAssets ? String(localized: "Signed in; requesting Wallpaper Engine’s shared assets…") : String(localized: "Signed in; requesting your Workshop download…")
+            status = isSigningInOnly ? String(localized: "Signed in; closing SteamCMD…") : isInstallingAssets ? String(localized: "Signed in; requesting Wallpaper Engine’s shared assets…") : String(localized: "Signed in; requesting your Workshop download…")
         } else if output.contains("confirm") && (output.contains("mobile") || output.contains("steam guard")) {
             prompt = nil
             steamGuardChallenge = .mobileApproval

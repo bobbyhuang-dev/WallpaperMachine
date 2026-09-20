@@ -21,6 +21,7 @@ class SceneRuntimeContext;
 
 struct ScriptHostContext {
     Eigen::Vector2f canvas_size { 0.0f, 0.0f };
+    Eigen::Vector2f screen_resolution { 0.0f, 0.0f };
     Eigen::Vector2f cursor_normalized_position { 0.5f, 0.5f };
     Eigen::Vector3f cursor_world_position { 0.0f, 0.0f, 0.0f };
     double          frame_time { 0.0 };

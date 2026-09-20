@@ -21,6 +21,9 @@ struct CustomPassRenderInfo {
     VkImageView        view {};
     VkImage            msaa_image {};
     VkImageView        msaa_view {};
+    VkImage            depth_image {};
+    VkImageView        depth_view {};
+    bool               with_depth { false };
     VkExtent3D         extent {};
     VkImageLayout      final_layout { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
     VkAttachmentLoadOp load_op { VK_ATTACHMENT_LOAD_OP_DONT_CARE };
@@ -74,6 +77,7 @@ CustomShaderPass* FindDirectPresentationPass(Scene&, std::span<VulkanPass* const
 
 struct CustomPassMsaaAttachmentPlan {
     bool                  needs_resolve_attachment { false };
+    bool                  has_depth { false };
     uint32_t              attachment_count { 1 };
     VkSampleCountFlagBits color_samples { VK_SAMPLE_COUNT_1_BIT };
     VkSampleCountFlagBits resolve_samples { VK_SAMPLE_COUNT_1_BIT };
@@ -96,13 +100,34 @@ PlanCustomPassMsaaAttachments(VkSampleCountFlagBits color_samples) {
     };
 }
 
+inline CustomPassMsaaAttachmentPlan
+PlanCustomPassAttachments(VkSampleCountFlagBits color_samples, bool with_depth) {
+    auto plan = PlanCustomPassMsaaAttachments(color_samples);
+    if (with_depth) {
+        plan.has_depth = true;
+        plan.attachment_count += 1;
+        plan.clear_value_count += 1;
+    }
+    return plan;
+}
+
 inline uint32_t
 CustomPassBeginRenderPassClearValueCount(const CustomPassRenderInfo& render) {
-    return PlanCustomPassMsaaAttachments(render.sample_count).clear_value_count;
+    return PlanCustomPassAttachments(render.sample_count, render.with_depth).clear_value_count;
+}
+
+inline void FillCustomPassClearValues(const CustomPassRenderInfo& render,
+                                      std::array<VkClearValue, 3>& out) {
+    out = {};
+    out[0] = render.clear_value;
+    if (! render.with_depth) return;
+    const auto count = CustomPassBeginRenderPassClearValueCount(render);
+    if (count == 0) return;
+    out[count - 1].depthStencil = { 1.0f, 0 };
 }
 
 struct CustomPassFramebufferAttachmentViewList {
-    std::array<VkImageView, 2> views {};
+    std::array<VkImageView, 3> views {};
     uint32_t                   count { 0 };
 
     uint32_t size() const { return count; }
@@ -112,14 +137,14 @@ struct CustomPassFramebufferAttachmentViewList {
 
 inline CustomPassFramebufferAttachmentViewList
 CustomPassFramebufferAttachmentViews(const CustomPassRenderInfo& render) {
-    const auto plan = PlanCustomPassMsaaAttachments(render.sample_count);
-    return CustomPassFramebufferAttachmentViewList {
-        .views = {
-            plan.needs_resolve_attachment ? render.msaa_view : render.view,
-            render.view,
-        },
-        .count = plan.attachment_count,
-    };
+    const auto plan = PlanCustomPassAttachments(render.sample_count, render.with_depth);
+    CustomPassFramebufferAttachmentViewList list;
+    list.views[0] = plan.needs_resolve_attachment ? render.msaa_view : render.view;
+    uint32_t count = 1;
+    if (plan.needs_resolve_attachment) list.views[count++] = render.view;
+    if (plan.has_depth) list.views[count++] = render.depth_view;
+    list.count = count;
+    return list;
 }
 
 inline bool CompatibleCustomPassAttachments(const CustomPassRenderInfo& a,
@@ -130,6 +155,9 @@ inline bool CompatibleCustomPassAttachments(const CustomPassRenderInfo& a,
         return false;
     }
 
+    if (a.with_depth != b.with_depth || a.depth_image != b.depth_image ||
+        a.depth_view != b.depth_view)
+        return false;
     if (a.sample_count == VK_SAMPLE_COUNT_1_BIT) return true;
     return a.msaa_image == b.msaa_image && a.msaa_view == b.msaa_view;
 }

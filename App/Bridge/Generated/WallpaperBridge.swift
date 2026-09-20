@@ -399,22 +399,6 @@ fileprivate class UniffiHandleMap<T> {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
-    typealias FfiType = UInt8
-    typealias SwiftType = UInt8
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt8 {
-        return try lift(readInt(&buf))
-    }
-
-    public static func write(_ value: UInt8, into buf: inout [UInt8]) {
-        writeInt(&buf, lower(value))
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -577,6 +561,16 @@ public protocol WallpaperBridgeProtocol : AnyObject {
      * Returns an error when the bridge actor cannot produce an app snapshot.
      */
     func appSnapshot() async throws  -> BridgeAppSnapshot
+    
+    /**
+     * Uploads `$mediaThumbnail` RGBA to every opted-in desktop scene.
+     *
+     * # Errors
+     *
+     * Returns an error when the payload is not `width * height * 4` bytes or
+     * the renderer rejects the upload.
+     */
+    func applySystemMediaArtwork(width: UInt32, height: UInt32, rgba: Data) async throws 
     
     /**
      * # Errors
@@ -773,11 +767,6 @@ public protocol WallpaperBridgeProtocol : AnyObject {
      * Returns an error when the wallpaper or property id is unknown.
      */
     func restorePropertyDefault(wallpaperId: String, propertyId: String) async throws  -> BridgeWallpaperMutationBundle
-    
-    /**
-     * Running scene wallpapers whose users enabled music information.
-     */
-    func sceneMediaWallpaperIds() async throws  -> [String]
     
     /**
      * # Errors
@@ -1187,12 +1176,22 @@ public protocol WallpaperBridgeProtocol : AnyObject {
      * Returns an error when `json` is not an object or its `type` is not a
      * media event tag.
      */
-    func submitSystemMediaEvent(json: String) throws 
+    func submitSystemMediaEvent(json: String) async throws 
     
     /**
-     * Publishes a bounded player snapshot; delivery rechecks per-wallpaper consent.
+     * Which applied desktop scenes have consented to now-playing.
+     *
+     * The host starts and stops its system media source from this, so a
+     * machine whose wallpapers all have the setting off is never asked for
+     * Automation permission and nothing reads what is playing. A handle that
+     * was not in the previous answer is a scene with no media state yet, which
+     * is what tells the host to replay what it already knows.
+     *
+     * # Errors
+     *
+     * Returns an error when the bridge actor is gone.
      */
-    func updateSceneMedia(wallpaperId: String, snapshot: BridgeMediaSnapshot) async throws 
+    func systemMediaSceneHandles() async throws  -> [UInt64]
     
     /**
      * # Errors
@@ -1337,6 +1336,31 @@ open func appSnapshot()async throws  -> BridgeAppSnapshot {
             completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
             freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeBridgeAppSnapshot.lift,
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Uploads `$mediaThumbnail` RGBA to every opted-in desktop scene.
+     *
+     * # Errors
+     *
+     * Returns an error when the payload is not `width * height * 4` bytes or
+     * the renderer rejects the upload.
+     */
+open func applySystemMediaArtwork(width: UInt32, height: UInt32, rgba: Data)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_apply_system_media_artwork(
+                    self.uniffiClonePointer(),
+                    FfiConverterUInt32.lower(width),FfiConverterUInt32.lower(height),FfiConverterData.lower(rgba)
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_void,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_void,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_void,
+            liftFunc: { $0 },
             errorHandler: FfiConverterTypeBridgeError.lift
         )
 }
@@ -1856,26 +1880,6 @@ open func restorePropertyDefault(wallpaperId: String, propertyId: String)async t
             completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
             freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeBridgeWallpaperMutationBundle.lift,
-            errorHandler: FfiConverterTypeBridgeError.lift
-        )
-}
-    
-    /**
-     * Running scene wallpapers whose users enabled music information.
-     */
-open func sceneMediaWallpaperIds()async throws  -> [String] {
-    return
-        try  await uniffiRustCallAsync(
-            rustFutureFunc: {
-                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_scene_media_wallpaper_ids(
-                    self.uniffiClonePointer()
-                    
-                )
-            },
-            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
-            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
-            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
-            liftFunc: FfiConverterSequenceString.lift,
             errorHandler: FfiConverterTypeBridgeError.lift
         )
 }
@@ -2828,29 +2832,49 @@ open func shutdown()async throws  {
      * Returns an error when `json` is not an object or its `type` is not a
      * media event tag.
      */
-open func submitSystemMediaEvent(json: String)throws  {try rustCallWithError(FfiConverterTypeBridgeError.lift) {
-    uniffi_wallpaper_bridge_fn_method_wallpaperbridge_submit_system_media_event(self.uniffiClonePointer(),
-        FfiConverterString.lower(json),$0
-    )
-}
-}
-    
-    /**
-     * Publishes a bounded player snapshot; delivery rechecks per-wallpaper consent.
-     */
-open func updateSceneMedia(wallpaperId: String, snapshot: BridgeMediaSnapshot)async throws  {
+open func submitSystemMediaEvent(json: String)async throws  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
-                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_update_scene_media(
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_submit_system_media_event(
                     self.uniffiClonePointer(),
-                    FfiConverterString.lower(wallpaperId),FfiConverterTypeBridgeMediaSnapshot.lower(snapshot)
+                    FfiConverterString.lower(json)
                 )
             },
             pollFunc: ffi_wallpaper_bridge_rust_future_poll_void,
             completeFunc: ffi_wallpaper_bridge_rust_future_complete_void,
             freeFunc: ffi_wallpaper_bridge_rust_future_free_void,
             liftFunc: { $0 },
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Which applied desktop scenes have consented to now-playing.
+     *
+     * The host starts and stops its system media source from this, so a
+     * machine whose wallpapers all have the setting off is never asked for
+     * Automation permission and nothing reads what is playing. A handle that
+     * was not in the previous answer is a scene with no media state yet, which
+     * is what tells the host to replay what it already knows.
+     *
+     * # Errors
+     *
+     * Returns an error when the bridge actor is gone.
+     */
+open func systemMediaSceneHandles()async throws  -> [UInt64] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_system_media_scene_handles(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceUInt64.lift,
             errorHandler: FfiConverterTypeBridgeError.lift
         )
 }
@@ -3986,131 +4010,6 @@ public func FfiConverterTypeBridgeLogStatus_lift(_ buf: RustBuffer) throws -> Br
 #endif
 public func FfiConverterTypeBridgeLogStatus_lower(_ value: BridgeLogStatus) -> RustBuffer {
     return FfiConverterTypeBridgeLogStatus.lower(value)
-}
-
-
-/**
- * Player data read by the native host. Artwork is bounded RGBA8, never a path or URL.
- */
-public struct BridgeMediaSnapshot {
-    public var title: String
-    public var artist: String
-    public var album: String
-    public var playbackState: UInt8
-    public var position: Double
-    public var duration: Double
-    public var artworkWidth: UInt32
-    public var artworkHeight: UInt32
-    public var artworkRgba: Data
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(title: String, artist: String, album: String, playbackState: UInt8, position: Double, duration: Double, artworkWidth: UInt32, artworkHeight: UInt32, artworkRgba: Data) {
-        self.title = title
-        self.artist = artist
-        self.album = album
-        self.playbackState = playbackState
-        self.position = position
-        self.duration = duration
-        self.artworkWidth = artworkWidth
-        self.artworkHeight = artworkHeight
-        self.artworkRgba = artworkRgba
-    }
-}
-
-
-
-extension BridgeMediaSnapshot: Equatable, Hashable {
-    public static func ==(lhs: BridgeMediaSnapshot, rhs: BridgeMediaSnapshot) -> Bool {
-        if lhs.title != rhs.title {
-            return false
-        }
-        if lhs.artist != rhs.artist {
-            return false
-        }
-        if lhs.album != rhs.album {
-            return false
-        }
-        if lhs.playbackState != rhs.playbackState {
-            return false
-        }
-        if lhs.position != rhs.position {
-            return false
-        }
-        if lhs.duration != rhs.duration {
-            return false
-        }
-        if lhs.artworkWidth != rhs.artworkWidth {
-            return false
-        }
-        if lhs.artworkHeight != rhs.artworkHeight {
-            return false
-        }
-        if lhs.artworkRgba != rhs.artworkRgba {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(title)
-        hasher.combine(artist)
-        hasher.combine(album)
-        hasher.combine(playbackState)
-        hasher.combine(position)
-        hasher.combine(duration)
-        hasher.combine(artworkWidth)
-        hasher.combine(artworkHeight)
-        hasher.combine(artworkRgba)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeBridgeMediaSnapshot: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeMediaSnapshot {
-        return
-            try BridgeMediaSnapshot(
-                title: FfiConverterString.read(from: &buf), 
-                artist: FfiConverterString.read(from: &buf), 
-                album: FfiConverterString.read(from: &buf), 
-                playbackState: FfiConverterUInt8.read(from: &buf), 
-                position: FfiConverterDouble.read(from: &buf), 
-                duration: FfiConverterDouble.read(from: &buf), 
-                artworkWidth: FfiConverterUInt32.read(from: &buf), 
-                artworkHeight: FfiConverterUInt32.read(from: &buf), 
-                artworkRgba: FfiConverterData.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: BridgeMediaSnapshot, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.title, into: &buf)
-        FfiConverterString.write(value.artist, into: &buf)
-        FfiConverterString.write(value.album, into: &buf)
-        FfiConverterUInt8.write(value.playbackState, into: &buf)
-        FfiConverterDouble.write(value.position, into: &buf)
-        FfiConverterDouble.write(value.duration, into: &buf)
-        FfiConverterUInt32.write(value.artworkWidth, into: &buf)
-        FfiConverterUInt32.write(value.artworkHeight, into: &buf)
-        FfiConverterData.write(value.artworkRgba, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeBridgeMediaSnapshot_lift(_ buf: RustBuffer) throws -> BridgeMediaSnapshot {
-    return try FfiConverterTypeBridgeMediaSnapshot.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeBridgeMediaSnapshot_lower(_ value: BridgeMediaSnapshot) -> RustBuffer {
-    return FfiConverterTypeBridgeMediaSnapshot.lower(value)
 }
 
 
@@ -7821,6 +7720,31 @@ fileprivate struct FfiConverterOptionTypeBridgeFileFilter: FfiConverterRustBuffe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = [UInt64]
+
+    public static func write(_ value: [UInt64], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterUInt64.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UInt64] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UInt64]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterUInt64.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceFloat: FfiConverterRustBuffer {
     typealias SwiftType = [Float]
 
@@ -8260,6 +8184,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_app_snapshot() != 18399) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_apply_system_media_artwork() != 35216) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_apply_wallpaper_options() != 10903) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8330,9 +8257,6 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_restore_property_default() != 28754) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_scene_media_wallpaper_ids() != 29687) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_select_wallpaper() != 23020) {
@@ -8443,10 +8367,10 @@ private var initializationResult: InitializationResult = {
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_shutdown() != 36634) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_submit_system_media_event() != 344) {
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_submit_system_media_event() != 19034) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_update_scene_media() != 57302) {
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_system_media_scene_handles() != 16061) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_wallpaper_options_snapshot() != 45708) {

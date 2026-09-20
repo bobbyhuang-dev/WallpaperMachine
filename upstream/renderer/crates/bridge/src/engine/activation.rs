@@ -990,6 +990,10 @@ impl SceneDescBuilderExt for SceneDescBuilder {
             .scaling_mode(scaling_mode)
             .scaling_factor(scaling_factor)
             .audio_response_enabled(context.wallpaper.audio.response_enabled)
+            // Reading what the user is listening to is consent, not a
+            // capability: the scene is told exactly what the inspector shows,
+            // and the lock-screen path forces the flag off after apply.
+            .media_integration_enabled(context.wallpaper.media_integration_enabled)
             .audio_volume(audio_volume.into())
             .audio_muted(context.wallpaper.audio.muted)
             .shader_cache_path(context.paths.shader_cache_root().to_string_lossy())

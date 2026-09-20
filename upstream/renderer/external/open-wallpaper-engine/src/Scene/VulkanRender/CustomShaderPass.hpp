@@ -60,6 +60,8 @@ public:
         std::vector<bool>          video_textures;
         ImageParameters            vk_output;
         ImageParameters            vk_output_msaa;
+        ImageParameters            vk_output_depth;
+        bool                       with_depth { false };
 
         // bufs
         bool                          dyn_vertex { false };

@@ -92,6 +92,40 @@ scene.on('mediaPlaybackChanged', function(event) {
     EXPECT_EQ(fixture.runtime->scriptErrorCount(), 0u);
 }
 
+TEST(SceneScriptMediaEventSmoke, PlaybackConstantsAndColorArraysReachHandlers) {
+    auto fixture = CreateRuntimeWithProbeNodes();
+    ASSERT_NE(fixture.runtime, nullptr);
+
+    fixture.runtime->RegisterSceneScript(
+        R"JS(
+function mediaPlaybackChanged(event) {
+  if (event.state === MediaPlaybackEvent.PLAYBACK_PLAYING) {
+    scene.getObject('exportedProbe').visible = true;
+  }
+}
+
+function mediaThumbnailChanged(event) {
+  if (event.primaryColor && event.primaryColor.x === 1 &&
+      event.secondaryColor && event.secondaryColor.y === 0.5 &&
+      event.tertiaryColor && event.tertiaryColor.z === 0.25 &&
+      event.highContrastColor && event.highContrastColor.x === 0) {
+    scene.getObject('callbackProbe').visible = true;
+  }
+}
+)JS",
+        "");
+    ASSERT_EQ(fixture.runtime->sceneScriptCount(), 1u);
+
+    fixture.runtime->SetMediaIntegrationEnabled(true);
+    fixture.runtime->DispatchMediaEventJson(R"({"type":"mediaPlaybackChanged","state":0})");
+    fixture.runtime->DispatchMediaEventJson(
+        R"({"type":"mediaThumbnailChanged","hasThumbnail":true,"primaryColor":[1,0,0],"secondaryColor":[0,0.5,0],"tertiaryColor":[0,0,0.25],"textColor":[1,1,1],"highContrastColor":[0,0,0]})");
+
+    EXPECT_TRUE(fixture.runtime->NodeVisible("exportedProbe"));
+    EXPECT_TRUE(fixture.runtime->NodeVisible("callbackProbe"));
+    EXPECT_EQ(fixture.runtime->scriptErrorCount(), 0u);
+}
+
 TEST(SceneScriptMediaEventSmoke, VideoPlaybackControlsResolveWrappedState) {
     auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
     ASSERT_NE(runtime, nullptr);
@@ -486,6 +520,52 @@ export function update(value) {
 
     EXPECT_FLOAT_EQ(runtime->NodeScale("Simple Visualizer").x(), 3.0f);
     EXPECT_FLOAT_EQ(runtime->NodeScale("Simple Visualizer").y(), 30.0f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+TEST(SceneScriptMediaEventSmoke, EngineScreenResolutionIsAReadableVec2) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {
+        .canvas_width  = 1920,
+        .canvas_height = 1080,
+    });
+    ASSERT_NE(runtime, nullptr);
+
+    auto node = std::make_shared<SceneNode>();
+    runtime->RegisterNode("Probe", node.get());
+    runtime->RegisterNodeTranslate(
+        "Probe",
+        node.get(),
+        ResolveVec3Setting(
+            *runtime,
+            nlohmann::json {
+                {
+                    "script",
+                    R"JS(
+export function update(value) {
+  value.x = engine.screenResolution.x;
+  value.y = engine.screenResolution.y;
+  return value;
+}
+)JS",
+                },
+                { "value", "0.00000 0.00000 0.00000" },
+            },
+            "Probe"));
+
+    runtime->Tick(1.0 / 60.0);
+    EXPECT_FLOAT_EQ(runtime->NodeTranslate("Probe").x(), 1920.0f);
+    EXPECT_FLOAT_EQ(runtime->NodeTranslate("Probe").y(), 1080.0f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+
+    runtime->SetCursorViewport(CursorViewport {
+        .origin         = Eigen::Vector2f::Zero(),
+        .size           = Eigen::Vector2f(2560.0f, 1440.0f),
+        .content_origin = Eigen::Vector2f::Zero(),
+        .content_size   = Eigen::Vector2f(2560.0f, 1440.0f),
+    });
+    runtime->Tick(1.0 / 60.0);
+    EXPECT_FLOAT_EQ(runtime->NodeTranslate("Probe").x(), 2560.0f);
+    EXPECT_FLOAT_EQ(runtime->NodeTranslate("Probe").y(), 1440.0f);
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 

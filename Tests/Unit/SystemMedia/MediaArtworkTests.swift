@@ -93,4 +93,12 @@ final class MediaArtworkTests: XCTestCase {
         XCTAssertNil(artwork.thumbnail(for: Data()))
         XCTAssertNil(artwork.thumbnail(for: Data("this is not a cover".utf8)))
     }
+
+    func testDecodedCoverKeepsRowMajorRGBA() throws {
+        let cover = try makeSolidPNG(10, 20, 30, size: 8)
+        let thumbnail = try XCTUnwrap(MediaArtwork().thumbnail(for: cover))
+        XCTAssertEqual(thumbnail.rgba.count, thumbnail.width * thumbnail.height * 4)
+        XCTAssertGreaterThan(thumbnail.width, 0)
+        XCTAssertGreaterThan(thumbnail.height, 0)
+    }
 }

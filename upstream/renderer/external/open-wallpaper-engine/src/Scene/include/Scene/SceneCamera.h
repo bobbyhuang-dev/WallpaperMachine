@@ -57,6 +57,11 @@ public:
 
     Eigen::Vector3d GetPosition() const;
     Eigen::Vector3d GetDirection() const;
+    Eigen::Vector3d GetUp() const;
+    Eigen::Vector3d GetRight() const;
+
+    void LockFov(bool lock) { m_fovLocked = lock; }
+    bool FovLocked() const { return m_fovLocked; }
 
     Eigen::Matrix4d GetViewMatrix() const;
     Eigen::Matrix4d GetViewProjectionMatrix() const;
@@ -80,6 +85,8 @@ public:
         m_nearClip    = cam.m_nearClip;
         m_farClip     = cam.m_farClip;
         m_perspective = cam.m_perspective;
+        m_fov         = cam.m_fov;
+        m_fovLocked   = cam.m_fovLocked;
         m_isComposeLayer = cam.m_isComposeLayer;
     }
 
@@ -93,6 +100,7 @@ private:
     double m_farClip { 1000.0f };
     double m_fov { 45.0f };
     bool   m_perspective;
+    bool   m_fovLocked { false };
 
     Eigen::Matrix4d m_viewMat { Eigen::Matrix4d::Identity() };
     Eigen::Matrix4d m_viewProjectionMat { Eigen::Matrix4d::Identity() };

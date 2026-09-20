@@ -244,6 +244,8 @@ pub struct SceneDesc {
     pub paused: bool,
     /// Whether scene audio-response properties should be enabled.
     pub audio_response_enabled: bool,
+    /// Whether this desktop scene should receive now-playing events.
+    pub media_integration_enabled: bool,
     /// Scene-wide audio volume multiplier.
     pub audio_volume: AudioVolume,
     /// Scene-wide audio mute flag.
@@ -274,6 +276,7 @@ impl SceneDesc {
             scaling_factor: 1.0,
             paused: false,
             audio_response_enabled: false,
+            media_integration_enabled: false,
             audio_volume: AudioVolume::try_from(1.0).unwrap(),
             audio_muted: false,
             property_override_json: None,
@@ -308,6 +311,7 @@ impl SceneDesc {
             scaling_factor: 1.0,
             paused,
             audio_response_enabled: false,
+            media_integration_enabled: false,
             audio_volume: AudioVolume::try_from(1.0).unwrap(),
             audio_muted: false,
             property_override_json: None,
@@ -355,6 +359,13 @@ impl SceneDesc {
     #[must_use]
     pub fn with_audio_response_enabled(mut self, enabled: bool) -> Self {
         self.audio_response_enabled = enabled;
+        self
+    }
+
+    /// Sets whether this desktop scene should receive now-playing events.
+    #[must_use]
+    pub fn with_media_integration_enabled(mut self, enabled: bool) -> Self {
+        self.media_integration_enabled = enabled;
         self
     }
 
@@ -453,6 +464,7 @@ impl SceneDesc {
             && self.scaling_mode == other.scaling_mode
             && (self.scaling_factor - other.scaling_factor).abs() <= f64::EPSILON
             && self.audio_response_enabled == other.audio_response_enabled
+            && self.media_integration_enabled == other.media_integration_enabled
             && self.audio_volume == other.audio_volume
             && self.audio_muted == other.audio_muted
             && self.property_override_json == other.property_override_json
@@ -485,6 +497,8 @@ pub struct SceneTemplate {
     pub paused: bool,
     /// Whether scene audio-response properties should be enabled.
     pub audio_response_enabled: bool,
+    /// Whether this desktop scene should receive now-playing events.
+    pub media_integration_enabled: bool,
     /// Scene-wide audio volume multiplier.
     pub audio_volume: AudioVolume,
     /// Scene-wide audio mute flag.
@@ -514,6 +528,7 @@ impl SceneTemplate {
             scaling_factor: 1.0,
             paused: false,
             audio_response_enabled: false,
+            media_integration_enabled: false,
             audio_volume: AudioVolume::try_from(1.0).unwrap(),
             audio_muted: false,
             property_override_json: None,
@@ -533,6 +548,7 @@ impl SceneTemplate {
             scaling_factor: scene.scaling_factor,
             paused: scene.paused,
             audio_response_enabled: scene.audio_response_enabled,
+            media_integration_enabled: scene.media_integration_enabled,
             audio_volume: scene.audio_volume,
             audio_muted: scene.audio_muted,
             property_override_json: scene.property_override_json.clone(),
@@ -553,6 +569,7 @@ impl SceneTemplate {
             scaling_factor: self.scaling_factor,
             paused: self.paused,
             audio_response_enabled: self.audio_response_enabled,
+            media_integration_enabled: self.media_integration_enabled,
             audio_volume: self.audio_volume,
             audio_muted: self.audio_muted,
             property_override_json: self.property_override_json.clone(),
@@ -597,6 +614,7 @@ pub struct SceneTemplateBuilder {
     scaling_factor: f64,
     paused: bool,
     audio_response_enabled: bool,
+    media_integration_enabled: bool,
     audio_volume: AudioVolume,
     audio_muted: bool,
     property_override_json: Option<String>,
@@ -644,6 +662,13 @@ impl SceneTemplateBuilder {
     #[must_use]
     pub fn audio_response_enabled(mut self, enabled: bool) -> Self {
         self.audio_response_enabled = enabled;
+        self
+    }
+
+    /// Sets whether this desktop scene should receive now-playing events.
+    #[must_use]
+    pub fn media_integration_enabled(mut self, enabled: bool) -> Self {
+        self.media_integration_enabled = enabled;
         self
     }
 
@@ -696,6 +721,7 @@ impl SceneTemplateBuilder {
             scaling_factor: self.scaling_factor,
             paused: self.paused,
             audio_response_enabled: self.audio_response_enabled,
+            media_integration_enabled: self.media_integration_enabled,
             audio_volume: self.audio_volume,
             audio_muted: self.audio_muted,
             property_override_json: self.property_override_json,
@@ -774,6 +800,7 @@ pub struct SceneDescBuilder {
     scaling_factor: f64,
     paused: bool,
     audio_response_enabled: bool,
+    media_integration_enabled: bool,
     audio_volume: AudioVolume,
     audio_muted: bool,
     property_override_json: Option<String>,
@@ -821,6 +848,13 @@ impl SceneDescBuilder {
     #[must_use]
     pub fn audio_response_enabled(mut self, enabled: bool) -> Self {
         self.audio_response_enabled = enabled;
+        self
+    }
+
+    /// Sets whether this desktop scene should receive now-playing events.
+    #[must_use]
+    pub fn media_integration_enabled(mut self, enabled: bool) -> Self {
+        self.media_integration_enabled = enabled;
         self
     }
 
@@ -895,6 +929,7 @@ impl SceneDescBuilder {
             scaling_factor: self.scaling_factor,
             paused: self.paused,
             audio_response_enabled: self.audio_response_enabled,
+            media_integration_enabled: self.media_integration_enabled,
             audio_volume: self.audio_volume,
             audio_muted: self.audio_muted,
             property_override_json: self.property_override_json,
@@ -954,6 +989,7 @@ mod tests {
         assert_eq!(scene.fps, 60);
         assert!(!scene.paused);
         assert!(!scene.audio_response_enabled);
+        assert!(!scene.media_integration_enabled);
         assert!(!scene.audio_muted);
         assert_eq!(scene.property_override_json, None);
         assert_eq!(scene.shader_cache_path, None);
@@ -967,6 +1003,15 @@ mod tests {
             .with_audio_response_enabled(true);
 
         assert!(scene.audio_response_enabled);
+    }
+
+    #[test]
+    fn scene_descriptor_can_enable_media_integration() {
+        let display = DisplayDesc::new(42, -1920, 0, 1920, 1080, 2.0);
+        let scene = SceneDesc::new(display, "/scene/project.json", "/scene/assets", 60, false)
+            .with_media_integration_enabled(true);
+
+        assert!(scene.media_integration_enabled);
     }
 
     #[test]
@@ -993,6 +1038,7 @@ mod tests {
             .scaling_factor(1.25)
             .paused(true)
             .audio_response_enabled(true)
+            .media_integration_enabled(true)
             .audio_volume(0.5)
             .audio_muted(true)
             .property_override_json("{\"general\":{\"brightness\":1}}")
@@ -1015,6 +1061,7 @@ mod tests {
         );
         assert!(scene.paused);
         assert!(scene.audio_response_enabled);
+        assert!(scene.media_integration_enabled);
         assert_eq!(
             scene.audio_volume,
             crate::media::audio::AudioVolume::try_from(0.5).unwrap()

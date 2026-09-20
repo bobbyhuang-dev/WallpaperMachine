@@ -154,6 +154,17 @@ history-feedback effects, HDR or 10-bit video, plain video wallpapers and
 shaders that do not translate fall back as a whole scene; an effect is never
 dropped to keep a scene native.
 
+Compatibility (Vulkan) instantiates leaf `.mdl` model objects, activates the
+scene's perspective camera when `orthogonalprojection` is null or `isOrtho` is
+false, and a visible camera object named `default` replaces the editor preview
+pose as `activeCamera`. It writes live `g_EyePosition` / view-basis uniforms, honours material
+`depthtest` / `depthwrite` / `cullmode` on a depth attachment for `_rt_default`,
+keeps authored `scene.lights`, and still builds the LDR bloom chain when the
+author set `hdr: true` so a sun glow is not skipped entirely. Native Metal
+continues to refuse those scenes as a whole until that backend grows the same
+depth, perspective and lighting path. `input.cursorWorldPosition` remains 2D
+(`z = 0`), so scripted orbit drag may not match Wallpaper Engine.
+
 A puppet is deformed by its author's own skinning shader on both renderers. The
 pose comes from the one animation system the scene already has — animation
 layers, their play, pause, stop, rate, blend and visibility, and any script or

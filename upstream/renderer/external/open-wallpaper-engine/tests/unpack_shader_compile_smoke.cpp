@@ -848,7 +848,7 @@ std::vector<ExpectedShaderContext> CollectSourceShaderExpectations(
 
     if (scene_json.contains("general") && scene_json.at("general").is_object()) {
         const auto& general = scene_json.at("general");
-        if (JsonBoolValue(general, "bloom", false) && ! JsonBoolValue(general, "hdr", false)) {
+        if (JsonBoolValue(general, "bloom", false)) {
             AddMaterialExpectation(scene_dir,
                                    "materials/util/downsample_quarter_bloom.json",
                                    "post-process:__bloom/downsample-quarter",

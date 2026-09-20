@@ -270,6 +270,7 @@ struct ParseContext {
     std::shared_ptr<SceneNode> effect_camera_node;
     std::shared_ptr<SceneNode> global_camera_node;
     std::shared_ptr<SceneNode> global_perspective_camera_node;
+    bool                       uses_models { false };
 };
 
 using WPObjectVar =
@@ -1016,6 +1017,14 @@ void ApplyMaterialDepth(SceneMaterial& material, const wpscene::WPMaterial& wpma
     material.depth_write = wpmat.depthwrite == "enabled";
 }
 
+CullMode ParseSceneCullMode(std::string_view value) {
+    if (value == "inverted" || value == "front" || value == "clockwise") return CullMode::Front;
+    if (value == "normal" || value == "back" || value == "counterclockwise" || value == "ccw") {
+        return CullMode::Back;
+    }
+    return CullMode::None;
+}
+
 void ParseSpecTexName(std::string& name, Scene& scene, fs::VFS& vfs,
                       const wpscene::WPMaterial& wpmat, const WPShaderInfo& sinfo) {
     static const LayerObjectIndex kEmptyIndex;
@@ -1354,6 +1363,7 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::WPMaterial& wpmat, Scene* pScene,
 
     material.blenmode = ParseBlendMode(wpmat.blending);
     ApplyMaterialDepth(material, wpmat);
+    material.cull_mode = ParseSceneCullMode(wpmat.cullmode);
 
     for (uint i = 0; i < material.textures.size(); i++) {
         if (! exists(sd_units[1].preprocess_info.active_tex_slots, i)) material.textures[i].clear();
@@ -2607,7 +2617,37 @@ TryLoadPuppetMaterialSlots(ParseContext& context, SceneNode* node, wpscene::WPIm
 
 // parse
 
-void ParseCamera(ParseContext& context, wpscene::WPSceneGeneral& general) {
+float ResolvePerspectiveFov(const wpscene::WPSceneGeneral& general, float object_fov = 0.0f) {
+    if (object_fov > 0.0f) return object_fov;
+    if (general.perspectiveoverridefov > 0.0f) return general.perspectiveoverridefov;
+    if (general.fov > 0.0f) return general.fov;
+    return 50.0f;
+}
+
+void PlacePerspectiveCameraNode(SceneNode& node, const wpscene::WPSceneCamera& camera) {
+    const Vector3d eye(camera.eye[0], camera.eye[1], camera.eye[2]);
+    const Vector3d center(camera.center[0], camera.center[1], camera.center[2]);
+    Vector3d       up(camera.up[0], camera.up[1], camera.up[2]);
+    if (up.squaredNorm() < 1e-12) up = Vector3d::UnitY();
+
+    Vector3d camDir = center - eye;
+    if (camDir.squaredNorm() < 1e-12) camDir = -Vector3d::UnitZ();
+    const Vector3d zAxis = -camDir.normalized();
+    Vector3d       xAxis = up.cross(zAxis);
+    if (xAxis.squaredNorm() < 1e-12) xAxis = Vector3d::UnitX();
+    xAxis.normalize();
+    const Vector3d yAxis = zAxis.cross(xAxis).normalized();
+
+    Affine3d world = Affine3d::Identity();
+    world.linear().col(0) = xAxis;
+    world.linear().col(1) = yAxis;
+    world.linear().col(2) = zAxis;
+    world.translation()   = eye;
+    SetNodeTransformFromMatrix(node, world.matrix());
+}
+
+void ParseCamera(ParseContext& context, wpscene::WPScene& sc) {
+    auto&     general           = sc.general;
     auto&     scene             = *context.scene;
     const i32 projection_width  = EffectiveProjectionDimension(context.ortho_w, general.zoom);
     const i32 projection_height = EffectiveProjectionDimension(context.ortho_h, general.zoom);
@@ -2625,19 +2665,31 @@ void ParseCamera(ParseContext& context, wpscene::WPSceneGeneral& general) {
         cscale { 1.0f, 1.0f, 1.0f }, cangle(Vector3f::Zero());
 
     context.global_camera_node = std::make_shared<SceneNode>(cori, cscale, cangle);
-    scene.activeCamera->AttatchNode(context.global_camera_node);
+    scene.cameras.at("global")->AttatchNode(context.global_camera_node);
     scene.sceneGraph->AppendChild(context.global_camera_node);
 
+    const float authored_fov = ResolvePerspectiveFov(general);
     scene.cameras["global_perspective"] = std::make_shared<SceneCamera>(
         (float)projection_width / (float)projection_height,
         general.nearz,
         general.farz,
-        algorism::CalculatePersperctiveFov(1000.0f, projection_height));
+        general.isOrtho ? algorism::CalculatePersperctiveFov(1000.0f, projection_height)
+                        : authored_fov);
 
-    Vector3f cperori                       = cori;
-    cperori[2]                             = 1000.0f;
-    context.global_perspective_camera_node = std::make_shared<SceneNode>(cperori, cscale, cangle);
+    if (general.isOrtho) {
+        Vector3f cperori                       = cori;
+        cperori[2]                             = 1000.0f;
+        context.global_perspective_camera_node = std::make_shared<SceneNode>(cperori, cscale, cangle);
+        scene.cameras["global_perspective"]->AttatchNode(context.global_perspective_camera_node);
+        scene.sceneGraph->AppendChild(context.global_perspective_camera_node);
+        return;
+    }
+
+    context.global_perspective_camera_node = std::make_shared<SceneNode>();
+    PlacePerspectiveCameraNode(*context.global_perspective_camera_node, sc.camera);
     scene.cameras["global_perspective"]->AttatchNode(context.global_perspective_camera_node);
+    scene.cameras["global_perspective"]->LockFov(true);
+    scene.activeCamera = scene.cameras.at("global_perspective").get();
     scene.sceneGraph->AppendChild(context.global_perspective_camera_node);
 }
 
@@ -2751,7 +2803,7 @@ std::optional<StagedPostProcessNode> BuildPostProcessNode(ParseContext&      con
 }
 
 void BuildBloomPostProcess(ParseContext& context, const wpscene::WPScene& sc) {
-    if (! sc.general.bloom || sc.general.hdr) return;
+    if (! sc.general.bloom) return;
 
     const auto render_width =
         std::max(1, static_cast<i32>(context.scene->cameras.at("global")->Width()));
@@ -3943,6 +3995,205 @@ void ParseParticleObj(ParseContext& context, wpscene::WPParticleObject& wppartob
     runtime_node_registration.Commit();
 }
 
+void RegisterCommonNodeBindings(ParseContext& context, SceneNode& node, std::string_view runtime_name,
+                                const wpscene::WPMiscObjectBase& obj,
+                                const std::string& previous_runtime_name) {
+    if (context.scene->runtime == nullptr) return;
+    if (! previous_runtime_name.empty() && previous_runtime_name != runtime_name) {
+        context.scene->runtime->UnregisterNode(previous_runtime_name);
+    }
+    context.scene->runtime->RegisterNode(std::string(runtime_name), &node);
+    context.scene->runtime->RegisterNodeVisibility(
+        std::string(runtime_name),
+        &node,
+        ResolveBoolSetting(*context.scene->runtime,
+                           obj.dynamic_visible ? obj.visible_setting : nlohmann::json(obj.visible),
+                           std::string(runtime_name)));
+    if (obj.dynamic_origin) {
+        context.scene->runtime->RegisterNodeTranslate(
+            std::string(runtime_name),
+            &node,
+            ResolveVec3Setting(*context.scene->runtime,
+                               obj.origin_setting,
+                               std::string(runtime_name),
+                               Vec3SettingSemantic::Generic));
+    }
+    if (obj.dynamic_scale) {
+        context.scene->runtime->RegisterNodeScale(
+            std::string(runtime_name),
+            &node,
+            ResolveVec3Setting(*context.scene->runtime,
+                               obj.scale_setting,
+                               std::string(runtime_name),
+                               Vec3SettingSemantic::Generic));
+    }
+    if (obj.dynamic_angles) {
+        context.scene->runtime->RegisterNodeRotation(
+            std::string(runtime_name),
+            &node,
+            ResolveVec3Setting(*context.scene->runtime,
+                               obj.angles_setting,
+                               std::string(runtime_name),
+                               Vec3SettingSemantic::AnglesDegrees));
+    }
+}
+
+std::shared_ptr<SceneNode> ReuseOrCreateLayerNode(ParseContext& context, int32_t id) {
+    auto node_iterator = context.layer_nodes.find(id);
+    if (node_iterator != context.layer_nodes.end() && node_iterator->second != nullptr) {
+        return node_iterator->second;
+    }
+    return std::make_shared<SceneNode>();
+}
+
+void ParseModelObj(ParseContext& context, wpscene::WPModelObject& obj) {
+    const auto runtime_name = LayerRuntimeName(context, obj);
+    WPMdl      mdl;
+    if (obj.model.empty() || ! WPMdlParser::Parse(obj.model, *context.vfs, mdl)) {
+        LOG_ERROR("parse model '%s' failed", obj.model.c_str());
+        return;
+    }
+    if (! PuppetHasMeshData(mdl)) {
+        LOG_ERROR("model '%s' has no mesh data", obj.model.c_str());
+        return;
+    }
+
+    auto       node                    = ReuseOrCreateLayerNode(context, obj.id);
+    const auto previous_runtime_name   = node->Name();
+    node->SetName(runtime_name);
+    node->SetTranslate(Vector3f(obj.origin.data()));
+    node->SetScale(Vector3f(obj.scale.data()));
+    node->SetRotation(Vector3f(obj.angles.data()));
+    node->SetVisible(obj.visible);
+    node->ID() = obj.id;
+    if (obj.perspective ||
+        (context.scene->activeCamera != nullptr && context.scene->activeCamera->IsPerspective())) {
+        node->SetCamera("global_perspective");
+    }
+
+    auto       mesh      = std::make_shared<SceneMesh>();
+    const bool has_bones = PuppetHasBones(mdl);
+    WPMdlParser::GenPuppetMesh(*mesh, mdl, false);
+
+    WPShaderValueData               svData;
+    std::vector<LoadedMaterialSlot> slots;
+    auto load_material = [&](const std::string& path) {
+        if (path.empty()) return false;
+        wpscene::WPMaterial source;
+        if (! LoadWPMaterialFromPath(*context.vfs, path, source)) return false;
+        if (has_bones) WPMdlParser::AddPuppetMatInfo(source, mdl);
+        WPShaderInfo shader_info;
+        if (has_bones) WPMdlParser::AddPuppetShaderInfo(shader_info, mdl);
+        shader_info.baseConstSvs = context.global_base_uniforms;
+        auto slot = MakePuppetMaterialSlot(source, shader_info, svData);
+        if (! LoadPuppetMaterialSlot(context, node.get(), slot)) return false;
+        slots.push_back(std::move(slot));
+        return true;
+    };
+
+    bool any_material = false;
+    if (! mdl.meshes.empty()) {
+        for (const auto& mdl_mesh : mdl.meshes) {
+            if (mdl_mesh.positions.empty()) continue;
+            if (load_material(mdl_mesh.mat_json_file)) {
+                any_material = true;
+            } else {
+                LOG_ERROR("load model material '%s' failed", mdl_mesh.mat_json_file.c_str());
+            }
+        }
+    } else if (load_material(mdl.mat_json_file)) {
+        any_material = true;
+    }
+    (void)any_material;
+
+    for (auto& slot : slots) {
+        mesh->AddMaterial(std::move(slot.material));
+        const auto index = static_cast<uint32_t>(mesh->MaterialSlots().size() - 1);
+        context.shader_updater->SetNodeData(node.get(), index, slot.shader_value_data);
+        RegisterMaterialConstants(
+            context, mesh->MaterialSlotPtr(index), slot.source, slot.shader_info, runtime_name);
+    }
+    node->AddMesh(mesh);
+
+    RegisterCommonNodeBindings(context, *node, runtime_name, obj, previous_runtime_name);
+    QueueSceneScriptIfNeeded(context, runtime_name, obj.visible_setting);
+    QueueSceneScriptIfNeeded(context, runtime_name, obj.origin_setting);
+    QueueSceneScriptIfNeeded(context, runtime_name, obj.scale_setting);
+    QueueSceneScriptIfNeeded(context, runtime_name, obj.angles_setting);
+
+    context.layer_nodes[obj.id]      = node;
+    context.layer_parent_ids[obj.id] = obj.parent_id;
+    context.uses_models              = true;
+}
+
+void ParseCameraObj(ParseContext& context, wpscene::WPCameraObject& obj) {
+    const auto runtime_name = LayerRuntimeName(context, obj);
+    auto       node         = ReuseOrCreateLayerNode(context, obj.id);
+    const auto previous_runtime_name = node->Name();
+    node->SetName(runtime_name);
+    node->SetTranslate(Vector3f(obj.origin.data()));
+    node->SetScale(Vector3f(obj.scale.data()));
+    node->SetRotation(Vector3f(obj.angles.data()));
+    node->SetVisible(obj.visible);
+    node->ID() = obj.id;
+
+    // Official scenes name the playing camera "default". That is this
+    // scene's perspective camera, not a second unused one. scene.camera
+    // eye/center is the editor preview pose and is often pointed at empty
+    // space; the object origin/angles are what the wallpaper actually uses.
+    std::string cam_name = obj.camera;
+    if (cam_name.empty() || cam_name == "default") {
+        cam_name = "global_perspective";
+    }
+    auto existing = context.scene->cameras.find(cam_name);
+    if (existing != context.scene->cameras.end() && existing->second != nullptr) {
+        if (existing->second->IsPerspective() && obj.fov > 0.0f) {
+            existing->second->SetFov(obj.fov);
+            existing->second->LockFov(true);
+        }
+        existing->second->AttatchNode(node);
+        if (cam_name == "global_perspective") {
+            context.global_perspective_camera_node = node;
+            if (obj.visible) {
+                context.scene->activeCamera = existing->second.get();
+            }
+        } else if (cam_name == "global") {
+            context.global_camera_node = node;
+        }
+    } else if (context.scene->cameras.count("global_perspective") != 0) {
+        const auto& source = context.scene->cameras.at("global_perspective");
+        auto camera = std::make_shared<SceneCamera>(
+            static_cast<float>(source->Aspect()),
+            static_cast<float>(source->NearClip()),
+            static_cast<float>(source->FarClip()),
+            ResolvePerspectiveFov({}, obj.fov));
+        camera->LockFov(true);
+        camera->AttatchNode(node);
+        context.scene->cameras[cam_name] = camera;
+        if (obj.visible && camera->IsPerspective()) {
+            context.scene->activeCamera = camera.get();
+        }
+    }
+
+    RegisterCommonNodeBindings(context, *node, runtime_name, obj, previous_runtime_name);
+    QueueSceneScriptIfNeeded(context, runtime_name, obj.visible_setting);
+    QueueSceneScriptIfNeeded(context, runtime_name, obj.origin_setting);
+    QueueSceneScriptIfNeeded(context, runtime_name, obj.scale_setting);
+    QueueSceneScriptIfNeeded(context, runtime_name, obj.angles_setting);
+
+    context.layer_nodes[obj.id]      = node;
+    context.layer_parent_ids[obj.id] = obj.parent_id;
+}
+
+void ApplyDefaultDepthTarget(ParseContext& context) {
+    auto* target = context.scene->FindRenderTarget(SpecTex_Default.data());
+    if (target == nullptr) return;
+    if (context.uses_models ||
+        (context.scene->activeCamera != nullptr && context.scene->activeCamera->IsPerspective())) {
+        target->withDepth = true;
+    }
+}
+
 void ParseLightObj(ParseContext& context, wpscene::WPLightObject& light_obj) {
     auto node = std::make_shared<SceneNode>(Vector3f(light_obj.origin.data()),
                                             Vector3f(light_obj.scale.data()),
@@ -3982,6 +4233,10 @@ bool HasDynamicVisible(const wpscene::WPParticleObject& object) { return object.
 
 bool HasDynamicVisible(const wpscene::WPTextObject&) { return true; }
 
+bool HasDynamicVisible(const wpscene::WPModelObject& object) { return object.dynamic_visible; }
+
+bool HasDynamicVisible(const wpscene::WPCameraObject& object) { return object.dynamic_visible; }
+
 std::unordered_set<int32_t> CollectReachableDependencyIds(const nlohmann::json& objects,
                                                           const LayerObjectIndex& index,
                                                           fs::VFS& vfs) {
@@ -4018,13 +4273,22 @@ std::string NodeRuntimeName(std::string name, int32_t id, uint32_t count) {
 
 void wallpaper::ApplySystemUserTextures(std::vector<std::string>&                  textures,
                                         const std::vector<wpscene::WPUserTexture>& usertextures) {
+    // The two cover slots a wallpaper may bind. Anything else named `system`
+    // is a slot this renderer does not supply, and the authored texture in
+    // that position is left alone rather than replaced by a blank one.
+    static constexpr std::string_view kSystemTextures[] = {
+        "$mediaThumbnail",
+        "$mediaPreviousThumbnail",
+    };
     for (std::size_t index = 0; index < usertextures.size(); ++index) {
         const auto& user_texture = usertextures[index];
-        if (user_texture.type == "system" &&
-            (user_texture.name == "$mediaThumbnail" || user_texture.name == "$mediaPreviousThumbnail")) {
-            if (textures.size() <= index) textures.resize(index + 1);
-            textures[index] = user_texture.name;
-        }
+        if (user_texture.type != "system") continue;
+        const auto* match = std::find(std::begin(kSystemTextures),
+                                      std::end(kSystemTextures),
+                                      std::string_view { user_texture.name });
+        if (match == std::end(kSystemTextures)) continue;
+        if (textures.size() <= index) textures.resize(index + 1);
+        textures[index] = std::string { *match };
     }
 }
 
@@ -4091,6 +4355,12 @@ std::shared_ptr<Scene> WPSceneParser::Parse(const SceneParseRequest& request,
                        [&context](const wpscene::WPTextObject& text) {
                            if (! text.name.empty()) ++context.text_name_counts[text.name];
                        },
+                       [&context](const wpscene::WPModelObject& object) {
+                           CountNodeRuntimeName(context.layer_name_counts, object);
+                       },
+                       [&context](const wpscene::WPCameraObject& object) {
+                           CountNodeRuntimeName(context.layer_name_counts, object);
+                       },
                        [](const auto&) {
                        },
                    },
@@ -4116,6 +4386,20 @@ std::shared_ptr<Scene> WPSceneParser::Parse(const SceneParseRequest& request,
                                NodeRuntimeName(object.name, object.id, count);
                        },
                        [&context](const wpscene::WPParticleObject& object) {
+                           const auto count = object.name.empty()
+                                                  ? 0u
+                                                  : context.layer_name_counts[object.name];
+                           context.object_runtime_names[object.id] =
+                               NodeRuntimeName(object.name, object.id, count);
+                       },
+                       [&context](const wpscene::WPModelObject& object) {
+                           const auto count = object.name.empty()
+                                                  ? 0u
+                                                  : context.layer_name_counts[object.name];
+                           context.object_runtime_names[object.id] =
+                               NodeRuntimeName(object.name, object.id, count);
+                       },
+                       [&context](const wpscene::WPCameraObject& object) {
                            const auto count = object.name.empty()
                                                   ? 0u
                                                   : context.layer_name_counts[object.name];
@@ -4148,7 +4432,7 @@ std::shared_ptr<Scene> WPSceneParser::Parse(const SceneParseRequest& request,
     context.scene->layer_texture_error = ClassifyLayerTextureReferences(layer_refs, layer_index);
     context.scene->layer_texture_sources = context.referenced_layer_ids;
     ParseLayerNodes(context, json.at("objects"));
-    ParseCamera(context, sc.general);
+    ParseCamera(context, sc);
     if (context.scene->runtime != nullptr && json.at("general").contains("zoom")) {
         if (auto animation = ResolveScalarAnimation(json.at("general").at("zoom"))) {
             auto& runtime = *context.scene->runtime;
@@ -4225,14 +4509,17 @@ std::shared_ptr<Scene> WPSceneParser::Parse(const SceneParseRequest& request,
                        [&context](wpscene::WPTextObject& obj) {
                            ParseTextObj(context, obj);
                        },
-                       [](wpscene::WPModelObject&) {
+                       [&context](wpscene::WPModelObject& obj) {
+                           ParseModelObj(context, obj);
                        },
-                       [](wpscene::WPCameraObject&) {
+                       [&context](wpscene::WPCameraObject& obj) {
+                           ParseCameraObj(context, obj);
                        },
                    },
                    obj);
     }
 
+    ApplyDefaultDepthTarget(context);
     AttachRemainingLayerNodes(context);
     RegisterLayerAttachments(context);
     SyncImageEffectFinalTransforms(context);

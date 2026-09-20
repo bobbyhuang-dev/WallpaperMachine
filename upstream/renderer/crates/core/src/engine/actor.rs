@@ -301,6 +301,34 @@ impl EngineActor {
         self.with_scene_mut(handle, |scene| scene.set_audio_response_enabled(enabled))
     }
 
+    pub fn set_media_integration_enabled(
+        &mut self,
+        handle: SceneHandle,
+        enabled: bool,
+    ) -> Result<(), EngineError> {
+        self.with_scene_mut(handle, |scene| scene.set_media_integration_enabled(enabled))
+    }
+
+    pub fn submit_media_event_json(
+        &mut self,
+        handle: SceneHandle,
+        json: String,
+    ) -> Result<(), EngineError> {
+        self.with_scene_mut(handle, |scene| scene.submit_media_event_json(&json))
+    }
+
+    pub fn apply_system_media_artwork(
+        &mut self,
+        handle: SceneHandle,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> Result<(), EngineError> {
+        self.with_scene_mut(handle, |scene| {
+            scene.apply_system_media_artwork(width, height, rgba)
+        })
+    }
+
     pub fn set_audio_volume(
         &mut self,
         handle: SceneHandle,
@@ -853,6 +881,46 @@ impl Message<messages::UpdateMedia> for EngineActor {
     async fn handle(&mut self, msg: messages::UpdateMedia,
         _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         self.with_scene_mut(msg.handle, |scene| scene.update_media(msg.enabled, &msg.state))
+    }
+}
+
+impl Message<messages::SetMediaIntegrationEnabled> for EngineActor {
+    type Reply = Result<(), EngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: messages::SetMediaIntegrationEnabled,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.with_snapshot_update(|actor| {
+            actor.set_media_integration_enabled(msg.handle, msg.enabled)
+        })
+    }
+}
+
+impl Message<messages::SubmitMediaEventJson> for EngineActor {
+    type Reply = Result<(), EngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: messages::SubmitMediaEventJson,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.with_snapshot_update(|actor| actor.submit_media_event_json(msg.handle, msg.json))
+    }
+}
+
+impl Message<messages::ApplySystemMediaArtwork> for EngineActor {
+    type Reply = Result<(), EngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: messages::ApplySystemMediaArtwork,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.with_snapshot_update(|actor| {
+            actor.apply_system_media_artwork(msg.handle, msg.width, msg.height, msg.rgba)
+        })
     }
 }
 

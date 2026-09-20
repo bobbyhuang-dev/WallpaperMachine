@@ -512,6 +512,7 @@ impl OweScene {
         })?;
 
         self.set_audio_response_enabled(desc.audio_response_enabled)?;
+        self.set_media_integration_enabled(desc.media_integration_enabled)?;
         self.set_audio_volume(desc.audio_volume)?;
         self.set_audio_muted(desc.audio_muted)?;
         Ok(())
@@ -839,7 +840,6 @@ impl OweScene {
     ///
     /// Returns [`EngineError`] if the scene is closed, OWE property lookup
     /// fails, or OWE rejects the property update.
-    #[allow(dead_code)]
     pub fn set_media_integration_enabled(&mut self, enabled: bool) -> Result<(), EngineError> {
         self.set_property_bool(Self::media_integration_enabled()?, enabled)
     }
@@ -850,7 +850,6 @@ impl OweScene {
     ///
     /// Returns [`EngineError`] if event serialization fails, the JSON contains
     /// an interior NUL byte, the scene is closed, or OWE rejects the event.
-    #[allow(dead_code)]
     pub fn submit_media_event(
         &mut self,
         event: &crate::media::MediaIntegrationEvent,
@@ -858,7 +857,20 @@ impl OweScene {
         let json = event
             .to_json()
             .map_err(|error| EngineError::InvalidInput(error.to_string()))?;
-        let json = cstring(&json)?;
+        self.submit_media_event_json(&json)
+    }
+
+    /// Submits one SceneScript media event as already-serialized JSON.
+    ///
+    /// The host owns the object shape. Passing a narrower Rust model through
+    /// here would drop fields such as `subTitle` and `albumArtist`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if the JSON contains an interior NUL byte, the
+    /// scene is closed, or OWE rejects the event.
+    pub fn submit_media_event_json(&mut self, json: &str) -> Result<(), EngineError> {
+        let json = cstring(json)?;
         let raw = self.raw_ptr()?;
         call_status("owe_scene_wallpaper_submit_media_event_json", || unsafe {
             sys::owe_scene_wallpaper_submit_media_event_json(raw.as_ptr(), json.as_ptr())
@@ -871,7 +883,6 @@ impl OweScene {
     ///
     /// Returns [`EngineError`] if the scene is closed or OWE rejects the
     /// artwork.
-    #[allow(dead_code)]
     pub fn apply_system_media_artwork(
         &mut self,
         artwork: &crate::media::MediaThumbnailRgba,

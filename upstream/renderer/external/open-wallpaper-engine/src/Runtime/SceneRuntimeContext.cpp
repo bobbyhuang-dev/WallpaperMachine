@@ -441,6 +441,7 @@ SceneRuntimeContext::SceneRuntimeContext(SceneRuntimeBootstrap bootstrap)
       m_project_properties(bootstrap.project_properties) {
     m_host_context->canvas_size = Eigen::Vector2f(static_cast<float>(bootstrap.canvas_width),
                                                   static_cast<float>(bootstrap.canvas_height));
+    m_host_context->screen_resolution = m_host_context->canvas_size;
     // Until the renderer reports its presentation, the window is the canvas.
     m_cursor_viewport = CursorViewport {
         .origin         = Eigen::Vector2f::Zero(),
@@ -587,6 +588,7 @@ void SceneRuntimeContext::SetCursorViewport(const CursorViewport& viewport) {
     if (! viewport.content_origin.allFinite() || ! viewport.content_size.allFinite()) return;
     if (viewport.size.x() == 0.0f || viewport.size.y() == 0.0f) return;
     m_cursor_viewport = viewport;
+    m_host_context->screen_resolution = viewport.size;
 }
 
 void SceneRuntimeContext::SetCursorInput(float x, float y) {
@@ -1207,7 +1209,9 @@ void SceneRuntimeContext::ApplySceneZoomAnimation() {
     camera.Update();
     auto& perspective = *m_scene->cameras.at("global_perspective");
     perspective.SetAspect(camera.Aspect());
-    perspective.SetFov(algorism::CalculatePersperctiveFov(1000.0, camera.Height()));
+    if (! perspective.FovLocked()) {
+        perspective.SetFov(algorism::CalculatePersperctiveFov(1000.0, camera.Height()));
+    }
     perspective.Update();
     m_scene->UpdateLinkedCamera("global");
 }

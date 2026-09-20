@@ -26,6 +26,22 @@ Vector3d SceneCamera::GetDirection() const {
 	return -Vector3d::UnitZ();
 }
 
+Vector3d SceneCamera::GetUp() const {
+	if(m_node) {
+		m_node->UpdateTrans();
+		return (m_node->ModelTrans() * Vector4d(0.0f, 1.0f, 0.0f, 0.0f)).head<3>();
+	}
+	return Vector3d::UnitY();
+}
+
+Vector3d SceneCamera::GetRight() const {
+	if(m_node) {
+		m_node->UpdateTrans();
+		return (m_node->ModelTrans() * Vector4d(1.0f, 0.0f, 0.0f, 0.0f)).head<3>();
+	}
+	return Vector3d::UnitX();
+}
+
 Matrix4d SceneCamera::GetViewMatrix() const {
 	const_cast<SceneCamera*>(this)->Update();
 	return m_viewMat;

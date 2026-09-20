@@ -826,6 +826,61 @@ impl WallpaperEngine {
         self.ask_actor(messages::UpdateMedia { handle, enabled, state }).await
     }
 
+    /// Enables or disables now-playing events for one scene.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if actor communication fails or the renderer rejects
+    /// the update.
+    pub async fn set_media_integration_enabled(
+        &self,
+        handle: SceneHandle,
+        enabled: bool,
+    ) -> Result<(), EngineError> {
+        self.ask_actor(messages::SetMediaIntegrationEnabled { handle, enabled })
+            .await
+    }
+
+    /// Delivers one SceneScript media event as already-serialized JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if actor communication fails or the renderer rejects
+    /// the event.
+    pub async fn submit_media_event_json(
+        &self,
+        handle: SceneHandle,
+        json: impl Into<String> + Send,
+    ) -> Result<(), EngineError> {
+        self.ask_actor(messages::SubmitMediaEventJson {
+            handle,
+            json: json.into(),
+        })
+        .await
+    }
+
+    /// Uploads `$mediaThumbnail` RGBA for one scene.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if actor communication fails or the renderer rejects
+    /// the artwork.
+    pub async fn apply_system_media_artwork(
+        &self,
+        handle: SceneHandle,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> Result<(), EngineError> {
+        self.ask_actor(messages::ApplySystemMediaArtwork {
+            handle,
+            width,
+            height,
+            rgba,
+        })
+        .await
+    }
+
     /// Sets the scene-wide audio volume multiplier.
     ///
     /// # Errors

@@ -165,6 +165,48 @@ TEST(MediaThumbnailTextureSmoke, EffectUserTextureSlotOneResolvesToMediaThumbnai
     EXPECT_EQ(textures[1], "$mediaThumbnail");
 }
 
+TEST(MediaThumbnailTextureSmoke, PreviousThumbnailSlotResolvesForCrossFades) {
+    const nlohmann::json material_json = {
+        { "passes",
+          { {
+              { "shader", "default" },
+              { "textures", { "materials/base.tex", "masks/blend.tex" } },
+              { "usertextures",
+                { nullptr, { { "type", "system" }, { "name", "$mediaPreviousThumbnail" } } } },
+          } } },
+    };
+
+    wpscene::WPMaterial material;
+    ASSERT_TRUE(material.FromJson(material_json));
+
+    auto textures = material.textures;
+    ApplySystemUserTextures(textures, material.usertextures);
+
+    ASSERT_EQ(textures.size(), 2u);
+    EXPECT_EQ(textures[0], "materials/base.tex");
+    EXPECT_EQ(textures[1], "$mediaPreviousThumbnail");
+}
+
+TEST(MediaThumbnailTextureSmoke, UnknownSystemTextureKeepsAuthoredTexture) {
+    const nlohmann::json material_json = {
+        { "passes",
+          { {
+              { "shader", "default" },
+              { "textures", { "materials/base.tex" } },
+              { "usertextures", { { { "type", "system" }, { "name", "$somethingElse" } } } },
+          } } },
+    };
+
+    wpscene::WPMaterial material;
+    ASSERT_TRUE(material.FromJson(material_json));
+
+    auto textures = material.textures;
+    ApplySystemUserTextures(textures, material.usertextures);
+
+    ASSERT_EQ(textures.size(), 1u);
+    EXPECT_EQ(textures[0], "materials/base.tex");
+}
+
 TEST(MediaThumbnailTextureSmoke, ConstantShaderValuesPreserveUserBindingAndFallback) {
     const nlohmann::json material_json = {
         { "passes",
@@ -481,6 +523,32 @@ TEST(MediaThumbnailTextureSmoke, RuntimeImageSourceClassifiesRuntimeImagesWithou
     EXPECT_TRUE(source.IsRuntimeImage("__we_text_texture_layer"));
     EXPECT_EQ(fallback->parse_calls, 0);
     EXPECT_EQ(fallback->header_calls, 0);
+}
+
+TEST(MediaThumbnailTextureSmoke, PreviousThumbnailKeepsTheCoverItReplaced) {
+    RuntimeImageSource source(std::make_unique<NullImageParser>());
+
+    // Before any track: both slots parse, so a bound layer is never missing an
+    // image, and the previous cover is transparent rather than a stale one.
+    ASSERT_NE(source.Parse("$mediaPreviousThumbnail"), nullptr);
+
+    const std::vector<uint8_t> first { 0x11, 0x22, 0x33, 0xFF };
+    const std::vector<uint8_t> second { 0x44, 0x55, 0x66, 0xFF };
+
+    source.SetRgbaImage("$mediaThumbnail", 1, 1, first.data(), first.size());
+    ASSERT_TRUE(source.AliasRuntimeImage("$mediaThumbnail", "$mediaPreviousThumbnail"));
+    source.SetRgbaImage("$mediaThumbnail", 1, 1, second.data(), second.size());
+
+    const auto current  = source.Parse("$mediaThumbnail");
+    const auto previous = source.Parse("$mediaPreviousThumbnail");
+    ASSERT_NE(current, nullptr);
+    ASSERT_NE(previous, nullptr);
+    EXPECT_EQ(std::memcmp(current->slots[0].mipmaps[0].data.get(), second.data(), second.size()), 0);
+    EXPECT_EQ(std::memcmp(previous->slots[0].mipmaps[0].data.get(), first.data(), first.size()), 0);
+    // Distinct cache identities, so the two covers cannot collapse into one
+    // GPU texture while both are on screen during a cross-fade.
+    EXPECT_NE(current->key, previous->key);
+    EXPECT_EQ(source.Version("$mediaPreviousThumbnail"), source.Version("$mediaThumbnail") - 1);
 }
 
 } // namespace

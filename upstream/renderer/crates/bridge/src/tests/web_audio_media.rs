@@ -8,7 +8,10 @@
 //! overwrite the track that replaced it. And the scene optimisation the user
 //! can switch off has to survive a restart and reach the renderer.
 
-use wallpaper_core::{DisplayDesc, DisplayIdentity, DisplaySnapshotEntry};
+use wallpaper_core::{
+    DisplayDesc, DisplayIdentity, DisplaySnapshotEntry, WallpaperAssignment,
+    project::{SceneHandle, SceneTemplate},
+};
 
 use crate::{
     api::{BridgeBuilder, WallpaperBridge},
@@ -288,6 +291,7 @@ async fn a_late_media_event_never_overwrites_newer_state() {
         .submit_system_media_event(
             r#"{"type":"mediaPropertiesChanged","generation":7,"title":"Second"}"#.into(),
         )
+        .await
         .unwrap();
     // The artwork fetch for the previous track finishing after the track has
     // already changed is the case this ordering exists for.
@@ -295,6 +299,7 @@ async fn a_late_media_event_never_overwrites_newer_state() {
         .submit_system_media_event(
             r#"{"type":"mediaPropertiesChanged","generation":6,"title":"First"}"#.into(),
         )
+        .await
         .unwrap();
 
     let state: serde_json::Value =
@@ -314,7 +319,7 @@ async fn media_state_keeps_one_event_of_each_kind_verbatim() {
         r#"{"type":"mediaTimelineChanged","position":12.5,"duration":200.0}"#,
         r#"{"type":"mediaPlaybackChanged","state":1}"#,
     ] {
-        bridge.submit_system_media_event(event.into()).unwrap();
+        bridge.submit_system_media_event(event.into()).await.unwrap();
     }
 
     let state: serde_json::Value =
@@ -342,10 +347,136 @@ async fn an_unrecognised_media_event_is_refused_and_stores_nothing() {
 
     let error = bridge
         .submit_system_media_event(r#"{"type":"mediaLyricsChanged","lyrics":"…"}"#.into())
+        .await
         .unwrap_err();
 
     assert_eq!(error.kind(), crate::BridgeErrorKind::InvalidInput);
     assert!(bridge.current_system_media_state().is_none());
+}
+
+#[tokio::test]
+async fn scene_media_events_fan_out_only_to_opted_in_handles() {
+    let engine = FakeEngineFacade::default();
+    engine.set_snapshot(vec![DisplaySnapshotEntry {
+        handle: Some(SceneHandle::new(11)),
+        accepts_pointer_input: true,
+        window_active: true,
+        assignment: Some(WallpaperAssignment::Direct(
+            SceneTemplate::builder("/workshop/content/431960/100/project.json")
+                .build()
+                .unwrap(),
+        )),
+        ..display_snapshot(7)
+    }]);
+    let bridge = BridgeBuilder::new(engine.clone())
+        .with_state(crate::actor::state::BridgeActorState::default())
+        .build()
+        .unwrap();
+    bridge
+        .inject_scene_wallpaper_config_for_test("100", "Scene")
+        .await;
+    bridge
+        .set_display_config_enabled("100".into(), "7".into(), true)
+        .await
+        .unwrap();
+    bridge.apply_wallpaper_options("100".into()).await.unwrap();
+
+    bridge
+        .submit_system_media_event(r#"{"type":"mediaPlaybackChanged","state":0}"#.into())
+        .await
+        .unwrap();
+    assert!(
+        engine.media_event_calls().is_empty(),
+        "a scene that never opted in must not receive media events"
+    );
+
+    bridge
+        .set_media_integration_enabled("100".into(), true)
+        .await
+        .unwrap();
+    assert_eq!(
+        engine
+            .media_integration_calls()
+            .last()
+            .map(|(_, enabled)| *enabled),
+        Some(true)
+    );
+
+    bridge
+        .submit_system_media_event(
+            r#"{"type":"mediaPropertiesChanged","title":"Track","subTitle":"shown"}"#.into(),
+        )
+        .await
+        .unwrap();
+    let events = engine.media_event_calls();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].0, SceneHandle::new(11));
+    assert!(
+        events[0].1.contains("\"subTitle\":\"shown\""),
+        "fan-out must keep the host JSON, not a narrower Rust model: {}",
+        events[0].1
+    );
+
+    bridge
+        .apply_system_media_artwork(2, 2, vec![0; 16])
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.media_artwork_calls(),
+        vec![(SceneHandle::new(11), 2, 2, 16)]
+    );
+}
+
+#[tokio::test]
+async fn scene_media_handles_follow_consent_so_nothing_reads_the_player_without_it() {
+    let engine = FakeEngineFacade::default();
+    engine.set_snapshot(vec![DisplaySnapshotEntry {
+        handle: Some(SceneHandle::new(11)),
+        accepts_pointer_input: true,
+        window_active: true,
+        assignment: Some(WallpaperAssignment::Direct(
+            SceneTemplate::builder("/workshop/content/431960/100/project.json")
+                .build()
+                .unwrap(),
+        )),
+        ..display_snapshot(7)
+    }]);
+    let bridge = BridgeBuilder::new(engine.clone())
+        .with_state(crate::actor::state::BridgeActorState::default())
+        .build()
+        .unwrap();
+    bridge
+        .inject_scene_wallpaper_config_for_test("100", "Scene")
+        .await;
+    bridge
+        .set_display_config_enabled("100".into(), "7".into(), true)
+        .await
+        .unwrap();
+    bridge.apply_wallpaper_options("100".into()).await.unwrap();
+
+    assert!(
+        bridge.system_media_scene_handles().await.unwrap().is_empty(),
+        "an applied scene without consent must not make the host read the player"
+    );
+
+    bridge
+        .set_media_integration_enabled("100".into(), true)
+        .await
+        .unwrap();
+    assert_eq!(
+        bridge.system_media_scene_handles().await.unwrap(),
+        vec![11],
+        "the consenting scene is named, so a host can tell a new instance from a known one"
+    );
+
+    bridge
+        .set_media_integration_enabled("100".into(), false)
+        .await
+        .unwrap();
+    assert!(
+        bridge.system_media_scene_handles().await.unwrap().is_empty(),
+        "turning the setting back off stops the source again"
+    );
 }
 
 #[tokio::test]

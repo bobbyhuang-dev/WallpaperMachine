@@ -72,6 +72,21 @@ pub trait EngineFacade: Send + Sync + 'static {
     fn set_audio_volume(&self, handle: SceneHandle, volume: AudioVolume) -> EngineFuture<()>;
     fn set_audio_muted(&self, handle: SceneHandle, muted: bool) -> EngineFuture<()>;
     fn set_audio_response_enabled(&self, handle: SceneHandle, enabled: bool) -> EngineFuture<()>;
+    fn set_media_integration_enabled(&self, handle: SceneHandle, enabled: bool) -> EngineFuture<()>;
+    fn submit_media_event_json(&self, handle: SceneHandle, json: String) -> EngineFuture<()> {
+        let _ = (handle, json);
+        async move { Ok(()) }.boxed()
+    }
+    fn apply_system_media_artwork(
+        &self,
+        handle: SceneHandle,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> EngineFuture<()> {
+        let _ = (handle, width, height, rgba);
+        async move { Ok(()) }.boxed()
+    }
     fn set_audio_capture_enabled(&self, handle: SceneHandle, enabled: bool) -> EngineFuture<()>;
     fn set_scaling_mode(&self, handle: SceneHandle, mode: ScalingMode) -> EngineFuture<()>;
     fn set_scaling_factor(&self, handle: SceneHandle, factor: f64) -> EngineFuture<()>;
@@ -417,6 +432,32 @@ impl EngineFacade for RealEngineFacade {
         async move { engine.set_audio_response_enabled(handle, enabled).await }.boxed()
     }
 
+    fn set_media_integration_enabled(&self, handle: SceneHandle, enabled: bool) -> EngineFuture<()> {
+        let engine = self.engine.clone();
+        async move { engine.set_media_integration_enabled(handle, enabled).await }.boxed()
+    }
+
+    fn submit_media_event_json(&self, handle: SceneHandle, json: String) -> EngineFuture<()> {
+        let engine = self.engine.clone();
+        async move { engine.submit_media_event_json(handle, json).await }.boxed()
+    }
+
+    fn apply_system_media_artwork(
+        &self,
+        handle: SceneHandle,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> EngineFuture<()> {
+        let engine = self.engine.clone();
+        async move {
+            engine
+                .apply_system_media_artwork(handle, width, height, rgba)
+                .await
+        }
+        .boxed()
+    }
+
     fn set_audio_capture_enabled(&self, handle: SceneHandle, enabled: bool) -> EngineFuture<()> {
         let audio_capture = self.audio_capture.clone();
         let audio_mutation = self.audio_mutation.clone();
@@ -690,6 +731,9 @@ pub struct FakeEngineFacade {
     audio_volume_calls: Arc<ArcSwap<Vec<(SceneHandle, f32)>>>,
     audio_muted_calls: Arc<ArcSwap<Vec<(SceneHandle, bool)>>>,
     audio_response_calls: Arc<ArcSwap<Vec<(SceneHandle, bool)>>>,
+    media_integration_calls: Arc<ArcSwap<Vec<(SceneHandle, bool)>>>,
+    media_event_calls: Arc<ArcSwap<Vec<(SceneHandle, String)>>>,
+    media_artwork_calls: Arc<ArcSwap<Vec<(SceneHandle, u32, u32, usize)>>>,
     audio_capture_calls: Arc<ArcSwap<Vec<(SceneHandle, bool)>>>,
     audio_capture_suspend_calls: Arc<ArcSwap<Vec<bool>>>,
     audio_capture_suspended: Arc<ArcSwap<bool>>,
@@ -873,6 +917,21 @@ impl FakeEngineFacade {
     #[must_use]
     pub fn audio_response_calls(&self) -> Vec<(SceneHandle, bool)> {
         load_log(&self.audio_response_calls)
+    }
+
+    #[must_use]
+    pub fn media_integration_calls(&self) -> Vec<(SceneHandle, bool)> {
+        load_log(&self.media_integration_calls)
+    }
+
+    #[must_use]
+    pub fn media_event_calls(&self) -> Vec<(SceneHandle, String)> {
+        load_log(&self.media_event_calls)
+    }
+
+    #[must_use]
+    pub fn media_artwork_calls(&self) -> Vec<(SceneHandle, u32, u32, usize)> {
+        load_log(&self.media_artwork_calls)
     }
 
     #[must_use]
@@ -1295,6 +1354,48 @@ impl EngineFacade for FakeEngineFacade {
             fake.update_direct_assignment_after_refresh(handle, |template| {
                 template.audio_response_enabled = enabled;
             });
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn set_media_integration_enabled(&self, handle: SceneHandle, enabled: bool) -> EngineFuture<()> {
+        let fake = self.clone();
+        async move {
+            push_log(&fake.media_integration_calls, (handle, enabled));
+            fake.update_direct_assignment(handle, |template| {
+                template.media_integration_enabled = enabled;
+            });
+            fake.update_direct_assignment_after_refresh(handle, |template| {
+                template.media_integration_enabled = enabled;
+            });
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn submit_media_event_json(&self, handle: SceneHandle, json: String) -> EngineFuture<()> {
+        let fake = self.clone();
+        async move {
+            push_log(&fake.media_event_calls, (handle, json));
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn apply_system_media_artwork(
+        &self,
+        handle: SceneHandle,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> EngineFuture<()> {
+        let fake = self.clone();
+        async move {
+            push_log(
+                &fake.media_artwork_calls,
+                (handle, width, height, rgba.len()),
+            );
             Ok(())
         }
         .boxed()

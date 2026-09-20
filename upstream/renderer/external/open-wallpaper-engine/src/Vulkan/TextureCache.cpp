@@ -152,7 +152,9 @@ VkResult TransImgLayout(const vvk::Queue& queue, vvk::CommandBuffer& cmd,
         if (result != VK_SUCCESS) break;
 
         VkImageSubresourceRange subresourceRange {
-            .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+            .aspectMask     = layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                  ? VK_IMAGE_ASPECT_DEPTH_BIT
+                                  : VK_IMAGE_ASPECT_COLOR_BIT,
             .baseMipLevel   = 0,
             .levelCount     = VK_REMAINING_MIP_LEVELS,
             .baseArrayLayer = 0,
@@ -423,7 +425,9 @@ CreateImage(const Device& device, VkExtent3D extent, u32 miplevel, VkFormat form
             VkSampleCountFlagBits  samples = VK_SAMPLE_COUNT_1_BIT) {
     VmaImageParameters image;
     do {
-        if (samples != VK_SAMPLE_COUNT_1_BIT) {
+        const bool is_depth = (usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0 &&
+                              (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) == 0;
+        if (samples != VK_SAMPLE_COUNT_1_BIT && ! is_depth) {
             miplevel = 1;
             constexpr VkImageUsageFlags removed_msaa_usage =
                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -462,7 +466,8 @@ CreateImage(const Device& device, VkExtent3D extent, u32 miplevel, VkFormat form
                 .format   = format,
                 .subresourceRange =
                     VkImageSubresourceRange {
-                        .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                        .aspectMask     = is_depth ? VK_IMAGE_ASPECT_DEPTH_BIT
+                                                   : VK_IMAGE_ASPECT_COLOR_BIT,
                         .baseMipLevel   = 0,
                         .levelCount     = miplevel,
                         .baseArrayLayer = 0,
@@ -564,7 +569,8 @@ inline VkResult CopyImageData(std::span<const BufferParameters> in_bufs,
 } // namespace
 
 VkSampleCountFlagBits vulkan::PlannedTextureSampleCountForGpuAllocation(TextureKey key) {
-    if (key.usage != TexUsage::MSAA_COLOR) return VK_SAMPLE_COUNT_1_BIT;
+    if (key.usage != TexUsage::MSAA_COLOR && key.usage != TexUsage::DEPTH)
+        return VK_SAMPLE_COUNT_1_BIT;
     return key.sample_count;
 }
 
@@ -1193,28 +1199,33 @@ std::optional<VmaImageParameters> TextureCache::CreateTex(TextureKey tex_key) {
     do {
         const VkSampleCountFlagBits planned_samples =
             PlannedTextureSampleCountForGpuAllocation(tex_key);
+        const bool          is_depth = tex_key.usage == TexUsage::DEPTH;
         VkSamplerCreateInfo sam_info = GenSamplerInfo(tex_key);
-        VkFormat            format   = ToVkType(tex_key.format);
+        VkFormat            format   = is_depth ? VK_FORMAT_D32_SFLOAT : ToVkType(tex_key.format);
         VkExtent3D          ext { (u32)tex_key.width, (u32)tex_key.height, 1 };
+        const VkImageUsageFlags usage =
+            is_depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
+                     : (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
 
-        if (auto opt =
-                CreateImage(m_device,
-                            ext,
-                            tex_key.mipmap_level,
-                            format,
-                            sam_info,
-                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-                            VMA_MEMORY_USAGE_GPU_ONLY,
-                            planned_samples);
+        if (auto opt = CreateImage(m_device,
+                                   ext,
+                                   tex_key.mipmap_level,
+                                   format,
+                                   sam_info,
+                                   usage,
+                                   VMA_MEMORY_USAGE_GPU_ONLY,
+                                   planned_samples);
             opt.has_value()) {
             image_paras = std::move(opt.value());
         } else
             break;
 
-        const VkImageLayout final_layout = planned_samples == VK_SAMPLE_COUNT_1_BIT
-                                               ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                                               : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        const VkImageLayout final_layout =
+            is_depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                     : (planned_samples == VK_SAMPLE_COUNT_1_BIT
+                            ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                            : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
         if (! m_tex_cmd) allocateCmd();
         TransImgLayout(m_device.graphics_queue().handle,

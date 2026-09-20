@@ -115,12 +115,12 @@ final class WallpaperSurface {
         owe_scene_wallpaper_set_property_bool(
           renderer, owe_property_audio_response_enabled(), false))
       try check(
-        owe_scene_wallpaper_set_property_bool(
-          renderer, owe_property_media_integration_enabled(), false))
-      try check(
         owe_scene_wallpaper_apply_config(
           renderer, project.path, assets.path, cache.path, scene.fps, false, false,
           scene.propertiesJSON))
+      try check(
+        owe_scene_wallpaper_set_property_bool(
+          renderer, owe_property_media_integration_enabled(), false))
       try check(
         owe_scene_wallpaper_set_property_int32(
           renderer, owe_property_scaling_mode(), scene.scalingMode))

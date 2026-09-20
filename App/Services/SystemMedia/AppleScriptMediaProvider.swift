@@ -1,0 +1,378 @@
+import AppKit
+import Foundation
+
+/// A player this app knows how to ask.
+///
+/// The bundle identifier is what decides whether it is asked at all: an Apple
+/// Event sent to an application that is not running launches it, and a
+/// wallpaper must never start the user's music player.
+enum AppleScriptPlayer: String, CaseIterable, Sendable {
+    case music
+    case spotify
+
+    var bundleIdentifier: String {
+        switch self {
+        case .music: "com.apple.Music"
+        case .spotify: "com.spotify.client"
+        }
+    }
+}
+
+/// One Music.app or Spotify snapshot. Absent fields stay empty; nothing here
+/// invents a title, position or cover.
+struct AppleScriptNowPlaying: Equatable, Sendable {
+    var player: AppleScriptPlayer
+    var playback: SystemMediaPlaybackState
+    var properties: SystemMediaProperties
+    var position: Double?
+    var duration: Double?
+    /// Identifies the track this snapshot describes. Cover art is fetched when
+    /// this changes rather than once a second, because the artwork is the one
+    /// expensive thing either player can be asked for. Empty when the player
+    /// published no identifier, which simply means no cover is fetched.
+    var trackIdentity = ""
+    /// Where the cover can be fetched when the player publishes a URL instead
+    /// of bytes. Nil for a player whose cover is read over Apple Events.
+    var artworkURL: URL?
+}
+
+/// Runs the Music.app / Spotify queries. Injected so tests never execute a
+/// real script, reach the network or prompt for Automation access.
+@MainActor
+protocol AppleScriptRunning: AnyObject {
+    /// Players that are running right now. Nothing else is contacted.
+    func runningPlayers() -> [AppleScriptPlayer]
+    /// Asks one player what it is playing. Cheap enough to poll: no cover.
+    func query(_ player: AppleScriptPlayer) async -> AppleScriptNowPlaying?
+    /// Reads the cover of whatever `player` has loaded, over Apple Events.
+    func fetchArtwork(from player: AppleScriptPlayer) async -> Data?
+    /// Downloads a cover the player described by URL.
+    func fetchArtwork(at url: URL) async -> Data?
+}
+
+/// Asks the music players the user already has open what they are playing.
+///
+/// The first running player with a loaded track wins. A player that is not
+/// running is never contacted, so this neither launches anything nor asks for
+/// Automation permission for an app the user is not using. A player that
+/// answers with nothing is skipped rather than turned into a placeholder track.
+@MainActor
+final class AppleScriptMediaProvider: SystemMediaProvider {
+    private(set) var availability: SystemMediaAvailability
+    var onPropertiesChanged: ((SystemMediaProperties) -> Void)?
+    var onThumbnailChanged: ((SystemMediaThumbnail) -> Void)?
+    var onPlaybackChanged: ((SystemMediaPlaybackState) -> Void)?
+    var onTimelineChanged: ((SystemMediaTimeline?) -> Void)?
+
+    private let runner: any AppleScriptRunning
+    private let scheduler: any MediaTimerScheduling
+    private let artwork: MediaArtwork
+    private let pollInterval: TimeInterval
+
+    private var consumers = 0
+    private var ticker: (any MediaTimerToken)?
+    private var properties = SystemMediaProperties()
+    private var thumbnail: SystemMediaThumbnail?
+    private var playback = SystemMediaPlaybackState.stopped
+    private var timeline: SystemMediaTimeline?
+    /// Bumped whenever this provider stops, so a cover that finishes loading
+    /// afterwards is discarded instead of being shown next to a later song.
+    private var generation = 0
+    /// The track whose cover has already been looked for, successfully or not.
+    private var coveredTrack: String?
+    private var polling = false
+
+    init(
+        runner: (any AppleScriptRunning)? = nil,
+        scheduler: (any MediaTimerScheduling)? = nil,
+        artwork: MediaArtwork? = nil,
+        pollInterval: TimeInterval = 1
+    ) {
+        self.runner = runner ?? NSAppleScriptNowPlayingRunner()
+        self.scheduler = scheduler ?? FoundationMediaTimerScheduler()
+        self.artwork = artwork ?? MediaArtwork()
+        self.pollInterval = pollInterval
+        availability = .unavailable(
+            reason: MediaRemoteUnavailable(code: .notStarted).localizedDescription)
+    }
+
+    func addConsumer() {
+        consumers += 1
+        guard consumers == 1 else { return }
+        refresh()
+        ticker = scheduler.schedule(every: pollInterval) { [weak self] in self?.refresh() }
+    }
+
+    func removeConsumer() {
+        guard consumers > 0 else { return }
+        consumers -= 1
+        guard consumers == 0 else { return }
+        ticker?.cancel()
+        ticker = nil
+        generation &+= 1
+        availability = .unavailable(
+            reason: MediaRemoteUnavailable(code: .notStarted).localizedDescription)
+        properties = SystemMediaProperties()
+        thumbnail = nil
+        playback = .stopped
+        timeline = nil
+        coveredTrack = nil
+    }
+
+    func replayCurrentState() {
+        guard consumers > 0, case .available = availability else { return }
+        onPropertiesChanged?(properties)
+        if let thumbnail { onThumbnailChanged?(thumbnail) }
+        onPlaybackChanged?(playback)
+        onTimelineChanged?(timeline)
+    }
+
+    /// One poll at a time. The scripts run off the main thread and a slow
+    /// answer must not queue another round behind it.
+    private func refresh() {
+        guard consumers > 0, !polling else { return }
+        polling = true
+        Task { @MainActor [weak self] in
+            await self?.poll()
+            self?.polling = false
+        }
+    }
+
+    private func poll() async {
+        let players = runner.runningPlayers()
+        guard !players.isEmpty else {
+            report(unavailable: String(localized: "No music player this app can read is running."))
+            return
+        }
+
+        let started = generation
+        var snapshot: AppleScriptNowPlaying?
+        for player in players {
+            snapshot = await runner.query(player)
+            guard consumers > 0, generation == started else { return }
+            if snapshot != nil { break }
+        }
+        guard let snapshot else {
+            report(unavailable: String(localized: "Neither Music nor Spotify reported what is playing."))
+            return
+        }
+
+        availability = .available
+        apply(snapshot)
+        await applyArtwork(for: snapshot, generation: started)
+    }
+
+    private func report(unavailable reason: String) {
+        guard consumers > 0 else { return }
+        availability = .unavailable(reason: reason)
+    }
+
+    private func apply(_ snapshot: AppleScriptNowPlaying) {
+        if snapshot.properties != properties {
+            properties = snapshot.properties
+            onPropertiesChanged?(snapshot.properties)
+        }
+        if snapshot.playback != playback {
+            playback = snapshot.playback
+            onPlaybackChanged?(snapshot.playback)
+        }
+        let nextTimeline: SystemMediaTimeline?
+        if let duration = snapshot.duration, duration > 0, let position = snapshot.position {
+            nextTimeline = SystemMediaTimeline(
+                position: min(max(position, 0), duration), duration: duration)
+        } else {
+            nextTimeline = nil
+        }
+        if nextTimeline != timeline {
+            timeline = nextTimeline
+            onTimelineChanged?(nextTimeline)
+        }
+    }
+
+    /// Loads the cover of a track whose cover has not been looked for yet. A
+    /// track that turns out to have none is remembered as looked-for too, so a
+    /// coverless album is not re-fetched once a second.
+    private func applyArtwork(
+        for snapshot: AppleScriptNowPlaying, generation started: Int
+    ) async {
+        guard !snapshot.trackIdentity.isEmpty, snapshot.trackIdentity != coveredTrack else { return }
+        let data: Data?
+        if let url = snapshot.artworkURL {
+            data = await runner.fetchArtwork(at: url)
+        } else {
+            data = await runner.fetchArtwork(from: snapshot.player)
+        }
+        guard consumers > 0, generation == started else { return }
+        coveredTrack = snapshot.trackIdentity
+        guard let data, !data.isEmpty, let cover = artwork.thumbnail(for: data), cover != thumbnail
+        else { return }
+        thumbnail = cover
+        onThumbnailChanged?(cover)
+    }
+}
+
+/// Compiles and runs the Music.app / Spotify queries through `NSAppleScript`.
+///
+/// `NSAppleScript` is synchronous and an Apple Event round trip to a busy
+/// player takes as long as that player wants, so every execution happens on one
+/// private serial queue. Nothing here runs on the main thread.
+@MainActor
+final class NSAppleScriptNowPlayingRunner: AppleScriptRunning {
+    /// `NSAppleScript` is not thread safe, so one serial queue owns every
+    /// instance this type ever compiles.
+    private let queue = DispatchQueue(label: "mac-wallpaper-engine.applescript-now-playing")
+    private let session: URLSession
+
+    init(session: URLSession = .shared) {
+        self.session = session
+    }
+
+    func runningPlayers() -> [AppleScriptPlayer] {
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        return AppleScriptPlayer.allCases.filter { running.contains($0.bundleIdentifier) }
+    }
+
+    func query(_ player: AppleScriptPlayer) async -> AppleScriptNowPlaying? {
+        await offMainThread { Self.parse(Self.run(Self.stateSource(for: player)), player: player) }
+    }
+
+    func fetchArtwork(from player: AppleScriptPlayer) async -> Data? {
+        guard player == .music else { return nil }
+        return await offMainThread {
+            let data = Self.run(Self.musicArtworkSource)?.data
+            return data?.isEmpty == false ? data : nil
+        }
+    }
+
+    func fetchArtwork(at url: URL) async -> Data? {
+        guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else {
+            return nil
+        }
+        guard let (data, response) = try? await session.data(from: url),
+            (response as? HTTPURLResponse).map({ $0.statusCode < 400 }) ?? true
+        else { return nil }
+        return data
+    }
+
+    private func offMainThread<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: work()) }
+        }
+    }
+
+    // MARK: - Script execution
+
+    private nonisolated static func run(_ source: String) -> NSAppleEventDescriptor? {
+        var error: NSDictionary?
+        guard let script = NSAppleScript(source: source) else { return nil }
+        let result = script.executeAndReturnError(&error)
+        if error != nil && result.numberOfItems == 0 && result.stringValue == nil { return nil }
+        return result
+    }
+
+    /// Reads one player's reply list. This is where a player's units are
+    /// turned into the protocol's, so it is reachable on its own.
+    nonisolated static func parse(
+        _ descriptor: NSAppleEventDescriptor?, player: AppleScriptPlayer
+    ) -> AppleScriptNowPlaying? {
+        guard let descriptor, descriptor.numberOfItems >= 8 else { return nil }
+        let text = { (index: Int) in descriptor.atIndex(index)?.stringValue ?? "" }
+        let title = text(2)
+        let artist = text(3)
+        let album = text(4)
+        if title.isEmpty && artist.isEmpty && album.isEmpty { return nil }
+
+        var properties = SystemMediaProperties()
+        properties.title = title
+        properties.artist = artist
+        properties.albumTitle = album
+        properties.albumArtist = text(5)
+        properties.contentType = "music"
+
+        // Music reports a duration in seconds, Spotify in milliseconds. Both
+        // report the position in seconds.
+        let rawDuration = double(descriptor.atIndex(7))
+        let identity = text(8)
+        let status = text(1).lowercased()
+        // Music has no artwork URL and its script returns an empty string
+        // there. `URL(string: "")` is not nil — it is an empty relative URL —
+        // and taking it would send this track down the download path and
+        // silently skip Music's own cover.
+        let artwork = text(9).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return AppleScriptNowPlaying(
+            player: player,
+            playback: status.contains("play")
+                ? .playing : status.contains("pause") ? .paused : .stopped,
+            properties: properties,
+            position: double(descriptor.atIndex(6)),
+            duration: player == .spotify ? rawDuration.map { $0 / 1000 } : rawDuration,
+            // Namespaced by player so switching apps always counts as a new
+            // track, even when two players agree on an identifier.
+            trackIdentity: identity.isEmpty ? "" : "\(player.rawValue)\u{1F}\(identity)",
+            artworkURL: artwork.isEmpty ? nil : URL(string: artwork))
+    }
+
+    private nonisolated static func double(_ descriptor: NSAppleEventDescriptor?) -> Double? {
+        guard let descriptor else { return nil }
+        if let text = descriptor.stringValue, let parsed = Double(text) { return parsed }
+        if descriptor.data.count == MemoryLayout<Double>.size {
+            return descriptor.data.withUnsafeBytes { $0.load(as: Double.self) }
+        }
+        if descriptor.data.count == MemoryLayout<Float>.size {
+            return Double(descriptor.data.withUnsafeBytes { $0.load(as: Float.self) })
+        }
+        let number = descriptor.int32Value
+        return number == 0 ? nil : Double(number)
+    }
+
+    // MARK: - Sources
+
+    /// Addressed by bundle identifier and only ever sent to a running player,
+    /// so no query here can launch an application.
+    ///
+    /// Every optional field is read inside its own `try`: `album artist`,
+    /// `artwork url` and the track identifier exist in some versions of these
+    /// applications and not others, and one missing property must not cost the
+    /// title and artist next to it.
+    private nonisolated static func stateSource(for player: AppleScriptPlayer) -> String {
+        let identity = player == .music ? "(database ID of t) as text" : "(id of t) as text"
+        let artworkURL = player == .spotify ? "set u to (artwork url of t) as text" : ""
+        return """
+            tell application id "\(player.bundleIdentifier)"
+              if player state is stopped then return {}
+              set t to current track
+              set a to ""
+              try
+                set a to (album artist of t) as text
+              end try
+              set i to ""
+              try
+                set i to \(identity)
+              end try
+              set u to ""
+              try
+                \(artworkURL)
+              end try
+              return {player state as text, (name of t) as text, (artist of t) as text, \
+            (album of t) as text, a, player position, duration of t, i, u}
+            end tell
+            """
+    }
+
+    /// Cover bytes are asked for on their own, and only when the track changed:
+    /// a megabyte of artwork in every one-second poll would be the most
+    /// expensive thing this provider does.
+    private nonisolated static let musicArtworkSource = """
+        tell application id "com.apple.Music"
+          if player state is stopped then return ""
+          set t to current track
+          try
+            if (count of artworks of t) is 0 then return ""
+            return raw data of artwork 1 of t
+          on error
+            return ""
+          end try
+        end tell
+        """
+}

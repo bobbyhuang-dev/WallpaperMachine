@@ -13,7 +13,10 @@ This uses a sandboxed native wallpaper extension — the
 ordinary app window over the login UI. While it is active the native desktop
 remains a still frame, while the existing desktop renderer keeps playing.
 Lock-screen audio, audio input and media integration are disabled; see
-[Audio response](audio-response.md).
+[Audio response](audio-response.md) and
+[Media integration](media-integration.md). The extension turns media off again
+after `apply_config`, so a desktop Scene that uses now-playing does not keep
+that feed on the lock screen.
 
 "Enabled" is not claimed optimistically: it requires the system extension to
 acknowledge a rendered frame.

@@ -1,3 +1,5 @@
+import AppKit
+import WebKit
 import XCTest
 
 @testable import MacWallpaperEngine
@@ -261,6 +263,53 @@ final class WebPanelSceneSettingsTests: XCTestCase {
     XCTAssertEqual(
       afterEmptyPurge["userAssetsReleasedBytes"] as? UInt64, 0,
       "A purge that found nothing reports zero, which must not be published as never-run")
+  }
+
+  func testSceneInspectorShowsMediaIntegration() async throws {
+    let context = try Context()
+    defer { context.tearDown() }
+    let web = context.controller.makeWebView()
+    web.setFrameSize(NSSize(width: 960, height: 640))
+    let deadline = Date().addingTimeInterval(15)
+    while !context.controller.isReady && Date() < deadline {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    XCTAssertTrue(context.controller.isReady)
+    guard context.controller.isReady else { return }
+    let base =
+      try await web.callAsyncJavaScript(
+        "return await window.webkit.messageHandlers.native.postMessage({action:'ready'})",
+        arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+    let payload = try XCTUnwrap(base)
+    context.controller.stop()
+
+    let result =
+      try await web.callAsyncJavaScript(
+        """
+        const waitFor = async predicate => {
+          const deadline = Date.now() + 5000;
+          while (!predicate()) {
+            if (Date.now() > deadline) throw new Error('The inspector did not settle');
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+        };
+        window.wallpaperUI.receive(Object.assign({}, base, {
+          page: 'installed', selectedID: 'scene-1',
+          wallpapers: [{ id: 'scene-1', title: 'Scene one', kind: 'Scene', preview: null, active: true, supported: true, tags: [] }],
+          options: { id: 'scene-1', kind: 'Scene', supported: true, dirty: false, volume: 0.5, muted: false,
+            audioResponseEnabled: true, mediaIntegrationEnabled: false, displays: [], properties: [] }
+        }));
+        await waitFor(() => document.querySelector('#inspector [data-setting="mediaIntegrationEnabled"]'));
+        return {
+          mediaToggle: document.querySelector('#inspector [data-setting="mediaIntegrationEnabled"]') !== null,
+          mediaChecked: document.querySelector('#inspector [data-setting="mediaIntegrationEnabled"]').checked,
+        };
+        """, arguments: ["base": payload], in: nil, contentWorld: .page)
+      as? [String: Any]
+    let page = try XCTUnwrap(result)
+    XCTAssertEqual(page["mediaToggle"] as? Bool, true)
+    XCTAssertEqual(page["mediaChecked"] as? Bool, false)
+    XCTAssertNil(web.window, "This check must stay offscreen")
   }
 
   @MainActor

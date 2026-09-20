@@ -154,9 +154,11 @@ than a match.
 
 ## Media integration
 
-Off by default, per wallpaper. The bundled provider delivers system Now Playing
-metadata and artwork; supported sources, lifetime, failure behavior and tests
-are documented in [media-integration.md](media-integration.md).
+Off by default, per wallpaper. Web pages still register
+`wallpaperRegisterMedia*` listeners as documented above. The now-playing source
+is shared through `DesktopMediaSession` and also feeds Scene wallpapers that
+have the same toggle on. Sources, lifetime, lock-screen policy and tests are
+documented in [media-integration.md](media-integration.md).
 
 The status listener describes the user's setting, independently of provider
 availability. With integration enabled but no data, properties are empty,

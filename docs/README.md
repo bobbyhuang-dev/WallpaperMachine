@@ -51,6 +51,7 @@ live under `testing/`.
 | [features/workshop-downloads.md](features/workshop-downloads.md) | Discover, SteamCMD setup, download queue |
 | [features/audio-response.md](features/audio-response.md) | Audio-responsive wallpapers |
 | [features/web-wallpapers.md](features/web-wallpapers.md) | HTML/JS wallpapers hosted in a web view, host protocol, limits |
+| [features/media-integration.md](features/media-integration.md) | Now-playing for Web and Scene wallpapers, MediaRemote and AppleScript fallback |
 | [features/lock-screen.md](features/lock-screen.md) | Experimental animated lock screen |
 | [features/appearance.md](features/appearance.md) | Theme and appearance customization |
 | [features/performance.md](features/performance.md) | Video backend, render scale, battery quality profile, scene renderer and optimisation, experimental pacing, shared decode and direct video plane sampling |

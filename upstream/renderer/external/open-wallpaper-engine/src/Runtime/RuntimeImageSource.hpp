@@ -23,7 +23,12 @@ public:
     explicit RuntimeImageSource(std::unique_ptr<IImageParser> fallback)
         : m_fallback(std::move(fallback)) {
         std::array<uint8_t, 4> transparent_pixel { 0, 0, 0, 0 };
+        // Both cover slots exist before any track does: a layer that binds one
+        // of them must find an image on the very first parse, and a wallpaper
+        // with media integration off never gets a second chance to be told.
         SetRgbaImage("$mediaThumbnail", 1, 1, transparent_pixel.data(), transparent_pixel.size());
+        SetRgbaImage(
+            "$mediaPreviousThumbnail", 1, 1, transparent_pixel.data(), transparent_pixel.size());
     }
 
     std::shared_ptr<Image> Parse(const std::string& name) override {
@@ -122,6 +127,24 @@ public:
         m_runtime_images[std::move(name)] = std::move(image);
     }
 
+    /// Publishes what `from` currently holds under `to`, without copying pixels.
+    ///
+    /// `SetRgbaImage` builds a fresh immutable `Image` every time, so two names
+    /// may share one: replacing `from` afterwards leaves `to` holding exactly
+    /// what `from` used to be. `to` inherits `from`'s version so the number and
+    /// the `Image::key` it is taken from keep agreeing, and it still only ever
+    /// rises because `from`'s own version does.
+    ///
+    /// Returns false when `from` has never been given pixels.
+    bool AliasRuntimeImage(const std::string& from, const std::string& to) {
+        std::lock_guard lock(m_mutex);
+        const auto iterator = m_runtime_images.find(from);
+        if (iterator == m_runtime_images.end()) return false;
+        m_runtime_images[to] = iterator->second;
+        m_versions[to]       = m_versions[from];
+        return true;
+    }
+
 private:
     mutable std::mutex                                      m_mutex;
     std::unique_ptr<IImageParser>                           m_fallback;
@@ -129,5 +152,17 @@ private:
     std::unordered_map<std::string, uint64_t>               m_versions;
     std::atomic<uint64_t>                                   m_next_version { 0 };
 };
+
+/// Publishes one now-playing cover.
+///
+/// The cover being replaced becomes `$mediaPreviousThumbnail`, which is what a
+/// wallpaper cross-fades from, so it has to be captured before the new pixels
+/// land. One definition, because the renderer and the offscreen probe must
+/// publish covers the same way.
+inline void PublishSystemMediaArtwork(RuntimeImageSource& source, uint32_t width, uint32_t height,
+                                      const uint8_t* rgba, std::size_t rgba_len) {
+    source.AliasRuntimeImage("$mediaThumbnail", "$mediaPreviousThumbnail");
+    source.SetRgbaImage("$mediaThumbnail", width, height, rgba, rgba_len);
+}
 
 } // namespace wallpaper

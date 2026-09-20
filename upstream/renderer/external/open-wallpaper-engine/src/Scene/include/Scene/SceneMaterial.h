@@ -35,5 +35,6 @@ public:
     bool                      depth_compare_unsupported { false };
     bool                      depth_test { false };
     bool                      depth_write { false };
+    CullMode                  cull_mode { CullMode::None };
 };
 } // namespace wallpaper

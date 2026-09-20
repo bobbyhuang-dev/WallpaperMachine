@@ -1405,6 +1405,30 @@ TEST(MdlSchema, Uv2OnlyLayoutStillProvidesPrimaryAndSecondaryUvs) {
     EXPECT_FLOAT_EQ(mdl.meshes[0].texcoord2[1][0], 0.5f);
 }
 
+TEST(MdlSchema, GenMeshIncludesNormals) {
+    WPMdl::Mesh src;
+    src.positions = { { 0.0f, 0.0f, 0.0f }, { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f } };
+    src.normals   = { { 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 1.0f } };
+    src.tangents  = { { 1.0f, 0.0f, 0.0f, 1.0f },
+                      { 1.0f, 0.0f, 0.0f, 1.0f },
+                      { 1.0f, 0.0f, 0.0f, 1.0f } };
+    src.texcoords = { { 0.0f, 0.0f }, { 1.0f, 0.0f }, { 0.0f, 1.0f } };
+    src.indices   = { { 0, 1, 2 } };
+
+    SceneMesh::Submesh submesh;
+    WPMdlParser::GenMeshFromMdl(submesh, src);
+    ASSERT_EQ(submesh.VertexCount(), 1u);
+    const auto& attributes = submesh.GetVertexArray(0).Attributes();
+    bool        has_normal  = false;
+    bool        has_tangent = false;
+    for (const auto& attribute : attributes) {
+        if (attribute.name == "a_Normal") has_normal = true;
+        if (attribute.name == "a_Tangent") has_tangent = true;
+    }
+    EXPECT_TRUE(has_normal);
+    EXPECT_TRUE(has_tangent);
+}
+
 TEST(MdlSchema, GeneratesOneSubmeshPerMdlv21Mesh) {
     fs::VFS vfs;
     MountMdlFixture(vfs, BuildMdlv21TwoMeshFixture());

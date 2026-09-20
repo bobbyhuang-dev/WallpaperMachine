@@ -58,6 +58,8 @@ final class WebWallpaperHost {
     private var audioSubscriptionTask: Task<Void, Never>?
     private var audioSubscriptions: [UInt32: Bool] = [:]
     private let mediaRelay: WebWallpaperMediaRelay
+    private let mediaListenerKey = ObjectIdentifier(MediaListenerKey())
+    private final class MediaListenerKey {}
     /// Pages currently able to receive media events, which is not the same as
     /// the pages consuming the provider: a page whose user turned integration
     /// off still has to be told so.
@@ -86,6 +88,7 @@ final class WebWallpaperHost {
         counters: RuntimeCounters? = nil,
         audioPump: WebWallpaperAudioPump? = nil,
         setAudioSubscribed: (@MainActor (String, UInt32, Bool) async throws -> Void)? = nil,
+        mediaRelay: WebWallpaperMediaRelay? = nil,
         mediaProvider: (any SystemMediaProvider)? = nil,
         assetStore: (@MainActor (URL, String) -> any WebWallpaperAssetSource)? = nil
     ) {
@@ -95,13 +98,17 @@ final class WebWallpaperHost {
         self.counters = counters ?? .shared
         self.audioPump = audioPump ?? WebWallpaperAudioPump(read: { nil })
         self.setAudioSubscribed = setAudioSubscribed ?? { _, _, _ in }
-        self.mediaRelay = WebWallpaperMediaRelay(provider: mediaProvider ?? UnavailableSystemMediaProvider())
+        self.mediaRelay = mediaRelay ?? WebWallpaperMediaRelay(provider: mediaProvider ?? UnavailableSystemMediaProvider())
         self.makeAssetStore = assetStore
         self.audioPump.onSpectrum = { [weak self] spectrum in self?.broadcast(spectrum) }
-        self.mediaRelay.onChange = { [weak self] event in self?.broadcast(event) }
+        if mediaRelay != nil {
+            self.mediaRelay.addListener(mediaListenerKey) { [weak self] event in self?.broadcast(event) }
+        } else {
+            self.mediaRelay.onChange = { [weak self] event in self?.broadcast(event) }
+        }
     }
 
-    convenience init(bridge: WallpaperBridge) {
+    convenience init(bridge: WallpaperBridge, mediaRelay: WebWallpaperMediaRelay? = nil) {
         self.init(
             fetch: { try await bridge.webWallpapers() },
             audioPump: WebWallpaperAudioPump(read: { try bridge.webAudioSpectrum() }),
@@ -109,7 +116,8 @@ final class WebWallpaperHost {
                 try await bridge.setWebAudioSubscribed(
                     wallpaperId: wallpaperId, displayId: displayId, subscribed: subscribed)
             },
-            mediaProvider: AdapterSystemMediaProvider(),
+            mediaRelay: mediaRelay,
+            mediaProvider: mediaRelay == nil ? AdapterSystemMediaProvider() : nil,
             assetStore: { UserAssetStore(projectURL: $0, wallpaperId: $1) })
     }
 
@@ -351,6 +359,7 @@ final class WebWallpaperHost {
         for window in windows.values { close(window) }
         windows.removeAll()
         audioPump.removeAllSubscribers()
+        mediaRelay.removeListener(mediaListenerKey)
         mediaRelay.removeAllConsumers()
         mediaListeners.removeAll()
         for (displayID, subscribed) in audioSubscriptions where subscribed {

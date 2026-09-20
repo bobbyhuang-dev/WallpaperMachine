@@ -234,7 +234,7 @@ const catalogs = {
     'Off by default. macOS publishes no API for reading what another application is playing. This uses a private interface that is restricted on current macOS, so it may well report unavailable.': '默认关闭。macOS 没有公开读取其他应用播放内容的 API。此功能使用的私有接口在当前 macOS 上受到限制，因此很可能显示为不可用。',
     'Off. The wallpaper is told media integration is disabled and receives no media events.': '已关闭。壁纸会被告知媒体集成已停用，不会收到任何媒体事件。',
     'On, and a media source is available. Only fields the system actually reports are sent; nothing is substituted for the rest.': '已开启，且有可用的媒体来源。只会发送系统实际报告的字段，其余不会用占位数据代替。',
-    'On, but no media source is available: {reason} The page is told nothing rather than being given a placeholder track.': '已开启，但没有可用的媒体来源：{reason} 页面不会收到任何信息，也不会收到占位曲目。',
+    'On, but no media source is available: {reason} The wallpaper is told nothing rather than being given a placeholder track.': '已开启，但没有可用的媒体来源：{reason} 壁纸不会收到任何信息，也不会收到占位曲目。',
     'the system declined to report what is playing.': '系统拒绝报告正在播放的内容。',
     'On for this wallpaper. With no desktop wallpaper running, the panel cannot tell whether a media source is available.': '此壁纸已开启。桌面上没有运行中的壁纸时，面板无法判断是否有可用的媒体来源。',
 

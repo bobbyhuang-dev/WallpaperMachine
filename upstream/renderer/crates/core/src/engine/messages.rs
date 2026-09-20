@@ -122,6 +122,23 @@ pub struct SetAudioResponseEnabled {
     pub enabled: bool,
 }
 
+pub struct SetMediaIntegrationEnabled {
+    pub handle: SceneHandle,
+    pub enabled: bool,
+}
+
+pub struct SubmitMediaEventJson {
+    pub handle: SceneHandle,
+    pub json: String,
+}
+
+pub struct ApplySystemMediaArtwork {
+    pub handle: SceneHandle,
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
 pub struct SetAudioVolume {
     pub handle: SceneHandle,
     pub volume: AudioVolume,

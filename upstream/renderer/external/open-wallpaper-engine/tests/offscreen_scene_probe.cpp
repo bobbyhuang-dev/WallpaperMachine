@@ -10,6 +10,7 @@
 #include "Runtime/SceneRuntimeContext.hpp"
 #include "Runtime/RuntimeImageSource.hpp"
 #include "Runtime/VirtualAssetRegistry.hpp"
+#include "Runtime/RuntimeImageSource.hpp"
 #include "Scene/Scene.h"
 #include "Scene/SceneNode.h"
 #include "WPSceneParser.hpp"
@@ -36,6 +37,8 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <nlohmann/json.hpp>
+#include <vector>
 #include <thread>
 
 using namespace wallpaper;
@@ -145,6 +148,54 @@ void ReadImage(Device& device, RenderingResources& rr, const ImageParameters& im
     Ppm(path, static_cast<const uint8_t*>(bytes), image.extent.width, image.extent.height);
     buffer.handle.UnMapMemory();
 }
+
+// Feeds the scene the now-playing state the app would deliver, so a media
+// wallpaper can be rendered without a desktop, a system media source or the
+// macOS Automation permission the real sources need.
+//
+// `WE_TEST_MEDIA_EVENTS` is a JSON array of SceneScript media event objects,
+// dispatched in order. `WE_TEST_MEDIA_ARTWORK` is "<width>x<height>:<rrggbb>"
+// and publishes one opaque cover, so what reached `$mediaThumbnail` is legible
+// in the rendered frame.
+void InjectSystemMedia(Scene& scene) {
+    const char* events = std::getenv("WE_TEST_MEDIA_EVENTS");
+    const char* artwork = std::getenv("WE_TEST_MEDIA_ARTWORK");
+    if (!events && !artwork) return;
+    Check(scene.runtime != nullptr, "scene has no runtime for media events");
+    scene.runtime->SetMediaIntegrationEnabled(true);
+
+    if (artwork) {
+        unsigned width = 0, height = 0, rgb = 0;
+        Check(std::sscanf(artwork, "%ux%u:%x", &width, &height, &rgb) == 3 &&
+                  width >= 1 && width <= 4096 && height >= 1 && height <= 4096,
+              "WE_TEST_MEDIA_ARTWORK must be \"<width>x<height>:<rrggbb>\"");
+        auto* images = dynamic_cast<RuntimeImageSource*>(scene.imageParser.get());
+        Check(images != nullptr, "scene image parser cannot hold runtime images");
+        std::vector<uint8_t> rgba(std::size_t(width) * height * 4);
+        for (std::size_t i = 0; i < rgba.size(); i += 4) {
+            rgba[i + 0] = uint8_t((rgb >> 16) & 0xFF);
+            rgba[i + 1] = uint8_t((rgb >> 8) & 0xFF);
+            rgba[i + 2] = uint8_t(rgb & 0xFF);
+            rgba[i + 3] = 0xFF;
+        }
+        PublishSystemMediaArtwork(*images, width, height, rgba.data(), rgba.size());
+        std::cout << "media artwork " << width << 'x' << height << " rgb=" << std::hex << rgb
+                  << std::dec << std::endl;
+    }
+
+    if (events) {
+        const auto parsed = nlohmann::json::parse(events, nullptr, false);
+        Check(!parsed.is_discarded() && parsed.is_array(),
+              "WE_TEST_MEDIA_EVENTS must be a JSON array of media event objects");
+        for (const auto& event : parsed) {
+            Check(event.is_object(), "each WE_TEST_MEDIA_EVENTS entry must be an object");
+            const auto json = event.dump();
+            scene.runtime->DispatchMediaEventJson(json);
+            std::cout << "media event " << json << std::endl;
+        }
+        scene.runtime->Tick(1.0 / 60.0);
+    }
+}
 }
 int main() {
     try {
@@ -247,6 +298,15 @@ int main() {
             const char* enabled = std::getenv("WE_TEST_AUDIO_ENABLED");
             scene->runtime->SetAudioResponseEnabled(! enabled || std::string_view(enabled) != "0");
         }
+        for (int i = 0; i < 20; ++i) {
+            scene->runtime->Tick(1.0 / 60.0);
+            scene->runtime->PumpTextLayerCache();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        InjectSystemMedia(*scene);
+        // Media events change layer text, and that layout runs on another
+        // thread. Drain it the same way the initial warm-up does; five tight
+        // pumps collect nothing a worker has not finished yet.
         for (int i = 0; i < 20; ++i) {
             scene->runtime->Tick(1.0 / 60.0);
             scene->runtime->PumpTextLayerCache();
@@ -458,6 +518,11 @@ int main() {
                 scene->paritileSys->Emitt();
             }
             scene->runtime->Tick(frame_step > 0.0 ? frame_step : 1.0 / 60.0);
+            // Text layout runs on its own thread and its results are collected
+            // by the pump, which production DRAW calls every frame. Without
+            // this a label whose layout landed after preparation is never
+            // rasterized, and the frame is missing text the scene does have.
+            scene->runtime->PumpTextLayerCache();
             Check(device.tex_cache().BeginVideoFrameRecording(), "begin frame pins");
             std::vector<VulkanPass*> frame_passes = passes;
             if (scene_optimization) {

@@ -26,7 +26,8 @@ App/                               MacWallpaperEngine application target sources
   Services/LockScreen/             lock-screen selection overrides and configuration publishing
   Services/NativeVideo/            AVFoundation video backend: admission, player and host window
   Services/Steam/                  SteamCMD runtime discovery and setup state
-  Services/SystemMedia/            system now-playing provider and artwork palette for the web media integration
+  Services/SystemMedia/            shared now-playing session (MediaRemote, Music/Spotify
+                                   AppleScript fallback) and artwork for Web and Scene media integration
   Services/UserAssets/             importing, watching and picking for file/directory wallpaper properties;
                                    owns the app's copies under <support>/UserAssets/ and the derived,
                                    regenerable <project>/.mwe-user-assets/ bridge a page can read

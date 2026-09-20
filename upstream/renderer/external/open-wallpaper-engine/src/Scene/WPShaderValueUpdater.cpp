@@ -138,6 +138,10 @@ void WPShaderValueUpdater::InitUniforms(SceneNode* pNode, uint32_t material_slot
     info.has_ORIENTATIONUP      = existsOp(G_ORIENTATIONUP);
     info.has_ORIENTATIONRIGHT   = existsOp(G_ORIENTATIONRIGHT);
     info.has_ORIENTATIONFORWARD = existsOp(G_ORIENTATIONFORWARD);
+    info.has_EYE              = existsOp(G_EYEPOSITION);
+    info.has_VIEWFORWARD      = existsOp(G_VIEWFORWARD);
+    info.has_VIEWUP           = existsOp(G_VIEWUP);
+    info.has_VIEWRIGHT        = existsOp(G_VIEWRIGHT);
     info.has_AudioSpectrum16Left = existsOp(G_AUDIO_SPECTRUM16_LEFT);
     info.has_AudioSpectrum16Right = existsOp(G_AUDIO_SPECTRUM16_RIGHT);
     info.has_AudioSpectrum32Left = existsOp(G_AUDIO_SPECTRUM32_LEFT);
@@ -419,6 +423,30 @@ void WPShaderValueUpdater::UpdateUniforms(SceneNode* pNode, uint32_t material_sl
         }
         updateOp(G_LP, lights);
         updateOp(G_LCP, lights_color);
+    }
+
+    if (info.has_EYE || info.has_VIEWFORWARD || info.has_VIEWUP || info.has_VIEWRIGHT) {
+        // 2D scenes keep the authored axis-aligned constants. Overwriting them
+        // from the ortho camera node (canvas centre, z = 0) collapses particle
+        // billboards that subtract g_EyePosition from a layer on the same plane.
+        SceneCamera* view_camera = nullptr;
+        if (camera != nullptr && camera->IsPerspective()) {
+            view_camera = camera;
+        } else if (m_scene->activeCamera != nullptr && m_scene->activeCamera->IsPerspective()) {
+            view_camera = m_scene->activeCamera;
+        }
+        if (view_camera != nullptr) {
+            const auto to_array = [](const Eigen::Vector3d& value) {
+                return std::array<float, 3> { static_cast<float>(value.x()),
+                                              static_cast<float>(value.y()),
+                                              static_cast<float>(value.z()) };
+            };
+            if (info.has_EYE) updateOp(G_EYEPOSITION, to_array(view_camera->GetPosition()));
+            if (info.has_VIEWFORWARD)
+                updateOp(G_VIEWFORWARD, to_array(view_camera->GetDirection()));
+            if (info.has_VIEWUP) updateOp(G_VIEWUP, to_array(view_camera->GetUp()));
+            if (info.has_VIEWRIGHT) updateOp(G_VIEWRIGHT, to_array(view_camera->GetRight()));
+        }
     }
 }
 

@@ -461,6 +461,14 @@ impl EngineFacade for FailingPlaybackEngine {
         async move { Ok::<(), EngineError>(()) }.boxed()
     }
 
+    fn set_media_integration_enabled(
+        &self,
+        _handle: SceneHandle,
+        _enabled: bool,
+    ) -> BoxFuture<'static, Result<(), EngineError>> {
+        async move { Ok::<(), EngineError>(()) }.boxed()
+    }
+
     fn set_audio_capture_enabled(
         &self,
         _handle: SceneHandle,
@@ -652,6 +660,14 @@ impl EngineFacade for ShutdownEngine {
     }
 
     fn set_audio_response_enabled(
+        &self,
+        _handle: SceneHandle,
+        _enabled: bool,
+    ) -> BoxFuture<'static, Result<(), EngineError>> {
+        async move { Ok::<(), EngineError>(()) }.boxed()
+    }
+
+    fn set_media_integration_enabled(
         &self,
         _handle: SceneHandle,
         _enabled: bool,

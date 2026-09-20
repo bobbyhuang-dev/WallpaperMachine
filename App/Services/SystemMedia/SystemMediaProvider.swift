@@ -33,6 +33,10 @@ struct SystemMediaProperties: Equatable, Sendable {
 
 /// The payload of a `wallpaperRegisterMediaThumbnailListener` event: cover art the page
 /// can assign straight to `img.src`, plus the palette pages tint themselves with.
+///
+/// `rgba` is the same image as the data URL, kept so a scene wallpaper can upload
+/// `$mediaThumbnail` without decoding the PNG again. Empty when a test or a
+/// provider supplied colours without pixels.
 struct SystemMediaThumbnail: Equatable, Sendable {
     var pngBase64DataURL: String
     var primaryColor: String
@@ -41,6 +45,10 @@ struct SystemMediaThumbnail: Equatable, Sendable {
     /// Readable against `primaryColor`; see `MediaArtwork` for the contrast rule.
     var textColor: String
     var highContrastColor: String
+    /// Premultiplied RGBA8, `width * height * 4` bytes. Empty when unknown.
+    var rgba: [UInt8] = []
+    var width: Int = 0
+    var height: Int = 0
 }
 
 /// The payload of a `wallpaperRegisterMediaTimelineListener` event, in seconds.
@@ -49,7 +57,7 @@ struct SystemMediaTimeline: Equatable, Sendable {
     var duration: Double
 }
 
-/// Source of system now-playing state for the web media integration.
+/// Source of system now-playing state for web and scene media integration.
 ///
 /// The provider is dormant until a wallpaper asks for it: nothing is loaded, probed or
 /// observed before the first `addConsumer()`, and everything is released again at zero.

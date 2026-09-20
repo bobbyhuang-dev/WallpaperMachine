@@ -38,7 +38,9 @@ use crate::{
             SetAudioResponseEnabled, SetBatteryQualityProfile, SetContentPacingEnabled,
             SetDisplayConfigEnabled, SetDisplayEnabled, SetDisplayMode,
             SetDisplayPresentationSuspended,
-            SetFilter, SetGlobalPlayback, SetLaunchAtLogin, SetMediaIntegrationEnabled,
+            FanOutSystemMediaArtwork, FanOutSystemMediaEvent, GetSystemMediaSceneHandles, SetFilter,
+            SetGlobalPlayback,
+            SetLaunchAtLogin, SetMediaIntegrationEnabled,
             SetMirrorMuted, SetMirrorScalingFactor,
             SetMirrorScalingMode, SetMirrorTarget, SetMirrorTargetFps, SetMirrorVolume, SetMuted,
             SetPauseOnBatteryPower, SetPowerSource, SetPresentationSuspended, SetPropertyPath,
@@ -1077,6 +1079,7 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                     })?
                     .title
                     .clone();
+                scene.media_integration_enabled = false;
                 for path in [&mut scene.scene_path, &mut scene.assets_path] {
                     if !std::path::Path::new(path.as_str()).is_absolute() {
                         *path = std::path::absolute(&*path)
@@ -3088,11 +3091,22 @@ impl<E: EngineFacade + Clone> Message<SetMediaIntegrationEnabled> for BridgeActo
         msg: SetMediaIntegrationEnabled,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        let previous_enabled = self
+            .state
+            .wallpaper_draft_mut(&msg.wallpaper_id)?
+            .current()
+            .media_integration_enabled;
         let wallpaper_config = self
             .state
             .wallpaper_draft_mut(&msg.wallpaper_id)?
             .set_media_integration_enabled_immediate(msg.enabled);
-        self.save_wallpaper(msg.wallpaper_id.clone(), wallpaper_config)?;
+        if let Err(error) = self.save_wallpaper(msg.wallpaper_id.clone(), wallpaper_config) {
+            let _ = self
+                .state
+                .wallpaper_draft_mut(&msg.wallpaper_id)?
+                .set_media_integration_enabled_immediate(previous_enabled);
+            return Err(error);
+        }
         if !msg.enabled {
             let mut state = crate::api::BridgeMediaSnapshot { playback_state: 2, ..Default::default() }.into_state()?;
             state.events[0] = wallpaper_core::media::MediaIntegrationEvent::StatusChanged { enabled: false };
@@ -3102,7 +3116,46 @@ impl<E: EngineFacade + Clone> Message<SetMediaIntegrationEnabled> for BridgeActo
             }
         }
         self.bump_generation();
+        let handles = self.wallpaper_handles(&msg.wallpaper_id, true);
+        for handle in handles {
+            if let Err(error) = self
+                .engine
+                .set_media_integration_enabled(handle, msg.enabled)
+                .await
+            {
+                let reverted = self
+                    .state
+                    .wallpaper_draft_mut(&msg.wallpaper_id)?
+                    .set_media_integration_enabled_immediate(previous_enabled);
+                let _ = self.save_wallpaper(msg.wallpaper_id.clone(), reverted);
+                return Err(BridgeError::engine(error.to_string()));
+            }
+        }
         self.wallpaper_bundle(msg.wallpaper_id)
+    }
+}
+
+impl<E: EngineFacade + Clone> BridgeActor<E> {
+    fn media_scene_handles(&self) -> Vec<SceneHandle> {
+        let mut handles = Vec::new();
+        let mut seen = HashSet::new();
+        for (id, config) in &self.state.wallpaper_configs {
+            let enabled = self
+                .state
+                .wallpaper_drafts
+                .get(id)
+                .map(|draft| draft.current().media_integration_enabled)
+                .unwrap_or(config.media_integration_enabled);
+            if !enabled {
+                continue;
+            }
+            for handle in self.wallpaper_handles(id, true) {
+                if seen.insert(handle) {
+                    handles.push(handle);
+                }
+            }
+        }
+        handles
     }
 }
 
@@ -3130,6 +3183,58 @@ impl<E: EngineFacade + Clone> Message<messages::UpdateSceneMedia> for BridgeActo
                 .map_err(|error| BridgeError::engine(error.to_string()))?;
         }
         Ok(())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<FanOutSystemMediaEvent> for BridgeActor<E> {
+    type Reply = messages::FanOutSystemMediaEventReply;
+
+    async fn handle(
+        &mut self,
+        msg: FanOutSystemMediaEvent,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        for handle in self.media_scene_handles() {
+            self.engine
+                .submit_media_event_json(handle, msg.json.clone())
+                .await
+                .map_err(|error| BridgeError::engine(error.to_string()))?;
+        }
+        Ok(())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<FanOutSystemMediaArtwork> for BridgeActor<E> {
+    type Reply = messages::FanOutSystemMediaArtworkReply;
+
+    async fn handle(
+        &mut self,
+        msg: FanOutSystemMediaArtwork,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        for handle in self.media_scene_handles() {
+            self.engine
+                .apply_system_media_artwork(handle, msg.width, msg.height, msg.rgba.clone())
+                .await
+                .map_err(|error| BridgeError::engine(error.to_string()))?;
+        }
+        Ok(())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<GetSystemMediaSceneHandles> for BridgeActor<E> {
+    type Reply = messages::GetSystemMediaSceneHandlesReply;
+
+    async fn handle(
+        &mut self,
+        _msg: GetSystemMediaSceneHandles,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .media_scene_handles()
+            .into_iter()
+            .map(SceneHandle::raw)
+            .collect())
     }
 }
 

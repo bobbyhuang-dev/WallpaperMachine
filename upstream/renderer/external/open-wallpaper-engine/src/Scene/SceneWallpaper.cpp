@@ -933,15 +933,11 @@ private:
         auto* runtime_images = dynamic_cast<RuntimeImageSource*>(m_scene->imageParser.get());
         if (runtime_images == nullptr) return false;
 
-        runtime_images->SetRgbaImage("$mediaThumbnail",
-                                     artwork.width,
-                                     artwork.height,
-                                     artwork.rgba.data(),
-                                     artwork.rgba.size());
-        if (m_scene->runtime != nullptr) {
-            m_scene->runtime->DispatchMediaEventJson(
-                R"({"type":"mediaThumbnailChanged","hasThumbnail":true})");
-        }
+        PublishSystemMediaArtwork(*runtime_images,
+                                  artwork.width,
+                                  artwork.height,
+                                  artwork.rgba.data(),
+                                  artwork.rgba.size());
         return rebuildRenderGraph();
     }
 

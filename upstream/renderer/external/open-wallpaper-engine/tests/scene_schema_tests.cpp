@@ -6,11 +6,13 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <cstring>
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <Eigen/Dense>
 
 #include "Fs/Fs.h"
 #include "Fs/MemBinaryStream.h"
@@ -22,7 +24,9 @@
 #include "Scene/SceneCamera.h"
 #include "Scene/SceneNode.h"
 #include "SpecTexs.hpp"
+#include "Type.hpp"
 #include "WPShaderValueUpdater.hpp"
+#include "Interface/IShaderValueUpdater.h"
 #include "WPSceneParser.hpp"
 #include "wpscene/WPImageObject.h"
 #include "wpscene/WPMiscObject.hpp"
@@ -1162,6 +1166,210 @@ TEST(SceneSchema, ParserCreatesTextChildWithoutBreakingLayerParents) {
     ASSERT_EQ((*group)->GetChildren().size(), 1u);
     EXPECT_EQ((*group)->GetChildren().front()->Name(), "__we_text_101");
     EXPECT_NE((*group)->GetChildren().front()->Mesh(), nullptr);
+}
+
+void AddLeafModelSceneFiles(std::map<std::string, std::string>& files) {
+    files["/planet.mdl"] = BuildMeshOnlyPuppetMdlFixture();
+    files["/mat/head.json"] =
+        R"({"passes":[{"blending":"normal","cullmode":"normal","depthtest":"enabled","depthwrite":"enabled","shader":"genericimage","textures":["a.tex"]}]})";
+    files["/mat/eyes.json"] =
+        R"({"passes":[{"blending":"normal","cullmode":"nocull","depthtest":"enabled","depthwrite":"disabled","shader":"genericimage","textures":["a.tex"]}]})";
+    files["/shaders/genericimage.vert"] = R"(
+attribute vec3 a_Position;
+attribute vec2 a_TexCoord;
+varying vec2 v_TexCoord;
+void main() {
+  gl_Position = vec4(a_Position, 1.0);
+  v_TexCoord = a_TexCoord;
+}
+)";
+    files["/shaders/genericimage.frag"] = R"(
+uniform sampler2D g_Texture0;
+uniform vec3 g_EyePosition;
+uniform vec3 g_ViewForward;
+uniform vec3 g_ViewUp;
+uniform vec3 g_ViewRight;
+uniform vec4 g_LightsPosition[4];
+varying vec2 v_TexCoord;
+void main() {
+  gl_FragColor = texture(g_Texture0, v_TexCoord);
+}
+)";
+    files["/materials/a.tex.tex"] = "";
+}
+
+std::string PerspectiveSceneJson(std::string_view objects) {
+    return std::string(R"({
+      "camera": {"center":[0,0,0], "eye":[0,10,20], "up":[0,1,0]},
+      "general": {
+        "ambientcolor":[0.2,0.2,0.2], "skylightcolor":[0.3,0.3,0.3],
+        "clearcolor":[0,0,0], "cameraparallax":false,
+        "cameraparallaxamount":0, "cameraparallaxdelay":0,
+        "cameraparallaxmouseinfluence":0,
+        "orthogonalprojection":null, "fov":60, "nearz":0.1, "farz":5000
+      },
+      "objects": )") +
+           std::string(objects) + "}";
+}
+
+TEST(SceneSchema, ParserInstantiatesLeafModel) {
+    auto files = std::map<std::string, std::string> {};
+    AddLeafModelSceneFiles(files);
+    fs::VFS vfs;
+    EXPECT_TRUE(vfs.Mount("/assets", std::make_unique<MemoryFs>(std::move(files))));
+    audio::SoundManager sound_manager;
+    WPSceneParser       parser;
+    auto parsed = parser.Parse("leaf-model",
+                               R"({
+      "camera": {"center":[0,0,0], "eye":[0,0,1], "up":[0,1,0]},
+      "general": {
+        "ambientcolor":[0.2,0.2,0.2], "skylightcolor":[0.3,0.3,0.3],
+        "clearcolor":[0,0,0], "cameraparallax":false,
+        "cameraparallaxamount":0, "cameraparallaxdelay":0,
+        "cameraparallaxmouseinfluence":0,
+        "orthogonalprojection":{"width":640,"height":360}
+      },
+      "objects": [
+        {"id":7,"name":"planet","model":"planet.mdl","perspective":true,
+         "origin":[3,4,5],"scale":[1,1,1],"angles":[0.1,0.2,0.3],"visible":true}
+      ]
+    })",
+                               vfs,
+                               sound_manager);
+    ASSERT_NE(parsed, nullptr);
+    auto node = FindRootChildByName(*parsed, "planet");
+    ASSERT_NE(node, nullptr);
+    EXPECT_EQ(node->ID(), 7);
+    ExpectVec3Near({ node->Translate().x(), node->Translate().y(), node->Translate().z() },
+                   { 3.0f, 4.0f, 5.0f },
+                   1e-5f);
+    ExpectVec3Near({ node->Rotation().x(), node->Rotation().y(), node->Rotation().z() },
+                   { 0.1f, 0.2f, 0.3f },
+                   1e-5f);
+    EXPECT_EQ(node->Camera(), "global_perspective");
+    ASSERT_NE(node->Mesh(), nullptr);
+    EXPECT_FALSE(node->Mesh()->Submeshes().empty());
+    ASSERT_FALSE(node->Mesh()->MaterialSlots().empty());
+    ASSERT_NE(node->Mesh()->Material(), nullptr);
+    EXPECT_TRUE(node->Mesh()->Material()->depth_test);
+    EXPECT_TRUE(node->Mesh()->Material()->depth_write);
+    EXPECT_EQ(node->Mesh()->Material()->cull_mode, CullMode::Back);
+    const auto* default_rt = parsed->FindRenderTarget(SpecTex_Default);
+    ASSERT_NE(default_rt, nullptr);
+    EXPECT_TRUE(default_rt->withDepth);
+}
+
+TEST(SceneSchema, OrthogonalprojectionNullActivatesPerspective) {
+    fs::VFS vfs;
+    MountSceneFiles(vfs);
+    audio::SoundManager sound_manager;
+    WPSceneParser       parser;
+    auto parsed = parser.Parse("perspective-camera",
+                               PerspectiveSceneJson("[]"),
+                               vfs,
+                               sound_manager);
+    ASSERT_NE(parsed, nullptr);
+    ASSERT_NE(parsed->activeCamera, nullptr);
+    ASSERT_TRUE(parsed->cameras.contains("global_perspective"));
+    EXPECT_EQ(parsed->activeCamera, parsed->cameras.at("global_perspective").get());
+    EXPECT_TRUE(parsed->activeCamera->IsPerspective());
+    EXPECT_DOUBLE_EQ(parsed->activeCamera->Fov(), 60.0);
+    EXPECT_TRUE(parsed->activeCamera->FovLocked());
+    const auto eye = parsed->activeCamera->GetPosition();
+    EXPECT_NEAR(eye.x(), 0.0, 1e-4);
+    EXPECT_NEAR(eye.y(), 10.0, 1e-4);
+    EXPECT_NEAR(eye.z(), 20.0, 1e-4);
+    const auto forward = parsed->activeCamera->GetDirection().normalized();
+    EXPECT_GT(forward.dot(Eigen::Vector3d(0.0, -10.0, -20.0).normalized()), 0.99);
+    const auto* default_rt = parsed->FindRenderTarget(SpecTex_Default);
+    ASSERT_NE(default_rt, nullptr);
+    EXPECT_TRUE(default_rt->withDepth);
+}
+
+TEST(SceneSchema, DefaultCameraObjectBecomesActivePerspective) {
+    auto files = std::map<std::string, std::string> {};
+    AddLeafModelSceneFiles(files);
+    fs::VFS vfs;
+    EXPECT_TRUE(vfs.Mount("/assets", std::make_unique<MemoryFs>(std::move(files))));
+    audio::SoundManager sound_manager;
+    WPSceneParser       parser;
+    auto parsed = parser.Parse(
+        "default-camera",
+        PerspectiveSceneJson(R"([
+        {"id":9,"name":"playcam","camera":"default","origin":[0,0,0.454],
+         "angles":[0,0,0],"fov":50,"visible":true},
+        {"id":7,"name":"planet","model":"planet.mdl",
+         "origin":[0,0,0],"scale":[1,1,1],"angles":[0,0,0],"visible":true}
+      ])"),
+        vfs,
+        sound_manager);
+    ASSERT_NE(parsed, nullptr);
+    ASSERT_NE(parsed->activeCamera, nullptr);
+    ASSERT_TRUE(parsed->activeCamera->IsPerspective());
+    const auto eye = parsed->activeCamera->GetPosition();
+    EXPECT_NEAR(eye.x(), 0.0, 1e-4);
+    EXPECT_NEAR(eye.y(), 0.0, 1e-4);
+    EXPECT_NEAR(eye.z(), 0.454, 1e-4);
+    auto planet = FindRootChildByName(*parsed, "planet");
+    ASSERT_NE(planet, nullptr);
+    EXPECT_EQ(planet->Camera(), "global_perspective");
+}
+
+TEST(SceneSchema, ParserKeepsSceneLightsAndUpdatesViewUniforms) {
+    auto files = std::map<std::string, std::string> {};
+    AddLeafModelSceneFiles(files);
+    fs::VFS vfs;
+    EXPECT_TRUE(vfs.Mount("/assets", std::make_unique<MemoryFs>(std::move(files))));
+    audio::SoundManager sound_manager;
+    WPSceneParser       parser;
+    auto parsed = parser.Parse(
+        "model-light",
+        PerspectiveSceneJson(R"([
+        {"id":7,"name":"planet","model":"planet.mdl","perspective":true,
+         "origin":[0,0,0],"scale":[1,1,1],"angles":[0,0,0],"visible":true},
+        {"id":8,"name":"sun","light":"point","origin":[11,22,33],
+         "scale":[1,1,1],"angles":[0,0,0],"color":[1,0.5,0.25],
+         "radius":1000,"intensity":0.75,"visible":true}
+      ])"),
+        vfs,
+        sound_manager);
+    ASSERT_NE(parsed, nullptr);
+    ASSERT_EQ(parsed->lights.size(), 1u);
+    ASSERT_NE(parsed->lights[0], nullptr);
+    ASSERT_NE(parsed->lights[0]->node(), nullptr);
+    ExpectVec3Near({ parsed->lights[0]->node()->Translate().x(),
+                     parsed->lights[0]->node()->Translate().y(),
+                     parsed->lights[0]->node()->Translate().z() },
+                   { 11.0f, 22.0f, 33.0f },
+                   1e-5f);
+
+    auto node = FindRootChildByName(*parsed, "planet");
+    ASSERT_NE(node, nullptr);
+    auto* updater = dynamic_cast<WPShaderValueUpdater*>(parsed->shaderValueUpdater.get());
+    ASSERT_NE(updater, nullptr);
+    updater->InitUniforms(node.get(), 0, [](std::string_view name) {
+        return name == "g_EyePosition" || name == "g_ViewForward" || name == "g_ViewUp" ||
+               name == "g_ViewRight" || name == "g_LightsPosition";
+    });
+    std::unordered_map<std::string, std::array<float, 4>> captured;
+    sprite_map_t                                          sprites;
+    updater->UpdateUniforms(node.get(), sprites, [&](std::string_view name, const ShaderValue& value) {
+        if (name == "g_EyePosition" || name == "g_ViewForward" || name == "g_ViewUp" ||
+            name == "g_ViewRight") {
+            captured[std::string(name)] = { value[0], value[1], value[2], 0.0f };
+        }
+        if (name == "g_LightsPosition") {
+            captured[std::string(name)] = { value[0], value[1], value[2], value[3] };
+        }
+    });
+    ASSERT_TRUE(captured.contains("g_EyePosition"));
+    EXPECT_NEAR(captured["g_EyePosition"][0], 0.0f, 1e-3f);
+    EXPECT_NEAR(captured["g_EyePosition"][1], 10.0f, 1e-3f);
+    EXPECT_NEAR(captured["g_EyePosition"][2], 20.0f, 1e-3f);
+    ASSERT_TRUE(captured.contains("g_LightsPosition"));
+    EXPECT_NEAR(captured["g_LightsPosition"][0], 11.0f, 1e-3f);
+    EXPECT_NEAR(captured["g_LightsPosition"][1], 22.0f, 1e-3f);
+    EXPECT_NEAR(captured["g_LightsPosition"][2], 33.0f, 1e-3f);
 }
 
 TEST(SceneSchema, ParserKeepsInvisibleImageDependencySources) {
@@ -2554,7 +2762,7 @@ TEST(SceneSchema, ParserBuildsLdrBloomPostProcessWhenBloomEnabledWithoutHdr) {
     EXPECT_EQ(combine_rt->height, 360);
 }
 
-TEST(SceneSchema, ParserDoesNotBuildLdrBloomPostProcessWhenHdrBloomEnabled) {
+TEST(SceneSchema, ParserBuildsLdrBloomPostProcessWhenHdrBloomEnabled) {
     fs::VFS vfs;
     MountBloomSceneFiles(vfs);
     audio::SoundManager sound_manager;
@@ -2562,7 +2770,11 @@ TEST(SceneSchema, ParserDoesNotBuildLdrBloomPostProcessWhenHdrBloomEnabled) {
 
     auto parsed = parser.Parse("hdr-bloom", BloomSceneJson(true), vfs, sound_manager);
     ASSERT_NE(parsed, nullptr);
-    EXPECT_TRUE(parsed->post_processes.empty());
+    ASSERT_EQ(parsed->post_processes.size(), 1u);
+    ASSERT_NE(parsed->post_processes[0], nullptr);
+    EXPECT_EQ(parsed->post_processes[0]->name, "__bloom");
+    EXPECT_NE(parsed->FindRenderTarget("_rt_bloom_mip1"), nullptr);
+    EXPECT_NE(parsed->FindRenderTarget("_rt_bloom_combine"), nullptr);
 }
 
 TEST(SceneSchema, ParserDoesNotCommitPartialBloomStateWhenMaterialLoadFails) {

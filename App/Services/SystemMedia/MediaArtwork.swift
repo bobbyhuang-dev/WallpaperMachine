@@ -134,7 +134,10 @@ final class MediaArtwork {
             secondaryColor: palette.secondary.css,
             tertiaryColor: palette.tertiary.css,
             textColor: textColor(primary: palette.primary, candidates: [palette.secondary, palette.tertiary]).css,
-            highContrastColor: highContrastColor(against: palette.primary).css)
+            highContrastColor: highContrastColor(against: palette.primary).css,
+            rgba: raster.rgba,
+            width: raster.width,
+            height: raster.height)
     }
 
     // MARK: - Palette

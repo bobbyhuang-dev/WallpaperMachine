@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private lazy var appUpdater = AppUpdateStore()
     private var displayChangeObserver: NSObjectProtocol?
     private var desktopWallpaperSync: DesktopWallpaperSync?
+    private var desktopMediaSession: DesktopMediaSession?
+    private var sceneMediaSink: SceneMediaSink?
     private var webWallpaperHost: WebWallpaperHost?
     private var sceneMediaCoordinator: SceneMediaCoordinator?
     private var nativeVideoHost: NativeVideoWallpaperHost?
@@ -78,16 +80,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 self?.desktopWallpaperSync = nil
                 try self?.startDesktopWallpaperSync()
             }
-            let webHost = WebWallpaperHost(bridge: store.bridge)
+            let mediaScheduler = FoundationMediaTimerScheduler()
+            let mediaSession = DesktopMediaSession(
+                provider: FallbackSystemMediaProvider(
+                    primary: AdapterSystemMediaProvider(scheduler: mediaScheduler),
+                    fallback: AppleScriptMediaProvider(scheduler: mediaScheduler),
+                    scheduler: mediaScheduler))
+            desktopMediaSession = mediaSession
+            let webHost = WebWallpaperHost(bridge: store.bridge, mediaRelay: mediaSession.relay)
             webWallpaperHost = webHost
-            let sceneMedia = SceneMediaCoordinator(bridge: store.bridge)
-            sceneMediaCoordinator = sceneMedia
-            store.sceneMediaAvailability = { [weak sceneMedia] in
-                sceneMedia?.availability ?? .unavailable(reason: String(localized: "Media integration has not been started."))
+            store.sceneMediaAvailability = { [weak mediaSession] in
+                mediaSession?.availability ?? .unavailable(reason: String(localized: "Media integration has not been started."))
             }
-            sceneMedia.start()
+            sceneMediaSink = SceneMediaSink(
+                session: mediaSession,
+                submit: { json in
+                    try await store.bridge.submitSystemMediaEvent(json: json)
+                },
+                applyArtwork: { width, height, rgba in
+                    try await store.bridge.applySystemMediaArtwork(
+                        width: width, height: height, rgba: rgba)
+                },
+                fetchHandles: {
+                    await Self.sceneMediaHandles(store: store)
+                })
             // The panel distinguishes the user's setting from what is actually
-            // being delivered, which only the host knows.
+            // being delivered, which only the host knows. The provider is
+            // process-wide, so a scene wallpaper can populate it too.
             store.webWallpaperDeliveryStatus = { [weak webHost] in
                 webHost?.deliveryStatus ?? WebWallpaperHost.DeliveryStatus()
             }
@@ -123,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 // Web wallpapers live in host windows; open or close them before
                 // the poster sync and the presentation policy look at the desktop.
                 self.webWallpaperHost?.reconcile()
+                self.sceneMediaSink?.reconcile()
                 self.nativeVideoHost?.reconcile()
                 self.presentationPolicy?.evaluate()
                 if let lockScreen, lockScreen.isRequested, lockScreen.errorMessage == nil {
@@ -235,6 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         presentationPolicy?.stop()
         presentationPolicy = nil
         desktopWallpaperSync?.stop()
+        sceneMediaSink?.shutdown()
         webWallpaperHost?.shutdown()
         sceneMediaCoordinator?.stop()
         nativeVideoHost?.shutdown()
@@ -270,6 +291,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 presentationPolicy = nil
                 desktopWallpaperSync?.stop()
                 desktopWallpaperSync = nil
+                sceneMediaSink?.shutdown()
+                sceneMediaSink = nil
                 webWallpaperHost?.shutdown()
                 sceneMediaCoordinator?.stop()
                 sceneMediaCoordinator = nil
@@ -650,6 +673,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 playbackSnapshotCurrent = false
             }
             rebuildMenu()
+        }
+    }
+
+    /// The applied desktop Scenes that have consented to now-playing.
+    ///
+    /// The bridge answers, not the library snapshot: consent is per wallpaper
+    /// and the snapshot does not carry it. Nothing reads the system player
+    /// while this is empty, so a user who left the setting off is never asked
+    /// for Automation permission, and a handle that was not there before is a
+    /// scene that still has to be told what is playing.
+    private static func sceneMediaHandles(store: BridgeStore) async -> Set<UInt64> {
+        do {
+            return Set(try await store.bridge.systemMediaSceneHandles())
+        } catch {
+            AppLog.warn("Scene media consumers could not be read: \(error.localizedDescription)")
+            return []
         }
     }
 

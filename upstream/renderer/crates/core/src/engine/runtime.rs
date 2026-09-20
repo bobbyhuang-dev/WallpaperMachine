@@ -160,6 +160,8 @@ pub struct SceneRuntime {
     render_resolution: Option<(u32, u32)>,
     /// Runtime audio-response state, preserved across scene reconciliation.
     audio_response_enabled: bool,
+    /// Runtime media-integration state, preserved across scene reconciliation.
+    media_integration_enabled: bool,
     /// Runtime playback state, preserved across scene reconciliation.
     paused: bool,
     /// Runtime scene-global audio volume, preserved across scene
@@ -185,6 +187,7 @@ pub struct SceneRuntimeState {
     pub scaling_factor: f64,
     pub render_resolution: Option<(u32, u32)>,
     pub audio_response_enabled: bool,
+    pub media_integration_enabled: bool,
     pub paused: bool,
     pub audio_volume: AudioVolume,
     pub audio_muted: bool,
@@ -285,6 +288,7 @@ impl SceneRuntime {
             scaling_factor: state.scaling_factor,
             render_resolution: state.render_resolution,
             audio_response_enabled: state.audio_response_enabled,
+            media_integration_enabled: state.media_integration_enabled,
             paused: state.paused,
             audio_volume: state.audio_volume,
             audio_muted: state.audio_muted,
@@ -467,6 +471,7 @@ impl SceneRuntime {
         self.scaling_factor = state.scaling_factor;
         self.render_resolution = render_resolution;
         self.audio_response_enabled = state.audio_response_enabled;
+        self.media_integration_enabled = state.media_integration_enabled;
         self.audio_volume = state.audio_volume;
         self.audio_muted = state.audio_muted;
         self.property_override_json = state.property_override_json;
@@ -587,6 +592,34 @@ impl SceneRuntime {
         Ok(())
     }
 
+    pub fn set_media_integration_enabled(&mut self, enabled: bool) -> Result<(), EngineError> {
+        self.renderer.set_media_integration_enabled(enabled)?;
+        self.media_integration_enabled = enabled;
+        self.desc.media_integration_enabled = enabled;
+        Ok(())
+    }
+
+    pub fn submit_media_event_json(&mut self, json: &str) -> Result<(), EngineError> {
+        if !self.media_integration_enabled {
+            return Ok(());
+        }
+        self.renderer.submit_media_event_json(json)
+    }
+
+    pub fn apply_system_media_artwork(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> Result<(), EngineError> {
+        if !self.media_integration_enabled {
+            return Ok(());
+        }
+        let artwork = crate::media::MediaThumbnailRgba::new(width, height, rgba)
+            .map_err(|error| EngineError::InvalidInput(error.to_string()))?;
+        self.renderer.apply_system_media_artwork(&artwork)
+    }
+
     pub fn set_audio_volume(&mut self, volume: AudioVolume) -> Result<(), EngineError> {
         self.renderer.set_audio_volume(volume)?;
         self.audio_volume = volume;
@@ -629,6 +662,7 @@ impl SceneRuntime {
             scaling_factor: self.scaling_factor,
             render_resolution: self.render_resolution,
             audio_response_enabled: self.audio_response_enabled,
+            media_integration_enabled: self.media_integration_enabled,
             paused: self.paused,
             audio_volume: self.audio_volume,
             audio_muted: self.audio_muted,
@@ -700,6 +734,9 @@ impl SceneRuntimeState {
         if self.audio_response_enabled != descriptor_state.audio_response_enabled {
             renderer.set_audio_response_enabled(self.audio_response_enabled)?;
         }
+        if self.media_integration_enabled != descriptor_state.media_integration_enabled {
+            renderer.set_media_integration_enabled(self.media_integration_enabled)?;
+        }
         if self.audio_volume != descriptor_state.audio_volume {
             renderer.set_audio_volume(self.audio_volume)?;
         }
@@ -752,6 +789,7 @@ impl SceneRuntimeState {
             self.scaling_mode = next_descriptor_state.scaling_mode;
             self.scaling_factor = next_descriptor_state.scaling_factor;
             self.audio_response_enabled = next_descriptor_state.audio_response_enabled;
+            self.media_integration_enabled = next_descriptor_state.media_integration_enabled;
             self.audio_volume = next_descriptor_state.audio_volume;
             self.audio_muted = next_descriptor_state.audio_muted;
         }
@@ -769,6 +807,7 @@ impl TryFrom<&SceneDesc> for SceneRuntimeState {
             scaling_factor: desc.scaling_factor,
             render_resolution: None,
             audio_response_enabled: desc.audio_response_enabled,
+            media_integration_enabled: desc.media_integration_enabled,
             paused: desc.paused,
             audio_volume: desc.audio_volume,
             audio_muted: desc.audio_muted,
@@ -1304,6 +1343,7 @@ mod tests {
             scaling_factor: 1.0,
             render_resolution: None,
             audio_response_enabled: true,
+            media_integration_enabled: false,
             paused: false,
             audio_volume: AudioVolume::try_from(1.0).expect("volume should be valid"),
             audio_muted: false,

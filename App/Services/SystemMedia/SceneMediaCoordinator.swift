@@ -48,9 +48,12 @@ final class SceneMediaCoordinator {
 
     private func refresh() async {
         do {
-            let ids = try await bridge.sceneMediaWallpaperIds()
+            // Delivery is owned by SceneMediaSink over the shared session.
+            // This coordinator only keeps the provider subscribed while any
+            // consented desktop scene is live.
+            let handles = try await bridge.systemMediaSceneHandles()
             guard !Task.isCancelled else { return }
-            if ids.isEmpty {
+            if handles.isEmpty {
                 if consuming { provider.removeConsumer(); consuming = false }
                 properties = SystemMediaProperties()
                 playback = .stopped
@@ -60,15 +63,6 @@ final class SceneMediaCoordinator {
                 return
             }
             if !consuming { consuming = true; provider.addConsumer() }
-            let snapshot = BridgeMediaSnapshot(title: properties.title, artist: properties.artist,
-                album: properties.albumTitle, playbackState: UInt8(playback.rawValue),
-                position: timeline?.position ?? 0, duration: timeline?.duration ?? 0,
-                artworkWidth: UInt32(raster?.width ?? 0), artworkHeight: UInt32(raster?.height ?? 0),
-                artworkRgba: Data(raster?.rgba ?? []))
-            for id in ids {
-                guard !Task.isCancelled else { return }
-                try await bridge.updateSceneMedia(wallpaperId: id, snapshot: snapshot)
-            }
         } catch { AppLog.warn("Scene media delivery failed: \(error.localizedDescription)") }
     }
 }

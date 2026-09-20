@@ -361,7 +361,9 @@ inline void ApplyCameraFillMode(wallpaper::Scene& scene, wallpaper::FillMode fil
         gPerCam.SetAspect(fboAspect);
         break;
     }
-    gPerCam.SetFov(algorism::CalculatePersperctiveFov(1000.0f, gCam.Height()));
+    if (! gPerCam.FovLocked()) {
+        gPerCam.SetFov(algorism::CalculatePersperctiveFov(1000.0f, gCam.Height()));
+    }
     gCam.Update();
     gPerCam.Update();
     scene.UpdateLinkedCamera("global");
@@ -393,6 +395,15 @@ inline TextureKey ToTexKeyMsaa(wallpaper::SceneRenderTarget rt,
                                VkSampleCountFlagBits        sample_count) {
     auto key          = ToTexKey(rt);
     key.usage         = TexUsage::MSAA_COLOR;
+    key.mipmap_level  = 1;
+    key.sample_count  = sample_count;
+    return key;
+}
+
+inline TextureKey ToTexKeyDepth(wallpaper::SceneRenderTarget rt,
+                                VkSampleCountFlagBits        sample_count) {
+    auto key          = ToTexKey(rt);
+    key.usage         = TexUsage::DEPTH;
     key.mipmap_level  = 1;
     key.sample_count  = sample_count;
     return key;

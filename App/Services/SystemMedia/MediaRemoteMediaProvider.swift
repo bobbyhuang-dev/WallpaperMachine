@@ -369,12 +369,16 @@ final class MediaRemoteMediaProvider: SystemMediaProvider {
     }
 }
 
-private typealias MediaRemoteNowPlayingInfoFunction =
-    @convention(c) (DispatchQueue, @convention(block) (CFDictionary?) -> Void) -> Void
-private typealias MediaRemoteIsPlayingFunction =
-    @convention(c) (DispatchQueue, @convention(block) (Bool) -> Void) -> Void
-private typealias MediaRemoteRegisterFunction = @convention(c) (DispatchQueue) -> Void
-private typealias MediaRemoteUnregisterFunction = @convention(c) () -> Void
+/// MediaRemote copies these reply blocks and invokes them later (sometimes
+/// never). `@convention(block)` is non-escaping unless marked otherwise, and
+/// Swift traps the moment the framework retains the closure — that is the
+/// launch crash `non-escaping closure has escaped`.
+typealias MediaRemoteNowPlayingInfoFunction =
+    @convention(c) (DispatchQueue, @escaping @convention(block) (CFDictionary?) -> Void) -> Void
+typealias MediaRemoteIsPlayingFunction =
+    @convention(c) (DispatchQueue, @escaping @convention(block) (Bool) -> Void) -> Void
+typealias MediaRemoteRegisterFunction = @convention(c) (DispatchQueue) -> Void
+typealias MediaRemoteUnregisterFunction = @convention(c) () -> Void
 
 /// Resolves MediaRemote the first time a consumer asks for it.
 ///
@@ -438,7 +442,7 @@ final class DynamicMediaRemoteLoader: MediaRemoteLoading {
 
 /// The resolved MediaRemote functions, with their replies brought onto the main queue.
 @MainActor
-private final class DynamicMediaRemoteSymbols: MediaRemoteSymbols {
+final class DynamicMediaRemoteSymbols: MediaRemoteSymbols {
     private let getNowPlayingInfo: MediaRemoteNowPlayingInfoFunction
     private let getIsPlaying: MediaRemoteIsPlayingFunction
     private let register: MediaRemoteRegisterFunction

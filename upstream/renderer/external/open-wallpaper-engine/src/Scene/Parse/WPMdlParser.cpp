@@ -1214,6 +1214,33 @@ void WPMdlParser::GenMeshFromMdl(SceneMesh::Submesh& submesh, const WPMdl::Mesh&
         });
     }
 
+    if (! src.normals.empty()) {
+        attrs.push_back({ WE_IN_NORMAL.data(), VertexType::FLOAT3 });
+        packers.push_back([&src](std::size_t index, float* dst) {
+            if (index < src.normals.size()) {
+                std::memcpy(dst, src.normals[index].data(), sizeof(src.normals[index]));
+                return;
+            }
+            dst[0] = 0.0f;
+            dst[1] = 0.0f;
+            dst[2] = 1.0f;
+        });
+    }
+
+    if (! src.tangents.empty()) {
+        attrs.push_back({ WE_IN_TANGENT.data(), VertexType::FLOAT4 });
+        packers.push_back([&src](std::size_t index, float* dst) {
+            if (index < src.tangents.size()) {
+                std::memcpy(dst, src.tangents[index].data(), sizeof(src.tangents[index]));
+                return;
+            }
+            dst[0] = 1.0f;
+            dst[1] = 0.0f;
+            dst[2] = 0.0f;
+            dst[3] = 1.0f;
+        });
+    }
+
     if (! src.texcoords.empty()) {
         attrs.push_back({ WE_IN_TEXCOORD.data(), VertexType::FLOAT2 });
         packers.push_back([&src](std::size_t index, float* dst) {

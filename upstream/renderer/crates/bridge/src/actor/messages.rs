@@ -252,6 +252,28 @@ pub struct SetMediaIntegrationEnabled {
     pub enabled: bool,
 }
 
+/// Delivers one already-serialized SceneScript media event to every desktop
+/// scene that opted in.
+pub struct FanOutSystemMediaEvent {
+    pub json: String,
+}
+
+/// Uploads `$mediaThumbnail` RGBA to every opted-in desktop scene.
+pub struct FanOutSystemMediaArtwork {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// Asks which applied desktop scenes have consented to now-playing.
+///
+/// The host reads the system player only while something would receive it, so
+/// an empty answer is what keeps a machine with the setting off from being
+/// asked for Automation permission. The handles themselves matter too: a scene
+/// that has just been created starts with no media state, and the host can
+/// only know to replay for it by seeing a handle it has not fed.
+pub struct GetSystemMediaSceneHandles;
+
 /// Stores the absolute path the host staged for a file or directory property,
 /// or clears it. The path is persisted exactly as given.
 pub struct SetPropertyPath {
@@ -378,6 +400,9 @@ pub type SetSceneOnDemandEnabledReply = AllSnapshotsReply;
 pub type SetSceneVideoPlaneSamplingEnabledReply = AllSnapshotsReply;
 pub type SetWebAudioSubscribedReply = Result<(), BridgeError>;
 pub type SetMediaIntegrationEnabledReply = WallpaperMutationReply;
+pub type FanOutSystemMediaEventReply = Result<(), BridgeError>;
+pub type FanOutSystemMediaArtworkReply = Result<(), BridgeError>;
+pub type GetSystemMediaSceneHandlesReply = Result<Vec<u64>, BridgeError>;
 pub type SetPropertyPathReply = WallpaperMutationReply;
 pub type GetNativeVideoWallpapersReply = Result<Vec<BridgeNativeVideoWallpaper>, BridgeError>;
 pub type RejectNativeVideoReply = Result<(), BridgeError>;

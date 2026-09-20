@@ -66,6 +66,13 @@ enum class BlendMode
     AlphaToCoverage
 };
 
+enum class CullMode
+{
+    None,
+    Back,
+    Front
+};
+
 enum class ShaderType
 {
     VERTEX,

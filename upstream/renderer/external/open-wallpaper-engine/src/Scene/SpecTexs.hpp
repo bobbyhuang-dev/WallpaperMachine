@@ -34,6 +34,8 @@ constexpr std::string_view WE_EFFECT_PPONG_PREFIX_B { "_rt_effect_pingpong_b_" }
 
 constexpr std::string_view WE_IN_POSITION { "a_Position" };
 constexpr std::string_view WE_IN_TEXCOORD { "a_TexCoord" };
+constexpr std::string_view WE_IN_NORMAL { "a_Normal" };
+constexpr std::string_view WE_IN_TANGENT { "a_Tangent" };
 constexpr std::string_view WE_IN_BLENDINDICES { "a_BlendIndices" };
 constexpr std::string_view WE_IN_BLENDWEIGHTS { "a_BlendWeights" };
 
@@ -77,6 +79,10 @@ constexpr std::string_view G_ETVP { "g_EffectTextureProjectionMatrix" };
 constexpr std::string_view G_ETVPI { "g_EffectTextureProjectionMatrixInverse" };
 constexpr std::string_view G_LP { "g_LightsPosition" };
 constexpr std::string_view G_LCP { "g_LightsColorPremultiplied" };
+constexpr std::string_view G_EYEPOSITION { "g_EyePosition" };
+constexpr std::string_view G_VIEWFORWARD { "g_ViewForward" };
+constexpr std::string_view G_VIEWUP { "g_ViewUp" };
+constexpr std::string_view G_VIEWRIGHT { "g_ViewRight" };
 
 constexpr std::string_view G_TIME { "g_Time" };
 constexpr std::string_view G_DAYTIME { "g_DayTime" };

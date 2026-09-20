@@ -27,6 +27,9 @@ final class WebWallpaperMediaRelay {
     /// A part of the current state changed. Fires only for the part that
     /// changed, so a new track title does not re-send its artwork.
     var onChange: (@MainActor (Event) -> Void)?
+    /// Extra listeners besides `onChange`, so a shared relay can feed the web
+    /// host and the scene sink without either overwriting the other.
+    private var extraListeners: [ObjectIdentifier: @MainActor (Event) -> Void] = [:]
 
     var consumerCount: Int { consumers.count }
     var availability: SystemMediaAvailability { provider.availability }
@@ -77,6 +80,19 @@ final class WebWallpaperMediaRelay {
         }
     }
 
+    func addListener(_ key: ObjectIdentifier, _ handler: @escaping @MainActor (Event) -> Void) {
+        extraListeners[key] = handler
+    }
+
+    func removeListener(_ key: ObjectIdentifier) {
+        extraListeners.removeValue(forKey: key)
+    }
+
+    private func emit(_ event: Event) {
+        onChange?(event)
+        for handler in extraListeners.values { handler(event) }
+    }
+
     func removeAllConsumers() {
         let count = consumers.count
         guard count > 0 else { return }
@@ -98,19 +114,19 @@ final class WebWallpaperMediaRelay {
     private func apply(properties: SystemMediaProperties) {
         guard properties != self.properties else { return }
         self.properties = properties
-        onChange?(.properties(properties))
+        emit(.properties(properties))
     }
 
     private func apply(thumbnail: SystemMediaThumbnail) {
         guard thumbnail != self.thumbnail else { return }
         self.thumbnail = thumbnail
-        onChange?(.thumbnail(thumbnail))
+        emit(.thumbnail(thumbnail))
     }
 
     private func apply(playback: SystemMediaPlaybackState) {
         guard playback != self.playback else { return }
         self.playback = playback
-        onChange?(.playback(playback))
+        emit(.playback(playback))
     }
 
     /// A provider that lost the timeline reports nil. The protocol has no "no
@@ -120,7 +136,7 @@ final class WebWallpaperMediaRelay {
     private func apply(timeline: SystemMediaTimeline?) {
         guard timeline != self.timeline else { return }
         self.timeline = timeline
-        if let timeline { onChange?(.timeline(timeline)) }
+        if let timeline { emit(.timeline(timeline)) }
     }
 }
 

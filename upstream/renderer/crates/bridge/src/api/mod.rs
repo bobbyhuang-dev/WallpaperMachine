@@ -563,6 +563,33 @@ impl EngineFacade for ArcEngineFacade {
         self.0.set_audio_response_enabled(handle, enabled)
     }
 
+    fn set_media_integration_enabled(
+        &self,
+        handle: SceneHandle,
+        enabled: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<(), wallpaper_core::EngineError>> + Send>> {
+        self.0.set_media_integration_enabled(handle, enabled)
+    }
+
+    fn submit_media_event_json(
+        &self,
+        handle: SceneHandle,
+        json: String,
+    ) -> Pin<Box<dyn Future<Output = Result<(), wallpaper_core::EngineError>> + Send>> {
+        self.0.submit_media_event_json(handle, json)
+    }
+
+    fn apply_system_media_artwork(
+        &self,
+        handle: SceneHandle,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), wallpaper_core::EngineError>> + Send>> {
+        self.0
+            .apply_system_media_artwork(handle, width, height, rgba)
+    }
+
     fn set_audio_capture_enabled(
         &self,
         handle: SceneHandle,
@@ -1486,9 +1513,49 @@ impl WallpaperBridge {
     ///
     /// Returns an error when `json` is not an object or its `type` is not a
     /// media event tag.
-    pub fn submit_system_media_event(&self, json: String) -> Result<(), BridgeError> {
+    pub async fn submit_system_media_event(&self, json: String) -> Result<(), BridgeError> {
         let _ = self.system_media.submit(&json)?;
-        Ok(())
+        self.actor
+            .ask(crate::actor::messages::FanOutSystemMediaEvent { json })
+            .await
+    }
+
+    /// Uploads `$mediaThumbnail` RGBA to every opted-in desktop scene.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payload is not `width * height * 4` bytes or
+    /// the renderer rejects the upload.
+    pub async fn apply_system_media_artwork(
+        &self,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> Result<(), BridgeError> {
+        self.actor
+            .ask(crate::actor::messages::FanOutSystemMediaArtwork {
+                width,
+                height,
+                rgba,
+            })
+            .await
+    }
+
+    /// Which applied desktop scenes have consented to now-playing.
+    ///
+    /// The host starts and stops its system media source from this, so a
+    /// machine whose wallpapers all have the setting off is never asked for
+    /// Automation permission and nothing reads what is playing. A handle that
+    /// was not in the previous answer is a scene with no media state yet, which
+    /// is what tells the host to replay what it already knows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bridge actor is gone.
+    pub async fn system_media_scene_handles(&self) -> Result<Vec<u64>, BridgeError> {
+        self.actor
+            .ask(crate::actor::messages::GetSystemMediaSceneHandles)
+            .await
     }
 
     /// Every retained media event as a JSON array, in replay order, or `None`

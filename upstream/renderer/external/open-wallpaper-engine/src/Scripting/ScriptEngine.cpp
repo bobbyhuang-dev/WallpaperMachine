@@ -1056,6 +1056,11 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
         << "  globalThis.shared = globalThis.shared || {};\n"
         << "  globalThis.shared.STARTS_WITH = 0;\n"
         << "  globalThis.shared.END_WITH = 1;\n"
+        << "  globalThis.MediaPlaybackEvent = globalThis.MediaPlaybackEvent || {\n"
+        << "    PLAYBACK_PLAYING: 0,\n"
+        << "    PLAYBACK_PAUSED: 1,\n"
+        << "    PLAYBACK_STOPPED: 2\n"
+        << "  };\n"
         << "  globalThis.shared.userPropertyCategories = globalThis.shared.userPropertyCategories "
            "|| new Map();\n"
         << "  globalThis.__localStorageData = globalThis.__localStorageData || "
@@ -1104,6 +1109,15 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
         << "  globalThis.logInterrupts = false;\n"
         << "  globalThis.tips = false;\n"
         << "  globalThis.canvasSize = engine.canvasSize;\n"
+        << "  engine.screenResolution = engine.screenResolution || engine.canvasSize;\n"
+        << "  engine.isPortrait = engine.isPortrait || function() {\n"
+        << "    var size = engine.screenResolution || engine.canvasSize;\n"
+        << "    return !!(size && size.y > size.x);\n"
+        << "  };\n"
+        << "  engine.isLandscape = engine.isLandscape || function() {\n"
+        << "    var size = engine.screenResolution || engine.canvasSize;\n"
+        << "    return !!(size && size.x >= size.y);\n"
+        << "  };\n"
         << "  engine.on = engine.on || function(event, fn) { "
            "__registerCallback(globalThis.__callbacks, event, fn); };\n"
         << "  globalThis.input = globalThis.input || {};\n"
@@ -1437,6 +1451,16 @@ JSValue CreateCanvasSizeObject(JSContext* context, const ScriptHostContext& host
     return CreateJsVec2(context, host_context.canvas_size.x(), host_context.canvas_size.y());
 }
 
+JSValue CreateScreenResolutionObject(JSContext* context, const ScriptHostContext& host_context) {
+    const float width  = host_context.screen_resolution.x() > 0.0f
+                             ? host_context.screen_resolution.x()
+                             : host_context.canvas_size.x();
+    const float height = host_context.screen_resolution.y() > 0.0f
+                             ? host_context.screen_resolution.y()
+                             : host_context.canvas_size.y();
+    return CreateJsVec2(context, width, height);
+}
+
 JSValue CreateCursorWorldPositionObject(JSContext* context, const ScriptHostContext& host_context) {
     return CreateJsVec3(context,
                         host_context.cursor_world_position.x(),
@@ -1551,6 +1575,10 @@ void PopulateEngineObject(JSContext* context, JSValue engine_object,
                           const ScriptHostContext& host_context) {
     JS_SetPropertyStr(
         context, engine_object, "canvasSize", CreateCanvasSizeObject(context, host_context));
+    JS_SetPropertyStr(context,
+                      engine_object,
+                      "screenResolution",
+                      CreateScreenResolutionObject(context, host_context));
     JS_SetPropertyStr(
         context, engine_object, "frametime", JS_NewFloat64(context, host_context.frame_time));
     JS_SetPropertyStr(
@@ -1582,6 +1610,8 @@ void UpdateEngineObject(JSContext* context, JSValue global_object,
         std::abs(cache_state.last_host_context.runtime_seconds - host_context.runtime_seconds) >
             1.0e-9 ||
         ! cache_state.last_host_context.canvas_size.isApprox(host_context.canvas_size, 1.0e-6f) ||
+        ! cache_state.last_host_context.screen_resolution.isApprox(
+            host_context.screen_resolution, 1.0e-6f) ||
         ! cache_state.last_host_context.cursor_normalized_position.isApprox(
             host_context.cursor_normalized_position, 1.0e-6f) ||
         ! cache_state.last_host_context.cursor_world_position.isApprox(
@@ -1598,6 +1628,10 @@ void UpdateEngineObject(JSContext* context, JSValue global_object,
                               engine_object,
                               "canvasSize",
                               CreateCanvasSizeObject(context, host_context));
+            JS_SetPropertyStr(context,
+                              engine_object,
+                              "screenResolution",
+                              CreateScreenResolutionObject(context, host_context));
             JS_SetPropertyStr(context,
                               engine_object,
                               "frametime",
@@ -2399,6 +2433,35 @@ void RunSceneCallbacks(JSContext* context, const char* event_name,
     JS_FreeValue(context, global_object);
 }
 
+void CoerceMediaEventColorArrays(JSContext* context, JSValue event_object) {
+    static constexpr const char* keys[] = {
+        "primaryColor", "secondaryColor", "tertiaryColor", "textColor", "highContrastColor",
+    };
+    for (const char* key : keys) {
+        JSValue value = JS_GetPropertyStr(context, event_object, key);
+        if (JS_IsException(value)) {
+            JS_FreeValue(context, value);
+            continue;
+        }
+        if (JS_IsArray(value)) {
+            JSValue x = JS_GetPropertyUint32(context, value, 0);
+            JSValue y = JS_GetPropertyUint32(context, value, 1);
+            JSValue z = JS_GetPropertyUint32(context, value, 2);
+            double  dx = 0.0;
+            double  dy = 0.0;
+            double  dz = 0.0;
+            JS_ToFloat64(context, &dx, x);
+            JS_ToFloat64(context, &dy, y);
+            JS_ToFloat64(context, &dz, z);
+            JS_FreeValue(context, x);
+            JS_FreeValue(context, y);
+            JS_FreeValue(context, z);
+            JS_SetPropertyStr(context, event_object, key, CreateJsVec3(context, dx, dy, dz));
+        }
+        JS_FreeValue(context, value);
+    }
+}
+
 void DispatchMediaEventJsonToScript(JSContext* context, const std::string& exports_object_name,
                                     std::string_view event_json, bool run_scene_callbacks) {
     if (context == nullptr || event_json.empty()) return;
@@ -2410,6 +2473,7 @@ void DispatchMediaEventJsonToScript(JSContext* context, const std::string& expor
         JS_FreeValue(context, event_object);
         return;
     }
+    CoerceMediaEventColorArrays(context, event_object);
 
     JSValue type_value = JS_GetPropertyStr(context, event_object, "type");
     if (JS_IsException(type_value)) {

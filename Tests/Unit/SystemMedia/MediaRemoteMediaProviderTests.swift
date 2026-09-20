@@ -96,6 +96,34 @@ final class MediaRemoteMediaProviderTests: XCTestCase {
             "An unproductive system must not be turned into a polling loop")
     }
 
+    func testCopyingTheMediaRemoteReplyBlockDoesNotTrap() {
+        retainedNowPlayingBlock = nil
+        let symbols = DynamicMediaRemoteSymbols(
+            getNowPlayingInfo: retainNowPlayingInfoBlock,
+            getIsPlaying: retainIsPlayingBlock,
+            register: ignoreMediaRemoteRegister,
+            unregister: ignoreMediaRemoteUnregister,
+            notificationNames: MediaRemoteNotificationNames(
+                infoDidChange: Notification.Name("TestMediaRemote.infoDidChange"),
+                isPlayingDidChange: Notification.Name("TestMediaRemote.isPlayingDidChange"),
+                applicationDidChange: Notification.Name("TestMediaRemote.applicationDidChange")))
+
+        var received: [String: Any]?
+        var called = false
+        symbols.nowPlayingInfo { information in
+            received = information
+            called = true
+        }
+        XCTAssertNotNil(
+            retainedNowPlayingBlock,
+            "MediaRemote retains the reply; doing so must not trap")
+        XCTAssertFalse(called, "The reply is delivered later, not before return")
+
+        retainedNowPlayingBlock?([MediaRemoteInfoKey.title: "Later"] as CFDictionary)
+        XCTAssertTrue(called)
+        XCTAssertEqual(received?[MediaRemoteInfoKey.title] as? String, "Later")
+    }
+
     // MARK: - Consumers
 
     func testRegistrationFollowsTheConsumerCount() {
@@ -274,3 +302,27 @@ final class MediaRemoteMediaProviderTests: XCTestCase {
         XCTAssertEqual(timeline.count, 0, "A paused timeline is never pushed, replay included")
     }
 }
+
+/// File-level retainers so a `@convention(c)` trampoline can copy the MediaRemote
+/// reply block the way the real framework does. A method cannot be C-convention
+/// once it captures `self`.
+private var retainedNowPlayingBlock: (@convention(block) (CFDictionary?) -> Void)?
+private var retainedIsPlayingBlock: (@convention(block) (Bool) -> Void)?
+
+private func retainNowPlayingInfoBlock(
+    _ queue: DispatchQueue,
+    _ block: @escaping @convention(block) (CFDictionary?) -> Void
+) {
+    retainedNowPlayingBlock = block
+}
+
+private func retainIsPlayingBlock(
+    _ queue: DispatchQueue,
+    _ block: @escaping @convention(block) (Bool) -> Void
+) {
+    retainedIsPlayingBlock = block
+}
+
+private func ignoreMediaRemoteRegister(_ queue: DispatchQueue) {}
+
+private func ignoreMediaRemoteUnregister() {}

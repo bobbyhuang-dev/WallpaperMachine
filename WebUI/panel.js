@@ -387,14 +387,14 @@ function renderAudioAndMedia(options, lock) {
         : delivering === false
           ? t('On, but this wallpaper has not registered an audio listener, so it receives nothing. That is the wallpaper\u2019s choice, not a fault.')
           : t('On for this wallpaper. Delivery starts only once the wallpaper registers an audio listener; with no desktop wallpaper running, the panel cannot tell whether it has.');
-  const media = options.kind === 'Video' ? '' : check('mediaIntegrationEnabled', t('Media integration'), options.mediaIntegrationEnabled)
+  const media = !(web || options.kind === 'Scene') ? '' : check('mediaIntegrationEnabled', t('Media integration'), options.mediaIntegrationEnabled)
     + note(t('Share song titles, artists and artwork from system Now Playing. Supports Spotify, Apple Music and compatible browsers and local players.'))
     + status(!options.mediaIntegrationEnabled
       ? t('Off. The wallpaper is told media integration is disabled and receives no media events.')
       : options.mediaAvailable === true
         ? t('On, and a media source is available. Only fields the system actually reports are sent; nothing is substituted for the rest.')
         : options.mediaAvailable === false
-          ? t('On, but no media source is available: {reason} The page is told nothing rather than being given a placeholder track.', { reason: options.mediaUnavailableReason || t('the system declined to report what is playing.') })
+          ? t('On, but no media source is available: {reason} The wallpaper is told nothing rather than being given a placeholder track.', { reason: options.mediaUnavailableReason || t('the system declined to report what is playing.') })
           : t('On for this wallpaper. With no desktop wallpaper running, the panel cannot tell whether a media source is available.'));
   return check('audioResponseEnabled', t('Audio response'), options.audioResponseEnabled)
     + note(t('Reactive wallpapers use sound playing in other apps. macOS may request system audio recording permission.'))

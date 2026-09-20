@@ -118,6 +118,7 @@ pub fn case_scene_builder_preserves_defaults() {
     assert_eq!(scene.fps, 60);
     assert!(!scene.paused);
     assert!(!scene.audio_response_enabled);
+    assert!(!scene.media_integration_enabled);
     assert_eq!(scene.audio_volume, AudioVolume::try_from(1.0).unwrap());
     assert!(!scene.audio_muted);
     assert_eq!(scene.property_override_json, None);

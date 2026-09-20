@@ -45,6 +45,10 @@ struct WPUniformInfo {
     bool has_ORIENTATIONUP { false };
     bool has_ORIENTATIONRIGHT { false };
     bool has_ORIENTATIONFORWARD { false };
+    bool has_EYE { false };
+    bool has_VIEWFORWARD { false };
+    bool has_VIEWUP { false };
+    bool has_VIEWRIGHT { false };
     bool has_AudioSpectrum16Left { false };
     bool has_AudioSpectrum16Right { false };
     bool has_AudioSpectrum32Left { false };

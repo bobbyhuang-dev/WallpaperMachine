@@ -11,6 +11,247 @@ regression areas in [renderer.md](renderer.md), manual checks in
 and disposable, so entries state counts and commands rather than artifact
 paths.
 
+## 2026-09-20 — The renderer changes were never compiled; media consent, covers and AppleScript
+
+The previous round's C++ and Rust edits were real but absent from the shipped
+binary: the last delivery was `--swift-only`, so `libwescene-renderer.a` inside
+the app still predated `engine.screenResolution` and the camera fix. `strings`
+on the delivered Release app found no `screenResolution` at all. Everything
+below was rebuilt with `--configuration Release`, and the delivered binary was
+checked for the new symbols rather than assumed. Media integration now works
+end to end; **SYKM's 3D content still does not render** — see the correction at
+the end.
+
+- **Consent, not a constant.** Desktop Scene templates took
+  `media_integration_enabled(true)` unconditionally while the fan-out filtered
+  on the saved setting, so the panel said "off" about a scene the engine had
+  switched on. Activation now uses
+  `context.wallpaper.media_integration_enabled`. New
+  `WallpaperBridge::system_media_scene_handles()` names the consenting scenes;
+  `AppDelegate.sceneMediaHandles` asks it instead of counting active scenes, so
+  a machine with the setting off loads no MediaRemote, sends no Apple Event and
+  is never asked for Automation permission.
+- **Replay is keyed on the handle, not on aggregate demand.** `SceneMediaSink`
+  used to replay only when demand went false→true, so swapping one opted-in
+  Scene for another, or lighting a second display, left the new instance blank
+  until the track changed. It now replays whenever a handle appears that it has
+  not fed. `testAReplacementSceneIsToldTheUnchangedTrack` fails against the old
+  condition and passes against the new one (verified by reverting it).
+- **`NSAppleEventsUsageDescription`.** The app had only
+  `NSAudioCaptureUsageDescription`, so every Apple Event to Music or Spotify
+  would have been refused before the Automation prompt could appear — a runtime
+  prerequisite no fake-runner test can see. The key is in
+  `App/Resources/Info.plist` and was read back out of the built bundle. The app
+  is not sandboxed (only `com.apple.security.get-task-allow`), so no
+  `com.apple.security.automation.apple-events` entitlement is involved.
+- **Two cover slots.** `RuntimeImageSource` seeds `$mediaThumbnail` and
+  `$mediaPreviousThumbnail` and aliases the outgoing cover into the previous
+  slot without copying pixels; `ApplySystemUserTextures` binds both and leaves
+  any other `system` slot on its authored texture.
+- **AppleScript source rewritten.** Players are chosen from
+  `NSWorkspace.runningApplications` by bundle id, so nothing is launched and
+  `System Events` is no longer involved; every `NSAppleScript` runs on one
+  private serial queue instead of the main thread; Spotify's millisecond
+  duration is converted where it is read; cover art is loaded once per track
+  (Apple Events for Music, `artwork url` download for Spotify) rather than once
+  a second. Music's script returns an empty artwork-URL field and
+  `URL(string: "")` is *not* nil, so an unguarded parse sent Music down the
+  download path and skipped its own cover entirely; the parser now treats an
+  empty field as no URL. `FallbackSystemMediaProvider.availability` reads
+  through to the live source instead of latching what was true at the switch.
+- **MediaRemote on this machine.** A standalone probe resolved every symbol and
+  `MRMediaRemoteGetNowPlayingInfo` replied nil — the entitlement gate. The
+  AppleScript path is the only source here.
+
+- `python3 scripts/test.py` — exit 0, 519 native tests, 510 passed, 9 skipped,
+  0 failures. New: `AppleScriptMediaProviderTests` (running players only, first
+  answering player, per-player duration units, artwork once per track, Music's
+  empty artwork URL, empty reply), `SceneMediaSinkTests` (replacement scene,
+  consent withdrawal) and `testAvailabilityFollowsTheLiveSourceAfterTheSwitch`.
+- `cargo test -p wallpaper-bridge --release --lib` — 314 passed, including new
+  `scene_media_handles_follow_consent_so_nothing_reads_the_player_without_it`.
+  `cargo test -p wallpaper-core --release --lib` — 212 passed. Both need
+  `scripts/build.py`'s environment; the first invocation after an environment
+  change fails its CMake configure and succeeds on retry.
+- `python3 scripts/check_renderer.py` — exit 0, `adaptive-20260920-112242`: 10
+  generated cases `pixels_equal=true`, 0 diagnostics, 8 projects × 2 reload
+  cycles clean. `media_thumbnail_texture_smoke` 13 passed (new previous-cover
+  and unknown-system-slot cases); `scenescript_media_event_smoke` 15 passed.
+- **Probe text pump fixed before trusting any label evidence.**
+  `offscreen_scene_probe` never called `PumpTextLayerCache` inside its frame
+  loop, which production DRAW does, so layouts finished by the text worker were
+  never collected. It now pumps every frame and drains after media injection
+  the way the warm-up does. The difference is visible in the probe's own
+  report: `Canzone BIG … size=85.5 108` (unlaid-out) before, `size=391 108`
+  after.
+- New probe hooks `WE_TEST_MEDIA_EVENTS` / `WE_TEST_MEDIA_ARTWORK` rendered
+  Music Visualizer with an injected track. With the pump fixed, the composited
+  5120×2160 frame shows "Bohemian Rhapsody" and "Queen" drawn on the player
+  widget, with the progress bar, transport, cover square and a background
+  tinted from the injected palette. Re-run with a pure green cover, every
+  sampled pixel followed it.
+- **Correction — SYKM is not fixed.** The earlier claim in this entry's first
+  draft ("240 frames show it animating") covered the title page only.
+  Re-rendered with the authored intro disabled
+  (`WE_TEST_PROPERTIES='{"newproperty48":false}'`), frames 0, 60 and 149 are
+  byte-identical (mean 61.25) and still show only the 2D title/HUD layers plus
+  a full-height white band artifact. The brightest pixels in the dark two
+  thirds all sit on that band's edge: no stars, no orbits, no bodies.
+  `nodes.txt` shows the 3D nodes exist and are effective-visible (`skybox1`
+  scale 10000, `轨道显示内层/外层`, `sun-1`, `sun-4`, `SUN`, `s2`,
+  `Solar system行星1-6`) at authored scales of 1e-4 … 0.1 against the
+  perspective camera at `0 0 0.454`. So the `engine.screenResolution` fix is
+  real — the script `TypeError`s are gone and the 2D layers now lay out — but
+  the perspective/scale path that should draw the system is a separate,
+  unfinished renderer problem.
+- Other known gaps, unchanged: three effects in Music Visualizer still fail to
+  compile — `gaussian` (`float *= bool * 6.0`), `cutout_vignette`
+  (`vec3 - vec2`, HLSL-style truncation) and `effects/refract` (empty default
+  texture) — so its cover blur is not authored-accurate. `usershortcut`
+  transport is still unimplemented. `ShaderValue: … not found in glsl` on SYKM
+  is authored leftovers, not a binding failure.
+- `python3 scripts/build.py --configuration Release` — exit 0, `** BUILD
+  SUCCEEDED **`. Delivered
+  `build/Build/Products/Release/MacWallpaperEngine.app` carries
+  `NSAppleEventsUsageDescription` in its `Info.plist` and contains
+  `screenResolution`, `mediaPreviousThumbnail`, `systemMediaSceneHandles` and
+  `applescript-now-playing`. No desktop run, no Peekaboo, no `--ui`; the app
+  was not launched. Whether Music or Spotify actually reach SceneScript needs a
+  requested desktop check after quit/reopen, with the per-wallpaper *Media
+  integration* toggle turned on and Automation permission granted.
+
+## 2026-09-20 — Launch crash: MediaRemote copied a non-escaping reply block
+
+Applying a desktop Scene wallpaper now starts the shared media session. On
+this machine that calls `MRMediaRemoteGetNowPlayingInfo`, which copies the
+reply block. The Swift wrapper typed that block as non-escaping
+(`@convention(block)` without `@escaping`), so the runtime trapped
+(`EXC_BREAKPOINT`, `non-escaping closure has escaped`) on the main thread
+during `FallbackSystemMediaProvider.addConsumer` →
+`MediaRemoteMediaProvider.probe`. The C function types now mark the reply
+as escaping. A unit test retains the block the way MediaRemote does and
+delivers the dictionary after return. No desktop / Peekaboo / `--ui`;
+whether Music or Spotify now reach SceneScript still needs a requested
+desktop check after quit/reopen.
+
+- `python3 scripts/test.py` — exit 0, 511 native tests, 502 passed, 9
+  skipped, 0 failures (new
+  `testCopyingTheMediaRemoteReplyBlockDoesNotTrap`).
+- `python3 scripts/build.py --swift-only --configuration Release` — first
+  attempt failed CodeSign (`resource fork, Finder information, or similar
+  detritus not allowed` on the existing Release `.app` /
+  `.appex`, `com.apple.FinderInfo` + File Provider xattrs). Cleared those
+  with `xattr -cr` and the same command exited 0, `** BUILD SUCCEEDED **`.
+  Delivered binary `build/Build/Products/Release/MacWallpaperEngine.app`.
+  The app was not launched.
+
+## 2026-09-20 — Applied Scene wallpapers were still blank: wrong camera, no screenResolution
+
+The previous round instantiated SYKM's 73 models and a perspective camera, but
+the first frames stayed almost black (max 8). Music Visualizer still had no
+now-playing on the desktop. Cause was not "models discarded":
+
+- SYKM's playing camera is object 705 (`camera: "default"`, origin
+  `0 0 0.454`). The parser created that camera and left `activeCamera` on the
+  editor `scene.camera` LookAt pose (`0.11 2.23 -1.48` looking at a nearby
+  empty point). A visible `default` camera object now rebinds
+  `global_perspective` and becomes `activeCamera`. Models in a perspective
+  scene use that camera even without `perspective: true`.
+- 96 SceneScript sites read `engine.screenResolution.x`. That property did not
+  exist, so `getScreenSize` threw and HUD / shared rotation init aborted.
+  `engine.screenResolution` is now a Vec2 (presentation size, else canvas).
+- Desktop Scene templates now enable media integration on apply, and the host
+  starts the shared session for any active Scene. MediaRemote that never
+  answers still falls through to Music/Spotify after the probe. Lock screen
+  still forces media off.
+
+- `python3 scripts/test.py` — exit 0, 510 native tests, 501 passed, 9 skipped,
+  0 failures (new fallback probe-timeout case).
+- New gtests `DefaultCameraObjectBecomesActivePerspective` and
+  `EngineScreenResolutionIsAReadableVec2` passed. Existing leaf-model and
+  null-ortho perspective cases still pass.
+- `python3 scripts/check_renderer.py` — exit 0,
+  `adaptive-20260920-020721`: 10 generated cases `pixels_equal=true`, 0
+  diagnostics, 8 projects × 2 reload cycles clean.
+- `offscreen_scene_probe` on local `3662790108`: first-frame 9267 ms. Composite
+  frames now have real content (`frame-0` 126523 nonzero, max 255, mean 3.42;
+  previously 4399 nonzero, max 8). Camera node 705 sits at `0 0 0.454`.
+  `engine.screenResolution.x` TypeErrors are gone; leftover `toFixed` of
+  undefined remains on a few HUD scripts. No desktop / Peekaboo / `--ui`.
+- `python3 scripts/build.py --configuration Release` — exit 0, `** BUILD
+  SUCCEEDED **`. Delivered binary
+  `build/Build/Products/Release/MacWallpaperEngine.app`. The app was not
+  launched.
+
+## 2026-09-20 — Scene now-playing fan-out, and leaf models plus a perspective camera for SYKM
+
+Two Scene workshop packages were blank or mute for different reasons: Music
+Visualizer | iOS Style (`3280146735`) never received SceneScript media events
+because only Web wallpapers were wired to now-playing; Live Solar System - SYKM
+(`3662790108`) parsed 73 `.mdl` objects and a perspective camera but discarded
+both, so Compatibility cleared to black. No desktop run, no Peekaboo, no
+`--ui`, no live Steam login. Whether planets actually fill a display and
+whether album art tracks Music or Spotify still needs a requested desktop
+check after quit/reopen.
+
+- **Shared session, not a Web-only provider.** `DesktopMediaSession` owns one
+  `FallbackSystemMediaProvider` (MediaRemote first, Music.app / Spotify
+  AppleScript only after `noReply`) and fans events to Web plus opted-in
+  desktop scenes. JSON is submitted verbatim (`submitSystemMediaEvent`); RGBA
+  artwork is uploaded (`applySystemMediaArtwork`) before
+  `mediaThumbnailChanged`. SceneScript now sees `MediaPlaybackEvent` 0/1/2 and
+  Vec3 media colors. Lock-screen `apply_config` is followed by a forced
+  media-off. The inspector toggle is shown for Scene as well as Web.
+- **3D path is Compatibility only.** Leaf models enter `layer_nodes` with
+  normals/tangents; `orthogonalprojection: null` / `isOrtho == false` activates
+  `global_perspective`; `_rt_default` gets a depth attachment; material
+  depth/cull reach Vulkan; authored lights stay; LDR bloom still builds when
+  `hdr: true`. Native Metal still refuses perspective, dynamic lights and a
+  depth target as a whole scene. Live `g_EyePosition` / `g_View*` are written
+  only from a perspective camera so 2D sprite-trail billboards do not collapse
+  (that regression failed
+  `TheShippedRopeAndTrailPreviewScenesAreParsedTranslatedAndDrawnNatively`
+  once, then passed after the restriction).
+- `python3 scripts/test.py` — exit 0, 500 native tests, 491 passed, 9 skipped,
+  0 failures; Python suites green.
+- Cargo `--release --lib` for `wallpaper-core` and `wallpaper-bridge` — 212 and
+  313 passed, including `scene_descriptor_can_enable_media_integration` and
+  `scene_media_events_fan_out_only_to_opted_in_handles`.
+- `python3 scripts/check_renderer.py` (after the eye-uniform fix; later
+  `--skip-build`) — exit 0. `report.json` for
+  `adaptive-20260920-013721`: every listed test binary 0, 10 generated cases
+  `pixels_equal=true` in pooled and isolated mode, 0 diagnostics,
+  `desktop_automation: false`, `gpu_surface: false`.
+- Targeted gtests: `ParserInstantiatesLeafModel`,
+  `OrthogonalprojectionNullActivatesPerspective`, lights/view uniforms, HDR
+  bloom still emits bloom passes, `GenMeshIncludesNormals`, and 14
+  `scenescript_media_event_smoke` cases passed. Full `scene_schema_tests` was
+  69 passed / 2 failed —
+  `PointerCapabilityFollowsActualCommitsWithoutFirstFrame` and
+  `MouseButtonCommitBaselineKeepsVideoGatingFromStickingNativeLatch` (5 s Wait
+  timeouts). Those two are pre-existing and already in this log; they are not
+  claimed as this change.
+- `offscreen_scene_probe` on the local Library packages (SceneAssets on the
+  probe `PATH`). `3662790108`: 73 `"model"` objects, `general.hdr` and
+  `general.bloom` true, bloom passes present in the graph, camera node at the
+  authored eye. Shader cache on the recorded run was warm (`hits=1711
+  compiled=0`). Startup `parsed=6818` / `prepared=8732` / `first-frame=8803` ms
+  — under the 20 s first-frame deadline. Composite `frame-0` / `frame-1` are
+  almost black (6 220 800 bytes, 4399 nonzero, max 8); text-layer dumps have
+  real glyphs. SceneScript repeatedly throws `TypeError` reading `.x` /
+  `toFixed` from an undefined camera (`getScreenSize` / `getResolutionScale`)
+  — `thisScene.camera` and `lookAt` remain known gaps, as does 2D
+  `input.cursorWorldPosition`. `3280146735`: `parsed=2340` / `prepared=5601` /
+  `first-frame=5786` ms; both composite frames fully nonzero (mean ~36–41).
+  One SceneScript `lookAt` TypeError; effects `ui_editor_effect_refract_title`
+  (empty default texture), workshop gaussian and cutout vignette failed to
+  load and were logged, not treated as whole-scene failure. The probe does not
+  pump now-playing, so media script smoke on this package is host-side only.
+- `python3 scripts/build.py --configuration Release` — exit 0, `** BUILD
+  SUCCEEDED **`. Delivered binary
+  `build/Build/Products/Release/MacWallpaperEngine.app` (Mach-O mtime 2026-09-20
+  01:40). The app was not launched.
+
 ## 2026-09-20 — Leon rendering and system music information
 
 Fixed the hidden Leon layer's missing `video.isPlaying()` API, vector mixing,

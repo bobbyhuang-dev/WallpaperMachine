@@ -25,6 +25,16 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — The button sound reaches the runtime and plays; the Metal brightness predates the blur chain
+
+Two open questions closed by measurement. The sound: parsed through WPSoundParser, the layer registers, starts silent as its author asked, and PlaySoundLayer makes it play -- so nothing between the click handler and the stream is swallowing it. If a user still hears nothing, the remaining suspects are app-side output, which this does not cover.
+
+- `AButtonSoundStartsSilentAndPlaysWhenAsked` pins both halves: quiet at rest, playing after the ask
+- Metal: dumping all 64 targets with their bright tail shows every post-processing intermediate -- _downscaled1/2, _full1/_full2, _rt_FullCompoBuffer1, both _rt_QuarterCompoBuffers -- already at p99 255 with mean ~101, so the bright content exists before that chain rather than being made by it
+- Two earlier suspects are ruled out: `_coc` reads 255 because its Mask mode writes CAST4(mask) with mask 1.0, and it is an rg88 target an RGBA readback reports oddly; the clouds effect input is a white card on both backends by design
+- Still not isolated: which pass first writes the tail. Visibility gating, blend factors and the alpha write mask are identical between backends, and clamping LOD moves the mean onto Vulkan without moving the tail
+- `scene_schema_tests` 77 passed plus the two known pointer timeouts
+
 ## 2026-09-21 — Release build after the revert and the doc updates
 
 python3 scripts/build.py --configuration Release, following the full gate.
@@ -102,12 +112,3 @@ The fix below dropped MACOSX_DEPLOYMENT_TARGET from cargo's environment outright
 - The pin is renamed rather than removed -- `cargo_environment()` exports `OWE_MACOSX_DEPLOYMENT_TARGET`, and the crate build script passes it as CMAKE_OSX_DEPLOYMENT_TARGET with rerun-if-env-changed, so the host proc-macro dylibs stay loadable and the engine keeps the app\s minimum
 - `cargo clean --release` then `cargo build --release --workspace` — clean build passes, archive at minos 26.0
 - `scripts/check_renderer.py` clean — 10 generated cases pixels_equal=True; `scripts/tests` 99 passed
-
-## 2026-09-21 — A pinned deployment target was breaking every release renderer build
-
-scripts/build.py handed cargo a MACOSX_DEPLOYMENT_TARGET. Cargo builds proc-macro crates and build scripts for the host and then dlopens them in the running compiler, and the pinned host dylibs this toolchain produces are rejected at load with "mis-aligned LINKEDIT" -- which rustc reports as `can't find crate for <macro>`, so arc-swap, tokio, zerocopy, miette, futures-util and uniffi_meta all failed to compile. Any renderer release build was dead; --swift-only hid it by skipping cargo.
-
-- Isolated by rebuilding one proc-macro under the environment minus each variable in turn and dlopening the result: without SDKROOT it still fails, without MACOSX_DEPLOYMENT_TARGET it loads
-- Cargo steps in `build.py` and `check_renderer.py` now use `cargo_environment()`; Xcode still sets its own deployment target for the app, and the crates ship a staticlib the app links
-- `cargo test --release -p wallpaper-core --lib` 213 passed, `-p wallpaper-bridge --lib` 316 passed — the bridge compiles core, so this also covers the open_scene arity change
-- `scripts/check_renderer.py` clean — 10 generated cases, pixels_equal=True, 0 diagnostics, 8 reload cycles

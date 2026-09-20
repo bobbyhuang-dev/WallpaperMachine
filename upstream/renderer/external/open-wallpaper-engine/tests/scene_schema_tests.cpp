@@ -4442,3 +4442,35 @@ TEST(SceneSchema, ASoundWithNoBindingKeepsTheAuthorsVolume) {
     EXPECT_FLOAT_EQ(runtime->SoundLayerVolume("click"), 0.75f);
 }
 
+TEST(SceneSchema, AButtonSoundStartsSilentAndPlaysWhenAsked) {
+    // These sounds ship `startsilent`, so they are registered not playing and
+    // stay that way until a click asks for them. A click that reached the
+    // runtime but left the stream silent is the shape of the reported symptom,
+    // so both halves are pinned: quiet at rest, playing after the ask.
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    ASSERT_NE(runtime, nullptr);
+
+    wpscene::WPSoundObject object;
+    fs::VFS               vfs;
+    const auto            json = nlohmann::json::parse(R"({
+      "name": "button_press",
+      "sound": ["sounds/button_press.ogg"],
+      "playbackmode": "single",
+      "startsilent": true,
+      "volume": {"user": "buttonsvolume", "value": 0.3}
+    })");
+    ASSERT_TRUE(object.FromJson(json, vfs));
+    EXPECT_TRUE(object.startsilent);
+
+    audio::SoundManager sound_manager;
+    WPSoundParser::Parse(object, vfs, sound_manager, runtime.get());
+
+    ASSERT_TRUE(runtime->HasSoundLayer("button_press"))
+        << "the click handler asks for this by name and would find nothing";
+    EXPECT_FALSE(runtime->SoundLayerPlaying("button_press"))
+        << "a sound that starts silent was already running";
+
+    EXPECT_TRUE(runtime->PlaySoundLayer("button_press"));
+    EXPECT_TRUE(runtime->SoundLayerPlaying("button_press"))
+        << "the click reached the runtime and the sound stayed silent";
+}

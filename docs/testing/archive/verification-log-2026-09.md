@@ -15,6 +15,15 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — A pinned deployment target was breaking every release renderer build
+
+scripts/build.py handed cargo a MACOSX_DEPLOYMENT_TARGET. Cargo builds proc-macro crates and build scripts for the host and then dlopens them in the running compiler, and the pinned host dylibs this toolchain produces are rejected at load with "mis-aligned LINKEDIT" -- which rustc reports as `can't find crate for <macro>`, so arc-swap, tokio, zerocopy, miette, futures-util and uniffi_meta all failed to compile. Any renderer release build was dead; --swift-only hid it by skipping cargo.
+
+- Isolated by rebuilding one proc-macro under the environment minus each variable in turn and dlopening the result: without SDKROOT it still fails, without MACOSX_DEPLOYMENT_TARGET it loads
+- Cargo steps in `build.py` and `check_renderer.py` now use `cargo_environment()`; Xcode still sets its own deployment target for the app, and the crates ship a staticlib the app links
+- `cargo test --release -p wallpaper-core --lib` 213 passed, `-p wallpaper-bridge --lib` 316 passed — the bridge compiles core, so this also covers the open_scene arity change
+- `scripts/check_renderer.py` clean — 10 generated cases, pixels_equal=True, 0 diagnostics, 8 reload cycles
+
 ## 2026-09-21 — The shortcut request reaches the FFI boundary; the host chain above it does not exist yet
 
 SceneWallpaper drains the runtime's requests after the tick that produced them and reports each on the native main looper, and owe_scene_wallpaper_set_user_shortcut_callback follows the pointer-callback contract exactly. OweScene::set_user_shortcut_callback installs the Rust sink. The buttons are still dead: nothing above the FFI consumes these yet, the three properties hold empty values, and no send path to a media player exists.

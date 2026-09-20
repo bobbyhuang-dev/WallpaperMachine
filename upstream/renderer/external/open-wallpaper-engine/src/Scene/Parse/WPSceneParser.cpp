@@ -4273,22 +4273,13 @@ std::string NodeRuntimeName(std::string name, int32_t id, uint32_t count) {
 
 void wallpaper::ApplySystemUserTextures(std::vector<std::string>&                  textures,
                                         const std::vector<wpscene::WPUserTexture>& usertextures) {
-    // The two cover slots a wallpaper may bind. Anything else named `system`
-    // is a slot this renderer does not supply, and the authored texture in
-    // that position is left alone rather than replaced by a blank one.
-    static constexpr std::string_view kSystemTextures[] = {
-        "$mediaThumbnail",
-        "$mediaPreviousThumbnail",
-    };
+    // Anything the runtime does not supply is left on the authored texture in
+    // that position rather than replaced by a blank one.
     for (std::size_t index = 0; index < usertextures.size(); ++index) {
         const auto& user_texture = usertextures[index];
-        if (user_texture.type != "system") continue;
-        const auto* match = std::find(std::begin(kSystemTextures),
-                                      std::end(kSystemTextures),
-                                      std::string_view { user_texture.name });
-        if (match == std::end(kSystemTextures)) continue;
+        if (! wpscene::IsSystemUserTexture(user_texture)) continue;
         if (textures.size() <= index) textures.resize(index + 1);
-        textures[index] = std::string { *match };
+        textures[index] = user_texture.name;
     }
 }
 

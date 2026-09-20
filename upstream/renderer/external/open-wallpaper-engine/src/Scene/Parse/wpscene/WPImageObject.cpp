@@ -3,6 +3,7 @@
 #include "Utils/Logging.h"
 #include "Fs/VFS.h"
 
+#include <algorithm>
 #include <sstream>
 
 using namespace wallpaper::wpscene;
@@ -273,36 +274,28 @@ bool WPImageObject::FromJson(const nlohmann::json& json, fs::VFS& vfs) {
         GET_JSON_NAME_VALUE_NOWARN(jConf, "passthrough", config.passthrough);
     }
     ParseDependencies(json, dependencies);
+    // A solid instance layer carries its own pass overrides next to the shared
+    // model material: the textures, the user textures a scene binds by name —
+    // `$mediaThumbnail` for the now-playing cover — and the combos the shader
+    // is compiled with. Parsing them into a side struct left every such layer
+    // on the model's placeholder texture, so they are merged into the layer's
+    // material the same way an effect pass is.
     if (json.contains("instance") && json.at("instance").is_object()) {
-        const auto& jInstance = json.at("instance");
-        instance.enabled = true;
-        GET_JSON_NAME_VALUE_NOWARN(jInstance, "id", instance.id);
-        if (jInstance.contains("textures")) {
-            for (const auto& jT : jInstance.at("textures")) {
-                std::string texture;
-                if (! jT.is_null()) GET_JSON_VALUE_NOWARN(jT, texture);
-                instance.textures.push_back(texture);
-            }
-        }
-        if (jInstance.contains("usertextures")) {
-            for (const auto& jT : jInstance.at("usertextures")) {
-                WPUserTexture user_texture;
-                if (jT.is_string()) {
-                    GET_JSON_VALUE_NOWARN(jT, user_texture.name);
-                } else if (jT.is_object()) {
-                    GET_JSON_NAME_VALUE_NOWARN(jT, "name", user_texture.name);
-                    GET_JSON_NAME_VALUE_NOWARN(jT, "type", user_texture.type);
-                }
-                instance.usertextures.push_back(user_texture);
-            }
-        }
-        if (jInstance.contains("combos")) {
-            for (const auto& jC : jInstance.at("combos").items()) {
-                int32_t value { 0 };
-                GET_JSON_VALUE_NOWARN(jC.value(), value);
-                instance.combos[jC.key()] = value;
-            }
-        }
+        WPMaterialPass instance_pass;
+        instance_pass.FromJson(json.at("instance"));
+        const bool replaces_placeholder =
+            std::any_of(instance_pass.usertextures.begin(),
+                        instance_pass.usertextures.end(),
+                        IsSystemUserTexture);
+        material.MergePass(instance_pass);
+        // The layer colour of a solid instance layer tints the placeholder the
+        // model material ships — `util/white`. Once a runtime image is actually
+        // substituted into that slot the colour has nothing left to describe,
+        // and keeping it multiplies the image instead: this scene dims its
+        // cover layer to 0.118, while the author's own recording of it shows
+        // the cover at full strength. A binding that names a project property
+        // does not substitute anything, so that layer keeps its colour.
+        if (replaces_placeholder) color = { 1.0f, 1.0f, 1.0f };
     }
     AbsorbFieldBindings(json, field_bindings);
     return true;

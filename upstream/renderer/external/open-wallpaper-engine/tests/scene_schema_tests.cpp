@@ -1018,17 +1018,88 @@ TEST(SceneSchema, ImageAbsorbsDependenciesInstanceAnimationLayersAndBindings) {
     ASSERT_TRUE(image.FromJson(json, vfs));
     EXPECT_EQ(image.dependencies, (std::vector<int32_t> { 1, 2 }));
     EXPECT_EQ(image.attachment, "hat_anchor");
-    ASSERT_TRUE(image.instance.enabled);
-    EXPECT_EQ(image.instance.id, 42);
-    EXPECT_EQ(image.instance.combos.at("BLENDMODE"), 1);
-    ASSERT_EQ(image.instance.usertextures.size(), 1u);
-    EXPECT_EQ(image.instance.usertextures[0].type, "system");
+    // The instance block is what a solid instance layer overrides its shared
+    // model material with, so it has to land on the material the layer renders
+    // with — including the system cover slot the scene binds by name.
+    ASSERT_FALSE(image.material.textures.empty());
+    EXPECT_EQ(image.material.textures[0], "override.tex");
+    EXPECT_EQ(image.material.combos.at("BLENDMODE"), 1);
+    ASSERT_EQ(image.material.usertextures.size(), 1u);
+    EXPECT_EQ(image.material.usertextures[0].name, "$mediaThumbnail");
+    EXPECT_EQ(image.material.usertextures[0].type, "system");
+    auto bound = image.material.textures;
+    ApplySystemUserTextures(bound, image.material.usertextures);
+    EXPECT_EQ(bound[0], "$mediaThumbnail");
     ASSERT_EQ(image.puppet_layers.size(), 1u);
     EXPECT_EQ(image.puppet_layers[0].layer_id, 3);
     EXPECT_EQ(image.puppet_layers[0].name, "blink");
     EXPECT_TRUE(image.puppet_layers[0].additive);
     EXPECT_TRUE(image.field_bindings.contains("alpha"));
     EXPECT_TRUE(image.field_bindings.contains("visible"));
+}
+
+// The layer colour of a solid instance layer paints the placeholder its shared
+// model material ships. Whether it survives depends on whether that placeholder
+// is actually replaced: a runtime image is substituted into the slot, a project
+// property is not.
+TEST(SceneSchema, InstanceColourSurvivesUnlessARuntimeImageTakesTheSlot) {
+    fs::VFS vfs;
+    MountSceneFiles(vfs);
+    const auto layer = [&vfs](const char* usertexture) {
+        wpscene::WPImageObject image;
+        const auto             json = nlohmann::json::parse(
+            std::string(R"({"image":"image.json","id":7,"color":"0.11765 0.11765 0.11765",
+              "instance":{"id":42,"textures":["util/white"],"usertextures":[)") +
+            usertexture + "]}}");
+        EXPECT_TRUE(image.FromJson(json, vfs));
+        return image.color;
+    };
+
+    EXPECT_EQ(layer(R"({"name":"$mediaThumbnail","type":"system"})"),
+              (std::array<float, 3> { 1.0f, 1.0f, 1.0f }));
+    // A `scenetexture` project property keeps `util/white` in the slot, so the
+    // layer is still a solid colour and dropping its tint would repaint it.
+    EXPECT_EQ(layer(R"("backgroundimage")"),
+              (std::array<float, 3> { 0.11765f, 0.11765f, 0.11765f }));
+}
+
+// A layer can be attached to its parent after something has already asked for
+// its transform — composition layers build their camera and effect chain during
+// parsing, and the scene graph is wired afterwards. The world transform has to
+// follow the new parent, or the layer and everything under it draws at its own
+// local coordinates.
+TEST(SceneSchema, AttachingAParentRefreshesAWorldTransformThatWasAlreadyComputed) {
+    auto parent = std::make_shared<SceneNode>();
+    parent->SetTranslate({ 2560.0f, 1080.0f, 0.0f });
+    auto child = std::make_shared<SceneNode>();
+    child->SetTranslate({ 0.0f, 5.0f, 0.0f });
+
+    child->UpdateTrans();
+    ASSERT_EQ((child->ModelTrans() * Eigen::Vector4d(0, 0, 0, 1)).head<3>(),
+              Eigen::Vector3d(0.0, 5.0, 0.0));
+
+    parent->AppendChild(child);
+    child->UpdateTrans();
+
+    EXPECT_EQ((child->ModelTrans() * Eigen::Vector4d(0, 0, 0, 1)).head<3>(),
+              Eigen::Vector3d(2560.0, 1085.0, 0.0));
+
+    // The same has to hold deeper than one level: attaching a grandparent to an
+    // already-evaluated subtree re-dirties it through MarkTransDirty's
+    // recursion, so every descendant picks the new ancestry up.
+    auto grandchild = std::make_shared<SceneNode>();
+    grandchild->SetTranslate({ 7.0f, 0.0f, 0.0f });
+    child->AppendChild(grandchild);
+    grandchild->UpdateTrans();
+    EXPECT_EQ((grandchild->ModelTrans() * Eigen::Vector4d(0, 0, 0, 1)).head<3>(),
+              Eigen::Vector3d(2567.0, 1085.0, 0.0));
+
+    auto root = std::make_shared<SceneNode>();
+    root->SetTranslate({ 100.0f, 200.0f, 0.0f });
+    root->AppendChild(parent);
+    grandchild->UpdateTrans();
+    EXPECT_EQ((grandchild->ModelTrans() * Eigen::Vector4d(0, 0, 0, 1)).head<3>(),
+              Eigen::Vector3d(2667.0, 1285.0, 0.0));
 }
 
 TEST(SceneSchema, MaterialConstantShaderValueUserBindingsSurvivePassParsingAndMerge) {

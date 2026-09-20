@@ -27,6 +27,7 @@
 #include "VulkanRender/CopyPass.hpp"
 #include "VulkanRender/StaticSubgraphCache.hpp"
 #include "VulkanRender/PassCommon.hpp"
+#include "Presentation/WallpaperScaling.hpp"
 #include "VulkanRender/Resource.hpp"
 #include "VulkanRender/SceneToRenderGraph.hpp"
 #include "RenderGraph/RenderGraph.hpp"
@@ -343,7 +344,70 @@ int main() {
                 Check(parsed_count.ec == std::errc{} && parsed_count.ptr == value.data() + value.size() &&
                           click_count >= 1 && click_count <= 10, "click count must be 1..10");
             }
-            scene->runtime->SetCursorWorldPosition(position);
+            // A desktop never hands the runtime a world position: it publishes
+            // the presented viewport and a window-normalized cursor, and hit
+            // testing derives the world point from those. WE_TEST_CLICK_VIEWPORT
+            // reproduces that mapping — "<px_w>x<px_h>@<scale>:<fill|fit|stretch|none>" —
+            // so a click can be exercised the way the running wallpaper maps it.
+            if (const char* viewport = std::getenv("WE_TEST_CLICK_VIEWPORT")) {
+                unsigned px_w = 0, px_h = 0;
+                double   display_scale = 0.0;
+                char     mode_text[16] = {};
+                Check(std::sscanf(viewport, "%ux%u@%lf:%15s", &px_w, &px_h, &display_scale,
+                                  mode_text) == 4 &&
+                          px_w > 0 && px_h > 0 && display_scale > 0.0,
+                      "WE_TEST_CLICK_VIEWPORT must be \"<px_w>x<px_h>@<scale>:<mode>\"");
+                const std::string_view mode_name(mode_text);
+                WallpaperScalingMode   mode = WallpaperScalingMode::FILL;
+                if (mode_name == "fit") mode = WallpaperScalingMode::FIT;
+                else if (mode_name == "stretch") mode = WallpaperScalingMode::STRETCH;
+                else if (mode_name == "none") mode = WallpaperScalingMode::NONE;
+                else Check(mode_name == "fill", "scaling mode must be fill, fit, stretch or none");
+
+                // The camera is left exactly as the parser built it: nothing in
+                // the app sends PROPERTY_FILLMODE, so a running wallpaper never
+                // reaches UpdateCameraFillMode either, and cropping comes only
+                // from the scaling layout below.
+                const auto source = ResolveSceneSourceExtent(*scene, VkExtent2D { px_w, px_h });
+                const auto layout = ComputeWallpaperScalingLayout(
+                    mode, source.width, source.height,
+                    static_cast<uint32_t>(std::lround(px_w / display_scale)),
+                    static_cast<uint32_t>(std::lround(px_h / display_scale)), display_scale, 1.0);
+                const auto camera = scene->cameras.find("global");
+                Check(camera != scene->cameras.end() && camera->second != nullptr,
+                      "scene has no global camera to map the cursor through");
+                const auto camera_position = camera->second->GetPosition();
+                const auto mapping        = ComputeWallpaperCursorMapping(
+                    layout, camera_position.x(), camera_position.y(), camera->second->Width(),
+                    camera->second->Height());
+                Check(mapping.valid, "cursor mapping must be valid for this display");
+                scene->runtime->SetCursorViewport(CursorViewport {
+                    .origin = Eigen::Vector2f(static_cast<float>(mapping.origin_x),
+                                              static_cast<float>(mapping.origin_y)),
+                    .size   = Eigen::Vector2f(static_cast<float>(mapping.size_x),
+                                            static_cast<float>(mapping.size_y)),
+                    .content_origin =
+                        Eigen::Vector2f(static_cast<float>(mapping.content_origin_x),
+                                        static_cast<float>(mapping.content_origin_y)),
+                    .content_size = Eigen::Vector2f(static_cast<float>(mapping.content_size_x),
+                                                    static_cast<float>(mapping.content_size_y)),
+                });
+                const double normalized_x =
+                    (static_cast<double>(position.x()) - mapping.origin_x) / mapping.size_x;
+                const double normalized_y =
+                    1.0 - (static_cast<double>(position.y()) - mapping.origin_y) / mapping.size_y;
+                scene->runtime->SetCursorInput(static_cast<float>(normalized_x),
+                                               static_cast<float>(normalized_y));
+                std::cout << "cursor viewport origin=" << mapping.origin_x << ' '
+                          << mapping.origin_y << " size=" << mapping.size_x << ' '
+                          << mapping.size_y << " content_origin=" << mapping.content_origin_x
+                          << ' ' << mapping.content_origin_y
+                          << " content_size=" << mapping.content_size_x << ' '
+                          << mapping.content_size_y << " normalized=" << normalized_x << ' '
+                          << normalized_y << std::endl;
+            } else {
+                scene->runtime->SetCursorWorldPosition(position);
+            }
             scene->runtime->SetCursorEnter(true);
             for (int i = 0; i < click_count; ++i) {
                 scene->runtime->SetCursorButtons(0, 1, 1);
@@ -356,12 +420,24 @@ int main() {
         }
         if (std::getenv("WE_TEST_DUMP_SOURCE")) {
             std::ofstream nodes(out / "nodes.txt");
+            // World placement matters as much as the local transform: an effect
+            // or compose layer is composited through a separate final node, and
+            // a final node still carrying local coordinates draws the layer in
+            // the wrong place without any of these local numbers changing.
             const auto dump = [&](auto&& self, SceneNode* node) -> void {
                 if (!node) return;
+                node->UpdateTrans();
+                const Eigen::Vector3d world =
+                    (node->ModelTrans() * Eigen::Vector4d(0, 0, 0, 1)).head<3>();
+                const Eigen::Vector3d rendered =
+                    (node->RenderTrans() * Eigen::Vector4d(0, 0, 0, 1)).head<3>();
                 nodes << node->ID() << ' ' << node->Name() << " visible=" << node->Visible()
                       << " effective=" << node->EffectiveVisible()
                       << " translate=" << node->Translate().transpose()
-                      << " scale=" << node->Scale().transpose() << '\n';
+                      << " scale=" << node->Scale().transpose()
+                      << " world=" << world.transpose()
+                      << " rendered=" << rendered.transpose()
+                      << " override=" << (node->HasRenderTransformOverride() ? 1 : 0) << '\n';
                 for (const auto& child : node->GetChildren()) self(self, child.get());
             };
             dump(dump, scene->sceneGraph.get());

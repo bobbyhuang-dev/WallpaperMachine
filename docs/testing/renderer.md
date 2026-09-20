@@ -90,6 +90,7 @@ artifacts/renderer/bin/tests/offscreen_scene_probe
 | `WE_TEST_CLICK_LAYER` | `offscreen_scene_probe` | Image-layer ID to click |
 | `WE_TEST_CLICK_COUNT` | `offscreen_scene_probe` | `1..10` synthetic clicks, no desktop input |
 | `WE_TEST_CLICK_OFFSET` | `offscreen_scene_probe` | World-space `"dx dy"` added to the click layer's origin, to hit a covered or transparent texel instead of the centre |
+| `WE_TEST_CLICK_VIEWPORT` | `offscreen_scene_probe` | `"<px_w>x<px_h>@<scale>:<fill\|fit\|stretch\|none>"`; maps the click the way a desktop does — the presented viewport is published and the cursor arrives window-normalized — instead of handing the runtime a world position, so hit testing is exercised against a real display's geometry |
 | `WE_TEST_AUDIO_HZ` | `offscreen_scene_probe` | Synthetic PCM at `0..6000` Hz; `0` means silence |
 | `WE_TEST_AUDIO_ENABLED=0` | `offscreen_scene_probe` | Exercise the disabled audio gate |
 | `WE_TEST_MEDIA_EVENTS` | `offscreen_scene_probe` | JSON array of SceneScript media event objects, dispatched in order after the warm-up ticks. Enables media integration for the run, so a wallpaper that only draws its player while something is playing can be rendered without a system media source or Automation permission |

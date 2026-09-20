@@ -36,6 +36,13 @@ public:
     void        AppendChild(std::shared_ptr<SceneNode> sub) {
                sub->m_parent = this;
                m_children.push_back(sub);
+               // Acquiring a parent changes the child's world transform exactly
+               // as moving it does. A node whose matrix was already computed
+               // while it was unparented would otherwise keep that matrix for
+               // good, because UpdateTrans() stops at a clean node — which is
+               // how a composition layer ended up drawing its whole subtree at
+               // its own local coordinates instead of its parent's.
+               sub->MarkTransDirty();
     }
     Eigen::Matrix4d GetLocalTrans() const;
 

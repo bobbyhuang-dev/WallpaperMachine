@@ -66,6 +66,14 @@ void MergeUserTextures(std::vector<WPUserTexture>&       target,
 }
 } // namespace
 
+bool wallpaper::wpscene::IsSystemUserTexture(const WPUserTexture& user_texture) {
+    // The two cover slots a wallpaper may bind. Anything else named `system` is
+    // a slot this renderer does not supply.
+    return user_texture.type == "system" &&
+           (user_texture.name == "$mediaThumbnail" ||
+            user_texture.name == "$mediaPreviousThumbnail");
+}
+
 bool WPMaterialPassBindItem::FromJson(const nlohmann::json& json) {
     GET_JSON_NAME_VALUE(json, "name", name);
     GET_JSON_NAME_VALUE(json, "index", index);

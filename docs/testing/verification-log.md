@@ -25,6 +25,15 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-20 — The Metal cloud divergence is inside the clouds pass, not the blur chain
+
+Dumping every render target on the Metal side found the clouds layer's own input (_rt_effect_pingpong_a, 6520x3460) at mean luma 255 -- and the Vulkan pass dump shows the same layer drawn from util/white with g_Color=[1,1,1], so both backends feed the clouds effect an identical white card. The difference is what the clouds pass makes of it: the shader computes mix(g_Color2, g_Color1, blend) with blend = smoothstep(0.08, 0.19, sampled noise) * 0.95, and BlendMode::Normal maps to One/Zero -- a replace -- on both backends, so wherever blend falls near zero the white card is written straight out.
+
+- Metal keeps that contrast (p99 202); Vulkan lands on a flat mid grey (p99 121) with the same blob structure, so the noise scale agrees and only the tone does
+- Ruled out additionally this round: mip availability (clouds_256.tex ships 7 levels, both backends size the image and the sampler from image_slot.mipmaps.size()), the alpha write mask (write_alpha is output != _rt_default on both), and the Normal blend factors (One/Zero on both)
+- Still open: which pass compresses the range on Vulkan and not on Metal -- the post-processing layer runs blurprecise, bokeh_blur, blur, two color_grading instances and dithering
+- `scripts/check_renderer.py` clean -- 10 generated cases, pixels_equal=True, diagnostics=0 -- confirming the probe texel-size change shifted no expectation; `metal_scene_draw_smoke` 33 passed
+
 ## 2026-09-20 — Native Metal draws this scene's cloud background wrong, and the harnesses were not comparable
 
 The extra frosted shape beside the media card reproduces offscreen, and only on Native Metal. At a matched 5120x2160 raster the Metal background is huge bright blobs (p99 luma 202) where Vulkan is a smooth grey wash (p99 121); the scene's own media card and clock are correct on both. The two harnesses were not comparable until now: the Vulkan probe never set texel size, so every neighbour-tap effect it drew sampled at a 1920x1080 step, and the Metal smoke rasterized 960x540 against a 5120x2160 scene target.
@@ -117,13 +126,3 @@ std140 pads every array element to 16 bytes — what the host packs and the refl
 - Probe on 3280146735 — 3 `failed to load` and 3 `Rust shader compile failed` before, 0 and 0 after; 399 executed passes before, 432 after
 - Installed corpus (10 scenes, Vulkan probe) — only 3292361861 still fails (4× `clipping_mask`, logical-not on a float, not addressed); no scene gained a failure
 - 4 tests in `legalize_type_coercion.rs`, two per rule, each pinning the rewrite and its refusal; the rewriting two also compile through `NagaCompiler`
-
-## 2026-09-20 — Full-window first-run guide with Steam sign-in
-
-- Replaced the welcome card with a five-page full-window guide (WebUI/welcome.js + welcome.css): language & appearance (live, Skip restores), Steam sign-in, preferences (drafts), tips + GitHub, start.
-- Native sign-in-only SteamCMD session: WorkshopDownloader.signIn (+login +quit, isSigningInOnly), WorkshopDownloadManager.signIn (id steam-sign-in), WorkshopStore.requestSignIn, steamSignIn panel action; snapshot titles for itemless jobs.
-- python3 scripts/test.py --only DownloaderLifecycleTests/testSignInOnlySession… --only WorkshopDownloadIntentTests/testSignInRequest…: 3 passed.
-- python3 scripts/test.py --only ControlPanelShellTests/testFirstRunGuideCoversTheWindowWalksFivePagesAndReturnsFromSettings: passed after splitting a click + setTimeout into separate JS calls (a combined call never resolved offscreen).
-- python3 scripts/test.py (full gate): 523 passed, 0 failed, 11 skipped (opt-in media/network layers), Python checks OK incl. localization parity with welcome.js added to the scanned files.
-- impeccable detect --json WebUI/welcome.js WebUI/welcome.css: no findings.
-- Not done: no Release build, no desktop/visual check of the guide (offscreen DOM/state assertions only); zh-Hans strings added by hand, unreviewed by a native speaker.

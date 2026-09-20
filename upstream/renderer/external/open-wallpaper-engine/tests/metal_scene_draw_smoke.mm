@@ -3477,6 +3477,16 @@ TEST_F(MetalSceneDraw, LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBack
         rest.remove_prefix(colon + 1);
     }
 
+    // Reusing a completed result is a correctness claim about the passes it
+    // skips. Turning it off is how a scene that looks wrong under it can be
+    // compared with the same scene drawn every frame. Process-global, so it is
+    // set once around the whole loop and put back: an unfiltered run must not
+    // carry this choice into any later test.
+    const bool optimization_was = wallpaper::vulkan::SceneOptimizationEnabled();
+    if (const char* opt = std::getenv("WE_TEST_SCENE_OPTIMIZATION")) {
+        wallpaper::vulkan::SetSceneOptimizationEnabled(std::string_view(opt) != "0");
+    }
+
     std::size_t index = 0;
     for (const auto& project : projects) {
         SCOPED_TRACE(project);
@@ -3533,12 +3543,6 @@ TEST_F(MetalSceneDraw, LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBack
                 surface_width  = w;
                 surface_height = h;
             }
-        }
-        // Reusing a completed result is a correctness claim about the passes it
-        // skips. Turning it off here is how a scene that looks wrong under it
-        // can be compared with the same scene drawn every frame.
-        if (const char* opt = std::getenv("WE_TEST_SCENE_OPTIMIZATION")) {
-            wallpaper::vulkan::SetSceneOptimizationEnabled(std::string_view(opt) != "0");
         }
         @autoreleasepool {
             id<MTLDevice> device       = MTLCreateSystemDefaultDevice();
@@ -3629,7 +3633,64 @@ TEST_F(MetalSceneDraw, LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBack
                     }
                 }
             }
+
+            // Named intermediates, not just the final image. When this backend
+            // and another disagree about a scene, the question is which pass
+            // first diverges, and that is answered by holding the same target
+            // from both against each other rather than by reading code.
+            if (const char* wanted = std::getenv("WE_TEST_METAL_DUMP_TARGETS");
+                wanted != nullptr && *wanted != '\0') {
+                const char* output = std::getenv("WE_TEST_OUTPUT");
+                // Target names carry a per-run suffix derived from the object
+                // that owns them, so naming one across two processes is not
+                // possible. `*` asks for every target the scene declares, which
+                // is the same set on either backend.
+                std::vector<std::string> keys;
+                if (std::string_view(wanted) == "*") {
+                    for (const auto& [name, target] : loaded.scene->renderTargets) {
+                        (void)target;
+                        keys.push_back(name);
+                    }
+                    std::sort(keys.begin(), keys.end());
+                } else {
+                    for (std::string_view rest = wanted; ! rest.empty();) {
+                        const auto colon = rest.find(':');
+                        if (colon != 0) keys.emplace_back(rest.substr(0, colon));
+                        if (colon == std::string_view::npos) break;
+                        rest.remove_prefix(colon + 1);
+                    }
+                }
+                for (const auto& key : keys) {
+                    uint32_t             width = 0, height = 0;
+                    std::vector<uint8_t> rgba;
+                    if (! render.ReadRenderTargetForTests(loaded.scene->ResolveRenderTargetName(key),
+                                                          rgba, width, height) ||
+                        width == 0 || height == 0) {
+                        std::cout << "[ LOCAL    ] " << paths.scene_id << ": no target named " << key
+                                  << std::endl;
+                        continue;
+                    }
+                    double sum = 0.0;
+                    for (std::size_t i = 0; i < std::size_t(width) * height; ++i) {
+                        sum += (rgba[i * 4] + rgba[i * 4 + 1] + rgba[i * 4 + 2]) / 3.0;
+                    }
+                    std::cout << "[ LOCAL    ] " << paths.scene_id << ": " << key << " " << width << "x"
+                              << height << " mean luma "
+                              << sum / (double(width) * double(height)) << std::endl;
+                    if (output == nullptr || *output == '\0') continue;
+                    std::filesystem::create_directories(output);
+                    std::string safe = key;
+                    std::replace(safe.begin(), safe.end(), '/', '_');
+                    std::ofstream image(std::filesystem::path(output) / ("metal-" + label + "-" + safe + ".ppm"),
+                                        std::ios::binary);
+                    image << "P6\n" << width << " " << height << "\n255\n";
+                    for (std::size_t i = 0; i < std::size_t(width) * height; ++i) {
+                        image.write(reinterpret_cast<const char*>(rgba.data() + i * 4), 3);
+                    }
+                }
+            }
             render.destroy();
         }
     }
+    wallpaper::vulkan::SetSceneOptimizationEnabled(optimization_was);
 }

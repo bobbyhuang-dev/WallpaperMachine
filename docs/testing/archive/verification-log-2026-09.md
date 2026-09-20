@@ -15,6 +15,16 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-20 — Full-window first-run guide with Steam sign-in
+
+- Replaced the welcome card with a five-page full-window guide (WebUI/welcome.js + welcome.css): language & appearance (live, Skip restores), Steam sign-in, preferences (drafts), tips + GitHub, start.
+- Native sign-in-only SteamCMD session: WorkshopDownloader.signIn (+login +quit, isSigningInOnly), WorkshopDownloadManager.signIn (id steam-sign-in), WorkshopStore.requestSignIn, steamSignIn panel action; snapshot titles for itemless jobs.
+- python3 scripts/test.py --only DownloaderLifecycleTests/testSignInOnlySession… --only WorkshopDownloadIntentTests/testSignInRequest…: 3 passed.
+- python3 scripts/test.py --only ControlPanelShellTests/testFirstRunGuideCoversTheWindowWalksFivePagesAndReturnsFromSettings: passed after splitting a click + setTimeout into separate JS calls (a combined call never resolved offscreen).
+- python3 scripts/test.py (full gate): 523 passed, 0 failed, 11 skipped (opt-in media/network layers), Python checks OK incl. localization parity with welcome.js added to the scanned files.
+- impeccable detect --json WebUI/welcome.js WebUI/welcome.css: no findings.
+- Not done: no Release build, no desktop/visual check of the guide (offscreen DOM/state assertions only); zh-Hans strings added by hand, unreviewed by a native speaker.
+
 ## 2026-09-20 — First-run welcome guide
 
 - Feature: one-screen first-run welcome over the panel content (not modal; tabs stay live). Three facts: browsing is free, downloading needs a Steam account that owns Wallpaper Engine (with Create a Steam account / Buy Wallpaper Engine links), nothing changes until Apply. Actions: Browse the Workshop, Import wallpapers, Skip; Escape, scrim and tab clicks dismiss. Replay from Settings → Library & Steam → Welcome guide.

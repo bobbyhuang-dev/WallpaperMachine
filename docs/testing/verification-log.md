@@ -25,6 +25,15 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — Corrected: two separate Metal divergences, and the blobs are not the clouds' negative space
+
+The entry below overstated what was measured. It headlined the clouds pass while admitting the flattening pass was unknown; what was actually shown is that the clouds pass's INPUT is identical on both backends (white 6520x3460 card) -- its output was never read back on either. It also claimed the blob structure agrees and only tone differs, which no measurement supported.
+
+- Measured now: metal-bright (>92nd percentile) against vulkan-dark (<8th) gives IoU 0.052, and against vulkan-bright 0.043 -- the shapes are disjoint, not the same clouds in another tone
+- The one-run lodMaxClamp experiment splits it in two: clamping Metal to level 0 moves the mean from 81.7 to 100.8, onto Vulkan 98.8, so the mip level the shader asks for (g_CloudLOD=5, and clouds_256.tex ships 7 levels) is a real backend difference in overall tone
+- But p99 stays 206 against Vulkan 121 under that clamp, so the bright regions are a second, independent defect that LOD does not explain
+- Which backend is right is not settled: Wallpaper Engine exposes that LOD as "smoothness" and the author set it to the maximum, so honouring level 5 may be the correct behaviour and Compatibility the deviant one
+
 ## 2026-09-20 — The Metal cloud divergence is inside the clouds pass, not the blur chain
 
 Dumping every render target on the Metal side found the clouds layer's own input (_rt_effect_pingpong_a, 6520x3460) at mean luma 255 -- and the Vulkan pass dump shows the same layer drawn from util/white with g_Color=[1,1,1], so both backends feed the clouds effect an identical white card. The difference is what the clouds pass makes of it: the shader computes mix(g_Color2, g_Color1, blend) with blend = smoothstep(0.08, 0.19, sampled noise) * 0.95, and BlendMode::Normal maps to One/Zero -- a replace -- on both backends, so wherever blend falls near zero the white card is written straight out.
@@ -115,14 +124,3 @@ std140 pads every array element to 16 bytes — what the host packs and the refl
 - Same scene, same seed, audio the only difference — Vulkan: 7 668 590 px changed whole-frame, 129 471 in the ring annulus. Native Metal: 929 and 0
 - Not a missing uniform: `g_AudioSpectrum64Left` is in that pass's Metal reflection and written every frame at offset 1120, stride 16, with a live band 0
 - `metal_scene_draw_smoke`'s local-project gate now reads `WE_TEST_PROPERTIES` and `WE_TEST_AUDIO_HZ`; without them a property-gated, audio-driven layer could not be drawn there at all
-
-## 2026-09-20 — Three author effects were rejected by the shader frontend
-
-3280146735 failed to load Bokeh blur, Cutout Vignette and Refract on every launch, so it rendered with no depth-of-field, vignette or refraction. Four permissive-path idioms now absorbed; see [renderer.md](renderer.md).
-
-- `effects/refract` — a texture annotation `"default":""` means the slot has no default, not an invalid request
-- `workshop/2798319181/effects/gaussian` — `(depth < limit) * 6.0` converts with `float(...)`; a comparison that stays a condition is untouched
-- `workshop/2138904733/effects/cutout_vignette` — mixed-width operands inside a call argument truncate to the narrowest; `CAST2`/`CAST3`/`CAST4` now classify as constructors
-- Probe on 3280146735 — 3 `failed to load` and 3 `Rust shader compile failed` before, 0 and 0 after; 399 executed passes before, 432 after
-- Installed corpus (10 scenes, Vulkan probe) — only 3292361861 still fails (4× `clipping_mask`, logical-not on a float, not addressed); no scene gained a failure
-- 4 tests in `legalize_type_coercion.rs`, two per rule, each pinning the rewrite and its refusal; the rewriting two also compile through `NagaCompiler`

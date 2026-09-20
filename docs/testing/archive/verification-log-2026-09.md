@@ -15,6 +15,17 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-20 — Three author effects were rejected by the shader frontend
+
+3280146735 failed to load Bokeh blur, Cutout Vignette and Refract on every launch, so it rendered with no depth-of-field, vignette or refraction. Four permissive-path idioms now absorbed; see [renderer.md](../renderer.md).
+
+- `effects/refract` — a texture annotation `"default":""` means the slot has no default, not an invalid request
+- `workshop/2798319181/effects/gaussian` — `(depth < limit) * 6.0` converts with `float(...)`; a comparison that stays a condition is untouched
+- `workshop/2138904733/effects/cutout_vignette` — mixed-width operands inside a call argument truncate to the narrowest; `CAST2`/`CAST3`/`CAST4` now classify as constructors
+- Probe on 3280146735 — 3 `failed to load` and 3 `Rust shader compile failed` before, 0 and 0 after; 399 executed passes before, 432 after
+- Installed corpus (10 scenes, Vulkan probe) — only 3292361861 still fails (4× `clipping_mask`, logical-not on a float, not addressed); no scene gained a failure
+- 4 tests in `legalize_type_coercion.rs`, two per rule, each pinning the rewrite and its refusal; the rewriting two also compile through `NagaCompiler`
+
 ## 2026-09-20 — Full-window first-run guide with Steam sign-in
 
 - Replaced the welcome card with a five-page full-window guide (WebUI/welcome.js + welcome.css): language & appearance (live, Skip restores), Steam sign-in, preferences (drafts), tips + GitHub, start.

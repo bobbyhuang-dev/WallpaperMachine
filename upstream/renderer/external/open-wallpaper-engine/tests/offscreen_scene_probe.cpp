@@ -489,6 +489,13 @@ int main() {
             if (rt.has_mipmap) rt.mipmap_level = std::max(3u, static_cast<uint32_t>(std::floor(std::log2(std::min(rt.width, rt.height))))) - 2u;
         }
         scene->shaderValueUpdater->SetScreenSize(extent.width, extent.height);
+        // Both production backends derive this from the extent actually being
+        // rasterized. Leaving the default behind made every neighbour-tap
+        // effect in this probe -- blurs above all -- sample at a 1920x1080
+        // step whatever the scene's real size, so a blur rendered here could
+        // not be compared with the same blur rendered by a real backend.
+        scene->shaderValueUpdater->SetTexelSize(1.0f / static_cast<float>(std::max(1u, extent.width)),
+                                                1.0f / static_cast<float>(std::max(1u, extent.height)));
         Check(Device::Create(instance, extensions, extent, device), "create device");
         StagingBuffer vertices(device, 8 * 1024 * 1024, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
         StagingBuffer dynamic(device, 8 * 1024 * 1024, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);

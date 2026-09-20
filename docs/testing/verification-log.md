@@ -25,6 +25,15 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-20 — Native Metal draws this scene's cloud background wrong, and the harnesses were not comparable
+
+The extra frosted shape beside the media card reproduces offscreen, and only on Native Metal. At a matched 5120x2160 raster the Metal background is huge bright blobs (p99 luma 202) where Vulkan is a smooth grey wash (p99 121); the scene's own media card and clock are correct on both. The two harnesses were not comparable until now: the Vulkan probe never set texel size, so every neighbour-tap effect it drew sampled at a 1920x1080 step, and the Metal smoke rasterized 960x540 against a 5120x2160 scene target.
+
+- Ruled out by measurement, not by reading: texel size (mean 82.2 vs 82.3 once the probe reports it honestly), static subgraph reuse (21k of 11M pixels differ with WE_TEST_SCENE_OPTIMIZATION=0), shader translation (every program compiles; the array varying `v_TexCoord[13]` reaches MSL with distinct taps at loc0..loc12), and the uniform values themselves
+- Traced both backends at the clouds pass: g_Color1=[0,0,0], g_Color2=[0.141176,...], g_CloudScales=[1,1,1,0.5], g_Texture0Resolution=[6520,3460,...] agree exactly, and every one resolves to a real reflection member on Metal
+- Repro: `WE_TEST_METAL_SURFACE=5120x2160 WE_TEST_METAL_PROJECTS=<project.json> metal_scene_draw_smoke --gtest_filter=*LocalProjectsNamed*` against `WE_TEST_FRAMES=120 offscreen_scene_probe`
+- `metal_scene_draw_smoke` 33 passed; not yet isolated, so nothing is claimed fixed
+
 ## 2026-09-20 — The consent test now pins the clear it is named for
 
 As first written, WithdrawingConsentDropsWhatWasRetained passed with the whole fix removed: while the setting is off both the replay and the runtime's own gate refuse to dispatch, so the assertion could not tell retention-with-clear from no retention at all.
@@ -118,13 +127,3 @@ std140 pads every array element to 16 bytes — what the host packs and the refl
 - python3 scripts/test.py (full gate): 523 passed, 0 failed, 11 skipped (opt-in media/network layers), Python checks OK incl. localization parity with welcome.js added to the scanned files.
 - impeccable detect --json WebUI/welcome.js WebUI/welcome.css: no findings.
 - Not done: no Release build, no desktop/visual check of the guide (offscreen DOM/state assertions only); zh-Hans strings added by hand, unreviewed by a native speaker.
-
-## 2026-09-20 — First-run welcome guide
-
-- Feature: one-screen first-run welcome over the panel content (not modal; tabs stay live). Three facts: browsing is free, downloading needs a Steam account that owns Wallpaper Engine (with Create a Steam account / Buy Wallpaper Engine links), nothing changes until Apply. Actions: Browse the Workshop, Import wallpapers, Skip; Escape, scrim and tab clicks dismiss. Replay from Settings → Library & Steam → Welcome guide.
-- Native: welcomeSeen persisted in UserDefaults (WebPanelController.welcomeSeenKey), snapshot field welcomeSeen, action welcomeSeen. Both links pass allowedExternalURL.
-- Localization: zh-Hans catalog extended; scripts/tests/test_panel_localization.py passes.
-- python3 scripts/test.py (full gate, once): 520 passed, 0 failed, 11 skipped (the usual opt-in media/network skips). New test ControlPanelShellTests/testFirstRunWelcomeShowsOnceLinksToSteamAndReturnsFromSettings.
-- Panel suites rerun after a test-only isolation fix (Shell/Library/Discover/Sync: 30 passed): every WebPanelController in tests now receives the test's own UserDefaults suite. Before that, test runs wrote welcomeSeen=1 into the real app.mac-wallpaper-engine domain; the key was deleted again with defaults delete.
-- Visual: offscreen WKWebView.takeSnapshot captures (throwaway test, deleted) at 760×560 dark en, 960×640 dark zh-Hans, 1240×800 light en; one overflow at the minimum window fixed by widening the card and relaxing the step measure. impeccable detect: no findings.
-- Not done: no Release build, no desktop run; the entrance animation and real-window focus were not observed live.

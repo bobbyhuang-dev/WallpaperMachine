@@ -3521,21 +3521,40 @@ TEST_F(MetalSceneDraw, LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBack
             continue;
         }
 
+        // A real surface is the size of the display it is on, and screen-space
+        // shader inputs -- texel size above all -- follow it. Comparing this
+        // backend's output with another's is only meaningful when both
+        // rasterize the same extent, so the size is overridable.
+        uint32_t surface_width  = 960;
+        uint32_t surface_height = 540;
+        if (const char* size = std::getenv("WE_TEST_METAL_SURFACE")) {
+            unsigned w = 0, h = 0;
+            if (std::sscanf(size, "%ux%u", &w, &h) == 2 && w > 0 && h > 0) {
+                surface_width  = w;
+                surface_height = h;
+            }
+        }
+        // Reusing a completed result is a correctness claim about the passes it
+        // skips. Turning it off here is how a scene that looks wrong under it
+        // can be compared with the same scene drawn every frame.
+        if (const char* opt = std::getenv("WE_TEST_SCENE_OPTIMIZATION")) {
+            wallpaper::vulkan::SetSceneOptimizationEnabled(std::string_view(opt) != "0");
+        }
         @autoreleasepool {
             id<MTLDevice> device       = MTLCreateSystemDefaultDevice();
             CAMetalLayer* layer        = [CAMetalLayer layer];
             layer.device               = device;
             layer.pixelFormat          = MTLPixelFormatBGRA8Unorm;
-            layer.drawableSize         = CGSizeMake(960, 540);
+            layer.drawableSize         = CGSizeMake(surface_width, surface_height);
             layer.framebufferOnly      = NO;
 
             MetalRender         render;
             MetalRenderInitInfo info {
                 .metal_layer          = (__bridge void*)layer,
-                .width                = 960,
-                .height               = 540,
-                .render_width         = 960,
-                .render_height        = 540,
+                .width                = static_cast<uint16_t>(surface_width),
+                .height               = static_cast<uint16_t>(surface_height),
+                .render_width         = static_cast<uint16_t>(surface_width),
+                .render_height        = static_cast<uint16_t>(surface_height),
                 .display_scale_factor = 1.0,
             };
             ASSERT_TRUE(render.init(info)) << render.lastError();

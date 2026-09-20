@@ -15,6 +15,16 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-20 — First-run welcome guide
+
+- Feature: one-screen first-run welcome over the panel content (not modal; tabs stay live). Three facts: browsing is free, downloading needs a Steam account that owns Wallpaper Engine (with Create a Steam account / Buy Wallpaper Engine links), nothing changes until Apply. Actions: Browse the Workshop, Import wallpapers, Skip; Escape, scrim and tab clicks dismiss. Replay from Settings → Library & Steam → Welcome guide.
+- Native: welcomeSeen persisted in UserDefaults (WebPanelController.welcomeSeenKey), snapshot field welcomeSeen, action welcomeSeen. Both links pass allowedExternalURL.
+- Localization: zh-Hans catalog extended; scripts/tests/test_panel_localization.py passes.
+- python3 scripts/test.py (full gate, once): 520 passed, 0 failed, 11 skipped (the usual opt-in media/network skips). New test ControlPanelShellTests/testFirstRunWelcomeShowsOnceLinksToSteamAndReturnsFromSettings.
+- Panel suites rerun after a test-only isolation fix (Shell/Library/Discover/Sync: 30 passed): every WebPanelController in tests now receives the test's own UserDefaults suite. Before that, test runs wrote welcomeSeen=1 into the real app.mac-wallpaper-engine domain; the key was deleted again with defaults delete.
+- Visual: offscreen WKWebView.takeSnapshot captures (throwaway test, deleted) at 760×560 dark en, 960×640 dark zh-Hans, 1240×800 light en; one overflow at the minimum window fixed by widening the card and relaxing the step measure. impeccable detect: no findings.
+- Not done: no Release build, no desktop run; the entrance animation and real-window focus were not observed live.
+
 ## 2026-09-20 — Download ring names the SteamCMD step before bytes move
 
 - Change: WorkshopDownloader.phase (preparing/connecting/updating/signingIn/requesting/transferring/finishing) set alongside status; DownloadJob.phase; snapshot field phase.

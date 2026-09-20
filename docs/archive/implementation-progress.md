@@ -1,7 +1,7 @@
 # Improvement plan implementation progress
 
 Implementation record for the work packages in
-[mac-wallpaper-engine-improvement-plan.md](mac-wallpaper-engine-improvement-plan.md).
+[improvement-plan.md](improvement-plan.md).
 Task IDs are the plan's own. The plan itself is not rewritten; corrections to it
 are recorded here.
 

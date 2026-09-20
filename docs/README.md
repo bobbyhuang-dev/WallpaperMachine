@@ -44,6 +44,17 @@ live under `testing/`.
 | [testing/archive/verification-log-2026-09.md](testing/archive/verification-log-2026-09.md) | Retired verification entries; historical only |
 | [testing/wallpaper-corpus.md](testing/wallpaper-corpus.md) | Local regression corpus checklist |
 
+## Archive
+
+Historical records kept for provenance, never for current guidance. `rg` skips
+`docs/archive/` and `docs/testing/archive/` through the repository `.ignore`
+file; pass `rg -u` to search them deliberately.
+
+| Document | Purpose |
+|---|---|
+| [archive/improvement-plan.md](archive/improvement-plan.md) | 2026-09 power-first source review and work-package plan (Chinese) |
+| [archive/implementation-progress.md](archive/implementation-progress.md) | Task-by-task implementation record for that plan |
+
 ## Product features
 
 - [Music information](features/media-integration.md) - system Now Playing metadata and covers in scene and web wallpapers.

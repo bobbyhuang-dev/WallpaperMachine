@@ -2,8 +2,10 @@
 """Run non-interactive native tests; desktop automation requires --ui.
 
 Order: the Python script tests in `scripts/tests/`, then `xcodegen generate`, then
-the Swift test bundle. Result bundles land in `artifacts/tests/` and are disposable;
-`scripts/clean.py` removes them. See docs/testing/README.md.
+the Swift test bundle. Result bundles and the full xcodebuild log land in
+`artifacts/tests/` and are disposable; `scripts/clean.py` removes them. The terminal
+only gets compile errors, failing tests and a one-line verdict; pass `--verbose` for
+the raw stream. See docs/testing/README.md.
 
 `--only` narrows the native run to test classes or methods
 (`--only LibraryStoreTests --only WorkshopSearchTests/testPagination`) for quick
@@ -22,6 +24,7 @@ import sys
 
 from lib.glyphs import markers
 from lib.paths import BUILD, ROOT, TEST_ARTIFACTS, XCODEPROJ
+from lib.xcode import run_quiet, test_summary
 
 MARK = markers()
 SCRIPT_TESTS = sorted((ROOT / "scripts/tests").glob("test_*.py"))
@@ -68,10 +71,11 @@ def xcodebuild_command(scheme, target, result, only=None, parallel=True):
 
 
 def prune_result_bundles(keep=KEPT_RESULT_BUNDLES, directory=TEST_ARTIFACTS):
-    """Delete all but the `keep` newest result bundles, newest by name."""
+    """Delete all but the `keep` newest result bundles (and their logs), newest by name."""
     bundles = sorted((entry for entry in directory.glob("*.xcresult") if entry.is_dir()), reverse=True)
     for stale in bundles[keep:]:
         shutil.rmtree(stale, ignore_errors=True)
+        stale.with_suffix(".log").unlink(missing_ok=True)
     return bundles[keep:]
 
 
@@ -86,6 +90,10 @@ def main():
         "--serial", action="store_true",
         help="Run test classes one at a time instead of in parallel (for diagnosing interference).",
     )
+    parser.add_argument(
+        "--verbose", action="store_true",
+        help="Echo the whole xcodebuild stream instead of only failures; the log gets it either way.",
+    )
     args = parser.parse_args()
     scheme = "MacWallpaperEngineUI" if args.ui else "MacWallpaperEngine"
     target = UI_TARGET if args.ui else NATIVE_TARGET
@@ -94,13 +102,22 @@ def main():
     if args.only:
         print(f"{MARK.warn} Targeted run ({', '.join(args.only)}): not a substitute for the full gate.", flush=True)
     else:
+        # unittest reports on stderr; the scripts under test chatter on stdout. Keep
+        # both unless something failed, and print one line per module otherwise.
         for module in SCRIPT_TESTS:
-            script_tests = subprocess.run([sys.executable, str(module)], cwd=ROOT)
+            script_tests = subprocess.run(
+                [sys.executable, str(module)], cwd=ROOT, capture_output=True, text=True, errors="replace")
+            if script_tests.returncode != 0 or args.verbose:
+                sys.stdout.write(script_tests.stdout)
+                sys.stdout.write(script_tests.stderr)
             if script_tests.returncode != 0:
+                print(f"{MARK.missing} {module.relative_to(ROOT)} failed", flush=True)
                 return script_tests.returncode
+            ran = next((line for line in script_tests.stderr.splitlines() if line.startswith("Ran ")), "ran")
+            print(f"{MARK.ok} {module.relative_to(ROOT)}: {ran}", flush=True)
     # `--use-cache` leaves the project untouched when project.yml has not changed,
     # so Xcode's incremental build state survives between runs.
-    subprocess.run(["xcodegen", "generate", "--use-cache"], cwd=ROOT, check=True)
+    subprocess.run(["xcodegen", "generate", "--use-cache", "--quiet"], cwd=ROOT, check=True)
     TEST_ARTIFACTS.mkdir(parents=True, exist_ok=True)
     prefix = "UI-" if args.ui else "Tests-"
     result = TEST_ARTIFACTS / (prefix + datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".xcresult")
@@ -110,10 +127,14 @@ def main():
     for name in OPT_IN_VARIABLES:
         if name in env:
             env["TEST_RUNNER_" + name] = env[name]
-    completed = subprocess.run(command, cwd=ROOT, env=env)
+    completed, log = run_quiet(command, result.with_suffix(".log"), cwd=ROOT, env=env, verbose=args.verbose)
+    failed = None
     if (result / "Info.plist").exists():
-        subprocess.run(["xcrun", "xcresulttool", "get", "test-results", "summary", "--path", str(result)], cwd=ROOT)
-    print(f"{MARK.step} Test evidence: {result}")
+        lines, failed = test_summary(result, cwd=ROOT)
+        for line in lines:
+            print(line, flush=True)
+    status = MARK.ok if completed.returncode == 0 and not failed else MARK.missing
+    print(f"{status} Test evidence: {result} (log: {log.name})", flush=True)
     prune_result_bundles()
     return completed.returncode
 

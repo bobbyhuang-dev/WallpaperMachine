@@ -4,22 +4,33 @@
 Stages, in order: cargo builds the renderer workspace, `uniffi-bindgen` regenerates
 the Swift bridge into `App/Bridge/Generated`, `xcodegen` regenerates the Xcode project
 from `project.yml`, and `xcodebuild` builds the app. See docs/build.md.
+
+Each stage's full output goes to `artifacts/build/<stage>-<timestamp>.log`; the
+terminal only sees errors and the final verdict unless `--verbose` is given.
 """
 import argparse
+from datetime import datetime
 import os
 from pathlib import Path
 import subprocess
 import sys
 
 from lib.glyphs import markers
-from lib.paths import BUILD, GENERATED_BRIDGE, PRODUCTS, RENDERER, ROOT, XCODEPROJ
+from lib.paths import BUILD, BUILD_ARTIFACTS, GENERATED_BRIDGE, PRODUCTS, RENDERER, ROOT, XCODEPROJ
+from lib.xcode import run_quiet
 
 MARK = markers()
+STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
+VERBOSE = False
 
 
-def run(args, cwd=ROOT, env=None):
+def run(args, cwd=ROOT, env=None, stage="build"):
     print(MARK.step, " ".join(map(str, args)), flush=True)
-    subprocess.run(list(map(str, args)), cwd=cwd, env=env, check=True)
+    log = BUILD_ARTIFACTS / f"{stage}-{STAMP}.log"
+    completed, _ = run_quiet(args, log, cwd=cwd, env=env, verbose=VERBOSE)
+    if completed.returncode != 0:
+        print(f"{MARK.missing} {stage} failed (exit {completed.returncode}); full log: {log}", flush=True)
+        raise subprocess.CalledProcessError(completed.returncode, list(map(str, args)))
 
 
 def repository_commit(root=ROOT):
@@ -56,17 +67,20 @@ def main():
     parser.add_argument("--swift-only", action="store_true")
     parser.add_argument("--renderer-only", action="store_true")
     parser.add_argument("--configuration", choices=["Debug", "Release"], default="Debug")
+    parser.add_argument("--verbose", action="store_true", help="Echo every tool line instead of only errors.")
     args = parser.parse_args()
+    global VERBOSE
+    VERBOSE = args.verbose
     env = build_environment()
     if not args.swift_only:
-        run(["cargo", "build", "--workspace", "--release"], RENDERER, env)
-        run([RENDERER / "target/release/uniffi-bindgen", "generate", "--library", RENDERER / "target/release/libwallpaper_bridge.a", "--language", "swift", "--no-format", "--out-dir", GENERATED_BRIDGE], cwd=RENDERER, env=env)
+        run(["cargo", "build", "--workspace", "--release"], RENDERER, env, stage="cargo")
+        run([RENDERER / "target/release/uniffi-bindgen", "generate", "--library", RENDERER / "target/release/libwallpaper_bridge.a", "--language", "swift", "--no-format", "--out-dir", GENERATED_BRIDGE], cwd=RENDERER, env=env, stage="bindgen")
     if args.renderer_only:
         return
     # `--use-cache` skips rewriting the project when `project.yml` has not changed,
     # which keeps Xcode's incremental build state (and `scripts/test.py` agrees).
-    run(["xcodegen", "generate", "--use-cache"], env=env)
-    run(["xcodebuild", "-project", XCODEPROJ.name, "-scheme", "MacWallpaperEngine", "-configuration", args.configuration, "-derivedDataPath", BUILD, "build"], env=env)
+    run(["xcodegen", "generate", "--use-cache", "--quiet"], env=env, stage="xcodegen")
+    run(["xcodebuild", "-project", XCODEPROJ.name, "-scheme", "MacWallpaperEngine", "-configuration", args.configuration, "-derivedDataPath", BUILD, "build"], env=env, stage=f"xcodebuild-{args.configuration}")
     print(f"{MARK.ok} Built {PRODUCTS / args.configuration / 'MacWallpaperEngine.app'}")
 
 

@@ -111,6 +111,12 @@ Products:
 `build/` is Git-ignored and disposable; `python3 scripts/clean.py --all` removes
 it entirely.
 
+Each stage's complete output is written to `artifacts/build/<stage>-<timestamp>.log`
+(`cargo`, `bindgen`, `xcodegen`, `xcodebuild-<Configuration>`); the terminal only
+shows compile errors, `The following build commands failed:` and the final
+product path. Pass `--verbose` to see the raw stream as well, or open the log
+named in the failure line.
+
 ### Choosing a mode
 
 | Mode | Use when | Requires |

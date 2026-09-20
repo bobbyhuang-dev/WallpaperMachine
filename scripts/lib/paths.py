@@ -30,6 +30,8 @@ PRODUCTS = BUILD / "Build/Products"
 
 ARTIFACTS = ROOT / "artifacts"
 TEST_ARTIFACTS = ARTIFACTS / "tests"
+# Full tool logs from scripts/build.py; the terminal only shows their failures.
+BUILD_ARTIFACTS = ARTIFACTS / "build"
 RENDERER_ARTIFACTS = ARTIFACTS / "renderer"
 
 

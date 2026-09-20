@@ -67,6 +67,12 @@ scheme excludes UI tests.
 `python3 scripts/test.py` is the routine gate: it runs the Python script tests,
 runs `xcodegen generate --use-cache`, then builds and runs
 `MacWallpaperEngineTests` only, with test classes in parallel worker processes.
+The terminal gets only what matters — compile errors, failing assertions, the
+`Testing failed:` block and a one-line verdict with counts — while the full
+`xcodebuild` stream goes to `artifacts/tests/Tests-<timestamp>.log` next to the
+result bundle. A green run prints nothing but the verdict; open the log or
+rerun with `--verbose` when the raw stream is the point. `scripts/build.py`
+filters the same way into `artifacts/build/<stage>-<timestamp>.log`.
 Cargo and CMake commands need the Homebrew environment that `scripts/build.py`
 assembles; run the Rust commands from `upstream/renderer`. Build prerequisites
 are in [../build.md](../build.md).
@@ -140,8 +146,9 @@ not a substitute for one.
 
 | Artifact | Produced by |
 | --- | --- |
-| `artifacts/tests/Tests-<timestamp>.xcresult` | `python3 scripts/test.py` |
-| `artifacts/tests/UI-<timestamp>.xcresult` | `python3 scripts/test.py --ui` |
+| `artifacts/tests/Tests-<timestamp>.xcresult` and `.log` | `python3 scripts/test.py` (five newest kept) |
+| `artifacts/tests/UI-<timestamp>.xcresult` and `.log` | `python3 scripts/test.py --ui` |
+| `artifacts/build/<stage>-<timestamp>.log` | `python3 scripts/build.py` (cargo, bindgen, xcodegen, xcodebuild) |
 | `artifacts/renderer/<run>/` | `python3 scripts/check_renderer.py` |
 | `artifacts/renderer/bin/` | renderer check binaries |
 | `build/Build/Products/{Debug,Release}/MacWallpaperEngine.app` | `python3 scripts/build.py` |
@@ -179,7 +186,11 @@ they do not establish.
 6. **Record the result** in [verification-log.md](verification-log.md) with the
    counts, the command, and what you did not verify. Keep it to about ten
    lines; a fact that outlives the round belongs in the doc that owns it, not
-   in the log.
+   in the log. Use `python3 scripts/log_verification.py --title "…" --line "…"`
+   (repeat `--line`; `--context` for one paragraph; `--dry-run` to preview): it
+   prepends the entry, keeps the ten newest and moves the rest into
+   [archive/](archive/) with links fixed, so nobody has to read the log to
+   write to it.
 
 Naming, style and review rules are in [../conventions.md](../conventions.md);
 the contributor workflow is in [../../CONTRIBUTING.md](../../CONTRIBUTING.md).

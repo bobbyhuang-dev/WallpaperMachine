@@ -6,6 +6,10 @@ sandboxed ExtensionKit lock screen. `CLAUDE.md` must stay a relative symlink to 
 ## Read on demand
 
 Read only task-relevant sections; keep this file to durable rules and routing.
+For any doc over ~300 lines (`architecture.md`, `testing/renderer.md`, feature docs),
+use its section index or `rg -n '^##' <file>` and read with offset/limit; never read
+the whole file. `.ignore` keeps `rg` out of `docs/archive/`, `docs/testing/archive/`,
+`App/Bridge/Generated/` and `upstream/`; use `rg -u` only when those are the target.
 
 - Placement / runtime: [layout](docs/repository-layout.md), [architecture](docs/architecture.md).
 - Code / tests / docs: [conventions](docs/conventions.md), [testing](docs/testing/README.md).
@@ -64,7 +68,9 @@ Read only task-relevant sections; keep this file to durable rules and routing.
   [renderer/download regressions](docs/testing/renderer.md#regression-areas-that-must-stay-covered).
   Report skipped asset checks as skipped; the [local corpus](docs/testing/wallpaper-corpus.md)
   is not a passing suite. Docs/skill-only changes: check links, paths and commands;
-  no app build or desktop test.
+  no app build or desktop test. Scripts print only failures and a verdict; the full
+  tool output is in the `artifacts/` log they name. Do not rerun with `--verbose`
+  unless the filtered output is not enough to act on.
 - Release builds on request, not by default (`.omp/rules/release-build-on-request.md`):
   build when the user asks to build, deliver, install or try it, and when a change
   cannot be verified any other way. Otherwise finish at the gate and say the app was
@@ -76,9 +82,10 @@ Read only task-relevant sections; keep this file to durable rules and routing.
   only after a successful Release build containing the changes; report path and remind
   the user to quit/reopen. Never launch/quit automatically. Failed/blocked builds ≠ delivery.
 - Update the owning docs; index new/removed documents in [docs/README.md](docs/README.md).
-  For features and cross-domain changes, record commands, results, skips and gaps newest-first in the
-  [verification log](docs/testing/verification-log.md), about ten lines per entry;
-  it keeps the ten newest, older ones move to `docs/testing/archive/`. Historical
+  For features and cross-domain changes, record commands, results, skips and gaps with
+  `python3 scripts/log_verification.py --title "…" --line "…"` (about ten lines per entry;
+  do not read or hand-edit the [verification log](docs/testing/verification-log.md)
+  to append; the script keeps the ten newest and archives the rest). Historical
   results aren't current proof, so promote anything durable (known-failing tests,
   recurring traps) into the owning doc instead of leaving it in the log.
   Report shared-workspace blockers and unchecked visual behavior explicitly.

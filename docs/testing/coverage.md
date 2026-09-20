@@ -29,7 +29,7 @@ Swift tests cover, without starting the app:
   and oldest-first pruning; the animated relay returns Steam's bytes on its own
   lane and refuses single-frame sources without a request; the scheme handler
   refuses thumbnail and animated ids it has not announced. An offscreen WebKit
-  regression (`ControlPanelLayoutTests`) checks that Discover tiles load the
+  regression (`ControlPanelDiscoverTests`) checks that Discover tiles load the
   still first, admit the animation beneath it, fade the still out only for a
   bright animation and never for a black one, and skip single-frame previews.
 - **Downloads** — private terminals per job, transfers side by side up to the
@@ -45,7 +45,11 @@ Swift tests cover, without starting the app:
   retained-intent setup/account progression, explicit shared-resource consent
   including reinstall, resource-job deduplication, account correction, removal
   preventing resumption, and download-speed sampling (see
-  [renderer.md](renderer.md) for the `nettop` streaming detail).
+  [renderer.md](renderer.md) for the `nettop` streaming detail). The
+  downloader suites share `DownloaderTestCase` (`Tests/Unit/Workshop/`) and
+  split by concern: `DownloaderLifecycleTests`, `DownloaderSessionTests`,
+  `DownloadQueueTests`, `SteamCMDRuntimeValidationTests` and
+  `DownloadTelemetryTests`.
 - **Steam runtime** — SteamCMD setup against isolated preferences/directories,
   `URLProtocol` archives, real system `tar`, and owned child processes:
   publication/replacement, invalid discovery, traversal/link/archive-size
@@ -63,7 +67,13 @@ Swift tests cover, without starting the app:
   selection, host allowlisting, progress clamping, classified errors, install
   retry/timeout. They never contact GitHub, download a real archive, or replace
   the running app.
-- **Panel** — offscreen `NSHostingController` layout proposals at 760×560,
+- **Panel** — the offscreen `WKWebView` suites share `ControlPanelTestCase`
+  (`Tests/Unit/Panel/`) and split by page: `ControlPanelShellTests` (window,
+  language, appearance, About/update, top bar), `ControlPanelLibraryTests`
+  (sorting, tile marks, filter sidebar, download setup, error dismissal),
+  `ControlPanelDiscoverTests` (pagination, grid, download rings, previews) and
+  `ControlPanelSyncTests` (hidden-panel pushes, option fetches, display titles).
+  Offscreen `NSHostingController` layout proposals at 760×560,
   960×640, and 1240×800 in English and Chinese, asserting the root accepts each
   window width without forcing a taller window; an offscreen `WKWebView`
   regression that loads the bundled interface under its custom scheme, waits for

@@ -29,12 +29,15 @@ generates the Xcode project and builds the app. Details, flags and failure modes
    `python3 scripts/build.py --swift-only`; renderer changes need a full
    `python3 scripts/build.py`.
 2. Run `python3 scripts/test.py` — Python script tests, project generation, then
-   `MacWallpaperEngineTests`. This never touches the desktop.
+   `MacWallpaperEngineTests`. This never touches the desktop. Only failures and
+   a verdict reach the terminal; the full log sits next to the result bundle in
+   `artifacts/tests/` (`--verbose` streams it).
 3. Run the targeted check your change needs:
    `python3 scripts/check_renderer.py` for renderer or scene work,
    `python3 scripts/test.py --ui` only when a desktop run is explicitly wanted.
-4. Update the document that owns the behavior you changed, then
-   `python3 scripts/clean.py` before you commit.
+4. Update the document that owns the behavior you changed, record the run with
+   `python3 scripts/log_verification.py --title "…" --line "…"` when the
+   change warrants an entry, then `python3 scripts/clean.py` before you commit.
 
 ## Where to read next
 

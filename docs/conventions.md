@@ -166,10 +166,11 @@ The rules that bind every change:
 - [testing/verification-log.md](testing/verification-log.md) is newest-entry
   first and keeps the ten newest entries. An entry is a heading, optional short
   context and a bullet per command with exit status, counts and skips — about
-  ten lines. Never edit a recorded result. Trimming is a separate act: move the
-  oldest entries verbatim into `testing/archive/` and promote anything still
-  true about the current tree into the doc that owns it first. A durable fact
-  left only in the log is a fact nobody will find.
+  ten lines. Never edit a recorded result. `python3 scripts/log_verification.py`
+  prepends an entry and moves whatever falls past ten verbatim into
+  `testing/archive/`; before it runs, promote anything still true about the
+  current tree into the doc that owns it. A durable fact left only in the log
+  is a fact nobody will find.
 - Never cite a path under `artifacts/` or `build/` as durable evidence: both are
   Git-ignored and are deleted by `python3 scripts/clean.py`. Describe what was
   exercised and what the run showed.

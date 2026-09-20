@@ -6,6 +6,30 @@ window, swapchain, audio device, or screenshot, and nothing here inspects or
 changes the desktop. Dated results live in
 [verification-log.md](verification-log.md); this file is the working reference.
 
+This file is long. Read the section you need rather than the whole file
+(`rg -n '^##' docs/testing/renderer.md` gives the line numbers):
+
+| Section | Read it when |
+|---|---|
+| [`scripts/check_renderer.py`](#scriptscheck_rendererpy) | Running or changing the renderer check itself |
+| [Probes](#probes) | Driving `offscreen_scene_probe` and friends by hand; `WE_TEST_*` variables |
+| [Regression areas that must stay covered](#regression-areas-that-must-stay-covered) | Before changing renderer behaviour: the table names the test that guards each area |
+|  [Property bindings and alignment anchors](#property-bindings-and-alignment-anchors) | Property scripts, `origin`/`scale`/anchor maths |
+|  [Native writes from scripts, puppet layers and cursor coverage](#native-writes-from-scripts-puppet-layers-and-cursor-coverage) | SceneScript side effects, puppets, cursor hit tests |
+|  [Startup and staging buffers](#startup-and-staging-buffers), [Alpha compositing](#alpha-compositing) | First-frame, staging, blend modes |
+|  [Vector material constant timelines](#vector-material-constant-timelines), [Scripted material constants](#scripted-material-constants-keep-their-component-count) | Material constants and their animation |
+|  [Timeline events](#timeline-events), [Animation and puppets](#animation-and-puppets) | Event timelines, puppet animation layers |
+|  [Cursor coordinates and presentation](#cursor-coordinates-and-presentation) | Pointer mapping across displays and scales |
+|  [Text, fonts and clocks](#text-fonts-and-clocks) | Text layers, font fallback, clock formats |
+|  [Textures, allocation and composition](#textures-allocation-and-composition) | Texture keys, allocation, composition layers |
+|  [Frame timing](#frame-timing), [Frame pacing](#frame-pacing-follows-the-content-bounded-on-both-sides) | Pacing, throttling, battery behaviour |
+|  [Continuous-playback work contracts](#continuous-playback-work-contracts), [Renderer work counters](#renderer-work-counters) | Work-per-frame contracts, `RuntimeCounters` |
+|  [Video decode state machine and colour range](#video-decode-state-machine-and-colour-range) | Video playback in scenes |
+|  [Shader pipeline](#shader-pipeline) | GLSL translation, uniform blocks, varyings |
+| [Rust crates](#rust-crates) | `cargo test` commands and the configure-retry trap |
+| [C++/CMake test binaries](#ccmake-test-binaries) | Building and filtering the gtest executables |
+| [Known limitations](#known-limitations) | Before reporting a failure as a regression: the pre-existing ones are listed |
+
 ## `scripts/check_renderer.py`
 
 ```sh
@@ -174,7 +198,7 @@ executable directly from the renderer check build directory.
 | Geometry rewritten on an event | `SceneDemandMapping.GeometryRewrittenOnAnEventIsNotAReasonToKeepDrawing` in `static_subgraph_cache_test`: `EventMesh` and `DynamicMesh` must both cost a target its cacheability and must differ at the scene level. Collapsing them back into one bit either stops static text idling or idles a particle system. |
 | Optional programs across launches | `MetalSceneDraw.AnOptionalProgramTranslatedOnceIsRestoredFromDiskOnTheNextLaunch`: after the in-memory caches are cleared, the stored entry must reproduce the Metal source, the reflection *and* the per-stage binding plan without the compiler running; truncated entries must fall back to a normal compile. Restoring MSL alone is not a restored program. |
 | Pipeline archive on the production path | `MetalSceneDraw.PipelinesThisProcessBuildsAreArchivedAndServeTheProductionPath`: pipelines are offered to the archive, published, reopened from disk and satisfied strictly, and a scene with no archive path still draws. A written archive that is never attached to a production descriptor proves nothing. |
-| Download-speed sampling | `DownloaderTests` in `Tests/Unit/Workshop/`: real `nettop` streaming over a private PTY with local-socket traffic; CRLF and split line endings. LF-only fixtures do not verify live delivery. |
+| Download-speed sampling | `DownloadTelemetryTests` in `Tests/Unit/Workshop/`: real `nettop` streaming over a private PTY with local-socket traffic; CRLF and split line endings. LF-only fixtures do not verify live delivery. |
 | Who owns the first frame | `MetalSceneDraw.ADrawnFrameIsReportedAsPresentedAndLeavesTheFirstFrameFlagAlone`: a backend must report presentation through `drawFrame`'s `presented` out-parameter and leave `Scene::first_frame_ok` to the frame handler. A backend that sets the flag satisfies the handler's own check before the handler runs, the host is never told the wallpaper started, and the startup deadline tears down a wallpaper that is drawing correctly. |
 | Decoded frames carry real timestamps | `video_source_input_test` and `shared_video_session_test` against media the tests encode. A frame whose timestamp is always zero looks like playback for as long as frames keep arriving and then freezes, so a video regression here reads as "the picture stopped" rather than as a decode failure; the FFmpeg header/library check in `src/Video/FfmpegAbi.hpp` exists because the layout mismatch that produced it compiles cleanly. |
 | One clock per shared decoder | `SharedVideoSessionTest.AFrameStaysValidAfterTheDecoderMovesOn` and `.PausingOneSurfaceLeavesTheOtherPlaying`: exactly one elected consumer moves a shared session's clock, so a test that advances the non-driving consumer observes nothing. Make the advancing consumer the driver rather than loosening the election. |

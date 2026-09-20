@@ -15,6 +15,115 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-20 — The renderer changes were never compiled; media consent, covers and AppleScript
+
+The previous round's C++ and Rust edits were real but absent from the shipped
+binary: the last delivery was `--swift-only`, so `libwescene-renderer.a` inside
+the app still predated `engine.screenResolution` and the camera fix. `strings`
+on the delivered Release app found no `screenResolution` at all. Everything
+below was rebuilt with `--configuration Release`, and the delivered binary was
+checked for the new symbols rather than assumed. Media integration now works
+end to end; **SYKM's 3D content still does not render** — see the correction at
+the end.
+
+- **Consent, not a constant.** Desktop Scene templates took
+  `media_integration_enabled(true)` unconditionally while the fan-out filtered
+  on the saved setting, so the panel said "off" about a scene the engine had
+  switched on. Activation now uses
+  `context.wallpaper.media_integration_enabled`. New
+  `WallpaperBridge::system_media_scene_handles()` names the consenting scenes;
+  `AppDelegate.sceneMediaHandles` asks it instead of counting active scenes, so
+  a machine with the setting off loads no MediaRemote, sends no Apple Event and
+  is never asked for Automation permission.
+- **Replay is keyed on the handle, not on aggregate demand.** `SceneMediaSink`
+  used to replay only when demand went false→true, so swapping one opted-in
+  Scene for another, or lighting a second display, left the new instance blank
+  until the track changed. It now replays whenever a handle appears that it has
+  not fed. `testAReplacementSceneIsToldTheUnchangedTrack` fails against the old
+  condition and passes against the new one (verified by reverting it).
+- **`NSAppleEventsUsageDescription`.** The app had only
+  `NSAudioCaptureUsageDescription`, so every Apple Event to Music or Spotify
+  would have been refused before the Automation prompt could appear — a runtime
+  prerequisite no fake-runner test can see. The key is in
+  `App/Resources/Info.plist` and was read back out of the built bundle. The app
+  is not sandboxed (only `com.apple.security.get-task-allow`), so no
+  `com.apple.security.automation.apple-events` entitlement is involved.
+- **Two cover slots.** `RuntimeImageSource` seeds `$mediaThumbnail` and
+  `$mediaPreviousThumbnail` and aliases the outgoing cover into the previous
+  slot without copying pixels; `ApplySystemUserTextures` binds both and leaves
+  any other `system` slot on its authored texture.
+- **AppleScript source rewritten.** Players are chosen from
+  `NSWorkspace.runningApplications` by bundle id, so nothing is launched and
+  `System Events` is no longer involved; every `NSAppleScript` runs on one
+  private serial queue instead of the main thread; Spotify's millisecond
+  duration is converted where it is read; cover art is loaded once per track
+  (Apple Events for Music, `artwork url` download for Spotify) rather than once
+  a second. Music's script returns an empty artwork-URL field and
+  `URL(string: "")` is *not* nil, so an unguarded parse sent Music down the
+  download path and skipped its own cover entirely; the parser now treats an
+  empty field as no URL. `FallbackSystemMediaProvider.availability` reads
+  through to the live source instead of latching what was true at the switch.
+- **MediaRemote on this machine.** A standalone probe resolved every symbol and
+  `MRMediaRemoteGetNowPlayingInfo` replied nil — the entitlement gate. The
+  AppleScript path is the only source here.
+
+- `python3 scripts/test.py` — exit 0, 519 native tests, 510 passed, 9 skipped,
+  0 failures. New: `AppleScriptMediaProviderTests` (running players only, first
+  answering player, per-player duration units, artwork once per track, Music's
+  empty artwork URL, empty reply), `SceneMediaSinkTests` (replacement scene,
+  consent withdrawal) and `testAvailabilityFollowsTheLiveSourceAfterTheSwitch`.
+- `cargo test -p wallpaper-bridge --release --lib` — 314 passed, including new
+  `scene_media_handles_follow_consent_so_nothing_reads_the_player_without_it`.
+  `cargo test -p wallpaper-core --release --lib` — 212 passed. Both need
+  `scripts/build.py`'s environment; the first invocation after an environment
+  change fails its CMake configure and succeeds on retry.
+- `python3 scripts/check_renderer.py` — exit 0, `adaptive-20260920-112242`: 10
+  generated cases `pixels_equal=true`, 0 diagnostics, 8 projects × 2 reload
+  cycles clean. `media_thumbnail_texture_smoke` 13 passed (new previous-cover
+  and unknown-system-slot cases); `scenescript_media_event_smoke` 15 passed.
+- **Probe text pump fixed before trusting any label evidence.**
+  `offscreen_scene_probe` never called `PumpTextLayerCache` inside its frame
+  loop, which production DRAW does, so layouts finished by the text worker were
+  never collected. It now pumps every frame and drains after media injection
+  the way the warm-up does. The difference is visible in the probe's own
+  report: `Canzone BIG … size=85.5 108` (unlaid-out) before, `size=391 108`
+  after.
+- New probe hooks `WE_TEST_MEDIA_EVENTS` / `WE_TEST_MEDIA_ARTWORK` rendered
+  Music Visualizer with an injected track. With the pump fixed, the composited
+  5120×2160 frame shows "Bohemian Rhapsody" and "Queen" drawn on the player
+  widget, with the progress bar, transport, cover square and a background
+  tinted from the injected palette. Re-run with a pure green cover, every
+  sampled pixel followed it.
+- **Correction — SYKM is not fixed.** The earlier claim in this entry's first
+  draft ("240 frames show it animating") covered the title page only.
+  Re-rendered with the authored intro disabled
+  (`WE_TEST_PROPERTIES='{"newproperty48":false}'`), frames 0, 60 and 149 are
+  byte-identical (mean 61.25) and still show only the 2D title/HUD layers plus
+  a full-height white band artifact. The brightest pixels in the dark two
+  thirds all sit on that band's edge: no stars, no orbits, no bodies.
+  `nodes.txt` shows the 3D nodes exist and are effective-visible (`skybox1`
+  scale 10000, `轨道显示内层/外层`, `sun-1`, `sun-4`, `SUN`, `s2`,
+  `Solar system行星1-6`) at authored scales of 1e-4 … 0.1 against the
+  perspective camera at `0 0 0.454`. So the `engine.screenResolution` fix is
+  real — the script `TypeError`s are gone and the 2D layers now lay out — but
+  the perspective/scale path that should draw the system is a separate,
+  unfinished renderer problem.
+- Other known gaps, unchanged: three effects in Music Visualizer still fail to
+  compile — `gaussian` (`float *= bool * 6.0`), `cutout_vignette`
+  (`vec3 - vec2`, HLSL-style truncation) and `effects/refract` (empty default
+  texture) — so its cover blur is not authored-accurate. `usershortcut`
+  transport is still unimplemented. `ShaderValue: … not found in glsl` on SYKM
+  is authored leftovers, not a binding failure.
+- `python3 scripts/build.py --configuration Release` — exit 0, `** BUILD
+  SUCCEEDED **`. Delivered
+  `build/Build/Products/Release/MacWallpaperEngine.app` carries
+  `NSAppleEventsUsageDescription` in its `Info.plist` and contains
+  `screenResolution`, `mediaPreviousThumbnail`, `systemMediaSceneHandles` and
+  `applescript-now-playing`. No desktop run, no Peekaboo, no `--ui`; the app
+  was not launched. Whether Music or Spotify actually reach SceneScript needs a
+  requested desktop check after quit/reopen, with the per-wallpaper *Media
+  integration* toggle turned on and Automation permission granted.
+
 ## 2026-09-20 — Scene now-playing fan-out, and leaf models plus a perspective camera for SYKM
 
 Two Scene workshop packages were blank or mute for different reasons: Music
@@ -362,7 +471,6 @@ was modified. No desktop run, no visual check, no power measurement.
   `metal_backend_test` 26 passed, `particle_rope_geometry_test` 17 passed,
   `playback_gpu_test` 39 passed. No local Workshop corpus was passed through
   `--project`, so shipped-asset coverage for this round is **not** claimed.
-
 
 ## 2026-09-19 — Round 13: two-dimensional puppets, sprite trails, ropes and rope trails on Metal
 
@@ -1348,7 +1456,6 @@ decoder actually advanced before claiming the retained frame survived.
 No desktop session, no visual check, no power measurement. Render scale, video
 backend routing and shared decode have not been observed on a real display.
 
-
 ## 2026-09-18 — Round 4: R02 memory accounting audit and V04 real-media hardening
 
 Audit round on top of `c0461f7` (clean tree at start). No new plan task. R02's
@@ -1437,7 +1544,8 @@ saving no memory at all, and was corrected before landing rather than pinned.
 displayed by the native backend, no screenshot or capture was taken, no
 wallpaper or appearance setting was changed, `--ui` was not run, and no power
 measurement exists. The minimum authorized-session checklist is in
-[../mac-wallpaper-engine-implementation-progress.md](../../mac-wallpaper-engine-implementation-progress.md).
+[../../archive/implementation-progress.md](../../archive/implementation-progress.md).
+
 ## 2026-09-18 — Shared-resources consent stage: two choices instead of caveats
 
 The resources stage of the download dialog in `WebUI/panel.js` / `panel.css`
@@ -1692,7 +1800,7 @@ results are from the rebased tree.
 Third round, on the same uncommitted tree as round 2 (`6bfaa1d84` plus that
 round's 41 modified and 9 untracked files, verified rather than assumed).
 Nothing was reset, stashed or committed. Per-task evidence:
-[../mac-wallpaper-engine-implementation-progress.md](../../mac-wallpaper-engine-implementation-progress.md).
+[../../archive/implementation-progress.md](../../archive/implementation-progress.md).
 
 - `python3 scripts/test.py`: passed, 325 tests, 0 failures (314 before). New
   suites: `NativeVideoWallpaperHostTests` (7) and four added
@@ -1841,7 +1949,7 @@ tree was clean, so the 310-test result recorded below belongs to exactly that
 commit. Built the renderer half of M00 that round 1 left unbuilt, and re-checked
 P02's correctness argument. Per-task evidence, with implementation, automated,
 runtime, visual and power verification tracked separately:
-[../mac-wallpaper-engine-implementation-progress.md](../../mac-wallpaper-engine-implementation-progress.md).
+[../../archive/implementation-progress.md](../../archive/implementation-progress.md).
 
 - `python3 scripts/test.py`: passed, 314 tests, 0 failures (310 before this
   round). New suite: `RuntimeDiagnosticsReportTests` (4). That run builds the
@@ -2138,7 +2246,7 @@ bridge and the web host) and W02 (media suspension, removal from the window
 tree, placeholder and pointer gating). A01 is limited to the visible-consumer
 gate for system audio capture; its real-time callback is unchanged. Details and
 per-task evidence:
-[../mac-wallpaper-engine-implementation-progress.md](../../mac-wallpaper-engine-implementation-progress.md).
+[../../archive/implementation-progress.md](../../archive/implementation-progress.md).
 
 - `python3 scripts/test.py`: Python suite, XcodeGen and native unit tests passed
   (310 tests, 0 failures; 267 before this work). New suites:
@@ -2850,7 +2958,6 @@ drivers. Built app products and current renderer/bridge outputs were retained.
 The relative `CLAUDE.md → AGENTS.md` symlink, 20 local documentation links and
 unchanged vendored source revisions were checked.
 
-
 ## 2026-09-17 — Web wallpapers receive mouse input; desktop-click setting
 
 Workshop 3799142774 (*Rhine Lab · 莱茵生命交互桌面 | Interactive Desktop*) rendered
@@ -2958,6 +3065,7 @@ Verified:
 - No renderer or bridge changes; `python3 scripts/check_renderer.py` not run.
 - Not visually verified in the running app (no desktop run authorized);
   breakpoints derived from tile minimum, 12 px gap and 16 px grid padding.
+
 ## 2026-09-16 — Cursor mapping rebased onto the coverage-mask work
 
 `fix(scene): map cursor input through the presented wallpaper` was rebased onto
@@ -3085,6 +3193,7 @@ Not verified: live GitHub Releases, archive extraction, replacement of
 an app in Applications, or visual layout of the About page in a real
 window. No desktop automation, wallpaper change, or Release delivery
 was performed.
+
 ## 2026-09-16 — Script side-effect writes, puppet animation layers, cursor coverage
 
 "流萤 夏日沙滩" (`3292361861`, the wallpaper applied on this machine) reported
@@ -4046,3 +4155,4 @@ desktop check after quit/reopen.
   with `xattr -cr` and the same command exited 0, `** BUILD SUCCEEDED **`.
   Delivered binary `build/Build/Products/Release/MacWallpaperEngine.app`.
   The app was not launched.
+

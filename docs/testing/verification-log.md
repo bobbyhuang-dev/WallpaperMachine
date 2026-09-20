@@ -25,6 +25,15 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — The missing background video was a picker that only ever offered images
+
+This wallpaper's Custom Background is a scenetexture property, and its manifest declares general.supportsvideo -- Wallpaper Engine's way of saying a video is as acceptable there as an image. Nothing in the app read that flag, and the picker set allowedContentTypes to .image, so the video the official example uses could not be selected at all. The scene has no missing video layer; the file simply never got in.
+
+- supportsvideo now reaches the texture property metadata and the bridge descriptor, and the picker offers video and retitles itself only for a project that declares it
+- `a_manifest_that_supports_video_says_so_on_its_texture_pickers` — a declaring manifest marks its scenetexture accordingly, and the existing scenetexture test pins the default false
+- `scripts/test.py` — 526 passed, 0 failed, 11 skipped of 537; `cargo test --release -p wallpaper-bridge --lib` 318 passed
+- Unverified: no desktop run, so whether the renderer then plays a selected video through that slot was not observed here
+
 ## 2026-09-21 — The button-click handler does not throw; its volume slider was the thing that did nothing
 
 The reported throw from thisScene.getLayer('button_press').play() does not reproduce: registered as a layer script and driven with a cursor-down, the handler runs with zero script errors. play() on a layer that is not a sound layer sets a local flag rather than raising, so nothing there can throw.
@@ -106,12 +115,3 @@ The entry below overstated what was measured. It headlined the clouds pass while
 - The one-run lodMaxClamp experiment splits it in two: clamping Metal to level 0 moves the mean from 81.7 to 100.8, onto Vulkan 98.8, so the mip level the shader asks for (g_CloudLOD=5, and clouds_256.tex ships 7 levels) is a real backend difference in overall tone
 - But p99 stays 206 against Vulkan 121 under that clamp, so the bright regions are a second, independent defect that LOD does not explain
 - Which backend is right is not settled: Wallpaper Engine exposes that LOD as "smoothness" and the author set it to the maximum, so honouring level 5 may be the correct behaviour and Compatibility the deviant one
-
-## 2026-09-20 — The Metal cloud divergence is inside the clouds pass, not the blur chain
-
-Dumping every render target on the Metal side found the clouds layer's own input (_rt_effect_pingpong_a, 6520x3460) at mean luma 255 -- and the Vulkan pass dump shows the same layer drawn from util/white with g_Color=[1,1,1], so both backends feed the clouds effect an identical white card. The difference is what the clouds pass makes of it: the shader computes mix(g_Color2, g_Color1, blend) with blend = smoothstep(0.08, 0.19, sampled noise) * 0.95, and BlendMode::Normal maps to One/Zero -- a replace -- on both backends, so wherever blend falls near zero the white card is written straight out.
-
-- Metal keeps that contrast (p99 202); Vulkan lands on a flat mid grey (p99 121) with the same blob structure, so the noise scale agrees and only the tone does
-- Ruled out additionally this round: mip availability (clouds_256.tex ships 7 levels, both backends size the image and the sampler from image_slot.mipmaps.size()), the alpha write mask (write_alpha is output != _rt_default on both), and the Normal blend factors (One/Zero on both)
-- Still open: which pass compresses the range on Vulkan and not on Metal -- the post-processing layer runs blurprecise, bokeh_blur, blur, two color_grading instances and dithering
-- `scripts/check_renderer.py` clean -- 10 generated cases, pixels_equal=True, diagnostics=0 -- confirming the probe texel-size change shifted no expectation; `metal_scene_draw_smoke` 33 passed

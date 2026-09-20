@@ -271,6 +271,9 @@ pub struct BridgePropertyDescriptor {
     pub file_filter: Option<BridgeFileFilter>,
     /// Present only on directory properties.
     pub directory_mode: Option<BridgeDirectoryMode>,
+    /// Scene-texture properties only: this project's manifest says a video file
+    /// is as acceptable here as an image.
+    pub texture_accepts_video: bool,
     pub dirty: bool,
     pub can_restore_defaults: bool,
     pub enabled: bool,

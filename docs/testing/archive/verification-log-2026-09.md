@@ -15,6 +15,15 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-20 — The Metal cloud divergence is inside the clouds pass, not the blur chain
+
+Dumping every render target on the Metal side found the clouds layer's own input (_rt_effect_pingpong_a, 6520x3460) at mean luma 255 -- and the Vulkan pass dump shows the same layer drawn from util/white with g_Color=[1,1,1], so both backends feed the clouds effect an identical white card. The difference is what the clouds pass makes of it: the shader computes mix(g_Color2, g_Color1, blend) with blend = smoothstep(0.08, 0.19, sampled noise) * 0.95, and BlendMode::Normal maps to One/Zero -- a replace -- on both backends, so wherever blend falls near zero the white card is written straight out.
+
+- Metal keeps that contrast (p99 202); Vulkan lands on a flat mid grey (p99 121) with the same blob structure, so the noise scale agrees and only the tone does
+- Ruled out additionally this round: mip availability (clouds_256.tex ships 7 levels, both backends size the image and the sampler from image_slot.mipmaps.size()), the alpha write mask (write_alpha is output != _rt_default on both), and the Normal blend factors (One/Zero on both)
+- Still open: which pass compresses the range on Vulkan and not on Metal -- the post-processing layer runs blurprecise, bokeh_blur, blur, two color_grading instances and dithering
+- `scripts/check_renderer.py` clean -- 10 generated cases, pixels_equal=True, diagnostics=0 -- confirming the probe texel-size change shifted no expectation; `metal_scene_draw_smoke` 33 passed
+
 ## 2026-09-20 — Native Metal draws this scene's cloud background wrong, and the harnesses were not comparable
 
 The extra frosted shape beside the media card reproduces offscreen, and only on Native Metal. At a matched 5120x2160 raster the Metal background is huge bright blobs (p99 luma 202) where Vulkan is a smooth grey wash (p99 121); the scene's own media card and clock are correct on both. The two harnesses were not comparable until now: the Vulkan probe never set texel size, so every neighbour-tap effect it drew sampled at a 1920x1080 step, and the Metal smoke rasterized 960x540 against a 5120x2160 scene target.

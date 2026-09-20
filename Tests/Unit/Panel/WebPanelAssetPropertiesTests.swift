@@ -224,7 +224,8 @@ final class WebPanelAssetPropertiesTests: XCTestCase {
   ) -> BridgePropertyDescriptor {
     BridgePropertyDescriptor(
       id: id, kind: kind, labelHtml: id, value: value, defaultValue: .empty, slider: nil,
-      comboOptions: [], fileFilter: filter, directoryMode: mode, dirty: false,
+      comboOptions: [], fileFilter: filter, directoryMode: mode, textureAcceptsVideo: false,
+      dirty: false,
       canRestoreDefaults: false, enabled: true, assetManaged: assetManaged,
       assetMissing: assetMissing, assetSourcePath: assetSourcePath)
   }

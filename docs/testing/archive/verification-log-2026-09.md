@@ -15,6 +15,14 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-20 — The halo was missing because the desktop draws that scene with Metal
+
+`config.toml` sets `scene_renderer = "native_metal_preferred"` and the local-project gate reports 3799253558 as Native Metal, so every `offscreen_scene_probe` measurement of it described a backend it never runs on. The probe is Vulkan-only; check the backend before comparing.
+
+- Same scene, same seed, audio the only difference — Vulkan: 7 668 590 px changed whole-frame, 129 471 in the ring annulus. Native Metal: 929 and 0
+- Not a missing uniform: `g_AudioSpectrum64Left` is in that pass's Metal reflection and written every frame at offset 1120, stride 16, with a live band 0
+- `metal_scene_draw_smoke`'s local-project gate now reads `WE_TEST_PROPERTIES` and `WE_TEST_AUDIO_HZ`; without them a property-gated, audio-driven layer could not be drawn there at all
+
 ## 2026-09-20 — Three author effects were rejected by the shader frontend
 
 3280146735 failed to load Bokeh blur, Cutout Vignette and Refract on every launch, so it rendered with no depth-of-field, vignette or refraction. Four permissive-path idioms now absorbed; see [renderer.md](../renderer.md).

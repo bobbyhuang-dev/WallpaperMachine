@@ -2337,6 +2337,23 @@ void SceneRuntimeContext::DispatchMediaEventJson(std::string_view event_json) {
     }
 }
 
+void SceneRuntimeContext::RequestUserShortcut(std::string_view property_name,
+                                              std::string_view property_value) {
+    // A wallpaper that asks on every cursor event while nothing drains would
+    // otherwise grow this forever. Sixteen is far more than a user can press
+    // between two host turns, and dropping the oldest keeps the newest press --
+    // the one still being waited on -- rather than the stalest.
+    constexpr std::size_t kMaxPendingRequests = 16;
+    if (m_user_shortcut_requests.size() >= kMaxPendingRequests) {
+        m_user_shortcut_requests.erase(m_user_shortcut_requests.begin());
+    }
+    m_user_shortcut_requests.emplace_back(std::string(property_name), std::string(property_value));
+}
+
+std::vector<std::pair<std::string, std::string>> SceneRuntimeContext::TakeUserShortcutRequests() {
+    return std::exchange(m_user_shortcut_requests, {});
+}
+
 void SceneRuntimeContext::MarkSceneRequiresAudioResponse() {
     m_scene_requires_audio_response = true;
 }

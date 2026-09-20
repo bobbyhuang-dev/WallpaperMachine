@@ -584,5 +584,73 @@ export function update(value) {
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 
+TEST(SceneScriptMediaEventSmoke, OpenUserShortcutCarriesTheValueTheUserChose) {
+    // The wallpaper names one of its own properties; what the press means is
+    // that property's value, which is the user's choice. A host that acted on
+    // the name instead would be deciding for them.
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {
+        .project_properties = {
+            { "playpausebutton", RuntimeScalarValue::String("toggle_play_pause") },
+            { "nextsongbutton", RuntimeScalarValue::String("") },
+        },
+    });
+    ASSERT_NE(runtime, nullptr);
+    EXPECT_TRUE(runtime->TakeUserShortcutRequests().empty());
+
+    runtime->RegisterSceneScript(
+        R"JS(
+scene.on('mediaPlaybackChanged', function() {
+  engine.openUserShortcut('playpausebutton');
+  engine.openUserShortcut('nextsongbutton');
+});
+)JS",
+        "");
+    runtime->SetMediaIntegrationEnabled(true);
+    runtime->DispatchMediaEventJson(R"({"type":"mediaPlaybackChanged","state":0})");
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+
+    const auto requests = runtime->TakeUserShortcutRequests();
+    ASSERT_EQ(requests.size(), 2u);
+    EXPECT_EQ(requests[0].first, "playpausebutton");
+    EXPECT_EQ(requests[0].second, "toggle_play_pause");
+    EXPECT_EQ(requests[1].first, "nextsongbutton");
+    EXPECT_EQ(requests[1].second, "") << "an unbound shortcut still reports, with nothing to run";
+    EXPECT_TRUE(runtime->TakeUserShortcutRequests().empty()) << "taking twice replayed a press";
+}
+
+TEST(SceneScriptMediaEventSmoke, OpenUserShortcutRefusesAPropertyTheWallpaperDoesNotDeclare) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    ASSERT_NE(runtime, nullptr);
+
+    runtime->RegisterSceneScript(
+        R"JS(
+scene.on('mediaPlaybackChanged', function() {
+  engine.openUserShortcut('somebody elses shortcut');
+});
+)JS",
+        "");
+    runtime->SetMediaIntegrationEnabled(true);
+    runtime->DispatchMediaEventJson(R"({"type":"mediaPlaybackChanged","state":0})");
+
+    EXPECT_TRUE(runtime->TakeUserShortcutRequests().empty());
+    EXPECT_GT(runtime->scriptErrorCount(), 0u)
+        << "reaching past this wallpaper's own properties passed silently";
+}
+
+TEST(SceneScriptMediaEventSmoke, UndrainedShortcutRequestsKeepTheNewestPresses) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {
+        .project_properties = {
+            { "button", RuntimeScalarValue::String("action") },
+        },
+    });
+    ASSERT_NE(runtime, nullptr);
+    for (int i = 0; i < 40; ++i) runtime->RequestUserShortcut("button", std::to_string(i));
+
+    const auto requests = runtime->TakeUserShortcutRequests();
+    EXPECT_LE(requests.size(), 16u) << "a wallpaper pressing while nothing drains grew this forever";
+    ASSERT_FALSE(requests.empty());
+    EXPECT_EQ(requests.back().second, "39") << "the press still being waited on was dropped";
+}
+
 } // namespace
 } // namespace wallpaper

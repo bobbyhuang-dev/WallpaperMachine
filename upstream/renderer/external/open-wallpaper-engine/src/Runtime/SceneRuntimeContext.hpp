@@ -259,6 +259,16 @@ public:
     void                         SetMediaIntegrationEnabled(bool enabled);
     bool                         MediaIntegrationEnabled() const;
     void                         DispatchMediaEventJson(std::string_view event_json);
+    /// Records a wallpaper's request to run the action its user bound to a
+    /// `usershortcut` property.
+    ///
+    /// The scene names the property; what the request means is the property's
+    /// own value, which is the user's choice and the only thing that may be
+    /// acted on. Nothing is interpreted here -- the host drains these and
+    /// decides -- so a scene cannot reach past its own declared properties.
+    void RequestUserShortcut(std::string_view property_name, std::string_view property_value);
+    /// Takes the requests made since the last call, oldest first.
+    std::vector<std::pair<std::string, std::string>> TakeUserShortcutRequests();
     void                         MarkSceneRequiresAudioResponse();
     bool                         SceneRequiresAudioResponse() const;
     void                         SetAudioResponseEnabled(bool enabled);
@@ -465,6 +475,10 @@ private:
     /// Guarded by `m_text_worker_mutex`, alongside the queues it describes.
     std::function<void()>                                          m_content_wake_handler;
     uint64_t                                                       m_next_generated_layer_id { 1 };
+    /// Bounded: a wallpaper that requests on every cursor event while nothing
+    /// drains must not grow this without limit, and the oldest request is the
+    /// one a user has already stopped waiting for.
+    std::vector<std::pair<std::string, std::string>>               m_user_shortcut_requests;
     bool m_scene_requires_audio_response { false };
     bool m_audio_response_enabled { false };
     bool m_media_integration_enabled { false };

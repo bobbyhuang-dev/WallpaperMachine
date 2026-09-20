@@ -1490,6 +1490,34 @@ JSValue CreateAudioBufferObject(JSContext* context, uint32_t resolution) {
     return buffer;
 }
 
+/// `engine.openUserShortcut(name)` -- run the action this wallpaper's user
+/// bound to one of its own `usershortcut` properties.
+///
+/// The scene names the property; the request carries that property's value,
+/// which is the user's own choice and the only thing a host may act on. A
+/// scene naming a property it does not declare gets a thrown error rather than
+/// silence, because that is a wallpaper bug its author can see.
+JSValue JsOpenUserShortcut(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || ! JS_IsString(argv[0])) {
+        return JS_ThrowTypeError(context, "openUserShortcut expects a property name");
+    }
+    const char* raw = JS_ToCString(context, argv[0]);
+    if (raw == nullptr) return JS_EXCEPTION;
+    const std::string name(raw);
+    JS_FreeCString(context, raw);
+
+    auto* bridge = GetBridgeState(context);
+    if (bridge == nullptr || bridge->runtime == nullptr) return JS_UNDEFINED;
+
+    const auto* value = bridge->runtime->FindPropertyValue(name);
+    if (value == nullptr) {
+        return JS_ThrowReferenceError(
+            context, "openUserShortcut names no property of this wallpaper: %s", name.c_str());
+    }
+    bridge->runtime->RequestUserShortcut(name, value->toString());
+    return JS_UNDEFINED;
+}
+
 JSValue JsRegisterAudioBuffers(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
     uint32_t resolution = 64;
     if (argc > 0) {
@@ -1599,6 +1627,10 @@ void PopulateEngineObject(JSContext* context, JSValue engine_object,
                       engine_object,
                       "registerAsset",
                       JS_NewCFunction(context, JsRegisterAsset, "registerAsset", 1));
+    JS_SetPropertyStr(context,
+                      engine_object,
+                      "openUserShortcut",
+                      JS_NewCFunction(context, JsOpenUserShortcut, "openUserShortcut", 1));
 }
 
 void UpdateEngineObject(JSContext* context, JSValue global_object,

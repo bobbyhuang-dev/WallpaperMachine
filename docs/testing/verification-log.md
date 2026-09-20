@@ -25,6 +25,16 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — engine.openUserShortcut existed nowhere, so every transport button threw
+
+This wallpaper's play/pause, next and previous buttons each have a cursorDown handler whose only statement is engine.openUserShortcut("<property>"). That member was not registered on the engine object at all, so the call threw TypeError, the handler aborted, and the press did nothing -- which is the whole of the reported 切歌无效, not a missing media permission.
+
+- The binding resolves the named property against the wallpaper\s own declared properties and queues the request with that property\s VALUE; the three properties here are usershortcut-typed with empty values, so acting on the name would be the host deciding for the user
+- `OpenUserShortcutCarriesTheValueTheUserChose` — two presses arrive in order with their configured values, an unbound one still reports with nothing to run, and taking twice does not replay
+- `OpenUserShortcutRefusesAPropertyTheWallpaperDoesNotDeclare` — naming a property the wallpaper does not declare raises a script error instead of passing silently
+- `UndrainedShortcutRequestsKeepTheNewestPresses` — 40 requests with no drain keep at most 16, and the newest survives
+- `scenescript_media_event_smoke` 19 passed; `scene_schema_tests` 74 passed plus the two known 5 s pointer timeouts
+
 ## 2026-09-21 — Corrected: two separate Metal divergences, and the blobs are not the clouds' negative space
 
 The entry below overstated what was measured. It headlined the clouds pass while admitting the flattening pass was unknown; what was actually shown is that the clouds pass's INPUT is identical on both backends (white 6520x3460 card) -- its output was never read back on either. It also claimed the blob structure agrees and only tone differs, which no measurement supported.
@@ -116,11 +126,3 @@ std140 pads every array element to 16 bytes — what the host packs and the refl
 - Re-run after rebasing onto `d6e9b78`, which reworked the test runner: `python3 scripts/check_renderer.py` — exit 0, `adaptive-20260920-195302`: 10 generated cases `pixels_equal=true`, 0 diagnostics, 8 projects × 2 reload cycles clean
 - `python3 scripts/test.py` — exit 0, `Tests-20260920-195139-287781.xcresult`: 519 passed, 0 failed, 11 skipped of 530
 - `python3 scripts/build.py --configuration Release` — exit 0; app not launched, no desktop state changed
-
-## 2026-09-20 — The halo was missing because the desktop draws that scene with Metal
-
-`config.toml` sets `scene_renderer = "native_metal_preferred"` and the local-project gate reports 3799253558 as Native Metal, so every `offscreen_scene_probe` measurement of it described a backend it never runs on. The probe is Vulkan-only; check the backend before comparing.
-
-- Same scene, same seed, audio the only difference — Vulkan: 7 668 590 px changed whole-frame, 129 471 in the ring annulus. Native Metal: 929 and 0
-- Not a missing uniform: `g_AudioSpectrum64Left` is in that pass's Metal reflection and written every frame at offset 1120, stride 16, with a live band 0
-- `metal_scene_draw_smoke`'s local-project gate now reads `WE_TEST_PROPERTIES` and `WE_TEST_AUDIO_HZ`; without them a property-gated, audio-driven layer could not be drawn there at all

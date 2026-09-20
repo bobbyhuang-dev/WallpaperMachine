@@ -253,7 +253,8 @@ final class WebPanelAssetPropertiesTests: XCTestCase {
         downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
         defaults: defaults)
       controller = WebPanelController(
-        store: store, navigation: ControlPanelNavigation(), workshop: workshop, defaults: defaults)
+        store: store, navigation: ControlPanelNavigation(), workshop: workshop, defaults: defaults,
+        appLanguage: .english())
       store.settingsSnapshot = BridgeSnapshotFixtures.settings()
       store.librarySnapshot = BridgeLibrarySnapshot(
         wallpapers: [

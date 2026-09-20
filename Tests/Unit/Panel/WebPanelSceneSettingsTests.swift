@@ -329,7 +329,8 @@ final class WebPanelSceneSettingsTests: XCTestCase {
         downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
         defaults: defaults)
       controller = WebPanelController(
-        store: store, navigation: ControlPanelNavigation(), workshop: workshop, defaults: defaults)
+        store: store, navigation: ControlPanelNavigation(), workshop: workshop, defaults: defaults,
+        appLanguage: .english())
       bridge.snapshots = { [store] in
         BridgeSnapshotBundle(
           app: store.appSnapshot, library: store.librarySnapshot, wallpaperOptions: nil,
@@ -457,7 +458,8 @@ final class WebPanelAssetProvenanceTests: XCTestCase {
         downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
         defaults: defaults)
       controller = WebPanelController(
-        store: store, navigation: ControlPanelNavigation(), workshop: workshop, defaults: defaults)
+        store: store, navigation: ControlPanelNavigation(), workshop: workshop, defaults: defaults,
+        appLanguage: .english())
     }
 
     func tearDown() {

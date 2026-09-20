@@ -56,7 +56,7 @@ scheme excludes UI tests.
 | Layer | Location | Command |
 | --- | --- | --- |
 | Python script tests | `scripts/tests/` | `python3 scripts/test.py` (runs first, before Xcode) |
-| Swift unit/integration | `Tests/Unit/<Domain>/` | `python3 scripts/test.py` (`MacWallpaperEngineTests`) |
+| Swift unit/integration | `Tests/Unit/<Domain>/` | `python3 scripts/test.py` (`MacWallpaperEngineTests`); `--only <TestClass>` for a subset |
 | XCUITest (desktop) | `Tests/UI/` | `python3 scripts/test.py --ui` — opt-in only |
 | Media/device integration | `Tests/Unit/NativeVideo/` | `MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1 python3 scripts/test.py` — opt-in only |
 | Rust crates | `upstream/renderer/crates/` | `cargo test --release -p wallpaper-core --lib`, `cargo test --release -p wallpaper-bridge --lib`, `cargo test -p shader --test pipeline -- --nocapture` |
@@ -71,6 +71,27 @@ are in [../build.md](../build.md).
 
 `Tests/Unit/` is grouped by domain: Appearance, Desktop, Diagnostics, GitHub,
 Library, LockScreen, NativeVideo, Panel, Steam, WebWallpaper, Workshop.
+
+## Verification tiers
+
+The full gate compiles the Debug app and test bundle and then runs ~530 native
+tests, several of which drive offscreen WebKit, a real PTY downloader or live
+Steam pages; on this machine the test phase alone takes about three minutes
+before any Release build. Match the effort to the change:
+
+| Change | While iterating | Before reporting |
+| --- | --- | --- |
+| Bug fix, refactor, test-only, one domain | `python3 scripts/test.py --only <TestClass>` (repeatable; `Class/testMethod` also works) | full gate once; no Release build, no log entry unless asked or a documented behavior changed |
+| New feature or cross-domain change | targeted runs as above | full gate once, Release build (`.omp/rules/release-build-on-feature.md`), log entry |
+| Renderer / bridge | `cargo test` in the touched crate | full gate plus `scripts/check_renderer.py` |
+| Docs / skills only | link, path and command check | nothing else |
+
+`--only` skips the Python script tests and prints a warning: it is an
+iteration tool, not evidence. Rerun the full gate only when it failed; a second
+identical run adds minutes and no information. `xcodegen generate --use-cache`
+(what `scripts/test.py` now runs) leaves the project untouched when
+`project.yml` has not changed, so Xcode's incremental build survives between
+runs.
 
 `NativeVideoPlayerMediaTests` is the one opt-in layer inside `Tests/Unit/`. It
 drives the real `AVQueuePlayer`, `AVPlayerLooper`, `AVPlayerLayer` and video
@@ -158,7 +179,12 @@ Swift tests cover, without starting the app:
   and result summary, plus locale fallback and literal placeholder substitution;
   a language-switch regression that sends `languageSetting` and confirms the
   page re-renders in place, the picker offers every shipped language under its
-  own name, and an unshipped tag is refused. `Tests/Unit/Localization/` covers
+  own name, and an unshipped tag is refused. Panel tests that read rendered
+  labels must pass `appLanguage: .english()` (`Tests/Unit/Support/TestAppLanguage.swift`)
+  or a store built with explicit `systemLanguages`: the default
+  `AppLanguageStore.shared` follows the developer's in-app language choice, so an
+  implicit store renders Chinese on a Mac where the app was switched to 简体中文
+  and English-wording assertions fail. `Tests/Unit/Localization/` covers
   the preference store: system matching, persistence, the `AppleLanguages`
   mirror and rejected tags. Python catalog checks
   (`scripts/tests/test_panel_localization.py`) require the Swift registry, the

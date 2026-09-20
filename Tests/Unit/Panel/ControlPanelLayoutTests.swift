@@ -70,7 +70,7 @@ final class ControlPanelLayoutTests: XCTestCase {
       defaults: defaults)
     let navigation = ControlPanelNavigation()
     let controller = WebPanelController(
-      store: fixture.store, navigation: navigation, workshop: workshop)
+      store: fixture.store, navigation: navigation, workshop: workshop, appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 960, height: 640))
@@ -294,7 +294,8 @@ final class ControlPanelLayoutTests: XCTestCase {
       scheduleInstall: { _ in }, terminate: {})
     let navigation = ControlPanelNavigation()
     let controller = WebPanelController(
-      store: fixture.store, navigation: navigation, workshop: workshop, updater: updater)
+      store: fixture.store, navigation: navigation, workshop: workshop, updater: updater,
+      appLanguage: .english())
     let idle = try XCTUnwrap(controller.snapshot()["update"] as? [String: Any])
     XCTAssertEqual(idle["status"] as? String, "idle")
     XCTAssertEqual(idle["action"] as? String, "checkForUpdates")
@@ -346,7 +347,8 @@ final class ControlPanelLayoutTests: XCTestCase {
       scheduleInstall: { _ in }, terminate: {})
     let navigation = ControlPanelNavigation()
     let controller = WebPanelController(
-      store: fixture.store, navigation: navigation, workshop: workshop, updater: updater)
+      store: fixture.store, navigation: navigation, workshop: workshop, updater: updater,
+      appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 960, height: 640))
@@ -428,7 +430,8 @@ final class ControlPanelLayoutTests: XCTestCase {
       downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
       defaults: defaults)
     let controller = WebPanelController(
-      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop, theme: theme)
+      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop, theme: theme,
+      appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 760, height: 560))
@@ -554,7 +557,7 @@ final class ControlPanelLayoutTests: XCTestCase {
       defaults: defaults)
     let navigation = ControlPanelNavigation()
     let controller = WebPanelController(
-      store: fixture.store, navigation: navigation, workshop: workshop)
+      store: fixture.store, navigation: navigation, workshop: workshop, appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 960, height: 640))
@@ -625,7 +628,8 @@ final class ControlPanelLayoutTests: XCTestCase {
     // A width dragged in an earlier build must neither be applied nor kept.
     defaults.set(320.0, forKey: WebPanelController.legacyInspectorWidthKey)
     let controller = WebPanelController(
-      store: fixture.store, navigation: navigation, workshop: workshop, defaults: defaults)
+      store: fixture.store, navigation: navigation, workshop: workshop, defaults: defaults,
+      appLanguage: .english())
     XCTAssertEqual(controller.filtersCollapsed, ["discover": false, "installed": false])
     XCTAssertNil(
       defaults.object(forKey: WebPanelController.legacyInspectorWidthKey),
@@ -766,7 +770,7 @@ final class ControlPanelLayoutTests: XCTestCase {
     XCTAssertNil(defaults.object(forKey: WebPanelController.legacyInspectorWidthKey))
     let relaunched = WebPanelController(
       store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
-      defaults: defaults)
+      defaults: defaults, appLanguage: .english())
     XCTAssertEqual(
       relaunched.filtersCollapsed, ["discover": true, "installed": false],
       "The choice must survive a relaunch, page by page")
@@ -931,7 +935,7 @@ final class ControlPanelLayoutTests: XCTestCase {
       defaults: defaults)
     let navigation = ControlPanelNavigation()
     let controller = WebPanelController(
-      store: fixture.store, navigation: navigation, workshop: workshop)
+      store: fixture.store, navigation: navigation, workshop: workshop, appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 960, height: 640))
@@ -993,7 +997,7 @@ final class ControlPanelLayoutTests: XCTestCase {
       defaults: defaults)
     let navigation = ControlPanelNavigation()
     let controller = WebPanelController(
-      store: fixture.store, navigation: navigation, workshop: workshop)
+      store: fixture.store, navigation: navigation, workshop: workshop, appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 960, height: 640))
@@ -1085,7 +1089,8 @@ final class ControlPanelLayoutTests: XCTestCase {
       downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
       defaults: defaults)
     let controller = WebPanelController(
-      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop)
+      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
+      appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 760, height: 560))
@@ -1156,7 +1161,8 @@ final class ControlPanelLayoutTests: XCTestCase {
       downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
       defaults: defaults)
     let controller = WebPanelController(
-      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop)
+      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
+      appLanguage: .english())
 
     try? await fixture.store.refreshAllAsync()
     workshop.downloader.installAssets(
@@ -1555,7 +1561,8 @@ final class ControlPanelLayoutTests: XCTestCase {
       downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
       defaults: defaults)
     let controller = WebPanelController(
-      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop)
+      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
+      appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 960, height: 640))
@@ -1711,7 +1718,8 @@ final class ControlPanelLayoutTests: XCTestCase {
       downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
       defaults: defaults)
     let controller = WebPanelController(
-      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop)
+      store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
+      appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 960, height: 640))
@@ -1823,7 +1831,7 @@ final class ControlPanelLayoutTests: XCTestCase {
       defaults: defaults)
     let controller = WebPanelController(
       store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
-      assets: assets)
+      assets: assets, appLanguage: .english())
     let web = controller.makeWebView()
     defer { controller.stop() }
     web.setFrameSize(NSSize(width: 960, height: 640))
@@ -2076,7 +2084,8 @@ private final class PanelFixture {
     let visibility = self.visibility
     controller = WebPanelController(
       store: store, navigation: navigation, workshop: workshop,
-      isPresentationVisible: { visibility.visible }, displayTitles: displayTitles)
+      isPresentationVisible: { visibility.visible }, displayTitles: displayTitles,
+      appLanguage: .english())
     web = controller.makeWebView()
     web.setFrameSize(NSSize(width: 960, height: 640))
   }

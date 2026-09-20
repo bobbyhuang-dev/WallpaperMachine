@@ -25,6 +25,37 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-20 — Tiered verification: `scripts/test.py --only`, xcodegen cache, small-fix gate
+
+Small bug fixes were paying the full gate twice plus a Release build (~20 min).
+`AGENTS.md` now scales the gate to the change (`docs/testing/README.md`
+"Verification tiers"); `scripts/test.py --only <Class[/method]>` narrows the
+native run and `xcodegen generate --use-cache` keeps incremental builds alive.
+
+- `python3 scripts/tests/test_test.py` — 5 tests OK (identifier and command shape).
+- `python3 scripts/test.py --only AppLanguageTests` — 5 passed, 0 failures, ~2 s wall clock.
+- `python3 scripts/test.py` — Python script tests OK; native 529 tests, 520 passed,
+  9 skipped, 0 failures, test phase 157 s. No Release build (tooling/docs change).
+
+## 2026-09-20 — Discover search button wrapped vertically in Chinese; panel tests pinned to English
+
+`.search-form` let its submit button shrink, and a CJK label breaks between any
+two characters, so 搜索 rendered one glyph per line and taller than the input.
+`WebUI/panel.css` now gives `.search-form button` `flex: none; white-space:
+nowrap`. The first gate run also exposed that panel tests reading English labels
+used `AppLanguageStore.shared`, which follows the developer's in-app language
+choice; they now pass `AppLanguageStore.english()` (`Tests/Unit/Support/`).
+
+- `python3 scripts/test.py` before the test fix, with the app set to 简体中文 —
+  native 516 passed, 9 skipped, 4 failures, all Chinese labels or a JS lookup
+  by English title in `ControlPanelLayoutTests`; none related to the CSS change.
+- `python3 scripts/test.py` after — 73 Python tests OK; native 520 passed,
+  9 skipped, 0 failures.
+- `python3 scripts/build.py --swift-only --configuration Release` — exit 0,
+  `** BUILD SUCCEEDED **`; bundled `Contents/Resources/WebUI/` matches `WebUI/`.
+  Delivered `build/Build/Products/Release/MacWallpaperEngine.app`; not launched.
+  The rendered Chinese button was not screenshotted (no desktop run).
+
 ## 2026-09-20 — In-app language picker, per-language panel catalogs, registry checks
 
 Simplified Chinese was already translated but only reachable through macOS's
@@ -451,110 +482,3 @@ desktop check after quit/reopen.
   with `xattr -cr` and the same command exited 0, `** BUILD SUCCEEDED **`.
   Delivered binary `build/Build/Products/Release/MacWallpaperEngine.app`.
   The app was not launched.
-
-## 2026-09-20 — Applied Scene wallpapers were still blank: wrong camera, no screenResolution
-
-The previous round instantiated SYKM's 73 models and a perspective camera, but
-the first frames stayed almost black (max 8). Music Visualizer still had no
-now-playing on the desktop. Cause was not "models discarded":
-
-- SYKM's playing camera is object 705 (`camera: "default"`, origin
-  `0 0 0.454`). The parser created that camera and left `activeCamera` on the
-  editor `scene.camera` LookAt pose (`0.11 2.23 -1.48` looking at a nearby
-  empty point). A visible `default` camera object now rebinds
-  `global_perspective` and becomes `activeCamera`. Models in a perspective
-  scene use that camera even without `perspective: true`.
-- 96 SceneScript sites read `engine.screenResolution.x`. That property did not
-  exist, so `getScreenSize` threw and HUD / shared rotation init aborted.
-  `engine.screenResolution` is now a Vec2 (presentation size, else canvas).
-- Desktop Scene templates now enable media integration on apply, and the host
-  starts the shared session for any active Scene. MediaRemote that never
-  answers still falls through to Music/Spotify after the probe. Lock screen
-  still forces media off.
-
-- `python3 scripts/test.py` — exit 0, 510 native tests, 501 passed, 9 skipped,
-  0 failures (new fallback probe-timeout case).
-- New gtests `DefaultCameraObjectBecomesActivePerspective` and
-  `EngineScreenResolutionIsAReadableVec2` passed. Existing leaf-model and
-  null-ortho perspective cases still pass.
-- `python3 scripts/check_renderer.py` — exit 0,
-  `adaptive-20260920-020721`: 10 generated cases `pixels_equal=true`, 0
-  diagnostics, 8 projects × 2 reload cycles clean.
-- `offscreen_scene_probe` on local `3662790108`: first-frame 9267 ms. Composite
-  frames now have real content (`frame-0` 126523 nonzero, max 255, mean 3.42;
-  previously 4399 nonzero, max 8). Camera node 705 sits at `0 0 0.454`.
-  `engine.screenResolution.x` TypeErrors are gone; leftover `toFixed` of
-  undefined remains on a few HUD scripts. No desktop / Peekaboo / `--ui`.
-- `python3 scripts/build.py --configuration Release` — exit 0, `** BUILD
-  SUCCEEDED **`. Delivered binary
-  `build/Build/Products/Release/MacWallpaperEngine.app`. The app was not
-  launched.
-
-## 2026-09-20 — Scene now-playing fan-out, and leaf models plus a perspective camera for SYKM
-
-Two Scene workshop packages were blank or mute for different reasons: Music
-Visualizer | iOS Style (`3280146735`) never received SceneScript media events
-because only Web wallpapers were wired to now-playing; Live Solar System - SYKM
-(`3662790108`) parsed 73 `.mdl` objects and a perspective camera but discarded
-both, so Compatibility cleared to black. No desktop run, no Peekaboo, no
-`--ui`, no live Steam login. Whether planets actually fill a display and
-whether album art tracks Music or Spotify still needs a requested desktop
-check after quit/reopen.
-
-- **Shared session, not a Web-only provider.** `DesktopMediaSession` owns one
-  `FallbackSystemMediaProvider` (MediaRemote first, Music.app / Spotify
-  AppleScript only after `noReply`) and fans events to Web plus opted-in
-  desktop scenes. JSON is submitted verbatim (`submitSystemMediaEvent`); RGBA
-  artwork is uploaded (`applySystemMediaArtwork`) before
-  `mediaThumbnailChanged`. SceneScript now sees `MediaPlaybackEvent` 0/1/2 and
-  Vec3 media colors. Lock-screen `apply_config` is followed by a forced
-  media-off. The inspector toggle is shown for Scene as well as Web.
-- **3D path is Compatibility only.** Leaf models enter `layer_nodes` with
-  normals/tangents; `orthogonalprojection: null` / `isOrtho == false` activates
-  `global_perspective`; `_rt_default` gets a depth attachment; material
-  depth/cull reach Vulkan; authored lights stay; LDR bloom still builds when
-  `hdr: true`. Native Metal still refuses perspective, dynamic lights and a
-  depth target as a whole scene. Live `g_EyePosition` / `g_View*` are written
-  only from a perspective camera so 2D sprite-trail billboards do not collapse
-  (that regression failed
-  `TheShippedRopeAndTrailPreviewScenesAreParsedTranslatedAndDrawnNatively`
-  once, then passed after the restriction).
-- `python3 scripts/test.py` — exit 0, 500 native tests, 491 passed, 9 skipped,
-  0 failures; Python suites green.
-- Cargo `--release --lib` for `wallpaper-core` and `wallpaper-bridge` — 212 and
-  313 passed, including `scene_descriptor_can_enable_media_integration` and
-  `scene_media_events_fan_out_only_to_opted_in_handles`.
-- `python3 scripts/check_renderer.py` (after the eye-uniform fix; later
-  `--skip-build`) — exit 0. `report.json` for
-  `adaptive-20260920-013721`: every listed test binary 0, 10 generated cases
-  `pixels_equal=true` in pooled and isolated mode, 0 diagnostics,
-  `desktop_automation: false`, `gpu_surface: false`.
-- Targeted gtests: `ParserInstantiatesLeafModel`,
-  `OrthogonalprojectionNullActivatesPerspective`, lights/view uniforms, HDR
-  bloom still emits bloom passes, `GenMeshIncludesNormals`, and 14
-  `scenescript_media_event_smoke` cases passed. Full `scene_schema_tests` was
-  69 passed / 2 failed —
-  `PointerCapabilityFollowsActualCommitsWithoutFirstFrame` and
-  `MouseButtonCommitBaselineKeepsVideoGatingFromStickingNativeLatch` (5 s Wait
-  timeouts). Those two are pre-existing and already in this log; they are not
-  claimed as this change.
-- `offscreen_scene_probe` on the local Library packages (SceneAssets on the
-  probe `PATH`). `3662790108`: 73 `"model"` objects, `general.hdr` and
-  `general.bloom` true, bloom passes present in the graph, camera node at the
-  authored eye. Shader cache on the recorded run was warm (`hits=1711
-  compiled=0`). Startup `parsed=6818` / `prepared=8732` / `first-frame=8803` ms
-  — under the 20 s first-frame deadline. Composite `frame-0` / `frame-1` are
-  almost black (6 220 800 bytes, 4399 nonzero, max 8); text-layer dumps have
-  real glyphs. SceneScript repeatedly throws `TypeError` reading `.x` /
-  `toFixed` from an undefined camera (`getScreenSize` / `getResolutionScale`)
-  — `thisScene.camera` and `lookAt` remain known gaps, as does 2D
-  `input.cursorWorldPosition`. `3280146735`: `parsed=2340` / `prepared=5601` /
-  `first-frame=5786` ms; both composite frames fully nonzero (mean ~36–41).
-  One SceneScript `lookAt` TypeError; effects `ui_editor_effect_refract_title`
-  (empty default texture), workshop gaussian and cutout vignette failed to
-  load and were logged, not treated as whole-scene failure. The probe does not
-  pump now-playing, so media script smoke on this package is host-side only.
-- `python3 scripts/build.py --configuration Release` — exit 0, `** BUILD
-  SUCCEEDED **`. Delivered binary
-  `build/Build/Products/Release/MacWallpaperEngine.app` (Mach-O mtime 2026-09-20
-  01:40). The app was not launched.

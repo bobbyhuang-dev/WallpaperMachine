@@ -199,7 +199,8 @@ final class WebPanelPerformanceSettingsTests: XCTestCase {
         downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
         defaults: defaults)
       controller = WebPanelController(
-        store: store, navigation: ControlPanelNavigation(), workshop: workshop, defaults: defaults)
+        store: store, navigation: ControlPanelNavigation(), workshop: workshop, defaults: defaults,
+        appLanguage: .english())
       bridge.snapshots = { [store] in
         BridgeSnapshotBundle(
           app: store.appSnapshot, library: store.librarySnapshot, wallpaperOptions: nil,

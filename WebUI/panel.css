@@ -275,7 +275,9 @@ small, .muted { color: var(--muted); }
 .search-form { flex: 1 1 150px; display: flex; align-items: center; position: relative; }
 .search-form > svg { position: absolute; left: 9px; color: var(--muted); pointer-events: none; }
 .search-form input { width: 100%; padding-left: 32px !important; }
-.search-form button { margin-left: 6px; }
+/* The submit button must never give up width to the input: a CJK label such as 搜索 can break
+   between any two characters, so a shrinkable button ends up one glyph wide and two lines tall. */
+.search-form button { margin-left: 6px; flex: none; white-space: nowrap; }
 .browser-toolbar select { max-width: 180px; }
 .browser-summary { min-height: 27px; padding: 0 16px 8px; color: var(--muted); font-size: 12px; }
 .selection-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-height: 27px; }

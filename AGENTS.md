@@ -53,6 +53,13 @@ Read only task-relevant sections; keep this file to durable rules and routing.
 
 ## Verify and deliver
 
+- Scale verification to the change (see [tiers](docs/testing/README.md#verification-tiers)).
+  Small fix (bug fix, refactor, test-only, single domain): iterate with
+  `python3 scripts/test.py --only <TestClass>` for the touched domain, then run the
+  full gate **once** at the end; no Release build, no log entry unless the user asks
+  or the fix changed a documented behavior. Feature or cross-domain change: full gate
+  plus the release build and log entry below. Never run the full gate more than once
+  per task unless it failed.
 - Routine gate: `python3 scripts/test.py` (Python → XcodeGen → native unit/integration).
   Add `python3 scripts/check_renderer.py` for renderer changes; preserve applicable
   [renderer/download regressions](docs/testing/renderer.md#regression-areas-that-must-stay-covered).
@@ -68,7 +75,7 @@ Read only task-relevant sections; keep this file to durable rules and routing.
   only after a successful Release build containing the changes; report path and remind
   the user to quit/reopen. Never launch/quit automatically. Failed/blocked builds ≠ delivery.
 - Update the owning docs; index new/removed documents in [docs/README.md](docs/README.md).
-  Record commands, results, skips and gaps newest-first in the
+  For features and cross-domain changes, record commands, results, skips and gaps newest-first in the
   [verification log](docs/testing/verification-log.md), about ten lines per entry;
   it keeps the ten newest, older ones move to `docs/testing/archive/`. Historical
   results aren't current proof, so promote anything durable (known-failing tests,

@@ -728,13 +728,13 @@ SceneScript views.
   Workshop package) are excluded when their referenced files are absent.
 - Some locally installed scenes emit pre-existing MDLA, Rust `light_map` compile
   and shader-value alias errors. Those predate current work; verify only that
-  no *new* diagnostics appear. Named cases seen so far: Wallpaper Engine's own
+  no *new* diagnostics appear. Named case seen so far: Wallpaper Engine's own
   `clipping_mask` fails to translate (`!float` in the translated vertex
-  shader); Music Visualizer | iOS Style's `gaussian` (`float *= bool * 6.0`),
-  `cutout_vignette` (`vec3 - vec2`, HLSL-style truncation) and
-  `effects/refract` (empty default texture) fail to compile, so that
-  wallpaper's cover blur is not authored-accurate. A `ShaderValue: … not found
-  in glsl` line is authored leftovers, not a binding failure.
+  shader). A `ShaderValue: … not found in glsl` line is authored leftovers,
+  not a binding failure. Music Visualizer | iOS Style's `gaussian`,
+  `cutout_vignette` and `effects/refract` were listed here until the shader
+  pipeline absorbed the three idioms they relied on; they compile now, and the
+  Shader pipeline section above owns that list.
 - `thisLayer.getParent()` is unimplemented in SceneScript. A layer whose script
   uses it logs `cannot read property … of undefined` once per update and keeps
   its authored value, so the picture is usually unaffected and the errors are

@@ -1,5 +1,5 @@
 use super::{
-    ScopedDeclarationFacts, ScopedDeclarationFactsConfig, ScopedDeclarationTypeMode, SourceSpan,
+    ScopedDeclarationFacts, ScopedDeclarationFactsConfig, ScopedDeclarationTypeMode,
     TypedToken,
 };
 use crate::{
@@ -15,15 +15,19 @@ pub(super) struct ArrayParameterUseScanner {
 }
 
 impl ArrayParameterUseScanner {
-    /// Collects identifier spans that still refer to the removed parameter.
-    pub(super) fn use_spans(
+    /// Collects identifier token indices that still refer to the removed
+    /// parameter.
+    ///
+    /// Indices rather than spans because the caller has to look past the use
+    /// to decide whether it is subscripted, which a span cannot answer.
+    pub(super) fn use_indices(
         self,
         module: &ShaderModule<'_>,
         tokens: TokenCursor<'_>,
         name: &str,
-    ) -> Vec<SourceSpan> {
+    ) -> Vec<usize> {
         let shadows = self.shadowed_scopes(module, name);
-        let mut spans = Vec::new();
+        let mut indices = Vec::new();
         for index in self.body.start()..self.body.end() {
             if shadows
                 .iter()
@@ -39,10 +43,10 @@ impl ArrayParameterUseScanner {
                     )
                 })
             {
-                spans.push(tokens[index].span());
+                indices.push(index);
             }
         }
-        spans
+        indices
     }
 
     /// Returns token ranges where local declarations own the same name.

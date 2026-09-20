@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     codegen::expressions::analysis::{VectorExpressionAnalyzer, VectorWidth},
-    syntax::CallArgument,
+    syntax::{CallArgument, FunctionCall},
     tokenizer::{
         ArithmeticOperator, AssignmentOperator, OperatorFact,
         OperatorType::{Arithmetic, Assignment},
@@ -241,6 +241,46 @@ impl VectorBinaryExpressions {
             })
             .filter(|item| !self.items.contains(item))
             .collect()
+    }
+}
+/// Mixed-width vector operands inside call arguments.
+///
+/// A declaration or an assignment names the width its expression has to end
+/// up with, which is the only thing `VectorBinaryExpressions` anchors on. An
+/// argument nested inside a call names nothing, so a mixed-width operand pair
+/// there was never examined -- `length(abs(v_TexCoord - CAST2(u_offset)))`
+/// over a `vec3` varying, which the permissive path these shaders target
+/// truncates and a strict frontend rejects outright.
+#[derive(Default)]
+pub(super) struct NestedVectorBinaryExpressions {
+    /// Swizzle insertions in source order.
+    pub items: Vec<VectorBinaryExpression>,
+}
+
+impl NestedVectorBinaryExpressions {
+    /// Scans call arguments for mixed-width binary operands.
+    pub(super) fn collect(
+        &mut self,
+        tokens: TokenCursor<'_>,
+        token_facts: &TypedTokenFacts,
+        facts: &VectorTypeBindings<'_>,
+        calls: &[FunctionCall],
+    ) {
+        let analyzer = VectorExpressionAnalyzer { facts, token_facts };
+        for call in calls {
+            for argument in call.arguments.iter() {
+                let range = TokenIndexRange::from_inclusive(argument.start(), argument.end());
+                for swizzle in analyzer.mixed_width_binary_swizzles(tokens, range) {
+                    let item = VectorBinaryExpression {
+                        insertion: swizzle.insertion,
+                        swizzle: swizzle.swizzle,
+                    };
+                    if !self.items.contains(&item) {
+                        self.items.push(item);
+                    }
+                }
+            }
+        }
     }
 }
 /// One wide vector binary operand that needs a trailing swizzle.

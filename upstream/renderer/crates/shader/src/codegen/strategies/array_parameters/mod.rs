@@ -28,10 +28,28 @@ use crate::{
     ShaderResult, SourceSpan,
     codegen::{
         Fixup, ScopedDeclarationFacts, ScopedDeclarationFactsConfig, ScopedDeclarationTypeMode,
+        declarations::WidenedArrayMember,
     },
     syntax::{ShaderModule, SyntaxItem},
     tokenizer::TypedToken,
 };
+
+/// Returns how a generated block member was widened, when it was.
+fn widened_member(
+    context: &mut StrategyContext<'_, '_, '_>,
+    name: &str,
+) -> Option<WidenedArrayMember> {
+    context
+        .context()
+        .declarations
+        .uniform_block()?
+        .members
+        .iter()
+        .find(|member| member.name.as_str() == name)
+        .and_then(|member| {
+            WidenedArrayMember::classify(member.ty.as_str(), member.array_suffix.as_deref())
+        })
+}
 
 /// Specializes fixed-array function parameters to the global arrays passed by
 /// every call. Naga's GLSL frontend accepts uniform array indexing, but does
@@ -52,7 +70,8 @@ impl Emitable for ArrayParametersStrategy {
         aliases.collect(module);
         let mut alias_fixups = Vec::new();
         for alias in aliases.items {
-            alias.emit(module, &mut alias_fixups);
+            let widened = widened_member(context, alias.target());
+            alias.emit(context.context().module, widened, &mut alias_fixups);
         }
         for fixup in alias_fixups {
             context.context().fixups.push(fixup);
@@ -100,15 +119,32 @@ impl Emitable for ArrayParametersStrategy {
                 else {
                     continue;
                 };
-                for span in (ArrayParameterUseScanner { body }).use_spans(
+                // Specializing a parameter away turns every use of it into a
+                // use of the global it was called with. If that global is a
+                // widened block member, these reads need the same swizzle a
+                // read written against the global directly gets -- the
+                // `widened_arrays` strategy cannot see them, because they do
+                // not name the member until this rewrite lands.
+                let widened = widened_member(context, argument.as_str());
+                let tokens = module.token_stream().cursor();
+                for index in (ArrayParameterUseScanner { body }).use_indices(
                     module,
-                    module.token_stream().cursor(),
+                    tokens,
                     parameter.name.as_str(),
                 ) {
                     context
                         .context()
                         .fixups
-                        .push(Fixup::replace(span, argument.to_string()));
+                        .push(Fixup::replace(tokens[index].span(), argument.to_string()));
+                    if let Some(widened) = widened
+                        && let Some(span) =
+                            WidenedArrayMember::subscript_swizzle_span(tokens, index)
+                    {
+                        context
+                            .context()
+                            .fixups
+                            .push(Fixup::insert(span, widened.swizzle().to_owned()));
+                    }
                 }
             }
             for call in specialization.calls {

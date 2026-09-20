@@ -14,7 +14,7 @@ pub(crate) use interface::{
     StageInterfaceLayoutBinding, SynthesizedStageInterface,
 };
 pub(crate) use layout::{StageResourceLayout, VideoPlaneResource};
-pub(crate) use resources::{FragmentOutput, SamplerType, UniformMember};
+pub(crate) use resources::{FragmentOutput, SamplerType, UniformMember, WidenedArrayMember};
 use smol_str::SmolStr;
 pub(crate) use types::LegacyTypeName;
 

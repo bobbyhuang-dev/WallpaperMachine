@@ -5,7 +5,7 @@ use super::{
     TypedToken,
 };
 use crate::{
-    codegen::{Fixup, LocalDeclaration},
+    codegen::{Fixup, LocalDeclaration, declarations::WidenedArrayMember},
     syntax::ShaderModule,
     tokenizer::{AccessOperator, OperatorType::Access, TokenIndexRange},
 };
@@ -67,19 +67,39 @@ pub(super) struct ArrayAlias {
 }
 
 impl ArrayAlias {
+    /// Returns the alias target's identifier.
+    pub(super) fn target(&self) -> &str {
+        self.target.as_str()
+    }
+
     /// Emits declaration removal and alias-use replacements.
-    pub(super) fn emit(&self, module: &ShaderModule<'_>, fixups: &mut Vec<Fixup>) {
+    ///
+    /// `widened` is how the target was widened in the generated block, when it
+    /// was: an alias use that becomes a member read needs the same swizzle a
+    /// read written against the member directly gets.
+    pub(super) fn emit(
+        &self,
+        module: &ShaderModule<'_>,
+        widened: Option<WidenedArrayMember>,
+        fixups: &mut Vec<Fixup>,
+    ) {
         fixups.push(Fixup::replace(self.declaration, ""));
-        for span in self.use_spans(module) {
-            fixups.push(Fixup::replace(span, self.target.as_str()));
+        let tokens = module.token_stream().cursor();
+        for index in self.use_indices(module) {
+            fixups.push(Fixup::replace(tokens[index].span(), self.target.as_str()));
+            if let Some(widened) = widened
+                && let Some(span) = WidenedArrayMember::subscript_swizzle_span(tokens, index)
+            {
+                fixups.push(Fixup::insert(span, widened.swizzle().to_owned()));
+            }
         }
     }
 
-    /// Collects identifier spans that still refer to the alias.
-    fn use_spans(&self, module: &ShaderModule<'_>) -> Vec<SourceSpan> {
+    /// Collects identifier token indices that still refer to the alias.
+    fn use_indices(&self, module: &ShaderModule<'_>) -> Vec<usize> {
         let tokens = module.token_stream().cursor();
         let shadows = self.shadowed_scopes(module);
-        let mut spans = Vec::new();
+        let mut indices = Vec::new();
         for index in self.visible.start()..self.visible.end() {
             if shadows
                 .iter()
@@ -95,10 +115,10 @@ impl ArrayAlias {
                     )
                 })
             {
-                spans.push(tokens[index].span());
+                indices.push(index);
             }
         }
-        spans
+        indices
     }
 
     /// Returns token ranges where nested declarations shadow the alias.

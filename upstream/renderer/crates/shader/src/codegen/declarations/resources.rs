@@ -6,7 +6,8 @@ use smol_str::SmolStr;
 
 use super::{super::emission::SourceEmitter, types::LegacyTypeName};
 use crate::{
-    ShaderDiagnostic, ShaderError, ShaderResult, ShaderStageKind, layout::DescriptorBinding,
+    ShaderDiagnostic, ShaderError, ShaderResult, ShaderStageKind, SourceSpan,
+    layout::DescriptorBinding, tokenizer::TokenCursor,
 };
 
 /// GLSL sampler uniform type classification.
@@ -57,6 +58,74 @@ pub(crate) struct UniformMember {
     /// Descriptor binding assigned to the generated block.
     pub binding: Option<DescriptorBinding>,
 }
+/// Component width a narrow array member is widened from, so its reads can be
+/// swizzled back.
+///
+/// std140 pads every array element to 16 bytes, which is the layout the host
+/// packs and the reflection reports. Metal's natural layout for `float[64]` is
+/// a tight 4-byte stride and the shader compiler's MSL backend emits it that
+/// way, so a scalar array in a uniform block puts the two renderers on
+/// different layouts and silently shifts every member after it. Declaring the
+/// member `vec4[N]` makes both layouts 16 bytes per element, which is what the
+/// host was writing all along.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WidenedArrayMember {
+    /// `float name[N]` widened to `vec4 name[N]`.
+    Scalar,
+    /// `vec2 name[N]` widened to `vec4 name[N]`.
+    Two,
+    /// `vec3 name[N]` widened to `vec4 name[N]`.
+    Three,
+}
+
+impl WidenedArrayMember {
+    /// Classifies a block member declaration, if widening applies.
+    pub(crate) fn classify(ty: &str, array_suffix: Option<&str>) -> Option<Self> {
+        if array_suffix.is_none() {
+            return None;
+        }
+        match ty {
+            "float" => Some(Self::Scalar),
+            "vec2" | "float2" => Some(Self::Two),
+            "vec3" | "float3" => Some(Self::Three),
+            _ => None,
+        }
+    }
+
+    /// Swizzle that reads the original value back out of a widened element.
+    pub(crate) const fn swizzle(self) -> &'static str {
+        match self {
+            Self::Scalar => ".x",
+            Self::Two => ".xy",
+            Self::Three => ".xyz",
+        }
+    }
+
+    /// Insertion point for the swizzle after a subscripted use beginning at
+    /// `index`, or `None` when the use is not an element read.
+    ///
+    /// A bare mention is the whole array -- passed to a function, say -- and
+    /// has no component to select. An author swizzle already following the
+    /// subscript needs no help and must not be given one.
+    pub(crate) fn subscript_swizzle_span(
+        tokens: TokenCursor<'_>,
+        index: usize,
+    ) -> Option<SourceSpan> {
+        let open = tokens.next_non_comment(index + 1)?;
+        if !tokens[open].kind().is_left_square() {
+            return None;
+        }
+        let close = tokens.matching_right_square(open)?;
+        if tokens
+            .next_non_comment(close + 1)
+            .is_some_and(|next| tokens[next].kind().is_member_access_operator())
+        {
+            return None;
+        }
+        let end = tokens[close].span().end();
+        SourceSpan::new(end, end).ok()
+    }
+}
 
 /// Generated std140 block containing scalar/vector uniforms.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -83,10 +152,16 @@ impl UniformBlock {
         )
         .map_err(SourceEmitter::write_error)?;
         for member in &self.members {
+            let widened =
+                WidenedArrayMember::classify(member.ty.as_str(), member.array_suffix.as_deref());
             writeln!(
                 output,
                 "    {} {}{};",
-                LegacyTypeName::new(member.ty.as_str()).glsl(),
+                if widened.is_some() {
+                    "vec4"
+                } else {
+                    LegacyTypeName::new(member.ty.as_str()).glsl()
+                },
                 member.name,
                 member
                     .array_suffix

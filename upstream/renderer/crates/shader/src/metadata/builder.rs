@@ -72,7 +72,13 @@ impl MetadataBuilder {
         annotation: &ParsedAnnotation<'_>,
         textures: &[ShaderTextureInfo],
     ) -> ShaderResult<()> {
-        if let Some(AnnotationDefaultValue::String(path)) = annotation.default() {
+        // `"default":""` is how a texture annotation says it has no default,
+        // not a path. `effects/refract` ships one on its normal map and the
+        // material supplies the real texture, so rejecting the empty string
+        // dropped the whole effect instead of the value it never named.
+        if let Some(AnnotationDefaultValue::String(path)) = annotation.default()
+            && !path.is_empty()
+        {
             self.default_textures
                 .push(DefaultTextureValue::new(slot, *path)?);
         }

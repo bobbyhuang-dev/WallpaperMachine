@@ -342,7 +342,7 @@ mod tests {
     fn production_pipeline_contains_each_strategy_once() {
         let names = LEGALIZER_PIPELINE.ordered_names();
 
-        assert_eq!(names.len(), 13);
+        assert_eq!(names.len(), 14);
         let unique = names.iter().copied().collect::<BTreeSet<_>>();
         assert_eq!(unique.len(), names.len());
         assert_eq!(
@@ -361,6 +361,7 @@ mod tests {
                 "scalar_texture",
                 "texture_sampling",
                 "type_coercion",
+                "widened_arrays",
             ]
             .into_iter()
             .collect::<BTreeSet<_>>()
@@ -382,6 +383,7 @@ mod tests {
                 "reserved_identifiers",
                 "alpha_to_coverage",
                 "array_parameters",
+                "widened_arrays",
                 "control_flow_coercion",
                 "type_coercion",
                 "scalar_texture",

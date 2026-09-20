@@ -716,8 +716,8 @@ fn shake_vertex_audio_response_helper_compiles_through_naga() {
          parameters:\n{source}"
     );
     assert!(
-        source.contains("audioResponse += g_AudioSpectrum16Left[a];")
-            && source.contains("audioResponse += g_AudioSpectrum16Right[a];"),
+        source.contains("audioResponse += g_AudioSpectrum16Left[a].x;")
+            && source.contains("audioResponse += g_AudioSpectrum16Right[a].x;"),
         "shake audio helper body should use the global arrays passed by every call:\n{source}"
     );
     assert!(
@@ -754,7 +754,7 @@ fn mixed_array_and_scalar_parameter_helper_compiles_through_naga() {
         "mixed helper should preserve scalar parameters while specializing fixed arrays:\n{source}"
     );
     assert!(
-        source.contains("return g_AudioSpectrum16Left[0] * gain;"),
+        source.contains("return g_AudioSpectrum16Left[0].x * gain;"),
         "mixed helper body should use the global array passed by every call:\n{source}"
     );
     assert!(
@@ -805,7 +805,7 @@ fn array_parameter_specialization_preserves_same_arity_scalar_overload() {
         "scalar overload call must not be rewritten:\n{source}"
     );
     assert!(
-        source.contains("return g_AudioSpectrum16Left[0];"),
+        source.contains("return g_AudioSpectrum16Left[0].x;"),
         "array helper body should use the matched global array:\n{source}"
     );
     let _artifact = NagaCompiler
@@ -852,7 +852,7 @@ fn array_parameter_specialization_preserves_different_arity_overload() {
         "different-arity overload call must not be rewritten:\n{source}"
     );
     assert!(
-        source.contains("return g_AudioSpectrum16Left[1];"),
+        source.contains("return g_AudioSpectrum16Left[1].x;"),
         "array helper body should use the matched global array:\n{source}"
     );
     let _artifact = NagaCompiler
@@ -914,7 +914,7 @@ fn array_parameter_specialization_does_not_rewrite_member_fields() {
     let source = legalized.source();
 
     assert!(
-        source.contains("return g_AudioSpectrum16Left[0] + state.samples;"),
+        source.contains("return g_AudioSpectrum16Left[0].x + state.samples;"),
         "array specialization must not rewrite struct fields named like removed \
          parameters:\n{source}"
     );
@@ -950,7 +950,7 @@ fn array_parameter_specialization_does_not_rewrite_shadowed_local_scopes() {
     let source = legalized.source();
 
     assert!(
-        source.contains("float total = g_AudioSpectrum16Left[0];"),
+        source.contains("float total = g_AudioSpectrum16Left[0].x;"),
         "array parameter use before shadowing should be specialized:\n{source}"
     );
     assert!(
@@ -958,7 +958,7 @@ fn array_parameter_specialization_does_not_rewrite_shadowed_local_scopes() {
         "shadowed local declaration and uses should remain local:\n{source}"
     );
     assert!(
-        source.contains("total += g_AudioSpectrum16Left[1];"),
+        source.contains("total += g_AudioSpectrum16Left[1].x;"),
         "array parameter use after shadowing scope should be specialized:\n{source}"
     );
     assert!(
@@ -4456,4 +4456,35 @@ fn reserved_identifier_strategy_respects_uninitialized_nested_shadowing_scope() 
     assert!(source.contains("    outer += uv_local;"));
     assert!(!source.contains("        uv_local = 2.0;"));
     assert!(!source.contains("        outer += uv_local;"));
+}
+
+#[test]
+fn widened_uniform_arrays_swizzle_reads_written_through_a_macro_alias() {
+    // An audio-bars shader selects its band count with `#define`s written
+    // inside `main`, then reads through the alias, so the identifier in the
+    // body never names the block member. Every branch aliases a member widened
+    // the same way, which is what makes one swizzle correct for all of them.
+    let source = concat!(
+        "uniform float g_AudioSpectrum16Left[16];\n",
+        "uniform float g_AudioSpectrum32Left[32];\n",
+        "void main() {\n",
+        "#if RESOLUTION == 16\n",
+        "#define u_AudioSpectrumLeft g_AudioSpectrum16Left\n",
+        "#endif\n",
+        "#if RESOLUTION == 32\n",
+        "#define u_AudioSpectrumLeft g_AudioSpectrum32Left\n",
+        "#endif\n",
+        "    float v = u_AudioSpectrumLeft[int(2)];\n",
+        "    gl_FragColor = vec4(v);\n",
+        "}\n",
+    );
+
+    let legalized = legalize(ShaderStageKind::Fragment, source);
+    let source = legalized.source();
+
+    assert!(source.contains("vec4 g_AudioSpectrum16Left[16];"), "{source}");
+    assert!(
+        source.contains("float v = u_AudioSpectrumLeft[int(2)].x;"),
+        "{source}"
+    );
 }

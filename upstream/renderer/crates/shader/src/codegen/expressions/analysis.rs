@@ -641,11 +641,16 @@ pub(crate) enum VectorWidth {
 
 impl VectorWidth {
     /// Classifies a vector constructor/type name.
+    ///
+    /// `CAST2`/`CAST3`/`CAST4` are the legacy spellings `legacy_builtins`
+    /// renames to `vec2`/`vec3`/`vec4` later in codegen. They are constructors
+    /// here too: a strategy that ran before the rename and did not know them
+    /// read an unknown width where the author wrote a vector.
     pub(crate) const fn classify_constructor(name: &str) -> Option<Self> {
         match name.as_bytes() {
-            b"vec2" | b"float2" => Some(Self::Two),
-            b"vec3" | b"float3" => Some(Self::Three),
-            b"vec4" | b"float4" => Some(Self::Four),
+            b"vec2" | b"float2" | b"CAST2" => Some(Self::Two),
+            b"vec3" | b"float3" | b"CAST3" => Some(Self::Three),
+            b"vec4" | b"float4" | b"CAST4" => Some(Self::Four),
             _ => None,
         }
     }
@@ -953,9 +958,7 @@ where
         width: VectorWidth,
     ) -> Option<SourceSpan> {
         let name = tokens[start].kind().source_text()?;
-        if VectorWidth::classify_constructor(name) != Some(width)
-            && !(name == "CAST2" && width == VectorWidth::Two)
-        {
+        if VectorWidth::classify_constructor(name) != Some(width) {
             return None;
         }
         let open = tokens.next_non_comment(start + 1)?;
@@ -995,6 +998,49 @@ where
 
         swizzle_operands
             .into_iter()
+            .map(|(operand, _width)| VectorOperandSwizzle {
+                insertion: SourceSpan::new(
+                    tokens[operand.end() - 1].span().end(),
+                    tokens[operand.end() - 1].span().end(),
+                )
+                .unwrap_or(tokens[operand.end() - 1].span()),
+                swizzle: target_width.component_swizzle(),
+            })
+            .collect()
+    }
+
+    /// Returns trailing swizzles that balance one mixed-width binary
+    /// expression against its own narrowest vector operand.
+    ///
+    /// `binary_operand_swizzles` takes the width from the declaration or
+    /// assignment the expression feeds. A sub-expression nested inside a call
+    /// argument feeds no such target, so the width has to come from the
+    /// expression itself: the permissive path these shaders were written for
+    /// truncates the wider operand, and that is the width the author meant.
+    pub(crate) fn mixed_width_binary_swizzles(
+        self,
+        tokens: TokenCursor<'_>,
+        range: TokenIndexRange,
+    ) -> Vec<VectorOperandSwizzle> {
+        let operands = self.token_facts.binary_expression_operand_ranges(
+            tokens,
+            range,
+            &Self::arithmetic_operators(),
+        );
+        let widths = operands
+            .iter()
+            .map(|operand| {
+                CallArgument::trim_from_bounds(tokens, operand.start(), operand.end())
+                    .and_then(|argument| self.argument_vector_width(tokens, argument))
+            })
+            .collect::<Vec<_>>();
+        let Some(target_width) = widths.iter().flatten().copied().min() else {
+            return Vec::new();
+        };
+        operands
+            .iter()
+            .zip(&widths)
+            .filter(|(_operand, width)| width.is_some_and(|width| width > target_width))
             .map(|(operand, _width)| VectorOperandSwizzle {
                 insertion: SourceSpan::new(
                     tokens[operand.end() - 1].span().end(),

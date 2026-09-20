@@ -9,7 +9,12 @@ pub struct ShaderPipelineRevision(u64);
 
 impl ShaderPipelineRevision {
     /// Current default pipeline revision.
-    pub const CURRENT: Self = Self(6);
+    ///
+    /// Bumped whenever codegen can produce different output for source that
+    /// already compiled. The on-disk program lookup is keyed on this identity
+    /// and the source, before anything is compiled, so a stale entry would
+    /// otherwise be served for a shader whose generated form has changed.
+    pub const CURRENT: Self = Self(8);
 
     /// Creates a typed pipeline revision.
     #[must_use]

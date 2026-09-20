@@ -110,12 +110,12 @@ artifacts/renderer/bin/tests/offscreen_scene_probe
 | `WE_TEST_MEDIA_JSON` | `offscreen_scene_probe` | JSON array of synthetic media events dispatched to scene scripts; does not read system media |
 | `WE_TEST_MEDIA_ARTWORK=1` | `offscreen_scene_probe` | Synthetic four-color 2x2 `$mediaThumbnail` texture; no player or audio device |
 | `WE_TEST_DUMP_PASSES` | `offscreen_scene_probe` | Dump per-pass detail for the last sampled frame only: one image per custom pass, plus that pass's material slot, its live visibility and its full `constValues` appended to `passes.txt`. The prepare-time listing at the top of that file is a snapshot; only these `frame N` lines show what a sampled frame actually drew |
-| `WE_TEST_PROPERTIES` | `offscreen_scene_probe` | Flat JSON property overrides, in memory only |
+| `WE_TEST_PROPERTIES` | `offscreen_scene_probe`, `metal_scene_draw_smoke` | Flat JSON property overrides, in memory only. A layer gated on a saved property draws nothing without this, which is how both backends have to be driven to compare one |
 | `WE_TEST_CLICK_LAYER` | `offscreen_scene_probe` | Image-layer ID to click |
 | `WE_TEST_CLICK_COUNT` | `offscreen_scene_probe` | `1..10` synthetic clicks, no desktop input |
 | `WE_TEST_CLICK_OFFSET` | `offscreen_scene_probe` | World-space `"dx dy"` added to the click layer's origin, to hit a covered or transparent texel instead of the centre |
 | `WE_TEST_CLICK_VIEWPORT` | `offscreen_scene_probe` | `"<px_w>x<px_h>@<scale>:<fill\|fit\|stretch\|none>"`; maps the click the way a desktop does — the presented viewport is published and the cursor arrives window-normalized — instead of handing the runtime a world position, so hit testing is exercised against a real display's geometry |
-| `WE_TEST_AUDIO_HZ` | `offscreen_scene_probe` | Synthetic PCM at `0..6000` Hz; `0` means silence |
+| `WE_TEST_AUDIO_HZ` | `offscreen_scene_probe`, `metal_scene_draw_smoke` | Synthetic PCM at `0..6000` Hz; `0` means silence. The Metal gate submits one block per frame through the same analysis service the desktop tap feeds and enables audio response for the run. Band 0 of the 64-band spectrum covers roughly 0–94 Hz, so a shader reading only the lowest bands needs a bass tone, not 440 Hz |
 | `WE_TEST_AUDIO_ENABLED=0` | `offscreen_scene_probe` | Exercise the disabled audio gate |
 | `WE_TEST_MEDIA_EVENTS` | `offscreen_scene_probe` | JSON array of SceneScript media event objects, dispatched in order after the warm-up ticks. Enables media integration for the run, so a wallpaper that only draws its player while something is playing can be rendered without a system media source or Automation permission |
 | `WE_TEST_MEDIA_ARTWORK` | `offscreen_scene_probe` | `<width>x<height>:<rrggbb>`; publishes one opaque cover through the same path the app uses, so `$mediaThumbnail` and `$mediaPreviousThumbnail` carry a colour that is legible in the rendered frame |
@@ -602,7 +602,31 @@ unavailable and never approximated by the request count.
 The shader repair handles undersized cross-stage varying declarations,
 conditional helper headers, source-defined `log10`, legacy scalar/vector
 argument conversion, compound assignment narrowing, and scalar initializer
-conversion. Shader pipeline revision 4 invalidates previously compiled programs.
+conversion. The pipeline revision is part of the cache key and is bumped
+whenever codegen can produce different output for source that already
+compiled; it is 8 now, and each bump invalidates previously compiled programs.
+
+It also absorbs idioms author shaders inherit from the permissive path they
+were written against, each of which otherwise drops a whole effect rather than
+one expression: a texture annotation's `"default":""` means the slot has no
+default; `CAST2`/`CAST3`/`CAST4` are vector constructors before
+`legacy_builtins` renames them; mixed-width vector operands inside a call
+argument truncate to that expression's narrowest operand, while sampler
+coordinate arguments stay with the texture strategy that narrows them to the
+sampler's dimensionality; and a parenthesized comparison used as an arithmetic
+operand is converted with `float(...)`. Known and not handled: logical-not
+applied to a float (`!someFloat`), which still rejects
+`workshop/2800594362/effects/clipping_mask`.
+
+One repair is a layout contract rather than a spelling: a scalar or
+narrow-vector array in the generated uniform block is declared `vec4 name[N]`
+and every subscripted read is swizzled back. std140 pads each element to 16
+bytes, which is what the host packs and the reflection reports, while the MSL
+backend emits the natural tight stride — so without it every member after such
+an array is read from a different address on Metal than the host wrote it to.
+The swizzle has to follow reads reached through `#define` aliases (written
+inside `main` by the audio-bars shader family) and through array-parameter
+specialization, not just direct ones.
 
 ## Rust crates
 
@@ -728,6 +752,16 @@ SceneScript views.
   regression, and never as power or battery measurements.
 - Unimplemented non-audio scene features, including some script outputs, can
   still affect wallpaper compatibility even when every renderer check passes.
+- **`offscreen_scene_probe` is Vulkan-only.** With
+  `scene_renderer = "native_metal_preferred"` a scene the capability gate
+  accepts runs on the native backend with nothing behind it, so a probe result
+  describes a renderer that wallpaper may never use. Check the backend first —
+  `metal_scene_draw_smoke` with `WE_TEST_METAL_PROJECTS` prints the decision
+  per project — and repeat any comparison there before calling a difference
+  backend-independent. The divergence that made this rule worth writing —
+  `3799253558` rendering 70% black on Native Metal with a ring that ignored
+  audio — was the uniform array layout above, and is fixed; the lesson is that
+  a Vulkan-only measurement could not have found it.
 - No renderer check proves desktop presentation, AppKit behavior, live audio
   capture, real input capture, or visual equivalence. Those need the authorized
   manual checks in [manual-smoke.md](manual-smoke.md).

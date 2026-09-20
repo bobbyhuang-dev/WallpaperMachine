@@ -4,6 +4,8 @@
 mod assignment;
 /// Binary expression vector width coercions.
 mod binary;
+/// Comparison operands used in arithmetic.
+mod boolean;
 /// Builtin and user function call argument coercions.
 mod calls;
 /// Declaration initializer vector coercions.
@@ -17,7 +19,8 @@ use linkme::distributed_slice;
 
 use self::{
     assignment::{NarrowVectorAssignments, ScalarVectorAssignments},
-    binary::{Vec3Vec2BinaryExpressions, VectorBinaryExpressions},
+    binary::{NestedVectorBinaryExpressions, Vec3Vec2BinaryExpressions, VectorBinaryExpressions},
+    boolean::BooleanArithmeticOperands,
     calls::{CoercionFunction, FunctionCoercion},
     initializer::{
         NarrowVectorInitializers, ScalarVectorInitializers, ScalarVectorReturnInitializers,
@@ -162,8 +165,36 @@ impl Emitable for TypeCoercionStrategy {
 
         let mut vector_binary_expressions = VectorBinaryExpressions::default();
         vector_binary_expressions.collect(tokens, &token_facts, &vector_facts);
-        for expression in vector_binary_expressions.items {
+        for expression in &vector_binary_expressions.items {
             expression.emit(context);
+        }
+
+        // A sampler's coordinate argument is narrowed to the sampler's own
+        // dimensionality by the texture strategy, which is a different width
+        // from the narrowest operand and already owns those calls.
+        let nested_calls = function_calls
+            .iter()
+            .filter(|call| {
+                TextureSamplingCall::classify_call(tokens, call, &context.context().declarations)
+                    .is_none()
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut nested_binary_expressions = NestedVectorBinaryExpressions::default();
+        nested_binary_expressions.collect(tokens, &token_facts, &vector_facts, &nested_calls);
+        for expression in nested_binary_expressions.items {
+            // The two collectors reach different expressions, but an operand
+            // swizzled twice would read `.xy.xy`, so the narrower scan yields.
+            if vector_binary_expressions.items.contains(&expression) {
+                continue;
+            }
+            expression.emit(context);
+        }
+
+        let mut boolean_operands = BooleanArithmeticOperands::default();
+        boolean_operands.collect(tokens);
+        for operand in boolean_operands.items {
+            operand.emit(context);
         }
         Ok(())
     }

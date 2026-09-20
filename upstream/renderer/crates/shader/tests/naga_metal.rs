@@ -290,3 +290,51 @@ fn binding_summary(metal: &MetalStageCode) -> Vec<(String, u32, MetalSlotKind, u
         })
         .collect()
 }
+
+/// Author-shaped scalar uniform array, next to the members that follow it.
+const AUTHOR_SPECTRUM: &str = r"
+uniform float g_AudioSpectrum64Left[64];
+uniform float u_ReduceValue;
+uniform vec2 u_FixedSize;
+varying vec2 v_TexCoord;
+void main() {
+    float v = g_AudioSpectrum64Left[0] / u_ReduceValue;
+    gl_FragColor = vec4(v, u_FixedSize.x, v_TexCoord.x, 1.0);
+}
+";
+
+#[test]
+fn scalar_uniform_arrays_keep_one_layout_on_both_targets() {
+    // std140 pads every array element to 16 bytes, which is what the host packs
+    // and the reflection reports. Metal's natural layout for `float[64]` is a
+    // tight 4-byte stride, and the shader compiler emits it that way, so a
+    // scalar array in a uniform block moved every member after it by 768 bytes
+    // on one renderer and not the other. Declaring the member `vec4[N]` is the
+    // only spelling both layouts agree on.
+    let module = shader::syntax::ShaderModule::parse(ShaderStageKind::Fragment, AUTHOR_SPECTRUM)
+        .expect("author source parses");
+    let legalized = shader::legalize::Codegen
+        .legalize(&module)
+        .expect("author source legalizes");
+    let source = legalized.source();
+
+    assert!(
+        source.contains("vec4 g_AudioSpectrum64Left[64];"),
+        "{source}"
+    );
+    assert!(
+        source.contains("g_AudioSpectrum64Left[0].x / u_ReduceValue"),
+        "{source}"
+    );
+
+    let artifact = NagaCompiler
+        .compile_stage(
+            ShaderTarget::MetalMsl,
+            ShaderStageKind::Fragment,
+            &legalized,
+        )
+        .expect("legalized author source compiles to MSL");
+    let msl = metal(&artifact).source().to_owned();
+    assert!(msl.contains("metal::float4 inner[64];"), "{msl}");
+    assert!(!msl.contains("float inner[64];"), "{msl}");
+}

@@ -20,6 +20,7 @@
 #include "MetalRender/MetalVideoSupport.hpp"
 #include "MetalRender/SceneMetalProgram.hpp"
 
+#include "Audio/AudioResponseService.h"
 #include "Audio/SoundManager.h"
 #include "Core/Random.hpp"
 #include "Fs/PhysicalFs.h"
@@ -3455,7 +3456,11 @@ TEST_F(MetalSceneDraw, LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBack
     // decision is printed. A scene that falls back is reported with its reason
     // and is not a failure here: what must hold is that an ACCEPTED scene
     // prepares and draws every frame, because an accepted scene has no other
-    // renderer behind it.
+    // renderer behind it. `WE_TEST_PROPERTIES` and `WE_TEST_AUDIO_HZ` mean what
+    // they mean for `offscreen_scene_probe`: a wallpaper whose layer is gated
+    // on a saved property, or whose shader reads the spectrum, draws nothing
+    // worth comparing without them, and this backend had no way to supply
+    // either.
     const char* listed = std::getenv("WE_TEST_METAL_PROJECTS");
     const auto  assets = LocalSceneAssetsRoot();
     if (listed == nullptr || *listed == '\0' || assets.empty() ||
@@ -3492,6 +3497,11 @@ TEST_F(MetalSceneDraw, LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBack
             "/cache", fs::CreatePhysicalFs((root_ / ("cache-" + label)).string(), true), "cache"));
         InstallVirtualAssets(loaded.vfs);
         ASSERT_TRUE(ParseProjectProperties(project, &loaded.properties, &error)) << error;
+        if (const char* json = std::getenv("WE_TEST_PROPERTIES")) {
+            ProjectProperties overrides;
+            ASSERT_TRUE(ParseFlatProjectPropertyOverrideJson(json, &overrides, &error)) << error;
+            loaded.properties = MergeProjectProperties(loaded.properties, overrides);
+        }
         auto source = loaded.vfs.Open("/assets/" + paths.pkg_entry);
         ASSERT_NE(source, nullptr);
         WPSceneParser parser;
@@ -3541,8 +3551,33 @@ TEST_F(MetalSceneDraw, LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBack
             }
             render.UpdateCameraFillMode(*loaded.scene, FillMode::ASPECTCROP);
 
+            const char* audio_hz = std::getenv("WE_TEST_AUDIO_HZ");
+            if (audio_hz != nullptr && loaded.scene->runtime != nullptr) {
+                loaded.scene->runtime->SetAudioResponseEnabled(true);
+            }
             std::vector<uint8_t> first;
             for (int frame = 0; frame < 120; ++frame) {
+                if (audio_hz != nullptr) {
+                    // Synthetic PCM only, analysed by the same service the
+                    // desktop tap feeds.
+                    std::array<float, 2400> pcm {};
+                    const double hz = std::strtod(audio_hz, nullptr);
+                    for (std::size_t i = 0; i < pcm.size(); ++i) {
+                        pcm[i] = 0.025f *
+                                 std::sin(2.0 * M_PI * hz * double(i) / 12000.0);
+                    }
+                    const auto generation = audio::CurrentAudioSpectrumSnapshot().generation;
+                    std::string audio_error;
+                    ASSERT_TRUE(audio::SubmitMonoAudioFrames(
+                        12000, uint32_t(pcm.size()), pcm.data(), &audio_error))
+                        << audio_error;
+                    const auto deadline =
+                        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                    while (audio::CurrentAudioSpectrumSnapshot().generation <= generation &&
+                           std::chrono::steady_clock::now() < deadline) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
+                }
                 loaded.scene->paritileSys->Emitt();
                 if (loaded.scene->runtime != nullptr) {
                     loaded.scene->runtime->Tick(1.0 / 60.0);

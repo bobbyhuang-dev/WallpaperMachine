@@ -1302,3 +1302,89 @@ fn control_flow_strategy_leaves_mixed_signedness_arithmetic_conditions_unrewritt
     assert!(!source.contains("u % i != 0u"));
     assert!(!source.contains("u % i != 0.0"));
 }
+
+#[test]
+fn type_coercion_strategy_truncates_mixed_width_operands_inside_a_call_argument() {
+    let source = concat!(
+        "varying vec3 v_TexCoord;\n",
+        "uniform float u_offset;\n",
+        "uniform float u_scale;\n",
+        "void main() {\n",
+        "    float scale = pow(length(abs(v_TexCoord - CAST2(u_offset)) * 1.0), 3.0) * u_scale;\n",
+        "    gl_FragColor = vec4(scale);\n",
+        "}\n",
+    );
+
+    let legalized = legalize(ShaderStageKind::Fragment, source);
+    assert!(
+        legalized
+            .source()
+            .contains("abs(v_TexCoord.xy - vec2(u_offset))"),
+        "{}",
+        legalized.source()
+    );
+    NagaCompiler
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
+        .expect("a truncated operand pair must compile");
+}
+
+#[test]
+fn type_coercion_strategy_leaves_matched_width_call_arguments_alone() {
+    let source = concat!(
+        "varying vec3 v_TexCoord;\n",
+        "uniform vec3 u_offset;\n",
+        "void main() {\n",
+        "    float scale = length(abs(v_TexCoord - u_offset));\n",
+        "    gl_FragColor = vec4(scale);\n",
+        "}\n",
+    );
+
+    let legalized = legalize(ShaderStageKind::Fragment, source);
+    let source = legalized.source();
+
+    assert!(source.contains("abs(v_TexCoord - u_offset)"), "{source}");
+    assert!(!source.contains("v_TexCoord.xy"), "{source}");
+    assert!(!source.contains("u_offset.xy"), "{source}");
+}
+
+#[test]
+fn type_coercion_strategy_converts_a_comparison_used_as_an_arithmetic_operand() {
+    let source = concat!(
+        "uniform float u_aperture;\n",
+        "void main() {\n",
+        "    float depth = u_aperture;\n",
+        "    depth *= (depth < 0.6) * 6.0;\n",
+        "    gl_FragColor = vec4(depth);\n",
+        "}\n",
+    );
+
+    let legalized = legalize(ShaderStageKind::Fragment, source);
+    assert!(
+        legalized.source().contains("float(depth < 0.6) * 6.0"),
+        "{}",
+        legalized.source()
+    );
+    NagaCompiler
+        .compile_stage(ShaderTarget::VulkanSpirv, ShaderStageKind::Fragment, &legalized)
+        .expect("a converted comparison must compile");
+}
+
+#[test]
+fn type_coercion_strategy_leaves_comparisons_that_stay_conditions_alone() {
+    let source = concat!(
+        "uniform float u_aperture;\n",
+        "void main() {\n",
+        "    float depth = u_aperture;\n",
+        "    if ((depth > 0.01) && (u_aperture > 0.01)) { depth = 1.0; }\n",
+        "    depth += (depth > 0.5 ? 2.0 : 3.0);\n",
+        "    gl_FragColor = vec4(depth);\n",
+        "}\n",
+    );
+
+    let legalized = legalize(ShaderStageKind::Fragment, source);
+    let source = legalized.source();
+
+    assert!(source.contains("if ((depth > 0.01) && (u_aperture > 0.01))"), "{source}");
+    assert!(!source.contains("float(depth > 0.01)"), "{source}");
+    assert!(!source.contains("float(depth > 0.5 ?"), "{source}");
+}

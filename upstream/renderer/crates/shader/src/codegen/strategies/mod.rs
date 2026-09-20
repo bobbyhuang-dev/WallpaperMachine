@@ -14,6 +14,7 @@ mod reserved_identifiers;
 mod scalar_texture;
 mod texture_sampling;
 mod type_coercion;
+mod widened_arrays;
 
 use linkme::distributed_slice;
 use texture_sampling::{TextureSamplingCall, TextureSamplingFunction};
@@ -71,6 +72,8 @@ pub(super) const SCALAR_TEXTURE: CodegenStrategyName = CodegenStrategyName::new(
 pub(super) const MUTABLE_INPUTS: CodegenStrategyName = CodegenStrategyName::new("mutable_inputs");
 /// Strategy name for generated fragment output preparation.
 pub(super) const FRAGMENT_OUTPUT: CodegenStrategyName = CodegenStrategyName::new("fragment_output");
+/// Strategy name for widened uniform array element reads.
+pub(super) const WIDENED_ARRAYS: CodegenStrategyName = CodegenStrategyName::new("widened_arrays");
 
 /// Coarse legalizer execution stage.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

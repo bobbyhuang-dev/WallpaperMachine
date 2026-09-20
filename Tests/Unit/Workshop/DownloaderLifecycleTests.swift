@@ -195,6 +195,51 @@ final class DownloaderLifecycleTests: DownloaderTestCase {
     }
   }
 
+  func testPhaseFollowsEachSteamCMDStepBeforeAndAfterTheTransfer() async throws {
+    let root = try makeRuntime(
+      """
+      printf 'Steam Console Client\\nUpdate state (0x5) verifying installation, progress: 1.00\\n'
+      while [ ! -f ../release-login ]; do sleep 0.02; done
+      printf 'Logging in using username/password.\\npassword: '
+      IFS= read -r password
+      printf '\\nWaiting for user info...OK\\n'
+      while [ ! -f ../release-download ]; do sleep 0.02; done
+      printf 'Downloading item 123456 ...\\n'
+      mkdir -p steamapps/workshop/content/431960/123456
+      printf '{"title":"Phase fixture","type":"video","file":"movie.mp4"}' > steamapps/workshop/content/431960/123456/project.json
+      printf 'downloaded-content' > steamapps/workshop/content/431960/123456/movie.mp4
+      while [ ! -f ../release-finish ]; do sleep 0.02; done
+      printf 'Success. Downloaded item 123456\\n'
+      """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let release = { (name: String) in FileManager.default.createFile(atPath: root.appendingPathComponent(name).path, contents: nil) }
+    let downloader = startDownload(in: root)
+    do {
+      // Before SteamCMD has reported anything the run is still being prepared or launched.
+      XCTAssertTrue([.preparing, .connecting].contains(downloader.phase))
+      try await waitUntil { downloader.phase == .updating }
+      XCTAssertNil(downloader.progress, "Runtime updates carry no wallpaper progress")
+      release("release-login")
+      try await waitUntil { downloader.prompt == .password }
+      XCTAssertEqual(downloader.phase, .signingIn)
+      downloader.submitSecret("local-password")
+      try await waitUntil { downloader.phase == .requesting }
+      XCTAssertFalse(downloader.isAuthenticating)
+      release("release-download")
+      try await waitUntil { downloader.phase == .transferring }
+      release("release-finish")
+      try await waitUntil { downloader.phase == .finishing }
+      XCTAssertEqual(downloader.progress, 1, "The last byte fills the ring while validation runs")
+      try await waitUntil { !downloader.isRunning }
+      XCTAssertNil(downloader.errorMessage)
+      XCTAssertEqual(downloader.phase, .finishing)
+      XCTAssertEqual(downloader.downloadedID, item.id)
+    } catch {
+      await downloader.shutdown()
+      throw error
+    }
+  }
+
   func testMobileApprovalCanAdvanceToIndeterminateDownload() async throws {
     let root = try makeRuntime(
       """
@@ -206,7 +251,7 @@ final class DownloaderLifecycleTests: DownloaderTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
     let downloader = startDownload(in: root)
     do {
-      try await waitUntil { downloader.status == "Downloading Workshop files…" }
+      try await waitUntil { downloader.status == String(localized: "Downloading Workshop files…") }
       XCTAssertNil(downloader.progress)
       XCTAssertNil(downloader.prompt)
       XCTAssertNil(downloader.errorMessage)

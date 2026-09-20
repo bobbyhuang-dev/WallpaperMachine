@@ -302,6 +302,10 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
           dialogClosed: !dialog.open };
         push([Object.assign({}, job, { progress: null, authenticating: true, status: 'Waiting for Steam authentication…' })]);
         const authenticating = { busy: ring().classList.contains('busy'), speed: ring().querySelector('.ring-speed')?.textContent.trim(), dialogClosed: !dialog.open };
+        push([Object.assign({}, job, { progress: null, bytesPerSecond: null, authenticating: true, phase: 'signingIn', status: 'Waiting for Steam authentication…' })]);
+        const phased = { busy: ring().classList.contains('busy'), word: ring().querySelector('.ring-label.ring-phase')?.textContent.trim(), phase: ring().dataset.phase, noSpeed: !ring().querySelector('.ring-speed') };
+        push([Object.assign({}, job, { progress: 1, bytesPerSecond: null, authenticating: false, phase: 'finishing', status: 'Validating and adding to your library…' })]);
+        const finishing = { progress: ring().classList.contains('progress'), word: ring().querySelector('.ring-label').textContent.trim(), full: Number(ring().querySelector('.ring-value').getAttribute('stroke-dashoffset')) === 0 };
         push([Object.assign({}, job, { progress: null, authenticating: true, prompt: 'Steam password', securePrompt: true, status: 'Enter your Steam password below' })]);
         await waitFor(() => dialog.open);
         const prompted = { attention: ring().classList.contains('attention'), passwordField: !!dialog.querySelector('input[type="password"]'),
@@ -328,7 +332,7 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
         const failed = ring()?.dataset.action === 'downloadRetry' && ring().classList.contains('failed');
         push([], { wallpapers: [{ id: 'ring-fixture', title: 'Ring fixture', kind: 'Video', preview: null, active: false, supported: true, tags: [] }] });
         const installed = { check: !!grid.querySelector('.tile-mark.installed'), noRing: !ring() };
-        return { idle, progress, authenticating, prompted, dismissedStaysClosed, guided, handoff, handoffStays, resumed, failed, installed };
+        return { idle, progress, authenticating, phased, finishing, prompted, dismissedStaysClosed, guided, handoff, handoffStays, resumed, failed, installed };
         """, arguments: ["base": base], in: nil, contentWorld: .page) as? [String: Any]
     let idle = result?["idle"] as? [String: Any]
     XCTAssertEqual(idle?["noRing"] as? Bool, true, "An untouched tile carries no ring")
@@ -353,6 +357,19 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
     XCTAssertEqual(
       authenticating?["dialogClosed"] as? Bool, true,
       "A saved sign-in handoff must not open the dialog")
+    let phased = result?["phased"] as? [String: Any]
+    XCTAssertEqual(phased?["busy"] as? Bool, true)
+    XCTAssertEqual(
+      phased?["word"] as? String, "Signing in",
+      "Before bytes move the ring names the SteamCMD step instead of spinning empty")
+    XCTAssertEqual(phased?["phase"] as? String, "signingIn")
+    XCTAssertEqual(phased?["noSpeed"] as? Bool, true)
+    let finishing = result?["finishing"] as? [String: Any]
+    XCTAssertEqual(finishing?["progress"] as? Bool, true)
+    XCTAssertEqual(finishing?["full"] as? Bool, true, "The ring stays full while the files are validated")
+    XCTAssertEqual(
+      finishing?["word"] as? String, "Finishing",
+      "Validation and import read as a step, not a frozen 100%")
     let prompted = result?["prompted"] as? [String: Any]
     XCTAssertEqual(prompted?["attention"] as? Bool, true, "A Steam request marks the tile")
     XCTAssertEqual(

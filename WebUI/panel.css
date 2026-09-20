@@ -293,8 +293,8 @@ small, .muted { color: var(--muted); }
    nothing is measured, reported or re-fetched on a resize and the layout cannot flap. */
 .wallpaper-grid { --tile-min: 154px; --tile-gap: 12px; --min-columns: 3; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(var(--tile-min), calc((100% - (var(--min-columns) - 1) * var(--tile-gap)) / var(--min-columns))), 1fr)); gap: var(--tile-gap); padding: 2px 16px 16px; overflow: auto; scrollbar-gutter: stable; align-content: start; flex: 1; min-height: 0; }
 @container (max-width: 560px) { .wallpaper-grid { --tile-min: 130px; --tile-gap: 9px; } .tile-download { --ring: 64px; } }
-@container (max-width: 440px) { .wallpaper-grid { --tile-min: 116px; } .tile-download { --ring: 60px; } .ring-label { font-size: 13px; } .ring-speed { display: none; } }
-@container (max-width: 360px) { .wallpaper-grid { --tile-gap: 8px; } .tile-download { --ring: 52px; } .tile-caption { padding: 18px 6px 6px; } .tile-title { font-size: 11px; -webkit-line-clamp: 1; } .tile-kind { display: none; } }
+@container (max-width: 440px) { .wallpaper-grid { --tile-min: 116px; } .tile-download { --ring: 60px; } .ring-label { font-size: 13px; } .ring-label.ring-phase { font-size: 9px; } .ring-speed { display: none; } }
+@container (max-width: 360px) { .wallpaper-grid { --tile-gap: 8px; } .tile-download { --ring: 52px; } .tile-caption { padding: 18px 6px 6px; } .tile-title { font-size: 11px; -webkit-line-clamp: 1; } .tile-kind { display: none; } .ring-label.ring-phase { display: none; } }
 /* --corner is where the tile's top-left content starts: 6px normally, past the select check
    whenever that check is showing on an Installed tile. --marks is the width the corner marks
    take so the Active badge sits after them. */
@@ -325,9 +325,15 @@ small, .muted { color: var(--muted); }
 /* Corner marks, the way Wallpaper Engine flags its tiles: a check for a Discover wallpaper already
    in the library, the green trophy for a staff-approved wallpaper, a heart for a favorite. They
    stack in a column on the dark badge colour so they read on any artwork in either appearance,
-   and step aside with the Active badge while the select check is showing. */
+   and step aside with the Active badge while the select check is showing. The library check
+   is the one mark that answers "do I have this?", so it wears the same filled accent as a
+   selected tile check instead of the muted badge; its glyph is drawn heavier and nudged
+   half a pixel down because a check's mass sits high and it otherwise reads off-centre. */
 .tile-marks { position: absolute; left: var(--corner); top: 6px; display: grid; gap: 4px; pointer-events: none; transition: left 120ms ease-out; }
-.tile-mark { width: 20px; height: 20px; border-radius: 50%; background: var(--media-badge); color: var(--media-badge-ink); display: grid; place-items: center; }
+.tile-mark { width: 20px; height: 20px; border-radius: 50%; background: var(--media-badge); color: var(--media-badge-ink); display: grid; place-items: center; box-shadow: 0 1px 2px rgb(0 0 0 / 40%); }
+.tile-mark svg { display: block; }
+.tile-mark.installed { background: var(--primary); color: var(--on-primary); }
+.tile-mark.installed svg { stroke-width: 3; translate: 0 .5px; }
 .tile-mark.approved { color: var(--media-approved); }
 .tile-mark.favorite { color: var(--media-heart); }
 .tile-mark.favorite svg { fill: currentColor; }
@@ -368,6 +374,9 @@ small, .muted { color: var(--muted); }
 .ring-copy { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: calc(var(--ring) - 16px); }
 .ring-label, .ring-hover { display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 600; line-height: 1; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
 .ring-label:empty { display: none; }
+/* A step word ("Signing in", "Finishing") sits where the percentage will go: small enough for the
+   longest English word to clear the stroke at 72px, centred even when wider than the copy box. */
+.ring-label.ring-phase { font-size: 10px; letter-spacing: 0; white-space: nowrap; }
 .ring-speed { font-size: 9px; font-weight: 500; line-height: 1; color: var(--media-ink-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ring-label:empty + .ring-speed { font-size: 11px; font-weight: 600; color: var(--media-ink); }
 .ring-hover { display: none; }

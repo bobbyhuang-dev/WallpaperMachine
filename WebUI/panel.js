@@ -309,20 +309,31 @@ function tileDownloadMarkup(item) {
     if (job.prompt || job.challenge) return tileRing({ kind: 'attention', glyph: 'shield', action: 'continueSetup', id: item.id, label: t('Finish the Steam sign-in to download {title}', { title: item.title }) });
     const percent = Number.isFinite(job.progress) ? Math.round(clamp(job.progress) * 100) : null;
     const pace = speed(job.bytesPerSecond);
+    const phase = phaseWord(job.phase);
     const progressText = percent === null ? job.status || t('Downloading') : t('Downloading {percent}%', { percent });
-    return tileRing({ kind: percent === null ? 'busy' : 'progress', progress: percent === null ? null : clamp(job.progress), text: percent === null ? '' : `${percent}%`, speed: pace, hoverGlyph: 'close', action: 'downloadCancel', id: item.id, label: t('{progress}: {title}. Click to cancel', { progress: pace ? t('{progress} at {speed}', { progress: progressText, speed: pace }) : progressText, title: item.title }) });
+    // Bytes only move once Steam has been contacted, signed in and asked for the item. Until then
+    // the ring sweeps and the phase word inside names that step, so the wait never reads as a stall;
+    // a transfer that is measuring but has no percentage yet shows its speed instead. After the
+    // last byte, "Finishing" replaces a frozen 100% while the files are validated and imported.
+    const finishing = job.phase === 'finishing' && percent === 100;
+    const word = finishing ? phase : percent === null && (job.phase !== 'transferring' || !pace) ? phase : '';
+    return tileRing({ kind: percent === null ? 'busy' : 'progress', progress: percent === null ? null : clamp(job.progress), text: word || (percent === null ? '' : `${percent}%`), word: !!word, speed: pace, phase: job.phase, hoverGlyph: 'close', action: 'downloadCancel', id: item.id, label: t('{progress}: {title}. Click to cancel', { progress: pace ? t('{progress} at {speed}', { progress: progressText, speed: pace }) : progressText, title: item.title }) });
   }
   if (job && needsReview(job)) return tileRing({ kind: 'failed', glyph: 'refresh', action: 'downloadRetry', id: item.id, label: t('{error} Click to try again', { error: job.error || t('Download cancelled.') }), disabled: !state.setup?.ready });
   return '';
 }
 // pathLength="100" makes the dash offset a percentage, and the busy sweep travels by dash offset rather
 // than a rotate() transform: rotating a layer whose centre lands between pixels shimmers in WebKit.
-function tileRing({ kind, glyph = '', hoverGlyph = '', progress = null, text = '', speed: pace = '', action, id, label, disabled: off = false }) {
+function tileRing({ kind, glyph = '', hoverGlyph = '', progress = null, text = '', word = false, speed: pace = '', phase = '', action, id, label, disabled: off = false }) {
   const dashOffset = kind === 'busy' ? 100 : progress === null ? 0 : 100 * (1 - progress);
   const value = kind === 'progress' || kind === 'busy' ? `<circle class="ring-value" cx="36" cy="36" r="32" pathLength="100" stroke-dasharray="${kind === 'busy' ? '26 74' : '100'}" stroke-dashoffset="${dashOffset.toFixed(1)}" transform="rotate(-90 36 36)"/>` : '';
-  const copy = text || pace ? `<span class="ring-copy"><span class="ring-label">${escapeHTML(text)}</span>${pace ? `<span class="ring-speed">${escapeHTML(pace)}</span>` : ''}</span>` : `<span class="ring-label">${glyph ? icon(glyph, 18) : ''}</span>`;
-  return `<button type="button" class="tile-download ${kind}" data-action="${action}" data-id="${escapeHTML(id)}" aria-label="${escapeHTML(label)}" title="${escapeHTML(label)}"${disabled(off)}><svg class="ring" viewBox="0 0 72 72" aria-hidden="true"><circle class="ring-track" cx="36" cy="36" r="32"/>${value}</svg>${copy}${hoverGlyph ? `<span class="ring-hover">${icon(hoverGlyph, 18)}</span>` : ''}</button>`;
+  const copy = text || pace ? `<span class="ring-copy"><span class="ring-label${word ? ' ring-phase' : ''}">${escapeHTML(text)}</span>${pace ? `<span class="ring-speed">${escapeHTML(pace)}</span>` : ''}</span>` : `<span class="ring-label">${glyph ? icon(glyph, 18) : ''}</span>`;
+  return `<button type="button" class="tile-download ${kind}" data-action="${action}" data-id="${escapeHTML(id)}"${phase ? ` data-phase="${escapeHTML(phase)}"` : ''} aria-label="${escapeHTML(label)}" title="${escapeHTML(label)}"${disabled(off)}><svg class="ring" viewBox="0 0 72 72" aria-hidden="true"><circle class="ring-track" cx="36" cy="36" r="32"/>${value}</svg>${copy}${hoverGlyph ? `<span class="ring-hover">${icon(hoverGlyph, 18)}</span>` : ''}</button>`;
 }
+// One short word per SteamCMD step, sized to sit inside the ring; the full sentence stays in the
+// tooltip, the inspector and the downloads list.
+const phaseWords = { preparing: 'Preparing', connecting: 'Connecting', updating: 'Updating', signingIn: 'Signing in', requesting: 'Requesting', transferring: 'Downloading', finishing: 'Finishing' };
+const phaseWord = (phase) => phaseWords[phase] ? t(phaseWords[phase]) : '';
 // Double-clicking a Discover tile downloads it; once it is in the library the same gesture applies it.
 function tileDoubleClickAction(id) {
   if (state.wallpapers.some(item => item.id === id)) {

@@ -25,6 +25,17 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-20 — Download ring names the SteamCMD step before bytes move
+
+- Change: WorkshopDownloader.phase (preparing/connecting/updating/signingIn/requesting/transferring/finishing) set alongside status; DownloadJob.phase; snapshot field phase.
+- WebUI: busy tile ring shows the phase word (ring-phase) instead of an empty sweep; transfer without percent keeps speed; progress 1 + finishing reads Finishing not 100%.
+- zh-Hans catalog: Preparing/Connecting/Signing in/Requesting/Finishing (Updating already present).
+- python3 scripts/test.py --only DownloaderLifecycleTests: 20 passed (new testPhaseFollowsEachSteamCMDStepBeforeAndAfterTheTransfer).
+- python3 scripts/test.py --only ControlPanelDiscoverTests: 6 passed (ring test extended with phased/finishing).
+- python3 scripts/test.py: 519 passed, 0 failed, 11 skipped (opt-in/asset checks).
+- impeccable detect on WebUI/panel.css, panel.js: no findings.
+- Gap: no desktop run; ring word fit at 60/72px and Chinese rendering not visually checked. Release app not rebuilt.
+
 ## 2026-09-20 — Quiet script output, doc archive and rg ignore, log helper, section index, test-file split
 
 Agent-cost pass. `scripts/lib/xcode.py` streams xcodebuild/cargo output to `artifacts/` and echoes only errors, failing tests and a verdict (`--verbose` restores the stream; `xcodegen --quiet`); the two 250 KB plan/progress documents moved to `docs/archive/` and a repository `.ignore` keeps `rg` out of archives, generated bindings and `upstream/`; `scripts/log_verification.py` prepends log entries and archives overflow; `docs/testing/renderer.md` gained a section index; `DownloaderTests` and `ControlPanelLayoutTests` split into five suites each over shared base classes (same 88 test methods, none rewritten).
@@ -343,37 +354,3 @@ session was started.
   `DesktopMediaSession`, `SceneMediaSink`, `mediaIntegrationEnabled` and
   `screenResolution`. `Info.plist` still has `NSAppleEventsUsageDescription`.
   The app was not launched.
-
-## 2026-09-20 — Rebase of scene-media plumbing onto native Now Playing
-
-`e342a31` (`feat(media): integrate scene media support and enhance media handling`)
-was rebased onto `f2cf701` (`feat(media): native now-playing integration and Leon
-scene fixes`) as `51a0e90`. The host keeps one `DesktopMediaSession`: adapter
-Now Playing is primary, AppleScript is fallback, web uses the shared relay, and
-scenes are fed only by `SceneMediaSink`. After the rebase,
-`MediaThumbnailTextureSmoke.PreviousThumbnailKeepsTheCoverItReplaced` failed
-because `SetRgbaImage` auto-promote stamped the new version onto the outgoing
-cover; the previous slot now keeps that image's own version so `Version()` and
-`Image::key` agree when `AliasRuntimeImage` also runs. That C++ fix and the
-provenance note are still uncommitted on top of `51a0e90`. No desktop or
-Now Playing session was started.
-
-- `python3 scripts/test.py` — exit 0, 523 native tests, 514 passed, 9 skipped,
-  0 failures. Python suites green.
-- `python3 scripts/check_renderer.py` — exit 0, `adaptive-20260920-114535`:
-  10 generated cases `pixels_equal=true`, 0 diagnostics, 8 projects × 2 reload
-  cycles clean.
-- `media_thumbnail_texture_smoke` 14 passed;
-  `scenescript_media_event_smoke` 16 passed.
-  `cargo test -p wallpaper-core --release --lib` 213 passed;
-  `cargo test -p wallpaper-bridge --release --lib` 316 passed.
-- `python3 scripts/build.py --configuration Release` — exit 0,
-  `** BUILD SUCCEEDED **`. Delivered
-  `build/Build/Products/Release/MacWallpaperEngine.app`. Bundled
-  `Contents/Resources/WebUI/panel.js` matches `WebUI/panel.js`. The binary
-  contains `submit_system_media_event`, `apply_system_media_artwork`,
-  `system_media_scene_handles`, `$mediaThumbnail`, `$mediaPreviousThumbnail`,
-  `AdapterSystemMediaProvider`, `AppleScriptMediaProvider`,
-  `DesktopMediaSession`, `SceneMediaSink` and `mediaIntegrationEnabled`.
-  `Info.plist` still has `NSAppleEventsUsageDescription`. The app was not
-  launched.

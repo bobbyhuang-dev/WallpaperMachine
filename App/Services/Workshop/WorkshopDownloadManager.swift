@@ -47,6 +47,7 @@ final class WorkshopDownload: Identifiable {
   }
   /// A job back in line for an automatic retry carries no failure; the retry decides.
   var errorMessage: String? { isQueued ? nil : worker.errorMessage }
+  var phase: WorkshopDownloader.Phase? { isQueued ? nil : worker.phase }
   var progress: Double? { isQueued ? nil : worker.progress }
   var bytesReceived: Int64? { isQueued ? nil : worker.bytesReceived }
   var bytesExpected: Int64? { isQueued ? nil : worker.bytesExpected }

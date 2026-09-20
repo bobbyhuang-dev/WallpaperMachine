@@ -871,6 +871,66 @@
     "Cancel download" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Cancel download"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "取消下载"}}}
     },
+    "Ready to download" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Ready to download"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "准备下载"}}}
+    },
+    "Validating and adding to your library…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Validating and adding to your library…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在验证并添加到你的资料库…"}}}
+    },
+    "Downloaded to your library" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Downloaded to your library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已下载到你的资料库"}}}
+    },
+    "Validating and installing scene assets…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Validating and installing scene assets…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在验证并安装场景资源…"}}}
+    },
+    "Scene assets installed" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scene assets installed"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "场景资源已安装"}}}
+    },
+    "Preparing a private SteamCMD download…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Preparing a private SteamCMD download…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在准备私有的 SteamCMD 下载…"}}}
+    },
+    "Download could not finish" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Download could not finish"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载未能完成"}}}
+    },
+    "Waiting for Steam authentication…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Waiting for Steam authentication…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在等待 Steam 验证…"}}}
+    },
+    "Starting SteamCMD and contacting Steam…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Starting SteamCMD and contacting Steam…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在启动 SteamCMD 并联系 Steam…"}}}
+    },
+    "Enter your Steam password below" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Enter your Steam password below"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请在下方输入你的 Steam 密码"}}}
+    },
+    "Enter the code from Steam Guard or your email" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Enter the code from Steam Guard or your email"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请输入 Steam 令牌或邮件中的验证码"}}}
+    },
+    "Download finished; validating scene assets…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Download finished; validating scene assets…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载完成，正在验证场景资源…"}}}
+    },
+    "Downloading Wallpaper Engine files…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Downloading Wallpaper Engine files…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在下载 Wallpaper Engine 文件…"}}}
+    },
+    "Processing Wallpaper Engine files…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Processing Wallpaper Engine files…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在处理 Wallpaper Engine 文件…"}}}
+    },
+    "Download finished; waiting for SteamCMD to close…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Download finished; waiting for SteamCMD to close…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载完成，正在等待 SteamCMD 关闭…"}}}
+    },
+    "Downloading Workshop files…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Downloading Workshop files…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在下载创意工坊文件…"}}}
+    },
+    "Signed in; requesting Wallpaper Engine’s shared assets…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Signed in; requesting Wallpaper Engine’s shared assets…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已登录，正在请求 Wallpaper Engine 的共享资源…"}}}
+    },
+    "Signed in; requesting your Workshop download…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Signed in; requesting your Workshop download…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已登录，正在请求你的创意工坊下载…"}}}
+    },
+    "Approve the sign-in in the Steam mobile app" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Approve the sign-in in the Steam mobile app"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请在 Steam 手机应用中批准登录"}}}
+    },
+    "Updating the private SteamCMD runtime…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Updating the private SteamCMD runtime…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在更新私有的 SteamCMD 运行环境…"}}}
+    },
     "Download cancelled" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Download cancelled"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载已取消"}}}
     },

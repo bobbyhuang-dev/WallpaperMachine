@@ -165,7 +165,7 @@ final class DownloaderSessionTests: DownloaderTestCase {
     let cancelled = startDownload(in: root)
     try await authenticate(cancelled)
     do {
-      try await waitUntil { cancelled.status == "Downloading Workshop files…" }
+      try await waitUntil { cancelled.status == String(localized: "Downloading Workshop files…") }
       XCTAssertNil(cancelled.progress)
       await cancelled.shutdown()
     } catch {

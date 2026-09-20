@@ -210,7 +210,13 @@ Unsubmitted text stays with its wallpaper when navigating between pages.
 ## Downloads and import
 
 Discover tiles show their own download ring (progress, cancel, sign-in needed,
-retry). Several tiles download at once; the activity bar sums them. The
+retry). Before any bytes move, the ring sweeps and names the current SteamCMD
+step inside it (Preparing, Connecting, Updating, Signing in, Requesting) from
+the job's `phase`; a transfer without a percentage yet shows its speed instead,
+and after the last byte the full ring reads Finishing while the files are
+validated and imported. The full status sentence stays in the tooltip, the
+inspector and the downloads list. Several tiles download at once; the activity
+bar sums them. The
 downloads popover opens from the activity bar, from the top-bar
 downloads button while downloads exist, and from **Show in downloads** in the
 inspector. The import

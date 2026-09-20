@@ -52,6 +52,7 @@ extension WebPanelController {
     _ = downloader.sessionConflictDetected
     for job in downloader.downloads {
       _ = job.status
+      _ = job.phase
       _ = job.errorMessage
       _ = job.progress
       _ = job.bytesReceived
@@ -258,6 +259,7 @@ extension WebPanelController {
         "title": job.item?.title ?? "Scene assets", "status": job.status,
         "preview": job.item?.previewURL?.absoluteString as Any? ?? null,
         "thumbnail": job.item.flatMap(Self.thumbnailAddress) as Any? ?? null, "account": job.account,
+        "phase": job.phase?.rawValue as Any? ?? null,
         "progress": job.progress as Any? ?? null, "pending": job.isPending, "queued": job.isQueued,
         "bytesReceived": job.bytesReceived as Any? ?? null,
         "bytesExpected": job.bytesExpected as Any? ?? null,

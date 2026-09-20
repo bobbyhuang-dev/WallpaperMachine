@@ -7,9 +7,14 @@ import Observation
 final class WorkshopDownloader: SteamCMDDownloadActivity {
     enum Prompt: String { case password = "Steam password", guardCode = "Steam Guard code" }
     enum SteamGuardChallenge { case mobileApproval, authenticatorCode, emailCode }
+    /// Coarse step of a run for compact surfaces such as the tile ring; `status` carries the
+    /// full sentence. Bytes only move during `transferring`; `finishing` covers SteamCMD's
+    /// close and the validation/import that follows it.
+    enum Phase: String { case preparing, connecting, updating, signingIn, requesting, transferring, finishing }
     private(set) var isRunning = false
+    private(set) var phase = Phase.preparing
     private(set) var wasCancelled = false
-    private(set) var status = "Ready to download"
+    private(set) var status = String(localized: "Ready to download")
     private(set) var progress: Double?
     private(set) var bytesReceived: Int64?
     private(set) var bytesExpected: Int64?
@@ -85,10 +90,11 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         }
         download(itemID: item.id, username: username, executable: executable, root: library.deletingLastPathComponent(),
                  rememberSession: rememberSession, expectedBytes: item.size > 0 ? item.size : nil) { staging in
-            self.status = "Validating and adding to your library…"
+            self.phase = .finishing
+            self.status = String(localized: "Validating and adding to your library…")
             try await WallpaperImportService().importDownloadedItem(item.id, from: staging, into: library)
             self.downloadedID = item.id
-            self.status = "Downloaded to your library"
+            self.status = String(localized: "Downloaded to your library")
             do { try await onImported() }
             catch { self.errorMessage = "Downloaded successfully, but the library could not refresh: \(error.localizedDescription). Use Refresh in Library before applying." }
         }
@@ -96,10 +102,11 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
 
     func installAssets(username: String, executable: URL, destination: URL, rememberSession: Bool = true, onInstalled: @escaping @MainActor () throws -> Void) {
         download(itemID: nil, username: username, executable: executable, root: destination.deletingLastPathComponent(), rememberSession: rememberSession) { staging in
-            self.status = "Validating and installing scene assets…"
+            self.phase = .finishing
+            self.status = String(localized: "Validating and installing scene assets…")
             try ClientPaths.installSceneAssets(from: staging.appendingPathComponent("wallpaper-engine/assets"), to: destination)
             try onInstalled()
-            self.status = "Scene assets installed"
+            self.status = String(localized: "Scene assets installed")
         }
     }
 
@@ -139,7 +146,8 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         recentOutput = ""
         isRunning = true
         isInstallingAssets = itemID == nil
-        status = "Preparing a private SteamCMD download…"
+        phase = .preparing
+        status = String(localized: "Preparing a private SteamCMD download…")
         let label = itemID ?? "shared assets"
         loggedStatus = ""
         task = Task {
@@ -246,12 +254,12 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                 try? readTerminalOutput()
                 authenticationFailed = false
                 steamGuardChallenge = nil
-                status = "Download cancelled"
+                status = String(localized: "Download cancelled")
             } catch {
                 await stopProcess()
                 try? readTerminalOutput()
                 errorMessage = error.localizedDescription
-                status = "Download could not finish"
+                status = String(localized: "Download could not finish")
             }
             if rememberSession {
                 do {
@@ -288,7 +296,8 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             try terminal.write(contentsOf: Data((value + "\n").utf8))
             prompt = nil
             recentOutput = ""
-            status = "Waiting for Steam authentication…"
+            phase = .signingIn
+            status = String(localized: "Waiting for Steam authentication…")
             lastActivity = Date()
         } catch {
             authenticationFailed = true
@@ -304,7 +313,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         bytesReceived = nil
         bytesExpected = nil
         task?.cancel()
-        status = "Cancelling…"
+        status = String(localized: "Cancelling…")
         // The task stops the child before staging cleanup; the importer checks cancellation before its atomic move.
     }
 
@@ -365,7 +374,8 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             throw WorkshopFailure(message: "Cannot launch SteamCMD: \(error.localizedDescription). Install the macOS SteamCMD distribution; on Apple silicon install Rosetta 2 if requested.")
         }
         try? child.close()
-        status = "Starting SteamCMD and contacting Steam…"
+        phase = .connecting
+        status = String(localized: "Starting SteamCMD and contacting Steam…")
     }
 
     private func readTerminalOutput() throws {
@@ -408,6 +418,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             cachedCredentialsRejected = true
             // SteamCMD can fall back to its password prompt in the same process.
             if output.contains("warning") {
+                phase = .signingIn
                 status = String(localized: "Saved Steam sign-in expired; waiting for fresh authentication…")
                 if output.hasSuffix("password:") { consumeLine("password:") }
                 return
@@ -448,14 +459,16 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             progress = nil
             receivesNetwork = false
             bytesPerSecond = nil
-            status = "Enter your Steam password below"
+            phase = .signingIn
+            status = String(localized: "Enter your Steam password below")
         } else if output.hasSuffix("auth code:") || output.hasSuffix("steam guard code:") || output.hasSuffix("two-factor code:") || output.hasSuffix("enter the code:") || output.hasSuffix("enter code:") {
             prompt = .guardCode
             steamGuardChallenge = output.hasSuffix("steam guard code:") ? .emailCode : .authenticatorCode
             progress = nil
             receivesNetwork = false
             bytesPerSecond = nil
-            status = "Enter the code from Steam Guard or your email"
+            phase = .signingIn
+            status = String(localized: "Enter the code from Steam Guard or your email")
         } else if isInstallingAssets && (output.contains("update state") || output.contains("success! app")) {
             prompt = nil
             steamGuardChallenge = nil
@@ -469,9 +482,11 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                 bytesReceived = nil
                 bytesExpected = nil
                 progress = 1
-                status = "Download finished; validating scene assets…"
+                phase = .finishing
+                status = String(localized: "Download finished; validating scene assets…")
             } else {
-                status = receivesNetwork ? "Downloading Wallpaper Engine files…" : "Processing Wallpaper Engine files…"
+                phase = .transferring
+                status = receivesNetwork ? String(localized: "Downloading Wallpaper Engine files…") : String(localized: "Processing Wallpaper Engine files…")
             }
         } else if output.contains("success. downloaded item") {
             workshopDownloadCompleted = true
@@ -482,7 +497,8 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             bytesPerSecond = nil
             bytesReceived = nil
             bytesExpected = nil
-            status = "Download finished; waiting for SteamCMD to close…"
+            phase = .finishing
+            status = String(localized: "Download finished; waiting for SteamCMD to close…")
             progress = 1
         } else if output.contains("downloading item") {
             prompt = nil
@@ -492,7 +508,8 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             bytesReceived = nil
             bytesExpected = nil
             progress = nil
-            status = "Downloading Workshop files…"
+            phase = .transferring
+            status = String(localized: "Downloading Workshop files…")
         } else if output.contains("logged in ok") || output.contains("waiting for user info...ok") {
             prompt = nil
             steamGuardChallenge = nil
@@ -500,28 +517,33 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             progress = nil
             receivesNetwork = false
             bytesPerSecond = nil
-            status = isInstallingAssets ? "Signed in; requesting Wallpaper Engine’s shared assets…" : "Signed in; requesting your Workshop download…"
+            phase = .requesting
+            status = isInstallingAssets ? String(localized: "Signed in; requesting Wallpaper Engine’s shared assets…") : String(localized: "Signed in; requesting your Workshop download…")
         } else if output.contains("confirm") && (output.contains("mobile") || output.contains("steam guard")) {
             prompt = nil
             steamGuardChallenge = .mobileApproval
             progress = nil
             receivesNetwork = false
             bytesPerSecond = nil
-            status = "Approve the sign-in in the Steam mobile app"
+            phase = .signingIn
+            status = String(localized: "Approve the sign-in in the Steam mobile app")
         } else if output.contains("logging in using cached credentials") {
             prompt = nil
             progress = nil
             receivesNetwork = false
             bytesPerSecond = nil
+            phase = .signingIn
             status = String(localized: "Using your saved Steam sign-in…")
         } else if output.contains("logging in") || output.contains("waiting for client config") || output.contains("waiting for user info") {
             prompt = nil
             progress = nil
             receivesNetwork = false
             bytesPerSecond = nil
-            status = "Waiting for Steam authentication…"
+            phase = .signingIn
+            status = String(localized: "Waiting for Steam authentication…")
         } else if output.contains("update") || output.contains("verifying installation") {
-            status = "Updating the private SteamCMD runtime…"
+            phase = .updating
+            status = String(localized: "Updating the private SteamCMD runtime…")
         }
         if failure != nil {
             prompt = nil

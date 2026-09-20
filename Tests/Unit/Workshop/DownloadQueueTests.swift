@@ -59,7 +59,7 @@ final class DownloadQueueTests: DownloaderTestCase {
       XCTAssertTrue(fourth.isQueued)
       XCTAssertTrue(fifth.isQueued)
       first.worker.submitSecret("secret1")
-      try await waitUntil { first.worker.status == "Downloading Workshop files…" }
+      try await waitUntil { first.worker.status == String(localized: "Downloading Workshop files…") }
       XCTAssertNil(first.progress)
       XCTAssertNil(second.worker.prompt)
       XCTAssertNil(third.worker.prompt)
@@ -73,12 +73,12 @@ final class DownloadQueueTests: DownloaderTestCase {
       try await waitUntil { third.worker.prompt == .password }
       XCTAssertNil(fourth.worker.prompt)
       third.worker.submitSecret("secret3")
-      try await waitUntil { third.worker.status == "Downloading Workshop files…" }
+      try await waitUntil { third.worker.status == String(localized: "Downloading Workshop files…") }
       XCTAssertNil(third.progress)
       try Data().write(to: root.appendingPathComponent("release-3"))
       try await waitUntil { fourth.worker.prompt == .password }
       fourth.worker.submitSecret("secret4")
-      try await waitUntil { fourth.worker.status == "Downloading Workshop files…" }
+      try await waitUntil { fourth.worker.status == String(localized: "Downloading Workshop files…") }
       XCTAssertNil(fourth.progress)
       try Data().write(to: root.appendingPathComponent("release-4"))
       try await waitUntil { !manager.isRunning }
@@ -355,7 +355,7 @@ final class DownloadQueueTests: DownloaderTestCase {
       executable: root.appendingPathComponent("runtime/steamcmd"),
       library: root.appendingPathComponent("OtherLibrary"), onImported: {})
     do {
-      try await waitUntil { manager.download(for: self.item.id)?.worker.status == "Downloading Workshop files…" }
+      try await waitUntil { manager.download(for: self.item.id)?.worker.status == String(localized: "Downloading Workshop files…") }
       XCTAssertNil(manager.download(for: item.id)?.progress)
       manager.forgetSavedAccount()
       XCTAssertNotNil(manager.errorMessage)

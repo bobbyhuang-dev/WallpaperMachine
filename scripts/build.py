@@ -63,7 +63,9 @@ def main():
         run([RENDERER / "target/release/uniffi-bindgen", "generate", "--library", RENDERER / "target/release/libwallpaper_bridge.a", "--language", "swift", "--no-format", "--out-dir", GENERATED_BRIDGE], cwd=RENDERER, env=env)
     if args.renderer_only:
         return
-    run(["xcodegen", "generate"], env=env)
+    # `--use-cache` skips rewriting the project when `project.yml` has not changed,
+    # which keeps Xcode's incremental build state (and `scripts/test.py` agrees).
+    run(["xcodegen", "generate", "--use-cache"], env=env)
     run(["xcodebuild", "-project", XCODEPROJ.name, "-scheme", "MacWallpaperEngine", "-configuration", args.configuration, "-derivedDataPath", BUILD, "build"], env=env)
     print(f"{MARK.ok} Built {PRODUCTS / args.configuration / 'MacWallpaperEngine.app'}")
 

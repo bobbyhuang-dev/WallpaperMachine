@@ -59,12 +59,14 @@ scheme excludes UI tests.
 | Swift unit/integration | `Tests/Unit/<Domain>/` | `python3 scripts/test.py` (`MacWallpaperEngineTests`); `--only <TestClass>` for a subset |
 | XCUITest (desktop) | `Tests/UI/` | `python3 scripts/test.py --ui` — opt-in only |
 | Media/device integration | `Tests/Unit/NativeVideo/` | `MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1 python3 scripts/test.py` — opt-in only |
+| Live Steam pages | `Tests/Unit/Workshop/WorkshopTests.swift` | `MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1 python3 scripts/test.py` — opt-in only |
 | Rust crates | `upstream/renderer/crates/` | `cargo test --release -p wallpaper-core --lib`, `cargo test --release -p wallpaper-bridge --lib`, `cargo test -p shader --test pipeline -- --nocapture` |
 | C++ renderer tests | `upstream/renderer/external/open-wallpaper-engine` | `python3 scripts/check_renderer.py` builds and runs them; see [renderer.md](renderer.md) |
 | Headless GPU probes | same CMake tree | explicitly invoked executables (`offscreen_scene_probe`, `scene_reload_cycle_probe`, `playback_gpu_test`, `wpdump`); see [renderer.md](renderer.md) |
 
 `python3 scripts/test.py` is the routine gate: it runs the Python script tests,
-runs `xcodegen generate`, then builds and runs `MacWallpaperEngineTests` only.
+runs `xcodegen generate --use-cache`, then builds and runs
+`MacWallpaperEngineTests` only, with test classes in parallel worker processes.
 Cargo and CMake commands need the Homebrew environment that `scripts/build.py`
 assembles; run the Rust commands from `upstream/renderer`. Build prerequisites
 are in [../build.md](../build.md).
@@ -72,17 +74,50 @@ are in [../build.md](../build.md).
 `Tests/Unit/` is grouped by domain: Appearance, Desktop, Diagnostics, GitHub,
 Library, LockScreen, NativeVideo, Panel, Steam, WebWallpaper, Workshop.
 
+### Opt-in layers
+
+Two layers inside `Tests/Unit/` skip themselves unless asked for, because they
+reach past this tree: they depend on the machine's media hardware and on Valve's
+live pages, so a failure there is not evidence about the code and a red gate
+invites a pointless re-run.
+
+- `MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1` — `NativeVideoPlayerMediaTests` decodes
+  real video. It still opens no window, changes no wallpaper and configures no
+  audio session; it is not a desktop test and not a substitute for one.
+- `MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1` — the two `testLive…` cases in
+  `WorkshopTests` fetch Steam's real community pages. Steam's page *format*
+  stays covered offline: `decodePage` runs against recorded markup in
+  `WorkshopStoreTests`, so only the assumption that Valve still serves that
+  shape goes untested by default. Run them before a release, after touching the
+  Workshop parser, and whenever search results look wrong in the app.
+
+Both are forwarded into the test host by `scripts/test.py`; setting them in your
+shell is enough. A skipped test is not a passing test — read the skip lines
+before claiming coverage.
+
+### Parallel execution
+
+Test classes run in parallel worker processes (`-parallel-testing-enabled YES`),
+which cuts the native phase roughly in half: most of its wall clock is spent
+waiting on debounce intervals and child-process reaping rather than on CPU.
+This is safe only as long as every suite keeps isolating its own state —
+`MAC_WALLPAPER_ENGINE_HOME`, a temporary directory, a per-test `UserDefaults`
+suite — and never asserts on a process-wide singleton, a fixed port or a shared
+path. A test that passes alone but fails in the gate is the symptom; reproduce
+it with `python3 scripts/test.py --serial` and fix the shared state rather than
+the scheduling. UI runs are always serial: they drive one desktop.
+
 ## Verification tiers
 
 The full gate compiles the Debug app and test bundle and then runs ~530 native
-tests, several of which drive offscreen WebKit, a real PTY downloader or live
-Steam pages; on this machine the test phase alone takes about three minutes
-before any Release build. Match the effort to the change:
+tests, several of which drive offscreen WebKit or a real PTY downloader; on this
+machine the test phase takes about 90 seconds in parallel, before any Release
+build. Match the effort to the change:
 
 | Change | While iterating | Before reporting |
 | --- | --- | --- |
 | Bug fix, refactor, test-only, one domain | `python3 scripts/test.py --only <TestClass>` (repeatable; `Class/testMethod` also works) | full gate once; no Release build, no log entry unless asked or a documented behavior changed |
-| New feature or cross-domain change | targeted runs as above | full gate once, Release build (`.omp/rules/release-build-on-feature.md`), log entry |
+| New feature or cross-domain change | targeted runs as above | full gate once, log entry; Release build only if delivery was requested (`.omp/rules/release-build-on-request.md`) |
 | Renderer / bridge | `cargo test` in the touched crate | full gate plus `scripts/check_renderer.py` |
 | Docs / skills only | link, path and command check | nothing else |
 
@@ -118,120 +153,10 @@ local asset inventories, screenshots, and traces stay out of Git.
 
 ## Current native coverage
 
-Swift tests cover, without starting the app:
-
-- **Library** — complete atomic adoption, concurrent destinations, duplicates,
-  cancellation, and rejection of linked, special, or incomplete content;
-  deletion; scene-asset installation.
-- **Workshop** — search and pagination beneath the UI, committed-query
-  pagination, window-sized pages cut from cached Steam pages (including a size
-  change while a page loads), superseded requests, cancellation, and exact
-  failed-request retry through the real page parser. Two tests use live Steam responses and therefore
-  require network access. Thumbnail cache: CDN scaling only for Steam image
-  hosts, still-frame JPEG extraction from animated previews (skipping a black
-  fade-in, keeping frame 0 for bright, uniformly dark or still sources), one download per
-  URL under concurrent requests, disk hits across instances, fallback when the
-  CDN refuses scaling, no cache entry after a failed fetch, the concurrency cap
-  and oldest-first pruning; the animated relay returns Steam's bytes on its own
-  lane and refuses single-frame sources without a request; the scheme handler
-  refuses thumbnail and animated ids it has not announced. An offscreen WebKit
-  regression (`ControlPanelLayoutTests`) checks that Discover tiles load the
-  still first, admit the animation beneath it, fade the still out only for a
-  bright animation and never for a black one, and skip single-frame previews.
-- **Downloads** — private terminals per job, transfers side by side up to the
-  slot limit once the first job's sign-in is accepted and saved (siblings start
-  silently while it still transfers), the queue waiting behind a job that is
-  still authenticating or renewing a stale sign-in, serial order without a
-  saved sign-in, a Steam "logged in elsewhere" kick re-queuing the ended job
-  and turning the queue serial, per-job secrets,
-  saved-sign-in handoff to the next job, cancellation, duplicate-click
-  suppression, FIFO handoff after failure/cancel, shutdown without launching
-  queued work, staging reclaim limited to directories nothing is writing to,
-  protection against stale credential rejections erasing a newer session,
-  retained-intent setup/account progression, explicit shared-resource consent
-  including reinstall, resource-job deduplication, account correction, removal
-  preventing resumption, and download-speed sampling (see
-  [renderer.md](renderer.md) for the `nettop` streaming detail).
-- **Steam runtime** — SteamCMD setup against isolated preferences/directories,
-  `URLProtocol` archives, real system `tar`, and owned child processes:
-  publication/replacement, invalid discovery, traversal/link/archive-size
-  boundaries, the updater's contained sibling Frameworks link, network failures,
-  signature-policy blocking, cancellation, and no late writes. Runtime fixtures
-  exercise canonical macOS path aliases and nested Mach-O executable
-  dependencies. Approval tests use isolated fixtures only: exact SHA-256
-  receipts, signature/policy-failure rejection, stale candidates, changed
-  resources, private copies, quarantine scope, same-path retry/relaunch, and
-  explicit discard. An installation-to-downloader regression launches the
-  published executable through the real PTY downloader and asserts imported
-  manifest and media bytes. Fixtures do not prove that Valve's current
-  distribution passes this Mac's policy.
-- **GitHub updates** — fixture JSON and a fake client: version comparison, asset
-  selection, host allowlisting, progress clamping, classified errors, install
-  retry/timeout. They never contact GitHub, download a real archive, or replace
-  the running app.
-- **Panel** — offscreen `NSHostingController` layout proposals at 760×560,
-  960×640, and 1240×800 in English and Chinese, asserting the root accepts each
-  window width without forcing a taller window; an offscreen `WKWebView`
-  regression that loads the bundled interface under its custom scheme, waits for
-  the native reply bridge, routes a `navigate` message to Settings, and rejects
-  a non-allowlisted external URL; an English/Simplified Chinese regression that
-  checks the injected language, rendered navigation/accessibility labels, settings
-  and result summary, plus locale fallback and literal placeholder substitution;
-  a language-switch regression that sends `languageSetting` and confirms the
-  page re-renders in place, the picker offers every shipped language under its
-  own name, and an unshipped tag is refused. Panel tests that read rendered
-  labels must pass `appLanguage: .english()` (`Tests/Unit/Support/TestAppLanguage.swift`)
-  or a store built with explicit `systemLanguages`: the default
-  `AppLanguageStore.shared` follows the developer's in-app language choice, so an
-  implicit store renders Chinese on a Mac where the app was switched to 简体中文
-  and English-wording assertions fail. `Tests/Unit/Localization/` covers
-  the preference store: system matching, persistence, the `AppleLanguages`
-  mirror and rejected tags. Python catalog checks
-  (`scripts/tests/test_panel_localization.py`) require the Swift registry, the
-  `i18n.js` registry, `WebUI/locales/` and both `.xcstrings` to name the same
-  languages, every native key to be translated, every catalog to hold the same
-  keys, and reject duplicate/empty entries, missing direct-call and
-  static-markup translations, and placeholder mismatches; an About-updates regression that checks,
-  downloads, and refuses to install without a window, plus a snapshot mapping of
-  idle/available/ready actions; a `dismissError` regression where a
-  library-refresh failure and a download failure raised through the real
-  download path are reported once, stay suppressed after dismissal, and surface
-  again when the same failure recurs after a successful refresh; and a hidden
-  download fixture that observes password-prompt/downloading transitions.
-  Editor-state tests cover locale-specific scaling, invalid raw text, and
-  independent wallpaper/field drafts.
-- **Appearance** — preference recreation, rejection of invalid changes without
-  overwriting saved values, recovery from a damaged saved accent, reset
-  isolation, plus an offscreen appearance regression that commits the real
-  Appearance controls through the native bridge, changes accent/tone, resets,
-  simulates live native appearance changes on a detached view, verifies explicit
-  Light wins over Dark, and reloads through the WebContent recovery path with
-  saved customizations intact.
-- **Desktop posters** — synthetic renderer pixels and an in-memory workspace:
-  lossless PNG dimensions/channel order/orientation, malformed frames,
-  synchronous frame requests (no Apply debounce), first-frame delivery to all
-  Spaces without a Space-change event, stale old-layer completion, automatic
-  retry, independent display/Space originals, duplicate-frame suppression,
-  immutable frame URLs with reference-aware cleanup, legacy journal migration,
-  relaunch recovery, external wallpaper changes, and write failures. Topology
-  and native option/path translation use fixtures, including empty
-  inherited/default native selections, exact pathless-option restoration across
-  relaunch, rejected native acknowledgements, and unreadable-original errors.
-  Empty native dictionaries are retained verbatim rather than replaced with a
-  guessed static default image. Coordinator tests use unattached
-  `CAMetalLayer`s and injected notification/encoding services.
-- **Lock screen** — per-display ownership, independent originals, external
-  Desktop changes, journal recovery after service-reload failure, inherited
-  Space cleanup, system-copied fallback restoration, global linked conflicts,
-  and a poster-handoff regression covering a pathless original, retention of its
-  poster and recovery journal, and rejection of delayed encoding completions
-  after suspension. No test selects a real wallpaper.
-
-What native tests do **not** establish: macOS acceptance/restoration of native
-wallpaper selections, live GitHub release install, archive extraction and
-Applications replacement, Steam CDN throughput, live-account session reuse,
-Mission Control cache refresh, and any visual timing. Those stay on
-[manual-smoke.md](manual-smoke.md).
+The domain-by-domain inventory of what the Swift bundle asserts, and the limits
+of each claim, is in [coverage.md](coverage.md). Check it before writing a test:
+most behaviors already have a home, and several entries name explicitly what
+they do not establish.
 
 ## Adding a test
 

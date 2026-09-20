@@ -6,6 +6,28 @@ static library that in turn statically links a C++ scene renderer.
 
 For the directory map and where new code belongs, see [repository-layout.md](repository-layout.md).
 
+This document is long because it spans four runtimes. Read the section you need
+rather than the whole file:
+
+| Section | Read it when |
+|---|---|
+| [Layers](#layers) | Orienting for the first time; each subsection below stands alone |
+|  [AppKit shell](#appkit-shell) | Touching app startup, windows or the status item |
+|  [Control panel: WKWebView and the JavaScript bridge](#control-panel-wkwebview-and-the-javascript-bridge) | Changing `WebUI/`, the message bridge, CSP or asset allowlisting |
+|  [Observable state](#observable-state) | Adding state that views or the panel observe |
+|  [Service layer](#service-layer) | Adding domain logic, networking or persistence under `App/Services/` |
+|  [Desktop wallpaper windows and private-API handling](#desktop-wallpaper-windows-and-private-api-handling) | Working on wallpaper presentation, Spaces or displays |
+|  [Renderer bridge (generated uniffi)](#renderer-bridge-generated-uniffi) | Changing the Swift↔Rust boundary or regenerating bindings |
+|  [Rust crates and the C++ scene engine](#rust-crates-and-the-c-scene-engine) | Working inside `upstream/renderer` |
+|  [Lock-screen extension](#lock-screen-extension) | Touching `Extension/` or `Shared/` |
+| [Build-time dependency chain](#build-time-dependency-chain) | A build fails or you add a dependency |
+| [Ours versus vendored](#ours-versus-vendored) | Deciding whether a change belongs in `upstream/` |
+| [Homebrew linkage and bundling](#homebrew-linkage-and-bundling) | Diagnosing dylib, rpath or packaging problems |
+| [Targets](#targets) | Adding a target or moving a file between them |
+| [Runtime and build relationships](#runtime-and-build-relationships) | Tracing what talks to what at runtime |
+| [Invariants and constraints](#invariants-and-constraints) | Before changing anything structural — these are the rules |
+| [Where to look](#where-to-look) | You know the symptom but not the file |
+
 ## Layers
 
 ### AppKit shell

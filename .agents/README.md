@@ -13,7 +13,7 @@ themselves live in [`../AGENTS.md`](../AGENTS.md); human contributors start at
 | `.agents/skills/<name>/` | no | Vendored third-party skill text, restored locally |
 | `.pi/settings.json` | no | Local harness settings (skill discovery overrides) |
 | `.claude/skills/<name>` | no | Claude Code discovery: symlink to `.agents/skills/<name>` |
-| `.omp/rules/` | yes | Always-apply harness rules, e.g. release-build-on-feature |
+| `.omp/rules/` | yes | Always-apply harness rules, e.g. release-build-on-request |
 | `.omp/` | no | Other local harness scratch state |
 
 `AGENTS.md` stays at the repository root: the vendored skill entry points link to

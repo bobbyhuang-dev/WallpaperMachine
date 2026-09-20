@@ -2,7 +2,27 @@ import XCTest
 @testable import MacWallpaperEngine
 
 final class WorkshopTests: XCTestCase {
+    /// Skips the case unless live-network tests are opted in.
+    ///
+    /// The `testLive…` cases below contact Steam's real community pages, so they
+    /// depend on network access and on Valve's current markup and result set. A
+    /// failure there says nothing about this tree, but it still turns the routine
+    /// gate red and invites a pointless re-run, so they are opt-in:
+    ///
+    /// ```
+    /// MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1 python3 scripts/test.py
+    /// ```
+    ///
+    /// Steam's page format itself stays covered offline: `decodePage` is exercised
+    /// against recorded markup by `WorkshopStoreTests`.
+    private func skipUnlessNetworkTestsEnabled() throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["MAC_WALLPAPER_ENGINE_NETWORK_TESTS"] == "1",
+            "live Steam tests are opt-in; set MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1")
+    }
+
     func testLiveSearchRespectsTypeAndPagination() async throws {
+        try skipUnlessNetworkTestsEnabled()
         let service = WorkshopService()
         let first = try await service.browse(search: "forest", kind: .scene, sort: .popular, page: 1)
         let second = try await service.browse(search: "forest", kind: .scene, sort: .popular, page: 2)
@@ -13,6 +33,7 @@ final class WorkshopTests: XCTestCase {
     }
 
     func testLiveEmptySearchIsNotReplacedByUnrelatedResults() async throws {
+        try skipUnlessNetworkTestsEnabled()
         let result = try await WorkshopService().browse(search: "zzqvwxjkrpnmabcxyzqvwxjkrpnmabcxyz", kind: .scene, sort: .relevance, page: 1)
         XCTAssertTrue(result.items.isEmpty)
         XCTAssertEqual(result.totalCount, 0)

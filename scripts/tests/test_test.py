@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -41,6 +43,51 @@ class TestXcodebuildCommand(unittest.TestCase):
 
     def test_action_stays_last(self):
         self.assertEqual(runner.xcodebuild_command("S", "T", Path("/tmp/r.xcresult"), ["A"])[-1], "test")
+
+    def flag(self, name, **kwargs):
+        command = runner.xcodebuild_command("S", "T", Path("/tmp/r.xcresult"), **kwargs)
+        return command[command.index(name) + 1]
+
+    def test_parallel_testing_is_on_by_default_and_can_be_turned_off(self):
+        self.assertEqual(self.flag("-parallel-testing-enabled"), "YES")
+        self.assertEqual(self.flag("-parallel-testing-enabled", parallel=False), "NO")
+
+
+class PruneResultBundles(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.directory, ignore_errors=True)
+
+    def bundles(self, count):
+        for index in range(count):
+            (self.directory / f"Tests-{index:03d}.xcresult").mkdir()
+
+    def remaining(self):
+        return sorted(entry.name for entry in self.directory.iterdir())
+
+    def test_keeps_the_newest_and_deletes_the_rest(self):
+        self.bundles(5)
+        runner.prune_result_bundles(keep=2, directory=self.directory)
+        self.assertEqual(self.remaining(), ["Tests-003.xcresult", "Tests-004.xcresult"])
+
+    def test_keeps_everything_when_under_the_limit(self):
+        self.bundles(2)
+        self.assertEqual(runner.prune_result_bundles(keep=5, directory=self.directory), [])
+        self.assertEqual(len(self.remaining()), 2)
+
+    def test_leaves_other_files_alone(self):
+        self.bundles(3)
+        (self.directory / "notes.txt").write_text("keep me")
+        runner.prune_result_bundles(keep=1, directory=self.directory)
+        self.assertEqual(self.remaining(), ["Tests-002.xcresult", "notes.txt"])
+
+
+class OptInVariables(unittest.TestCase):
+    def test_both_opt_in_layers_are_forwarded(self):
+        self.assertEqual(
+            set(runner.OPT_IN_VARIABLES),
+            {"MAC_WALLPAPER_ENGINE_MEDIA_TESTS", "MAC_WALLPAPER_ENGINE_NETWORK_TESTS"},
+        )
 
 
 if __name__ == "__main__":

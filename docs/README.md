@@ -35,7 +35,8 @@ live under `testing/`.
 
 | Document | Purpose |
 |---|---|
-| [testing/README.md](testing/README.md) | Test strategy, how to run each layer, evidence policy |
+| [testing/README.md](testing/README.md) | Test strategy, verification tiers, how to run each layer, evidence policy |
+| [testing/coverage.md](testing/coverage.md) | Domain-by-domain inventory of what the native tests assert, and their limits |
 | [testing/renderer.md](testing/renderer.md) | Headless renderer/GPU checks, probe environment variables, known regressions |
 | [testing/manual-smoke.md](testing/manual-smoke.md) | Manual release smoke checklist |
 | [testing/power-benchmark.md](testing/power-benchmark.md) | Configuration manifest, runtime counters, condition matrix and comparison rules for power claims |

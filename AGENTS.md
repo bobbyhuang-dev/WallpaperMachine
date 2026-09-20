@@ -58,16 +58,17 @@ Read only task-relevant sections; keep this file to durable rules and routing.
   `python3 scripts/test.py --only <TestClass>` for the touched domain, then run the
   full gate **once** at the end; no Release build, no log entry unless the user asks
   or the fix changed a documented behavior. Feature or cross-domain change: full gate
-  plus the release build and log entry below. Never run the full gate more than once
-  per task unless it failed.
+  plus a log entry. Never run the full gate more than once per task unless it failed.
 - Routine gate: `python3 scripts/test.py` (Python → XcodeGen → native unit/integration).
   Add `python3 scripts/check_renderer.py` for renderer changes; preserve applicable
   [renderer/download regressions](docs/testing/renderer.md#regression-areas-that-must-stay-covered).
   Report skipped asset checks as skipped; the [local corpus](docs/testing/wallpaper-corpus.md)
   is not a passing suite. Docs/skill-only changes: check links, paths and commands;
   no app build or desktop test.
-- Release builds after every new feature (`.omp/rules/release-build-on-feature.md`)
-  and for an explicit build/delivery request:
+- Release builds on request, not by default (`.omp/rules/release-build-on-request.md`):
+  build when the user asks to build, deliver, install or try it, and when a change
+  cannot be verified any other way. Otherwise finish at the gate and say the app was
+  not rebuilt.
   `python3 scripts/build.py --swift-only --configuration Release` for Swift/WebUI/resources/config
   with current renderer/bindings; `python3 scripts/build.py --configuration Release`
   for renderer/bridge changes or missing outputs.

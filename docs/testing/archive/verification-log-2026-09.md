@@ -4021,3 +4021,28 @@ now-playing on the desktop. Cause was not "models discarded":
   SUCCEEDED **`. Delivered binary
   `build/Build/Products/Release/MacWallpaperEngine.app`. The app was not
   launched.
+
+## 2026-09-20 — Launch crash: MediaRemote copied a non-escaping reply block
+
+Applying a desktop Scene wallpaper now starts the shared media session. On
+this machine that calls `MRMediaRemoteGetNowPlayingInfo`, which copies the
+reply block. The Swift wrapper typed that block as non-escaping
+(`@convention(block)` without `@escaping`), so the runtime trapped
+(`EXC_BREAKPOINT`, `non-escaping closure has escaped`) on the main thread
+during `FallbackSystemMediaProvider.addConsumer` →
+`MediaRemoteMediaProvider.probe`. The C function types now mark the reply
+as escaping. A unit test retains the block the way MediaRemote does and
+delivers the dictionary after return. No desktop / Peekaboo / `--ui`;
+whether Music or Spotify now reach SceneScript still needs a requested
+desktop check after quit/reopen.
+
+- `python3 scripts/test.py` — exit 0, 511 native tests, 502 passed, 9
+  skipped, 0 failures (new
+  `testCopyingTheMediaRemoteReplyBlockDoesNotTrap`).
+- `python3 scripts/build.py --swift-only --configuration Release` — first
+  attempt failed CodeSign (`resource fork, Finder information, or similar
+  detritus not allowed` on the existing Release `.app` /
+  `.appex`, `com.apple.FinderInfo` + File Provider xattrs). Cleared those
+  with `xattr -cr` and the same command exited 0, `** BUILD SUCCEEDED **`.
+  Delivered binary `build/Build/Products/Release/MacWallpaperEngine.app`.
+  The app was not launched.

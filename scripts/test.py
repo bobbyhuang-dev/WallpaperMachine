@@ -8,10 +8,15 @@ the Swift test bundle. Result bundles land in `artifacts/tests/` and are disposa
 `--only` narrows the native run to test classes or methods
 (`--only LibraryStoreTests --only WorkshopSearchTests/testPagination`) for quick
 iteration on a small change; the full gate is still the default and the final word.
+
+Opt-in layers are off by default and are requested through the environment:
+`MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1` (real video decoding) and
+`MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1` (live Steam pages).
 """
 import argparse
 from datetime import datetime
 import os
+import shutil
 import subprocess
 import sys
 
@@ -22,6 +27,14 @@ MARK = markers()
 SCRIPT_TESTS = sorted((ROOT / "scripts/tests").glob("test_*.py"))
 NATIVE_TARGET = "MacWallpaperEngineTests"
 UI_TARGET = "MacWallpaperEngineUITests"
+
+# Opt-in test layers. xcodebuild does not hand its own environment to the hosted test
+# process; `TEST_RUNNER_`-prefixed variables are forwarded with the prefix stripped,
+# which is what makes these reach the tests that gate themselves on them.
+OPT_IN_VARIABLES = ("MAC_WALLPAPER_ENGINE_MEDIA_TESTS", "MAC_WALLPAPER_ENGINE_NETWORK_TESTS")
+
+# Result bundles are tens of megabytes each and only the newest ones are ever read.
+KEPT_RESULT_BUNDLES = 5
 
 
 def test_identifiers(target, only):
@@ -37,15 +50,29 @@ def test_identifiers(target, only):
     return identifiers or [target]
 
 
-def xcodebuild_command(scheme, target, result, only=None):
+def xcodebuild_command(scheme, target, result, only=None, parallel=True):
     command = [
         "xcodebuild", "-project", XCODEPROJ.name,
         "-scheme", scheme, "-configuration", "Debug", "-derivedDataPath", str(BUILD),
         "-destination", "platform=macOS,arch=arm64", "-resultBundlePath", str(result),
     ]
     command += ["-only-testing:" + identifier for identifier in test_identifiers(target, only)]
+    # Test classes run in parallel worker processes. Every suite already isolates its
+    # state through `MAC_WALLPAPER_ENGINE_HOME`, temporary directories and per-test
+    # `UserDefaults` suites, so workers do not share a home, a preferences domain or a
+    # staging tree. Most of the wall clock is spent waiting on debounce intervals and
+    # child-process reaping, which overlaps well.
+    command += ["-parallel-testing-enabled", "YES" if parallel else "NO"]
     command += ["-maximum-test-execution-time-allowance", "90", "-test-timeouts-enabled", "YES", "test"]
     return command
+
+
+def prune_result_bundles(keep=KEPT_RESULT_BUNDLES, directory=TEST_ARTIFACTS):
+    """Delete all but the `keep` newest result bundles, newest by name."""
+    bundles = sorted((entry for entry in directory.glob("*.xcresult") if entry.is_dir()), reverse=True)
+    for stale in bundles[keep:]:
+        shutil.rmtree(stale, ignore_errors=True)
+    return bundles[keep:]
 
 
 def main():
@@ -54,6 +81,10 @@ def main():
     parser.add_argument(
         "--only", action="append", metavar="CLASS[/METHOD]",
         help="Run only this native test class or method (repeatable). Skips the Python script tests.",
+    )
+    parser.add_argument(
+        "--serial", action="store_true",
+        help="Run test classes one at a time instead of in parallel (for diagnosing interference).",
     )
     args = parser.parse_args()
     scheme = "MacWallpaperEngineUI" if args.ui else "MacWallpaperEngine"
@@ -73,20 +104,17 @@ def main():
     TEST_ARTIFACTS.mkdir(parents=True, exist_ok=True)
     prefix = "UI-" if args.ui else "Tests-"
     result = TEST_ARTIFACTS / (prefix + datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".xcresult")
-    command = xcodebuild_command(scheme, target, result, args.only)
+    # UI tests drive one desktop and cannot share it with a second worker.
+    command = xcodebuild_command(scheme, target, result, args.only, parallel=not (args.serial or args.ui))
     env = dict(os.environ)
-    # xcodebuild does not hand its own environment to the hosted test process.
-    # `TEST_RUNNER_`-prefixed variables are forwarded with the prefix stripped,
-    # which is what makes the documented opt-in
-    # `MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1 python3 scripts/test.py` reach the
-    # tests that gate themselves on it.
-    for name in ("MAC_WALLPAPER_ENGINE_MEDIA_TESTS",):
+    for name in OPT_IN_VARIABLES:
         if name in env:
             env["TEST_RUNNER_" + name] = env[name]
     completed = subprocess.run(command, cwd=ROOT, env=env)
     if (result / "Info.plist").exists():
         subprocess.run(["xcrun", "xcresulttool", "get", "test-results", "summary", "--path", str(result)], cwd=ROOT)
     print(f"{MARK.step} Test evidence: {result}")
+    prune_result_bundles()
     return completed.returncode
 
 

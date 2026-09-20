@@ -25,6 +25,26 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-20 — Parallel native tests, opt-in live Steam cases, doc split, build-on-request
+
+Follow-up to the tiered gate. Test classes now run in parallel worker processes
+(`-parallel-testing-enabled YES`, `--serial` to diagnose interference); the two
+`testLive…` Workshop cases became opt-in behind
+`MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1`; `scripts/test.py` keeps the five newest
+result bundles; `scripts/build.py` also uses `xcodegen --use-cache`. Coverage
+inventory moved to `docs/testing/coverage.md`, `docs/architecture.md` gained a
+section index, and the Release build is now on request
+(`.omp/rules/release-build-on-request.md`) rather than after every feature.
+
+- `python3 scripts/tests/test_test.py` — 10 tests OK (identifiers, parallel flag,
+  bundle pruning, opt-in variable list).
+- `python3 scripts/test.py` — Python script tests OK; native 529 tests, 518 passed,
+  11 skipped, 0 failures, 1m12 wall clock (was 2m41 serial). Three parallel runs,
+  no interference; skips are 9 asset/media + the 2 live Steam cases.
+- `MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1 python3 scripts/test.py --only WorkshopTests`
+  — 7 passed, 0 skipped; without the variable, 5 passed, 2 skipped.
+- No Release build: tooling and docs only, no delivery requested.
+
 ## 2026-09-20 — Tiered verification: `scripts/test.py --only`, xcodegen cache, small-fix gate
 
 Small bug fixes were paying the full gate twice plus a Release build (~20 min).
@@ -457,28 +477,3 @@ the end.
   was not launched. Whether Music or Spotify actually reach SceneScript needs a
   requested desktop check after quit/reopen, with the per-wallpaper *Media
   integration* toggle turned on and Automation permission granted.
-
-## 2026-09-20 — Launch crash: MediaRemote copied a non-escaping reply block
-
-Applying a desktop Scene wallpaper now starts the shared media session. On
-this machine that calls `MRMediaRemoteGetNowPlayingInfo`, which copies the
-reply block. The Swift wrapper typed that block as non-escaping
-(`@convention(block)` without `@escaping`), so the runtime trapped
-(`EXC_BREAKPOINT`, `non-escaping closure has escaped`) on the main thread
-during `FallbackSystemMediaProvider.addConsumer` →
-`MediaRemoteMediaProvider.probe`. The C function types now mark the reply
-as escaping. A unit test retains the block the way MediaRemote does and
-delivers the dictionary after return. No desktop / Peekaboo / `--ui`;
-whether Music or Spotify now reach SceneScript still needs a requested
-desktop check after quit/reopen.
-
-- `python3 scripts/test.py` — exit 0, 511 native tests, 502 passed, 9
-  skipped, 0 failures (new
-  `testCopyingTheMediaRemoteReplyBlockDoesNotTrap`).
-- `python3 scripts/build.py --swift-only --configuration Release` — first
-  attempt failed CodeSign (`resource fork, Finder information, or similar
-  detritus not allowed` on the existing Release `.app` /
-  `.appex`, `com.apple.FinderInfo` + File Provider xattrs). Cleared those
-  with `xattr -cr` and the same command exited 0, `** BUILD SUCCEEDED **`.
-  Delivered binary `build/Build/Products/Release/MacWallpaperEngine.app`.
-  The app was not launched.

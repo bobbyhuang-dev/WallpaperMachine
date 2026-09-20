@@ -45,6 +45,9 @@ pub struct OweBackend;
 
 pub type FirstFrameCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 pub type PointerInputCallback = Arc<dyn Fn(bool) + Send + Sync + 'static>;
+/// Receives one `engine.openUserShortcut` request: the property the wallpaper
+/// named, and the value its user chose for it.
+pub type UserShortcutCallback = Arc<dyn Fn(String, String) + Send + Sync + 'static>;
 
 impl OweBackend {
     /// Initializes access to the statically linked backend.
@@ -744,6 +747,38 @@ impl OweScene {
     ///
     /// Returns [`EngineError`] if coordinates are non-finite, the scene is
     /// closed, or OWE rejects the update.
+    /// Installs the sink for `engine.openUserShortcut` requests.
+    ///
+    /// The callback receives the property the wallpaper named and the value its
+    /// user chose for it. What that value means is decided above this layer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if the scene is closed or OWE rejects the
+    /// registration.
+    pub fn set_user_shortcut_callback(
+        &mut self,
+        callback: Option<UserShortcutCallback>,
+    ) -> Result<(), EngineError> {
+        let raw = self.raw_ptr()?;
+        let user_data = callback.map_or(std::ptr::null_mut(), |callback| {
+            Box::into_raw(Box::new(callback)).cast::<c_void>()
+        });
+        let result = call_status("owe_scene_wallpaper_set_user_shortcut_callback", || unsafe {
+            sys::owe_scene_wallpaper_set_user_shortcut_callback(
+                raw.as_ptr(),
+                if user_data.is_null() { None } else { Some(owe_user_shortcut_callback) },
+                user_data,
+                if user_data.is_null() { None } else { Some(owe_user_shortcut_callback_drop) },
+            )
+        });
+        if result.is_err() && !user_data.is_null() {
+            // Failed registration never consumes the caller's userdata.
+            drop(unsafe { Box::<UserShortcutCallback>::from_raw(user_data.cast()) });
+        }
+        result
+    }
+
     pub fn set_mouse_position(&mut self, x: f64, y: f64) -> Result<(), EngineError> {
         if !x.is_finite() || !y.is_finite() {
             return Err(EngineError::InvalidInput(
@@ -1136,6 +1171,35 @@ unsafe extern "C-unwind" fn owe_pointer_input_callback_drop(user_data: *mut c_vo
     let _ = catch_unwind(AssertUnwindSafe(|| {
         if !user_data.is_null() {
             drop(unsafe { Box::<PointerInputCallback>::from_raw(user_data.cast()) });
+        }
+    }));
+}
+
+unsafe extern "C-unwind" fn owe_user_shortcut_callback(
+    user_data: *mut c_void,
+    property_name: *const c_char,
+    property_value: *const c_char,
+) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if user_data.is_null() {
+            return;
+        }
+        // A request that cannot name its property is not one a host can act on,
+        // and an unreadable value would be a choice nobody made.
+        let (Some(name), Some(value)) =
+            (copy_c_string(property_name), copy_c_string(property_value))
+        else {
+            return;
+        };
+        let callback = unsafe { &*user_data.cast::<UserShortcutCallback>() };
+        callback(name, value);
+    }));
+}
+
+unsafe extern "C-unwind" fn owe_user_shortcut_callback_drop(user_data: *mut c_void) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if !user_data.is_null() {
+            drop(unsafe { Box::<UserShortcutCallback>::from_raw(user_data.cast()) });
         }
     }));
 }

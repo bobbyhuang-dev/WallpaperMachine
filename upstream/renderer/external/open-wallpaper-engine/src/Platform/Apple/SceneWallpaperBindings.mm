@@ -288,6 +288,28 @@ struct PointerInputCallbackRegistration {
     }
 };
 
+struct UserShortcutCallbackRegistration {
+    owe_user_shortcut_callback callback { nullptr };
+    void* user_data { nullptr };
+    owe_user_shortcut_callback_drop drop_user_data { nullptr };
+
+    UserShortcutCallbackRegistration(owe_user_shortcut_callback callback, void* user_data)
+        : callback(callback), user_data(user_data) {}
+
+    ~UserShortcutCallbackRegistration() {
+        if (drop_user_data != nullptr) drop_user_data(user_data);
+    }
+
+    void operator()(std::string_view property_name, std::string_view property_value) const {
+        if (callback == nullptr) return;
+        // The engine's strings are not null-terminated views of storage the
+        // callee may keep; both are copied for the length of the call only.
+        const std::string name(property_name);
+        const std::string value(property_value);
+        callback(user_data, name.c_str(), value.c_str());
+    }
+};
+
 int finish_with_error_noexcept(const char* message) noexcept {
     try {
         return finish_with_error(message);
@@ -302,6 +324,7 @@ struct owe_scene_wallpaper {
     wallpaper::SceneWallpaper scene;
     std::shared_ptr<FirstFrameCallbackRegistration> first_frame_callback;
     std::shared_ptr<PointerInputCallbackRegistration> pointer_input_callback;
+    std::shared_ptr<UserShortcutCallbackRegistration> user_shortcut_callback;
 };
 
 #ifdef WESCENE_BUILD_TESTS
@@ -529,6 +552,34 @@ extern "C" int owe_scene_wallpaper_set_pointer_input_callback(
         return 0;
     } catch (...) {
         return finish_with_error_noexcept("failed to register pointer-input callback");
+    }
+}
+
+extern "C" int owe_scene_wallpaper_set_user_shortcut_callback(
+    owe_scene_wallpaper* scene,
+    owe_user_shortcut_callback callback,
+    void* user_data,
+    owe_user_shortcut_callback_drop drop_user_data)
+{
+    try {
+        clear_last_error();
+        if (!valid_scene(scene)) return finish_with_error("scene must not be null");
+        if (!scene->scene.inited()) return finish_with_error("scene must be initialized");
+
+        // Keep drop unarmed until the registration is installed, exactly as the
+        // pointer callback does: a failure here must not consume user_data.
+        auto registration =
+            std::make_shared<UserShortcutCallbackRegistration>(callback, user_data);
+        auto forwarder = std::make_shared<wallpaper::UserShortcutCallback>(
+            [registration](std::string_view name, std::string_view value) {
+                (*registration)(name, value);
+            });
+        scene->scene.setPropertyObject(wallpaper::PROPERTY_USER_SHORTCUT_CALLBACK, forwarder);
+        registration->drop_user_data = drop_user_data;
+        scene->user_shortcut_callback = std::move(registration);
+        return 0;
+    } catch (...) {
+        return finish_with_error_noexcept("failed to register user-shortcut callback");
     }
 }
 

@@ -28,6 +28,15 @@ typedef void (*owe_first_frame_callback_drop)(void* user_data);
 typedef void (*owe_pointer_input_callback)(void* user_data, bool accepts_pointer_input);
 typedef void (*owe_pointer_input_callback_drop)(void* user_data);
 
+/*
+ * One `engine.openUserShortcut` request: the property the wallpaper named and
+ * the value its user chose for it. Both strings are owned by the caller and
+ * valid only for the duration of the call.
+ */
+typedef void (*owe_user_shortcut_callback)(void* user_data, const char* property_name,
+                                           const char* property_value);
+typedef void (*owe_user_shortcut_callback_drop)(void* user_data);
+
 void owe_set_log_callback(owe_log_callback callback);
 
 /* Renderer lifetime. */
@@ -119,6 +128,20 @@ int owe_scene_wallpaper_set_first_frame_callback(owe_scene_wallpaper* scene,
 int owe_scene_wallpaper_set_pointer_input_callback(
     owe_scene_wallpaper* scene, owe_pointer_input_callback callback, void* user_data,
     owe_pointer_input_callback_drop drop_user_data);
+
+/*
+ * Reports `engine.openUserShortcut` requests on the native main looper, in the
+ * order the wallpaper made them. Requires an initialized scene. Success
+ * transfers user_data ownership to drop_user_data; failure does not.
+ * Replacing/clearing keeps old userdata alive until its last queued/in-flight
+ * callback is released. A null callback clears notifications.
+ *
+ * What a request means is the host's to decide: the engine neither interprets
+ * the value nor acts on it.
+ */
+int owe_scene_wallpaper_set_user_shortcut_callback(
+    owe_scene_wallpaper* scene, owe_user_shortcut_callback callback, void* user_data,
+    owe_user_shortcut_callback_drop drop_user_data);
 
 /* Direct mouse/pointer forwarding to SceneWallpaper. Coordinates are normalized canvas space. */
 int owe_scene_wallpaper_mouse_input(owe_scene_wallpaper* scene, double x, double y);

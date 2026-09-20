@@ -20,6 +20,9 @@ namespace wallpaper
 
 using FirstFrameCallback = std::function<void()>;
 using PointerInputCallback = std::function<void(bool)>;
+/// Reports one `engine.openUserShortcut` request: the property the wallpaper
+/// named, and the value its user chose for that property.
+using UserShortcutCallback = std::function<void(std::string_view, std::string_view)>;
 
 constexpr std::string_view PROPERTY_SOURCE                    = "source";
 constexpr std::string_view PROPERTY_ASSETS                    = "assets";
@@ -45,6 +48,7 @@ constexpr std::string_view PROPERTY_CACHE_PATH             = "cache_path";
 constexpr std::string_view PROPERTY_FORCE_SHADER_REFRESH   = "force_shader_refresh";
 constexpr std::string_view PROPERTY_FIRST_FRAME_CALLBACK   = "first_frame_callback";
 constexpr std::string_view PROPERTY_POINTER_INPUT_CALLBACK = "pointer_input_callback";
+constexpr std::string_view PROPERTY_USER_SHORTCUT_CALLBACK = "user_shortcut_callback";
 
 #include "Core/NoCopyMove.hpp"
 class MainHandler;

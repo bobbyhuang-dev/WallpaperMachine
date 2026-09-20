@@ -348,6 +348,7 @@ public:
         CMD_STOP,
         CMD_FIRST_FRAME,
         CMD_POINTER_INPUT_CHANGED,
+        CMD_USER_SHORTCUT,
         CMD_NO
     };
 
@@ -372,6 +373,7 @@ public:
                 CASE_CMD(STOP);
                 CASE_CMD(FIRST_FRAME);
                 CASE_CMD(POINTER_INPUT_CHANGED);
+                CASE_CMD(USER_SHORTCUT);
             default: break;
             }
         }
@@ -380,6 +382,7 @@ public:
     void sendCmdLoadScene();
     void sendFirstFrameOk();
     void sendPointerInputCapability(bool accepts_pointer_input);
+    void sendUserShortcut(std::string_view property_name, std::string_view property_value);
     bool isGenGraphviz() const { return m_gen_graphviz; }
 
 private:
@@ -396,6 +399,7 @@ private:
     MHANDLER_CMD(STOP);
     MHANDLER_CMD(FIRST_FRAME);
     MHANDLER_CMD(POINTER_INPUT_CHANGED);
+    MHANDLER_CMD(USER_SHORTCUT);
 
 private:
     bool m_inited { false };
@@ -413,6 +417,7 @@ private:
     std::unique_ptr<audio::SoundManager> m_sound_manager;
     FirstFrameCallback                   m_first_frame_callback;
     PointerInputCallback                 m_pointer_input_callback;
+    UserShortcutCallback                 m_user_shortcut_callback;
     bool                                 m_accepts_pointer_input { true };
 
 private:
@@ -1050,6 +1055,12 @@ private:
             if (m_scene->runtime != nullptr) {
                 m_scene->runtime->Tick(frame_time);
                 m_scene->runtime->PumpTextLayerCache();
+                // After the tick that produced them, and on the main looper
+                // rather than here: what a press means is the host's to decide,
+                // and deciding it must never sit in front of a frame.
+                for (const auto& [name, value] : m_scene->runtime->TakeUserShortcutRequests()) {
+                    main_handler.sendUserShortcut(name, value);
+                }
                 if (m_scene->runtime->ConsumeSceneGraphMutationFlag()) {
                     frame_ok = rebuildRenderGraph();
                 }
@@ -1908,6 +1919,11 @@ MHANDLER_CMD_IMPL(MainHandler, SET_PROPERTY) {
                 m_pointer_input_callback = std::move(*cb);
                 if (m_pointer_input_callback) m_pointer_input_callback(m_accepts_pointer_input);
             }
+        } else if (property == PROPERTY_USER_SHORTCUT_CALLBACK) {
+            std::shared_ptr<UserShortcutCallback> cb;
+            if (msg->findObject("value", &cb) && cb != nullptr) {
+                m_user_shortcut_callback = std::move(*cb);
+            }
         } else if (property == PROPERTY_SPEED) {
             float speed { 1.0f };
             if (msg->findFloat("value", &speed)) {
@@ -1928,6 +1944,17 @@ MHANDLER_CMD_IMPL(MainHandler, STOP) {
 
 MHANDLER_CMD_IMPL(MainHandler, FIRST_FRAME) {
     if (m_first_frame_callback) m_first_frame_callback();
+}
+
+MHANDLER_CMD_IMPL(MainHandler, USER_SHORTCUT) {
+    std::string name;
+    std::string value;
+    // Both, or neither: a request with no property is not a request, and a
+    // host told only the name would have to guess what its user chose.
+    if (msg->findString("property_name", &name) && msg->findString("property_value", &value) &&
+        m_user_shortcut_callback) {
+        m_user_shortcut_callback(name, value);
+    }
 }
 
 MHANDLER_CMD_IMPL(MainHandler, POINTER_INPUT_CHANGED) {
@@ -2192,6 +2219,16 @@ void MainHandler::sendPointerInputCapability(bool accepts_pointer_input) {
     if (self == nullptr) return;
     auto msg = CreateMsgWithCmd(self, MainHandler::CMD::CMD_POINTER_INPUT_CHANGED);
     msg->setBool("accepts_pointer_input", accepts_pointer_input);
+    msg->post();
+}
+
+void MainHandler::sendUserShortcut(std::string_view property_name,
+                                   std::string_view property_value) {
+    auto self = weak_from_this().lock();
+    if (self == nullptr) return;
+    auto msg = CreateMsgWithCmd(self, MainHandler::CMD::CMD_USER_SHORTCUT);
+    msg->setString("property_name", std::string(property_name));
+    msg->setString("property_value", std::string(property_value));
     msg->post();
 }
 

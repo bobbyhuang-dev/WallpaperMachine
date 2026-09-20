@@ -25,6 +25,15 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — The shortcut request reaches the FFI boundary; the host chain above it does not exist yet
+
+SceneWallpaper drains the runtime's requests after the tick that produced them and reports each on the native main looper, and owe_scene_wallpaper_set_user_shortcut_callback follows the pointer-callback contract exactly. OweScene::set_user_shortcut_callback installs the Rust sink. The buttons are still dead: nothing above the FFI consumes these yet, the three properties hold empty values, and no send path to a media player exists.
+
+- Remaining, in order: a bounded channel per scene in core (the pointer relay uses a watch, which coalesces -- wrong for presses, where play/pause followed by next must not lose one), an actor message tagged with the SceneHandle, a PropertyKind::UserShortcut carrying Combo metadata so the user picks the action, and a Swift consumer that sends it to whichever provider is currently answering
+- Enabling that send changes the bundled adapter from read-only to control, which the mediaremote-adapter provenance note currently states is not done -- that note has to change with it
+- `scripts/test.py` — 523 passed, 0 failed, 11 skipped of 534
+- First run failed on CodeSign with "resource fork, Finder information, or similar detritus not allowed" on the Debug app; `xattr -cr` on the product cleared it, unrelated to any change here
+
 ## 2026-09-21 — engine.openUserShortcut existed nowhere, so every transport button threw
 
 This wallpaper's play/pause, next and previous buttons each have a cursorDown handler whose only statement is engine.openUserShortcut("<property>"). That member was not registered on the engine object at all, so the call threw TypeError, the handler aborted, and the press did nothing -- which is the whole of the reported 切歌无效, not a missing media permission.
@@ -113,16 +122,3 @@ The entry below reported three scenes changing and called them wall-clock text. 
 - `metal_scene_draw_smoke` local gate on 3280146735 — still Native Metal, 120 frames, no `metal translation of … failed`
 - `python3 scripts/check_renderer.py` — exit 0, adaptive-20260920-204029: 10 generated cases `pixels_equal=true`, 0 diagnostics
 - `python3 scripts/test.py` — exit 0, Tests-20260920-210253-762337.xcresult: 519 passed, 0 failed, 11 skipped of 530
-
-## 2026-09-20 — A scalar uniform array had two different layouts
-
-std140 pads every array element to 16 bytes — what the host packs and the reflection reports — while the MSL backend emits the natural tight stride, so `float g_AudioSpectrum64Left[64]` moved every member after it by 768 bytes on Native Metal only. Narrow array members are now declared `vec4 name[N]` with reads swizzled back; see [renderer.md](renderer.md). `ShaderPipelineRevision` 6 → 8.
-
-- Four read paths: direct, array-parameter specialization, `#define` aliases written inside `main` (this one broke five installed wallpapers before it was covered), and local array aliases
-- 3799253558 on Metal, audio vs silence — 929 → 11 428 244 px whole-frame, 0 → 66 995 in the ring annulus; frame 30.0% → 99.8% non-black, its background, flowers and fog back
-- Metal gate over all 10 installed scenes, before and after — backend decisions identical, `metal translation of … failed` 11 → 8, exactly the three repaired shaders
-- Installed corpus (Vulkan probe) — 4 pre-existing failures in 3292361861 before and after; every other scene 0
-- `cargo test -p shader` — 14 binaries, 0 failed; `metal_scene_draw_smoke` — 34 tests, 33 passed, 1 skipped (local gate skips without `WE_TEST_METAL_PROJECTS`)
-- Re-run after rebasing onto `d6e9b78`, which reworked the test runner: `python3 scripts/check_renderer.py` — exit 0, `adaptive-20260920-195302`: 10 generated cases `pixels_equal=true`, 0 diagnostics, 8 projects × 2 reload cycles clean
-- `python3 scripts/test.py` — exit 0, `Tests-20260920-195139-287781.xcresult`: 519 passed, 0 failed, 11 skipped of 530
-- `python3 scripts/build.py --configuration Release` — exit 0; app not launched, no desktop state changed

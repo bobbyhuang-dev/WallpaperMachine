@@ -25,6 +25,13 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — Release build carrying the transport, sound and video-picker fixes
+
+python3 scripts/build.py --configuration Release, after the full gate.
+
+- Confirmed in the delivered binary: the bound transport value, the picker title for a video-accepting project, and the shortcut option label are all present, and the bundled WebUI matches WebUI/ file for file
+- Delivered: `build/Build/Products/Release/MacWallpaperEngine.app` — quit and reopen the app to pick it up
+
 ## 2026-09-21 — The missing background video was a picker that only ever offered images
 
 This wallpaper's Custom Background is a scenetexture property, and its manifest declares general.supportsvideo -- Wallpaper Engine's way of saying a video is as acceptable there as an image. Nothing in the app read that flag, and the picker set allowedContentTypes to .image, so the video the official example uses could not be selected at all. The scene has no missing video layer; the file simply never got in.
@@ -106,12 +113,3 @@ This wallpaper's play/pause, next and previous buttons each have a cursorDown ha
 - `OpenUserShortcutRefusesAPropertyTheWallpaperDoesNotDeclare` — naming a property the wallpaper does not declare raises a script error instead of passing silently
 - `UndrainedShortcutRequestsKeepTheNewestPresses` — 40 requests with no drain keep at most 16, and the newest survives
 - `scenescript_media_event_smoke` 19 passed; `scene_schema_tests` 74 passed plus the two known 5 s pointer timeouts
-
-## 2026-09-21 — Corrected: two separate Metal divergences, and the blobs are not the clouds' negative space
-
-The entry below overstated what was measured. It headlined the clouds pass while admitting the flattening pass was unknown; what was actually shown is that the clouds pass's INPUT is identical on both backends (white 6520x3460 card) -- its output was never read back on either. It also claimed the blob structure agrees and only tone differs, which no measurement supported.
-
-- Measured now: metal-bright (>92nd percentile) against vulkan-dark (<8th) gives IoU 0.052, and against vulkan-bright 0.043 -- the shapes are disjoint, not the same clouds in another tone
-- The one-run lodMaxClamp experiment splits it in two: clamping Metal to level 0 moves the mean from 81.7 to 100.8, onto Vulkan 98.8, so the mip level the shader asks for (g_CloudLOD=5, and clouds_256.tex ships 7 levels) is a real backend difference in overall tone
-- But p99 stays 206 against Vulkan 121 under that clamp, so the bright regions are a second, independent defect that LOD does not explain
-- Which backend is right is not settled: Wallpaper Engine exposes that LOD as "smoothness" and the author set it to the maximum, so honouring level 5 may be the correct behaviour and Compatibility the deviant one

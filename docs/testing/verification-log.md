@@ -25,6 +25,15 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-20 — Corrected: a settings change reloads on the same object, and the harness exists
+
+Two claims in the entry below were wrong. A property change does not produce a new scene handle: set_property_override sets a property on the existing object and SceneWallpaper turns it into LOAD_SCENE on that same object, so the host's fedHandles diff is empty and there is no replay at all — the old runtime is discarded with the old Scene and the new one starts blank. The null-runtime window the entry described is the wallpaper-switch case. Retaining every live event and replaying on attach covers both, and depends on no host timing.
+
+- Also wrong: a headless SceneWallpaper harness does exist — `SceneWallpaperInputTestAccess::PostScene` posts SET_SCENE with a parsed scene and no renderer
+- `SceneSchema.MediaStateSurvivesTheSceneItArrivedBefore` — submits `mediaPlaybackChanged` before any scene, attaches a scene whose script reveals a node on it, asserts the node is visible. Fails on the previous commit with "a scene attached after the event never learned what was playing"
+- `SceneSchema.MediaStateIsNotReplayedAfterConsentIsWithdrawn` — the same sequence with media integration turned off in between leaves the node hidden
+- Still uncovered: publishing the surface size (`publishScreenResolution`), which needs a RenderInitInfo the harness does not supply
+
 ## 2026-09-20 — Retained media events across a scene rebuild; screenResolution is the display
 
 Two fixes the reported symptoms pointed at. MEDIA_EVENT_JSON was dropped whenever the wallpaper had no scene or runtime — the window a settings change opens, and exactly when the host replays state because the rebuilt scene is a new handle. The artwork already survived it by being parked; the events did not, and this wallpaper's cover group is revealed by mediaPlaybackChanged. Separately engine.screenResolution followed the cursor viewport, which is the scene's own world extent.
@@ -122,12 +131,3 @@ std140 pads every array element to 16 bytes — what the host packs and the refl
 - python3 scripts/test.py: 519 passed, 0 failed, 11 skipped (opt-in/asset checks).
 - impeccable detect on WebUI/panel.css, panel.js: no findings.
 - Gap: no desktop run; ring word fit at 60/72px and Chinese rendering not visually checked. Release app not rebuilt.
-
-## 2026-09-20 — Quiet script output, doc archive and rg ignore, log helper, section index, test-file split
-
-Agent-cost pass. `scripts/lib/xcode.py` streams xcodebuild/cargo output to `artifacts/` and echoes only errors, failing tests and a verdict (`--verbose` restores the stream; `xcodegen --quiet`); the two 250 KB plan/progress documents moved to `docs/archive/` and a repository `.ignore` keeps `rg` out of archives, generated bindings and `upstream/`; `scripts/log_verification.py` prepends log entries and archives overflow; `docs/testing/renderer.md` gained a section index; `DownloaderTests` and `ControlPanelLayoutTests` split into five suites each over shared base classes (same 88 test methods, none rewritten).
-
-- `python3 scripts/test.py` — exit 0; 529 native tests: 518 passed, 11 skipped (asset/opt-in), 0 failed, 33 s; 99 Python script tests OK including new `test_xcode.py` (8) and `test_log_verification.py` (8).
-- `python3 scripts/test.py --only ControlPanelSyncTests --only SteamCMDRuntimeValidationTests` — 14 passed; `--only AppThemeTests` after the runner change — 3 passed, three lines of output.
-- Filter replayed over nine archived xcodebuild logs: green runs echo 0 lines, the two failing ones echo 7–8 (assertion, failed case, suite verdict).
-- Not verified: Release build (no app code changed); desktop behaviour untouched.

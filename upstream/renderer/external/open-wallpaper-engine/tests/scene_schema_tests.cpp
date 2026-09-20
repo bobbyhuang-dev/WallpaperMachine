@@ -4313,3 +4313,74 @@ TEST(SceneSchema, ParserCoverageUsesAuthoredRegionOfPaddedRgbaTexture) {
     EXPECT_FALSE(runtime.NodeVisible("puppet image"));
     EXPECT_EQ(runtime.scriptErrorCount(), 0u);
 }
+
+namespace {
+/// A scene whose only content is a script that reveals a node when something
+/// is playing, which is the shape this wallpaper's cover group has.
+std::shared_ptr<wallpaper::Scene> MakeMediaProbeScene(std::shared_ptr<wallpaper::SceneNode>& probe) {
+    auto scene = std::make_shared<wallpaper::Scene>();
+    scene->activeCamera = nullptr;
+    scene->sceneGraph.reset();
+    scene->runtime = wallpaper::CreateSceneRuntimeContext(wallpaper::SceneRuntimeBootstrap {});
+    if (scene->runtime == nullptr) return scene;
+    probe = std::make_shared<wallpaper::SceneNode>();
+    probe->SetVisible(false);
+    scene->runtime->RegisterNode("probe", probe.get());
+    scene->runtime->RegisterSceneScript(
+        R"JS(
+scene.on('mediaPlaybackChanged', function(event) {
+  if (event.state === MediaPlaybackEvent.PLAYBACK_PLAYING) {
+    scene.getObject('probe').visible = true;
+  }
+});
+)JS",
+        "");
+    return scene;
+}
+} // namespace
+
+TEST(SceneSchema, MediaStateSurvivesTheSceneItArrivedBefore) {
+    // The host submits what is playing whenever it learns it, and a wallpaper
+    // being rebuilt -- a property change reloads the scene on the same object,
+    // a wallpaper switch builds a new one -- has no runtime to receive it for
+    // as long as the parse takes. Dropping it there left a scene whose cover
+    // group is revealed by `mediaPlaybackChanged` blank until the user pressed
+    // pause and play again.
+    wallpaper::SceneWallpaper wallpaper;
+    ASSERT_TRUE(wallpaper.init());
+    wallpaper.setPropertyBool(wallpaper::PROPERTY_MEDIA_INTEGRATION_ENABLED, true);
+    wallpaper.setPropertyString(wallpaper::PROPERTY_MEDIA_EVENT_JSON,
+                                R"({"type":"mediaPlaybackChanged","state":0})");
+
+    std::shared_ptr<wallpaper::SceneNode> probe;
+    auto scene = MakeMediaProbeScene(probe);
+    ASSERT_NE(scene->runtime, nullptr);
+    ASSERT_NE(probe, nullptr);
+    ASSERT_FALSE(scene->runtime->NodeVisible("probe"));
+
+    wallpaper::SceneWallpaperInputTestAccess::PostScene(wallpaper, scene);
+    wallpaper.shutdown();
+
+    EXPECT_TRUE(scene->runtime->NodeVisible("probe"))
+        << "a scene attached after the event never learned what was playing";
+    EXPECT_EQ(scene->runtime->scriptErrorCount(), 0u);
+}
+
+TEST(SceneSchema, MediaStateIsNotReplayedAfterConsentIsWithdrawn) {
+    wallpaper::SceneWallpaper wallpaper;
+    ASSERT_TRUE(wallpaper.init());
+    wallpaper.setPropertyBool(wallpaper::PROPERTY_MEDIA_INTEGRATION_ENABLED, true);
+    wallpaper.setPropertyString(wallpaper::PROPERTY_MEDIA_EVENT_JSON,
+                                R"({"type":"mediaPlaybackChanged","state":0})");
+    wallpaper.setPropertyBool(wallpaper::PROPERTY_MEDIA_INTEGRATION_ENABLED, false);
+
+    std::shared_ptr<wallpaper::SceneNode> probe;
+    auto scene = MakeMediaProbeScene(probe);
+    ASSERT_NE(scene->runtime, nullptr);
+
+    wallpaper::SceneWallpaperInputTestAccess::PostScene(wallpaper, scene);
+    wallpaper.shutdown();
+
+    EXPECT_FALSE(scene->runtime->NodeVisible("probe"))
+        << "a wallpaper whose user turned media integration off was still told what is playing";
+}

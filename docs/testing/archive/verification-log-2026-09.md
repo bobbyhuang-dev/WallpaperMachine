@@ -15,6 +15,15 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-20 — Quiet script output, doc archive and rg ignore, log helper, section index, test-file split
+
+Agent-cost pass. `scripts/lib/xcode.py` streams xcodebuild/cargo output to `artifacts/` and echoes only errors, failing tests and a verdict (`--verbose` restores the stream; `xcodegen --quiet`); the two 250 KB plan/progress documents moved to `docs/archive/` and a repository `.ignore` keeps `rg` out of archives, generated bindings and `upstream/`; `scripts/log_verification.py` prepends log entries and archives overflow; `docs/testing/renderer.md` gained a section index; `DownloaderTests` and `ControlPanelLayoutTests` split into five suites each over shared base classes (same 88 test methods, none rewritten).
+
+- `python3 scripts/test.py` — exit 0; 529 native tests: 518 passed, 11 skipped (asset/opt-in), 0 failed, 33 s; 99 Python script tests OK including new `test_xcode.py` (8) and `test_log_verification.py` (8).
+- `python3 scripts/test.py --only ControlPanelSyncTests --only SteamCMDRuntimeValidationTests` — 14 passed; `--only AppThemeTests` after the runner change — 3 passed, three lines of output.
+- Filter replayed over nine archived xcodebuild logs: green runs echo 0 lines, the two failing ones echo 7–8 (assertion, failed case, suite verdict).
+- Not verified: Release build (no app code changed); desktop behaviour untouched.
+
 ## 2026-09-20 — Parallel native tests, opt-in live Steam cases, doc split, build-on-request
 
 Follow-up to the tiered gate. Test classes now run in parallel worker processes

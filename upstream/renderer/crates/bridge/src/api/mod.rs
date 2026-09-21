@@ -1597,10 +1597,18 @@ impl WallpaperBridge {
             // Consent, not liveness: this asks whether the user allowed this
             // wallpaper near their media, which does not stop being true
             // because playback is paused or a display went dark.
-            if self.system_media_consent_handles().await?.contains(&event.scene_handle) {
+            let consented = self.system_media_consent_handles().await?;
+            if consented.contains(&event.scene_handle) {
                 return Ok(event);
             }
-            log::debug!("ignored a user shortcut from a wallpaper without media consent");
+            // A press is rare and deliberate, and being dropped here is
+            // indistinguishable from never having been reported at all.
+            log::info!(
+                "ignored user shortcut {} from scene handle {}, which has no media consent; consented: {:?}",
+                event.property,
+                event.scene_handle,
+                consented
+            );
         }
     }
 

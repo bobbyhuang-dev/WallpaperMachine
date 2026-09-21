@@ -17,6 +17,12 @@ final class DesktopMediaSession {
 
     var availability: SystemMediaAvailability { relay.availability }
 
+    /// Carries a transport command to whichever provider is answering, so a
+    /// press cannot land on a player that is not the one being reported.
+    func send(_ command: SystemMediaCommand) async -> Bool {
+        await provider.send(command)
+    }
+
     /// Nil when a provider can supply media; otherwise why it cannot.
     var mediaUnavailableReason: String? {
         switch availability {

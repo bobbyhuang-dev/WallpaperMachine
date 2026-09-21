@@ -162,10 +162,17 @@ still has to be under the cursor to hear a release, and a scene-wide script
 with no layer of its own still hears one from anywhere.
 
 `WallpaperBridge.next_user_shortcut` long-polls for those presses and drops any
-from a wallpaper the user has not consented to media integration for. The app
-carries the bound action out through whichever media provider is currently
-answering, so a command cannot land on a player that is not the one being
-reported.
+from a wallpaper the user has not consented to media integration for. The wait
+belongs to `SceneMediaSink`, which is the object that already holds the one
+live session, so the command goes to whichever provider is actually answering
+and cannot land on a player that is not the one being reported.
+
+Each hop of a press is logged, which is proportionate because a press is a rare
+and deliberate act: what `openUserShortcut` resolved the property to, whether it
+crossed the main looper with a callback installed, whether consent dropped it,
+and what was finally carried out. Without that trail an unbound button, a
+request that never reached the host and a command nothing executed all look
+exactly alike.
 
 ### Rendering one without a desktop
 

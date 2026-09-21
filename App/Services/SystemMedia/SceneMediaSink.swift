@@ -12,6 +12,10 @@ final class SceneMediaSink {
     private let submit: (String) async throws -> Void
     private let applyArtwork: (UInt32, UInt32, Data) async throws -> Void
     private let fetchHandles: () async -> Set<UInt64>
+    private let nextShortcut: (() async throws -> BridgeUserShortcut)?
+    /// Waits for wallpaper button presses. A long wait, not a poll: it returns
+    /// only when a press arrives, so an untouched wallpaper costs nothing.
+    private var shortcuts: Task<Void, Never>?
     /// Held, not derived from a temporary. `ObjectIdentifier` is an address,
     /// and an address freed the moment it was taken can be handed to the next
     /// allocation — which would let two listeners share one key in the shared
@@ -53,15 +57,57 @@ final class SceneMediaSink {
         session: DesktopMediaSession,
         submit: @escaping (String) async throws -> Void,
         applyArtwork: @escaping (UInt32, UInt32, Data) async throws -> Void,
-        fetchHandles: @escaping () async -> Set<UInt64>
+        fetchHandles: @escaping () async -> Set<UInt64>,
+        nextShortcut: (() async throws -> BridgeUserShortcut)? = nil
     ) {
         self.session = session
         self.submit = submit
         self.applyArtwork = applyArtwork
         self.fetchHandles = fetchHandles
+        self.nextShortcut = nextShortcut
         session.relay.addListener(listenerKey) { [weak self] event in
             self?.deliver(event)
         }
+        startShortcuts()
+    }
+
+    /// Carries out what each press was bound to, on the one session that is
+    /// actually reporting. The loop ends rather than spins if the bridge stops
+    /// reporting.
+    private func startShortcuts() {
+        // A sink with no source of presses simply has none to carry out.
+        guard shortcuts == nil, nextShortcut != nil else { return }
+        shortcuts = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let next = self?.nextShortcut else { return }
+                let event: BridgeUserShortcut
+                do {
+                    event = try await next()
+                } catch {
+                    AppLog.warn("Stopped waiting for wallpaper shortcuts.")
+                    return
+                }
+                guard let self, !Task.isCancelled else { return }
+                await self.perform(event)
+            }
+        }
+    }
+
+    /// Carries out one press, or nothing.
+    ///
+    /// The value is the user's own choice for that property; a wallpaper whose
+    /// user left a button unbound gets silence, which is what an unbound
+    /// button already did.
+    private func perform(_ event: BridgeUserShortcut) async {
+        guard let command = SystemMediaCommand(rawValue: event.value) else {
+            AppLog.info("Wallpaper shortcut \(event.property) is bound to nothing this host can do: \"\(event.value)\".")
+            return
+        }
+        if await session.send(command) {
+            AppLog.info("Carried out \(command.rawValue) for wallpaper shortcut \(event.property).")
+            return
+        }
+        AppLog.warn("No media player took a wallpaper's transport command.")
     }
 
     func reconcile() {
@@ -88,6 +134,8 @@ final class SceneMediaSink {
     }
 
     func shutdown() {
+        shortcuts?.cancel()
+        shortcuts = nil
         // Retires any reconcile still in flight, and any delivery already past
         // its first await, along with the listener. `setConsuming` tells the
         // relay; saying it twice would only rely on its remove-guard.

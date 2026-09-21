@@ -1514,6 +1514,10 @@ JSValue JsOpenUserShortcut(JSContext* context, JSValueConst, int argc, JSValueCo
         return JS_ThrowReferenceError(
             context, "openUserShortcut names no property of this wallpaper: %s", name.c_str());
     }
+    // A press is a rare, deliberate act, so saying what it resolved to costs
+    // nothing and is the only way to tell an unbound button from one whose
+    // request never reached the host.
+    LOG_INFO("openUserShortcut %s -> \"%s\"", name.c_str(), value->toString().c_str());
     bridge->runtime->RequestUserShortcut(name, value->toString());
     return JS_UNDEFINED;
 }

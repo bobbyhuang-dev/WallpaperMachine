@@ -25,6 +25,19 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — Nothing was waiting at the end of the shortcut chain
+
+Presses still did nothing after the value fix. Instrumenting each hop and reading the user's log settled it in one press instead of another round of reasoning.
+
+- Log evidence: `openUserShortcut nextsongbutton -> "media:next"` and `user shortcut reported: request=1 callback=1 value="media:next"` both appear, so the value fix works and the request crosses the main looper
+- Neither the consent-drop line nor the carried-out line appears, which places the break after the engine and before anything acts
+- Cause: SceneMediaCoordinator, which owned the nextUserShortcut long poll, was never constructed. It appeared only in two stop() calls. The class was dead code, so the whole Swift half of the chain never ran
+- The wait now belongs to SceneMediaSink, the object that already holds the one live DesktopMediaSession and is actually constructed; DesktopMediaSession gained send(_:). The dead coordinator is deleted rather than started, which would have double-subscribed the provider
+- Verified the last link directly against the machine before changing anything: the bundled adapter toggled Spotify False -> True -> False, so send was never the problem
+- New testAPressReachesThePlayer: three presses in, two commands out, and a binding this host cannot carry out never reaches the player
+- scripts/test.py 535 passed / 0 failed / 11 skipped of 546; SceneMediaSinkTests 7 passed
+- Release rebuilt
+
 ## 2026-09-21 — The bound shortcut never reached the scene engine
 
 The button pressed and released correctly after the capture fix, but the player still did not skip. The default bound in the last change only existed on the panel side.
@@ -121,16 +134,3 @@ Reported: the transport buttons still have no effect, and the progress bar canno
 - Found, reported, NOT changed: RenderHandler::onMessageReceived has no CASE_CMD(SET_RENDER_SCALE) (SceneWallpaper.cpp:488-506), so CMD_SET_RENDER_SCALE posted at line 1877 never reaches handle_SET_RENDER_SCALE and m_render_scale keeps its 1.0 default. Pre-existing (git diff touches no CASE_CMD line). This corrects the earlier report: P1 item 5 is not 'already a no-op in Vulkan' but unreachable in the scene path. Enabling it changes rendering for anyone with a non-default internal quality and needs visual acceptance, so it is left for the user's call.
 - Gates: scripts/test.py 529 passed / 0 failed / 11 skipped; scripts/check_renderer.py all binaries 0, pixels equal, 0 diagnostics; cargo test -p wallpaper-bridge 319 passed.
 - Release rebuilt 14:17: build/Build/Products/Release/MacWallpaperEngine.app plus Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor, the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
-
-## 2026-09-21 — Power regression follow-up: texture lifetime, request handover, media gating completeness
-
-- Blocker fixed before delivery: with the cover no longer rebuilding the graph, TextureCache::ReplaceTex could free an image a second binding was still sampling. A cover change aliases $mediaPreviousThumbnail onto the outgoing Image, so both names share one Image::key; whichever binding refreshed second retired that key, and the first never refreshed again because its own key was unchanged. m_tex_map and m_retired_runtime_textures now hold shared_ptr<ImageSlots> and ImageSlotsRef carries image_owner, so retiring drops the name and the image goes with its last holder.
-- New device-backed test PlaybackGPU.AnAliasedCoverOutlivesTheNameItSharesBeingReplaced drives three successive covers in both binding-refresh orders and asserts the outgoing image is not released while the previous slot holds it, that the two slots stay distinct and non-null, and that the image dies with its last holder. Contract test, not a sanitiser repro: it does not compile against the old borrow-only model.
-- Trailing-request fix corrected: the earlier retry-when-idle still lost an update across Continuous to Idle, because the tick was suppressed while the clock was still running and the scene only idled after that draw ended. FrameTimer now keeps m_frame_requested until a draw consumes it and re-arms from FrameEnd; the retry poll is gone.
-- Two new timer tests drive the real asynchronous draw path (a worker thread holding FrameBegin/FrameEnd), not m_frame_busy_count: AnEventThatArrivesDuringADrawIsStillDrawn at 20 FPS and ARequestSuppressedByAContinuousDrawSurvivesGoingIdle at 30 FPS. Both fail with the re-arm disabled and pass with it; timer_tests now 27/27.
-- Media gating completed: GetSceneMediaWallpapers and UpdateSceneMedia answer from the same effective-consumer predicate as the fan-out instead of playback_paused alone. New bridge test one_suspended_display_stops_only_its_own_scene_on_every_entry_point proves a two-display setup keeps feeding display 8 while display 7 is suspended, on handles, legacy list, events and artwork.
-- SceneMediaSink.reconcile is generation-bound so a slow earlier answer cannot re-open the provider a later one closed, and WebWallpaperMediaRelay.emit delivers only to current consumers so a paused scene does no artwork copy, JSON encode or bridge call while a visible Web wallpaper keeps the shared provider alive. Both new Swift tests fail with the guards removed (verified with scripts/test.py --only SceneMediaSinkTests) and pass with them.
-- Identical cover is now a true no-op: SYSTEM_MEDIA_ARTWORK is excluded from the blanket per-command requestFrame, and its handler requests a frame only when PublishSystemMediaArtwork reports the pixels moved.
-- upstream/provenance.json updated for this round (recorded 2026-09-21); renderer and sceneEngine notes prepended, revisions, licences and prior notes preserved.
-- Gates after all fixes: scripts/test.py 528 passed / 0 failed / 11 skipped; scripts/check_renderer.py all binaries 0, 10 pixel cases equal, 0 diagnostics, timer_tests 27/27, playback_gpu_test including the new lifetime test; cargo test -p wallpaper-bridge 319 passed.
-- Release rebuilt: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex (13:54). Both binaries contain SetMinInterval and the shared-ownership ImageSlotsRef constructor; the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.

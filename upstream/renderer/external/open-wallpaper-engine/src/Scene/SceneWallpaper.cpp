@@ -1995,8 +1995,12 @@ MHANDLER_CMD_IMPL(MainHandler, USER_SHORTCUT) {
     std::string value;
     // Both, or neither: a request with no property is not a request, and a
     // host told only the name would have to guess what its user chose.
-    if (msg->findString("property_name", &name) && msg->findString("property_value", &value) &&
-        m_user_shortcut_callback) {
+    const bool has_request =
+        msg->findString("property_name", &name) && msg->findString("property_value", &value);
+    LOG_INFO("user shortcut reported: request=%d callback=%d name=%s value=\"%s\"",
+             static_cast<int>(has_request), static_cast<int>(m_user_shortcut_callback != nullptr),
+             name.c_str(), value.c_str());
+    if (has_request && m_user_shortcut_callback) {
         m_user_shortcut_callback(name, value);
     }
 }

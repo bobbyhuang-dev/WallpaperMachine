@@ -211,6 +211,30 @@ final class SceneMediaSinkTests: XCTestCase {
             "a delivery retired by a pause still reported itself: \(submitted)")
     }
 
+    /// A press is only worth reporting if something carries it out. The whole
+    /// chain existed once before with nothing at its end -- the object that
+    /// waited for presses was never constructed -- so every button resolved
+    /// correctly, reported correctly and then did nothing at all.
+    func testAPressReachesThePlayer() async throws {
+        let provider = ScriptedSystemMediaProvider()
+        let session = DesktopMediaSession(provider: provider)
+        let presses = AsyncPresses([
+            BridgeUserShortcut(sceneHandle: 11, property: "nextsongbutton", value: "media:next"),
+            BridgeUserShortcut(sceneHandle: 11, property: "mystery", value: ""),
+            BridgeUserShortcut(
+                sceneHandle: 11, property: "playpausebutton", value: "media:playpause"),
+        ])
+        let sink = SceneMediaSink(
+            session: session, submit: { _ in }, applyArtwork: { _, _, _ in },
+            fetchHandles: { [11] },
+            nextShortcut: { try await presses.next() })
+
+        try await poll { provider.sentCommands.count == 2 }
+        XCTAssertEqual(provider.sentCommands, [.nextTrack, .togglePlayPause],
+                       "a binding the host cannot carry out must not reach the player")
+        sink.shutdown()
+    }
+
     private func poll(
         _ label: String = "", timeout: TimeInterval = 2, until condition: () -> Bool
     ) async throws {
@@ -234,9 +258,15 @@ final class ScriptedSystemMediaProvider: SystemMediaProvider {
     var onPlaybackChanged: ((SystemMediaPlaybackState) -> Void)?
     var onTimelineChanged: ((SystemMediaTimeline?) -> Void)?
     private(set) var consumers = 0
+    private(set) var sentCommands: [SystemMediaCommand] = []
     private var properties = SystemMediaProperties()
     private var thumbnail: SystemMediaThumbnail?
     private var playback = SystemMediaPlaybackState.stopped
+
+    func send(_ command: SystemMediaCommand) async -> Bool {
+        sentCommands.append(command)
+        return true
+    }
 
     func addConsumer() { consumers += 1 }
     func removeConsumer() { consumers = max(0, consumers - 1) }
@@ -267,5 +297,22 @@ final class ScriptedSystemMediaProvider: SystemMediaProvider {
             tertiaryColor: "rgb(0, 0, 0)", textColor: "rgb(255, 255, 255)",
             highContrastColor: "rgb(0, 0, 0)", rgba: [marker, 0, 0, 255], width: 1, height: 1)
         onThumbnailChanged?(thumbnail!)
+    }
+}
+
+/// Hands out a scripted run of presses, then waits forever -- which is what a
+/// real long poll does between presses.
+@MainActor
+final class AsyncPresses {
+    private var pending: [BridgeUserShortcut]
+
+    init(_ presses: [BridgeUserShortcut]) { pending = presses }
+
+    func next() async throws -> BridgeUserShortcut {
+        if pending.isEmpty {
+            try await Task.sleep(for: .seconds(3600))
+            throw CancellationError()
+        }
+        return pending.removeFirst()
     }
 }

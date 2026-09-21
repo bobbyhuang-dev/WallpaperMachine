@@ -14,7 +14,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var desktopMediaSession: DesktopMediaSession?
     private var sceneMediaSink: SceneMediaSink?
     private var webWallpaperHost: WebWallpaperHost?
-    private var sceneMediaCoordinator: SceneMediaCoordinator?
     private var nativeVideoHost: NativeVideoWallpaperHost?
     private var presentationPolicy: WallpaperPresentationPolicy?
     private var store: BridgeStore?
@@ -103,6 +102,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 },
                 fetchHandles: {
                     await Self.sceneMediaHandles(store: store)
+                },
+                nextShortcut: {
+                    try await store.bridge.nextUserShortcut()
                 })
             // The panel distinguishes the user's setting from what is actually
             // being delivered, which only the host knows. The provider is
@@ -268,7 +270,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         desktopWallpaperSync?.stop()
         sceneMediaSink?.shutdown()
         webWallpaperHost?.shutdown()
-        sceneMediaCoordinator?.stop()
         nativeVideoHost?.shutdown()
         if let displayChangeObserver {
             NotificationCenter.default.removeObserver(displayChangeObserver)
@@ -305,8 +306,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 sceneMediaSink?.shutdown()
                 sceneMediaSink = nil
                 webWallpaperHost?.shutdown()
-                sceneMediaCoordinator?.stop()
-                sceneMediaCoordinator = nil
                 webWallpaperHost = nil
             } catch {
                 lastError = error

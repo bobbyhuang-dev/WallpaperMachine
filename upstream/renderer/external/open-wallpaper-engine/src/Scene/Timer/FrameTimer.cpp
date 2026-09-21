@@ -36,9 +36,16 @@ FrameTimer::FrameTimer(std::function<void()> cb)
           // than queueing work the display will never show.
           if (m_callback && m_frame_busy_count.load() < 1) {
               m_frame_busy_count++;
+              // Cleared before the draw is posted, so an event arriving while
+              // it runs is a new request rather than one this frame already
+              // answered.
+              m_frame_requested.store(false);
               if (counters != nullptr) counters->Add(OWE_RC_DRAW_REQUESTS);
               m_callback();
           } else if (counters != nullptr) {
+              // The request itself is not dropped with the tick: it stays
+              // outstanding until a draw actually consumes it, and the
+              // in-flight draw re-arms the clock when it ends.
               counters->Add(OWE_RC_DRAW_TICKS_SUPPRESSED);
           }
       }) {
@@ -78,6 +85,11 @@ void FrameTimer::ResetFrameTiming() {
 void FrameTimer::SetRequiredFps(u16 value) {
     m_req_fps  = value > 0 ? value : DEFAULT_REQUIRED_FPS;
     m_ideatime = microseconds(1'000'000 / m_req_fps.load());
+    // The ceiling is a hard floor on the gap between frames, separate from the
+    // cadence: content pacing lengthens the cadence past the ceiling, and a
+    // one-shot request has no cadence at all, so both would otherwise be
+    // unbounded from below.
+    m_timer.SetMinInterval(m_ideatime.load());
     // An FPS change must not discard an in-flight draw or its elapsed time.
     m_timer.SetInterval(ResolveInterval());
 }
@@ -128,6 +140,12 @@ void FrameTimer::RequestFrame() {
     // property changed would override the user's own decision; the frame is
     // taken when the clock is next run.
     if (! Running()) return;
+    // Recorded here and cleared only by a draw. The thread timer's own latch
+    // is cleared by the tick it fires, which is not the same thing: a tick
+    // suppressed by an in-flight draw would otherwise consume the request
+    // without drawing anything, and if that draw then leaves the scene idle
+    // there is no later tick to notice.
+    m_frame_requested.store(true);
     m_timer.WakeOnce();
 }
 
@@ -201,6 +219,16 @@ void FrameTimer::FrameEnd(steady_clock::time_point now) {
             break;
         }
     }
+
+    // A request that arrived while this draw was running, or one whose tick
+    // this draw suppressed, is still owed a frame. The clock is re-armed from
+    // here — the edge where the draw actually finished — rather than by a
+    // retry that wakes once per frame period to find the draw still running.
+    // This is also the only place that can cover the handover: the scene
+    // decides whether it goes idle *after* this returns, so a request left
+    // outstanding by a continuous tick would otherwise have no later tick to
+    // notice it.
+    if (m_frame_requested.load() && Running()) m_timer.WakeOnce();
 }
 
 void FrameTimer::SetCallback(const std::function<void()>& cb) {

@@ -5,6 +5,8 @@
 #include <functional>
 #include <mutex>
 #include <thread>
+#include <memory>
+#include <vector>
 
 #define private public
 #include "Timer/FrameTimer.hpp"
@@ -502,10 +504,13 @@ TEST(FrameTimerTest, FrameRequestsDoNotPushARunningClockPastItsInterval)
 }
 
 /// A request made while the clock is running is not thrown away: it survives
-/// into idle and produces exactly one frame there.
+/// into idle and produces exactly one frame there, at the ceiling rather than
+/// at the cadence.
 ///
 /// Without this, closing the rate hole above would reopen the lost-event race
-/// the latch exists to prevent.
+/// the latch exists to prevent. The cadence here is long because the *content*
+/// is slow, not because the user asked for a low frame rate — the two are
+/// separate numbers, and only the second may delay an event.
 TEST(FrameTimerTest, AFrameRequestMadeWhileRunningSurvivesIntoIdle)
 {
     std::mutex              mutex;
@@ -520,12 +525,16 @@ TEST(FrameTimerTest, AFrameRequestMadeWhileRunningSurvivesIntoIdle)
         condition.notify_all();
         timer.FrameEnd();
     });
-    timer.SetRequiredFps(1); // One tick per second; the test never waits for it.
+    timer.SetRequiredFps(60); // ~17 ms ceiling.
     timer.Run();
 
-    // Let the first immediate tick land, then go quiet.
+    // Let the first tick land, then pace the clock to content that changes
+    // once every five seconds. The test never waits for that cadence.
     WaitFor(
         mutex, condition, [&]() { return draws > 0; }, 500ms);
+    timer.SetFrameDemand({ .content_period = 5s });
+    std::this_thread::sleep_for(50ms);
+
     int before = 0;
     {
         std::scoped_lock lock(mutex);
@@ -605,8 +614,13 @@ TEST(FrameTimerTest, AnIdleClockProducesNoTicksUntilOneIsRequested)
 }
 
 /// A deadline that has already passed is a frame the scene is owed, and it has
-/// to arrive promptly rather than after a full cadence interval.
-TEST(FrameTimerTest, ADeadlineAlreadyPastIsTakenImmediately)
+/// to arrive at the frame ceiling rather than after a full content cadence.
+///
+/// "Owed" is not "unbounded": an appointment that keeps being re-armed in the
+/// past must not be able to tick faster than the user's FPS, which is why this
+/// separates the two numbers instead of lowering the FPS to make the cadence
+/// long.
+TEST(FrameTimerTest, ADeadlineAlreadyPastIsTakenAtTheCeilingNotTheCadence)
 {
     std::mutex              mutex;
     std::condition_variable condition;
@@ -620,10 +634,13 @@ TEST(FrameTimerTest, ADeadlineAlreadyPastIsTakenImmediately)
         condition.notify_all();
         timer.FrameEnd();
     });
-    timer.SetRequiredFps(1); // One second of cadence, far longer than the bound below.
+    timer.SetRequiredFps(60); // ~17 ms ceiling, far shorter than the bound below.
     timer.Run();
     WaitFor(
         mutex, condition, [&]() { return draws > 0; }, 2s);
+    timer.SetFrameDemand({ .content_period = 5s });
+    std::this_thread::sleep_for(50ms);
+
     int before = 0;
     {
         std::scoped_lock lock(mutex);
@@ -641,6 +658,176 @@ TEST(FrameTimerTest, ADeadlineAlreadyPastIsTakenImmediately)
     EXPECT_GT(draws, before) << "an owed frame never arrived";
     EXPECT_LT(waited.count(), 500)
         << "an owed frame waited " << waited.count() << "ms, i.e. for the cadence";
+}
+
+/// Idling must not be the hole that events set the frame rate through.
+///
+/// A running clock already refuses to be pushed past its interval. An idle
+/// clock has no interval, and every request used to be taken the moment it
+/// arrived, so a pointer-reactive wallpaper drew one frame per pointer sample —
+/// the ceiling the user configured bounded nothing at all.
+TEST(FrameTimerTest, EventsCannotOutrunTheCeilingWhileIdle)
+{
+    std::mutex              mutex;
+    std::condition_variable condition;
+    int                     draws { 0 };
+
+    FrameTimer timer([&]() {
+        {
+            std::scoped_lock lock(mutex);
+            ++draws;
+        }
+        condition.notify_all();
+        timer.FrameEnd();
+    });
+    timer.SetRequiredFps(10); // 100 ms between frames.
+    timer.Run();
+    WaitFor(
+        mutex, condition, [&]() { return draws > 0; }, 500ms);
+    timer.SetFrameDemand({ .kind = FrameTimer::FrameDemand::Kind::Idle });
+    std::this_thread::sleep_for(50ms);
+
+    int before = 0;
+    {
+        std::scoped_lock lock(mutex);
+        before = draws;
+    }
+
+    const auto started = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - started < 300ms) {
+        timer.RequestFrame();
+        std::this_thread::sleep_for(2ms);
+    }
+    timer.Stop();
+
+    std::scoped_lock lock(mutex);
+    const int produced = draws - before;
+    // ~150 requests over 300 ms at a 10 FPS ceiling is three frames, plus one
+    // for scheduling slack. Anything near the request count means the ceiling
+    // was bypassed.
+    EXPECT_LE(produced, 4) << produced << " frames from ~150 requests in 300ms at 10 FPS";
+    EXPECT_GT(produced, 0) << "requests were dropped instead of paced";
+}
+
+/// A slow draw that the scene runs on its own thread, the way the render
+/// looper does: the tick posts the draw and returns, and `FrameEnd` lands
+/// later. Nothing here reaches into the scheduler's own state.
+class DeferredDraw {
+public:
+    explicit DeferredDraw(FrameTimer& timer, std::chrono::milliseconds duration)
+        : m_timer(timer), m_duration(duration) {}
+    ~DeferredDraw() { join(); }
+
+    /// Call after `FrameTimer::Stop`, before the timer goes out of scope: a
+    /// draw still running holds a reference to it.
+    void join() {
+        for (auto& worker : m_workers)
+            if (worker.joinable()) worker.join();
+        m_workers.clear();
+    }
+
+    /// Runs on the timer thread, like the production callback. `during` fires
+    /// at the *start* of the draw, so every tick the draw outlasts is one it
+    /// suppresses.
+    void post(const std::function<void()>& during) {
+        m_workers.emplace_back([this, during]() {
+            m_timer.FrameBegin();
+            if (during) during();
+            std::this_thread::sleep_for(m_duration);
+            m_timer.FrameEnd();
+        });
+    }
+
+private:
+    FrameTimer&                m_timer;
+    std::chrono::milliseconds  m_duration;
+    std::vector<std::thread>   m_workers;
+};
+
+/// An update that lands while a draw is in flight still has to be drawn.
+///
+/// The one-draw-in-flight rule drops the tick carrying it. A running clock has
+/// a next cadence tick that covers the loss; an idle clock has none, so the
+/// state change would never reach the screen and the wallpaper would sit on
+/// stale pixels until something unrelated asked for a frame.
+TEST(FrameTimerTest, AnEventThatArrivesDuringADrawIsStillDrawn)
+{
+    std::mutex              mutex;
+    std::condition_variable condition;
+    int                     draws { 0 };
+    std::unique_ptr<DeferredDraw> slow;
+
+    FrameTimer timer([&]() {
+        int index = 0;
+        {
+            std::scoped_lock lock(mutex);
+            index = ++draws;
+        }
+        condition.notify_all();
+        // The first draw is slow and an event arrives in the middle of it.
+        slow->post(index == 1 ? std::function<void()>([&]() { timer.RequestFrame(); })
+                              : std::function<void()> {});
+    });
+    slow = std::make_unique<DeferredDraw>(timer, 120ms);
+    timer.SetRequiredFps(20); // 50 ms ceiling, well under the draw.
+    timer.Run();
+    WaitFor(
+        mutex, condition, [&]() { return draws > 0; }, 500ms);
+    // The scene goes quiet while its first draw is still running.
+    timer.SetFrameDemand({ .kind = FrameTimer::FrameDemand::Kind::Idle });
+
+    const auto waited = WaitFor(
+        mutex, condition, [&]() { return draws > 1; }, 1s);
+    timer.Stop();
+    slow->join();
+
+    std::scoped_lock lock(mutex);
+    EXPECT_GT(draws, 1) << "the update that arrived during a draw was lost";
+    EXPECT_LT(waited.count(), 800) << "the owed frame did not arrive at the ceiling";
+}
+
+/// The handover itself: a request whose tick was suppressed by a continuous
+/// draw, where that same draw is the one that leaves the scene idle.
+///
+/// The clock is still running when the tick is suppressed, so nothing there
+/// can re-arm it; by the time the scene is idle the request is gone. Only the
+/// end of the draw sees both facts.
+TEST(FrameTimerTest, ARequestSuppressedByAContinuousDrawSurvivesGoingIdle)
+{
+    std::mutex              mutex;
+    std::condition_variable condition;
+    int                     draws { 0 };
+    std::unique_ptr<DeferredDraw> slow;
+
+    FrameTimer timer([&]() {
+        int index = 0;
+        {
+            std::scoped_lock lock(mutex);
+            index = ++draws;
+        }
+        condition.notify_all();
+        // Mid-draw: an event arrives, its tick is suppressed because this draw
+        // is still running, and then this draw is the one that leaves the
+        // scene idle — exactly what `refreshFrameDemand` does after `FrameEnd`.
+        slow->post(index == 1 ? std::function<void()>([&]() { timer.RequestFrame(); })
+                              : std::function<void()> {});
+    });
+    slow = std::make_unique<DeferredDraw>(timer, 150ms);
+    timer.SetRequiredFps(30); // ~33 ms cadence; several ticks fall inside the draw.
+    timer.Run();
+    WaitFor(
+        mutex, condition, [&]() { return draws > 0; }, 500ms);
+    std::this_thread::sleep_for(100ms);
+    timer.SetFrameDemand({ .kind = FrameTimer::FrameDemand::Kind::Idle });
+
+    const auto waited = WaitFor(
+        mutex, condition, [&]() { return draws > 1; }, 1s);
+    timer.Stop();
+    slow->join();
+
+    std::scoped_lock lock(mutex);
+    EXPECT_GT(draws, 1) << "a request suppressed by a continuous draw was lost when the scene idled";
+    EXPECT_LT(waited.count(), 800) << "the owed frame did not arrive at the ceiling";
 }
 
 } // namespace

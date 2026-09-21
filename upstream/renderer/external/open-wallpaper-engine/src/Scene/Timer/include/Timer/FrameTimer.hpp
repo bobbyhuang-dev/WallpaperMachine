@@ -120,6 +120,13 @@ private:
     std::atomic<FrameDemand::Kind>         m_demand_kind { FrameDemand::Kind::Continuous };
     std::atomic<std::chrono::steady_clock::time_point> m_demand_deadline {};
     std::atomic<bool>                      m_reset_frame_clock { true };
+    /// A frame someone asked for that no draw has produced yet.
+    ///
+    /// Distinct from the thread timer's one-shot latch, which is cleared by
+    /// the tick it fires even when that tick produces no draw. This is cleared
+    /// only by a draw actually being posted, so a request cannot be consumed
+    /// by a tick that a still-running draw suppressed.
+    std::atomic<bool>                      m_frame_requested { false };
     std::atomic<i32>                       m_frame_busy_count;
 
     ThreadTimer m_timer;

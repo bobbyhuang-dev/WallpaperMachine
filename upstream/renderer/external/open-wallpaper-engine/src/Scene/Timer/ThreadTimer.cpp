@@ -2,6 +2,7 @@
 
 #include "Utils/Logging.h"
 
+#include <algorithm>
 #include <cassert>
 
 using namespace wallpaper;
@@ -21,6 +22,14 @@ void ThreadTimer::SetInterval(micros v) {
     // content sits in a long wait by design; if a tighter content rate or a
     // higher target FPS could not cut that wait short, every frame produced
     // during the remainder of it is superseded before it is ever displayed.
+    std::unique_lock<std::mutex> lock(m_cond_mutex);
+    m_condition.notify_all();
+}
+
+void ThreadTimer::SetMinInterval(micros v) {
+    m_min_interval = v;
+    // A ceiling that just got looser has to shorten a wait taken under the old
+    // one; a tighter ceiling is picked up on the next re-check either way.
     std::unique_lock<std::mutex> lock(m_cond_mutex);
     m_condition.notify_all();
 }
@@ -80,50 +89,70 @@ void ThreadTimer::Start() {
                         m_rebase = false;
                         last_tick = std::chrono::steady_clock::now();
                     }
-                    // A one-shot request is honoured immediately only while the
-                    // clock is idle. A running clock already has a tick coming,
-                    // and letting a request jump the interval would let anything
-                    // that asks for a frame — pointer movement, at the pointer
-                    // sample rate — drive the scene past its configured FPS
-                    // ceiling. That would be a regression on the default path,
-                    // where on-demand updating is off and the ceiling is the
-                    // only thing bounding the frame rate.
+                    // The user's FPS ceiling is a floor on the gap between two
+                    // callbacks, and it binds every path into one — not only
+                    // the cadence. The cadence alone cannot carry it: content
+                    // pacing makes `m_interval` *longer* than the ceiling, so
+                    // an interval of 1s says nothing about how close together
+                    // two event-driven frames may run.
                     //
-                    // The request is NOT discarded when the clock is running:
-                    // it stays latched and is cleared by the next cadence tick.
-                    // That keeps the race closed — a request landing between
-                    // the decision to idle and the wait itself survives into
-                    // the idle state and fires exactly one frame there.
-                    if (m_wake_once && m_idle) {
-                        m_wake_once = false;
-                        break;
-                    }
+                    // Before this, a one-shot request was honoured immediately
+                    // whenever the clock was idle, so anything that asks for a
+                    // frame — pointer movement, at the pointer sample rate —
+                    // drove the scene at the rate the events arrived at rather
+                    // than at the rate the user configured.
+                    const auto earliest = last_tick + m_min_interval.load();
+
                     if (m_idle) {
-                        if (m_wake_at.has_value()) {
-                            const auto when = *m_wake_at;
-                            if (std::chrono::steady_clock::now() >= when) {
-                                // The appointment is kept exactly once. Leaving
-                                // it set would turn a single redraw into a spin
-                                // on an expired deadline.
-                                m_wake_at.reset();
-                                break;
-                            }
-                            m_condition.wait_until(lock, when);
+                        // An idle clock has no cadence, so the only deadlines
+                        // are the ones something asked for. A request is due at
+                        // the ceiling: after a long sleep that moment is
+                        // already past and the frame runs at once, and during a
+                        // burst the requests coalesce into one frame per
+                        // period instead of one frame each.
+                        std::optional<std::chrono::steady_clock::time_point> due;
+                        if (m_wake_once) {
+                            due = earliest;
+                        } else if (m_wake_at.has_value()) {
+                            // An appointment already past is owed, not urgent:
+                            // clamping it to the ceiling is what stops a
+                            // deadline that keeps being re-armed in the past
+                            // from spinning the thread.
+                            due = std::max(*m_wake_at, earliest);
+                        }
+                        if (! due.has_value()) {
+                            // No deadline at all. This is the difference
+                            // between an idle scene and a slow one: a slow
+                            // scene still wakes to find nothing to do.
+                            m_condition.wait(lock);
                             continue;
                         }
-                        // No deadline at all. This is the difference between
-                        // an idle scene and a slow one: a slow scene still
-                        // wakes to find nothing to do.
-                        m_condition.wait(lock);
+                        const auto now = std::chrono::steady_clock::now();
+                        if (now >= *due) {
+                            m_wake_once = false;
+                            // Only a kept appointment is consumed. One that is
+                            // still in the future survives a frame that ran for
+                            // another reason, so a layer that asked to redraw
+                            // on the minute still redraws on the minute.
+                            if (m_wake_at.has_value() && now >= *m_wake_at) m_wake_at.reset();
+                            break;
+                        }
+                        m_condition.wait_until(lock, *due);
                         continue;
                     }
-                    const auto deadline = last_tick + m_interval.load();
+
+                    auto deadline = last_tick + m_interval.load();
+                    // A pending request may cut a long content-paced wait
+                    // short, because the event is new content the period did
+                    // not predict — but only as far as the ceiling, never past
+                    // it. When the cadence is the ceiling this changes nothing.
+                    if (m_wake_once && earliest < deadline) deadline = earliest;
                     if (std::chrono::steady_clock::now() >= deadline) {
-                        // The cadence tick satisfies any pending request: the
-                        // frame it is about to run is the frame that was asked
-                        // for. Clearing here rather than discarding at the
-                        // request site is what keeps the latch meaningful while
-                        // the clock is running.
+                        // The tick satisfies any pending request: the frame it
+                        // is about to run is the frame that was asked for.
+                        // Clearing here rather than discarding at the request
+                        // site is what keeps the latch meaningful — a request
+                        // is never dropped, only absorbed by a real frame.
                         m_wake_once = false;
                         break;
                     }

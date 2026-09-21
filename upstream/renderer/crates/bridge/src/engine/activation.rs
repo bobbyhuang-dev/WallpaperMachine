@@ -870,6 +870,7 @@ impl ActivationInputs<'_> {
             display,
             workshop_id: wallpaper_id,
             wallpaper,
+            model: self.project_models.get(wallpaper_id),
             monitor,
             displays: self.displays,
             paused: display_paused,
@@ -969,19 +970,35 @@ impl SceneDescBuilderExt for SceneDescBuilder {
             .map(crate::config::wallpaper::MonitorRender::parse_scaling_mode)
             .unwrap_or_default();
         let scaling_factor = render_override.map_or(1.0, |render| render.scaling_factor);
-        let property_override_json = if !context.wallpaper.r#type.eq_ignore_ascii_case("scene")
-            || context.wallpaper.property_overrides.is_empty()
-        {
-            None
-        } else {
-            let overrides = context
-                .wallpaper
-                .property_overrides
-                .iter()
-                .map(|(id, value)| (id.clone(), PropertyValue::from_json(value)))
-                .collect::<BTreeMap<_, _>>();
+        let property_override_json = if context.wallpaper.r#type.eq_ignore_ascii_case("scene") {
+            // The scene engine parses the project file itself, so a default
+            // this host supplied rather than read from that file reaches it
+            // only here. An unbound transport shortcut is exactly that: the
+            // author ships it empty and the button would otherwise resolve to
+            // nothing however the panel shows it. The user's own overrides go
+            // on top, so choosing no action still means no action.
+            let mut overrides = context
+                .model
+                .map(|model| {
+                    model
+                        .properties
+                        .iter()
+                        .filter(|property| property.default_is_host_supplied)
+                        .map(|property| (property.id.clone(), property.default_value.clone()))
+                        .collect::<BTreeMap<_, _>>()
+                })
+                .unwrap_or_default();
+            overrides.extend(
+                context
+                    .wallpaper
+                    .property_overrides
+                    .iter()
+                    .map(|(id, value)| (id.clone(), PropertyValue::from_json(value))),
+            );
 
-            Some(overrides.to_override_json())
+            (!overrides.is_empty()).then(|| overrides.to_override_json())
+        } else {
+            None
         };
         let mut builder = SceneTemplate::builder(project_json.to_string_lossy())
             .assets_path(assets_path.to_string_lossy())
@@ -1017,6 +1034,9 @@ pub struct SceneBuildContext<'a> {
     display: DisplayDesc,
     workshop_id: &'a str,
     wallpaper: &'a WallpaperConfig,
+    /// Parsed manifest, for the defaults this host supplies rather than reads
+    /// from the project file the scene engine parses for itself.
+    model: Option<&'a ProjectModel>,
     monitor: &'a MonitorCfg,
     displays: &'a [DisplaySnapshotEntry],
     paused: bool,

@@ -146,6 +146,12 @@ only: the user's choice is stored as an override and always wins, including
 choosing no action, and dispatch still carries the **value**, never the name,
 so rebinding a button really rebinds it.
 
+That default has to be sent to the scene engine, which parses the project file
+for itself and would otherwise read the author's empty value however the panel
+shows the binding. A host-supplied default is therefore included in the scene's
+property overrides even when the user has none of their own, with the user's
+overrides applied on top.
+
 A button's release is delivered to whatever took its press, wherever the cursor
 has since gone, rather than being hit-tested again on the way up. These buttons
 scale themselves down while held -- this one to a tenth of its size -- and

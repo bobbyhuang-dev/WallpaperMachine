@@ -37,6 +37,11 @@ pub struct ProjectProperty {
     pub id: String,
     pub kind: PropertyKind,
     pub default_value: PropertyValue,
+    /// True when `default_value` is this host's own suggestion rather than
+    /// what the author wrote. The scene engine parses the project file itself,
+    /// so it only learns such a value if it is sent along with the user's own
+    /// overrides.
+    pub default_is_host_supplied: bool,
     pub label_html: String,
     pub order: i64,
     pub index: i64,
@@ -205,6 +210,7 @@ impl ProjectModel {
                         .map(str::to_owned);
                     let order = object.get("order").and_then(Value::as_i64).unwrap_or(0);
                     let index = object.get("index").and_then(Value::as_i64).unwrap_or(0);
+                    let mut host_supplied = false;
                     let default_value = match (&kind, object.get("value")) {
                         (PropertyKind::Combo, value)
                             if object
@@ -215,7 +221,10 @@ impl ProjectModel {
                             let authored =
                                 value.map_or_else(String::new, PropertyValue::json_scalar_to_string);
                             PropertyValue::String(if authored.is_empty() {
-                                suggested_user_shortcut(id).unwrap_or_default().to_owned()
+                                let suggested =
+                                    suggested_user_shortcut(id).unwrap_or_default().to_owned();
+                                host_supplied = !suggested.is_empty();
+                                suggested
                             } else {
                                 authored
                             })
@@ -236,6 +245,7 @@ impl ProjectModel {
                         id: id.clone(),
                         kind,
                         default_value,
+                        default_is_host_supplied: host_supplied,
                         label_html,
                         order,
                         index,

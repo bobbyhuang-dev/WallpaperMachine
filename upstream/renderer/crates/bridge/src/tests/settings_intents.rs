@@ -2225,6 +2225,71 @@ async fn mirror_scene_tracks_source_rebuild_settings_except_monitor_overrides() 
 }
 
 #[tokio::test]
+async fn an_unbound_transport_shortcut_reaches_the_scene_engine() {
+    // The scene engine parses the project file itself, where these ship empty,
+    // so a default this host supplies is invisible to it unless it is sent
+    // along with the user's overrides. Without that the button resolves to
+    // nothing, `openUserShortcut` reports an empty value and the press is
+    // dropped -- however the panel happens to show the binding.
+    let root = tempfile::tempdir().unwrap();
+    let engine = FakeEngineFacade::default();
+    engine.set_snapshot(vec![display_snapshot(1)]);
+    let bridge = BridgeBuilder::new(engine.clone())
+        .with_config_store(ConfigStore::open(root.path().to_path_buf()))
+        .build()
+        .expect("tokio runtime and config load for wallpaper bridge");
+    bridge
+        .inject_scene_project_for_test(
+            "100",
+            "Scene",
+            r#"{
+            "type":"scene",
+            "title":"Scene",
+            "general":{"properties":{
+                "playpausebutton":{"type":"usershortcut","text":"Play","value":"","order":1},
+                "nextsongbutton":{"type":"usershortcut","text":"Next","value":"","order":2},
+                "secretbutton":{"type":"usershortcut","text":"Secret","value":"","order":3}
+            }}
+        }"#,
+        )
+        .await;
+    bridge
+        .set_display_config_enabled("100".to_string(), "1".to_string(), true)
+        .await
+        .unwrap();
+    bridge
+        .apply_wallpaper_options("100".to_string())
+        .await
+        .unwrap();
+
+    // A name that says nothing stays out of it rather than being guessed at.
+    assert_eq!(
+        latest_scene(&engine, 1).property_override_json.as_deref(),
+        Some(r#"{"nextsongbutton":"media:next","playpausebutton":"media:playpause"}"#)
+    );
+
+    // The user's own choice still wins, including choosing no action.
+    bridge
+        .edit_property(
+            "100".to_string(),
+            "nextsongbutton".to_string(),
+            BridgePropertyValue::String {
+                value: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+    bridge
+        .apply_wallpaper_options("100".to_string())
+        .await
+        .unwrap();
+    assert_eq!(
+        latest_scene(&engine, 1).property_override_json.as_deref(),
+        Some(r#"{"nextsongbutton":"","playpausebutton":"media:playpause"}"#)
+    );
+}
+
+#[tokio::test]
 async fn audio_response_general_setting_updates_active_mirror_scenes() {
     let primary = active_display("primary", 1, 41, "100");
     let secondary = active_display("secondary", 3, 42, "100");

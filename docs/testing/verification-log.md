@@ -25,6 +25,16 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — The bound shortcut never reached the scene engine
+
+The button pressed and released correctly after the capture fix, but the player still did not skip. The default bound in the last change only existed on the panel side.
+
+- The scene engine parses project.json itself, where all three usershortcut values are empty. The bridge sent only explicit property_overrides, and the user has none, so openUserShortcut resolved to an empty value and the press was correctly dropped
+- ProjectProperty now records default_is_host_supplied, set exactly where an unbound usershortcut is given the action its name states. Scene activation sends those defaults with the overrides, user overrides applied on top
+- New an_unbound_transport_shortcut_reaches_the_scene_engine asserts the scene receives {"nextsongbutton":"media:next","playpausebutton":"media:playpause"} with no user overrides, that an unguessable name stays out of it, and that choosing no action still sends the empty string
+- scripts/test.py 534 passed / 0 failed / 11 skipped of 545; wallpaper-bridge 321 passed
+- Release rebuilt
+
 ## 2026-09-21 — The stuck transport button: a press made it too small to catch its own release
 
 Reported with a screenshot: the next button sits flattened to a dash and the player never skips. Rendering the wallpaper offscreen showed all three buttons drawing correctly, so the cause was runtime state, not content.
@@ -124,17 +134,3 @@ Reported: the transport buttons still have no effect, and the progress bar canno
 - upstream/provenance.json updated for this round (recorded 2026-09-21); renderer and sceneEngine notes prepended, revisions, licences and prior notes preserved.
 - Gates after all fixes: scripts/test.py 528 passed / 0 failed / 11 skipped; scripts/check_renderer.py all binaries 0, 10 pixel cases equal, 0 diagnostics, timer_tests 27/27, playback_gpu_test including the new lifetime test; cargo test -p wallpaper-bridge 319 passed.
 - Release rebuilt: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex (13:54). Both binaries contain SetMinInterval and the shared-ownership ImageSlotsRef constructor; the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
-
-## 2026-09-21 — Power regression: frame ceiling, media consumers, cover updates
-
-- HEAD 06ac2ca3 + dirty tree (13 tracked files); runtime read from config.toml and Logs/20260921-113428: scene wallpaper 3799253558, VulkanRender (scene_renderer=compatibility), render_scale 1.0, output 4112x2658, scene_optimization on, scene_on_demand off, content_pacing on, media_integration on.
-- P0 ThreadTimer: the FPS ceiling now bounds every wake path (request, appointment, expired appointment), not just the cadence; FrameTimer publishes it via SetMinInterval and re-arms a tick dropped by an in-flight draw.
-- Reproduced pre-fix by temporarily restoring the old idle branch: 102 frames from ~150 requests in 300ms at a 10 FPS ceiling, and a trailing update lost behind an in-flight draw. Post-fix both bounded/delivered.
-- P0 media: bridge media_scene_handles() now subtracts global pause, power suspend, presentation suspend and per-display suspend; consent moved to a separate media_consent_handles()/GetSystemMediaConsentHandles so a wallpaper button press is judged on permission, not presentation. AppDelegate reconciles the sink when a suspend commits (those paths publish no snapshot).
-- P0 artwork: applySystemMediaArtworkPayload publishes pixels and requests a frame instead of rebuildRenderGraph(); PublishSystemMediaArtwork returns false for a byte-identical cover. SET_SCENE now always builds its own graph.
-- P1 (actual backend) VulkanRender::planStaticSkips: dropped the per-frame std::vector allocation (writes into m_static_skip) and skips the sampling/signature walk when no target is pinned, since Plan can then only answer 'execute every pass'.
-- Excluded by source/runtime, not changed: MetalRender encoder merging and its 192MiB pin budget (scene_renderer=compatibility, Metal not running); VulkanRender::applyRenderScale already no-ops on an unchanged scale (VulkanRender.cpp:1472), so the ApplyRenderScale rebuild is Metal-only.
-- Counter wiring checked: Vulkan records OWE_RC_RENDER_SUBMISSIONS and OWE_RC_GPU_COMPLETIONS (VulkanRender.cpp:859/879/934/940); Metal records only OWE_RC_PRESENT_REQUESTS (MetalRender.mm:4226), so those two read 0 on Metal because they are unwired, not because the GPU is idle. Not added: no claim this round depends on them.
-- Tests: check_renderer.py all green (timer_tests 26/26 incl. 2 new, static_subgraph_cache_test, render_scale_test, playback_gpu_test, 10 pixel cases equal, 0 diagnostics); cargo test -p wallpaper-bridge 318 passed incl. new paused/suspended consumer test; media_thumbnail_texture_smoke 15 passed incl. new identical-cover test; scripts/test.py 526 passed / 0 failed / 11 skipped (first run hit a known-flaky ControlPanelShellTests power-probe timing assert, passed alone and on rerun).
-- Offscreen probe on the user's own wallpaper 3799253558: 249 passes (247 executed + 2 reused), 7 cacheable targets, 1 pinned - so the no-pin early-out does not fire for this scene, while the removed per-cover rebuild was re-preparing all 249 passes.
-- Release build OK: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries contain SetMinInterval and the app exports system_media_consent_handles. Not run: app launch, wallpaper change, screenshots, audio capture, power measurement - no watt or percentage claim.

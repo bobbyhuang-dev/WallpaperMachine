@@ -34,7 +34,7 @@ Adding a new target, source directory, resource or build setting means editing
   beside the type that owns them.
 - **Imports first, alphabetically**, one per line: `import AppKit` / `import
   Darwin` / `import Foundation`. Test files open with `import XCTest` followed by
-  `@testable import MacWallpaperEngine`.
+  `@testable import WallpaperMachine`.
 - **Indentation follows the file.** Four spaces dominate `App/Services/` and
   `Tests/`; the control-panel views, `Extension/` and `Shared/` use two. Braces
   are K&R (opening brace on the declaration line). Never reindent a file you are
@@ -73,7 +73,7 @@ Adding a new target, source directory, resource or build setting means editing
 - **Log through `AppLog`** (`trace`/`debug`/`info`/`warn`/`error`), which routes
   into the in-app log view. Do not add `print` to app code.
 - **Paths come from `ClientPaths`.** Never hardcode `~/Library/Application
-  Support/...`; the `MAC_WALLPAPER_ENGINE_HOME` override is what keeps tests off
+  Support/...`; the `WALLPAPER_MACHINE_HOME` override is what keeps tests off
   the real library.
 - **`App/Bridge/Generated/` is build output.** It is written by `uniffi-bindgen`
   during [the build](build.md); hand edits are lost on the next build. Change the
@@ -144,7 +144,7 @@ The rules that bind every change:
   emitted errors, ordering and precedence. Never assert wiring, defaults,
   forwarding, mock echoes, or the text of a source file.
 - Deterministic and isolated: unique temporary directories, a redirected
-  `MAC_WALLPAPER_ENGINE_HOME`, injected fakes instead of the network or the real
+  `WALLPAPER_MACHINE_HOME`, injected fakes instead of the network or the real
   SteamCMD, cleanup in `defer`. A test must pass in the full suite and on its
   own, in any order.
 - Routine verification never controls the desktop, captures the screen, opens app
@@ -190,7 +190,7 @@ The rules that bind every change:
   line and performed by CI; `chore: bump version to x.y.z` commits are produced
   by the Version workflow, not by hand. See [release.md](release.md).
 - Things that must change together in one commit:
-  - `project.yml` and the regenerated `mac-wallpaper-engine.xcodeproj` (run
+  - `project.yml` and the regenerated `WallpaperMachine.xcodeproj` (run
     `xcodegen generate`, which any `scripts/build.py` or `scripts/test.py` run
     does for you);
   - a bridge-crate interface change and the regenerated `App/Bridge/Generated`;

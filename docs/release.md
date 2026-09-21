@@ -9,7 +9,7 @@ updater consumes it. Build mechanics live in [build.md](build.md).
 [`project.yml`](../project.yml) are the version of both the app and the
 lock-screen extension; the two targets carry identical values.
 `scripts/bump_version.py` also rewrites the same two keys in the committed
-`mac-wallpaper-engine.xcodeproj/project.pbxproj`, so the generated project stays
+`WallpaperMachine.xcodeproj/project.pbxproj`, so the generated project stays
 in sync without anyone running `xcodegen`. Change the version through the script
 or the Version workflow, never by editing one of the two files alone.
 
@@ -63,7 +63,7 @@ workflow** with a `spec` input. On an `ubuntu-latest` runner it:
 2. runs `python3 scripts/bump_version.py --ci --apply`;
 3. if anything changed, refuses to continue when the target tag already exists on
    `origin`, then commits `project.yml` and
-   `mac-wallpaper-engine.xcodeproj/project.pbxproj` as
+   `WallpaperMachine.xcodeproj/project.pbxproj` as
    `chore: bump version to x.y.z`, tags `vx.y.z`, and pushes branch and tag
    atomically as `github-actions[bot]`;
 4. calls the Build workflow directly for the tag it just pushed.
@@ -85,17 +85,27 @@ protection must allow GitHub Actions.
 
 `workflow_call` only, with a required `tag` input. It is the single place a
 publishable artifact is produced, called by Version for CI-produced tags and by
-Release for hand-pushed ones. On a `macos-26` runner (120-minute timeout) it:
+Release for hand-pushed ones.
+
+**Its first step currently fails unconditionally** with an `::error::` citing
+[../LICENSING.md](../LICENSING.md): distribution of any binary is blocked by the
+Apache-2.0 components in the link closure, and no input or secret bypasses the
+step. The steps below are kept so the pipeline is ready once that step is
+deleted, which happens only after LICENSING.md records the blockers as
+resolved. Until then a `release:` push bumps the version and tags it, and the
+Build run fails before checkout. On a `macos-26` runner (120-minute timeout)
+the remaining steps:
 
 1. checks out the tag;
-2. `brew install --quiet` the XcodeGen/CMake/renderer package set;
+2. `brew install --quiet` the XcodeGen/CMake/renderer package set and
+   `python3 scripts/install_ffmpeg.py` for the project's LGPL FFmpeg build;
 3. restores an `actions/cache` entry for `~/.cargo/registry`, `~/.cargo/git` and
    `upstream/renderer/target`, keyed `renderer-${{ hashFiles('upstream/renderer/Cargo.lock') }}`
    with the `renderer-` prefix as a restore key, so an unchanged lock file reuses
    the previous renderer build;
 4. runs `python3 scripts/build.py --configuration Release` and
    `python3 scripts/package.py --configuration Release`;
-5. checks that `build/Build/Products/Release/MacWallpaperEngine-<tag without
+5. checks that `build/Build/Products/Release/WallpaperMachine-<tag without
    v>-arm64.zip` exists, creates the GitHub Release if needed
    (`gh release create "$TAG" --generate-notes --verify-tag`), and uploads the
    archive with `--clobber`.
@@ -120,7 +130,7 @@ section and starts the same check. The contract it relies on:
 
 - the release is not a prerelease, and its tag parses as `vx.y.z` (no
   prerelease suffixes, no `nightly`);
-- exactly the asset named `MacWallpaperEngine-<x.y.z>-arm64.zip` — the name
+- exactly the asset named `WallpaperMachine-<x.y.z>-arm64.zip` — the name
   `scripts/package.py` produces — is selected;
 - downloads are restricted to `github.com` and
   `objects.githubusercontent.com` over HTTPS, and a `sha256:` asset digest, when
@@ -138,10 +148,14 @@ pins this behavior.
    workflow with a spec.
 2. Confirm the Version run committed `chore: bump version to x.y.z` and pushed
    `vx.y.z`.
-3. Confirm the called Build run uploaded `MacWallpaperEngine-x.y.z-arm64.zip`.
+3. Confirm the called Build run uploaded `WallpaperMachine-x.y.z-arm64.zip`.
 4. Run the manual smoke pass in
    [testing/manual-smoke.md](testing/manual-smoke.md) against the packaged build
    and record it in [testing/verification-log.md](testing/verification-log.md).
 
-Distribution of built binaries is still subject to the unresolved questions in
-[../LICENSING.md](../LICENSING.md).
+Distribution of built binaries is blocked by the unresolved questions in
+[../LICENSING.md](../LICENSING.md), which also records the intended sales
+model (a paid official Developer ID signed and notarized build plus priority
+support, under the GPL with corresponding source alongside). Neither Developer
+ID signing nor notarization exists in this pipeline yet; `scripts/package.py`
+signs ad hoc, and a signature is not license clearance.

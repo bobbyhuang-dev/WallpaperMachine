@@ -168,7 +168,7 @@ final class SteamCMDSetupStore {
     @ObservationIgnored private var pending: PendingInstallation?
     private var discarding = false
     private var pendingURL: URL { supportDirectory.appendingPathComponent("SteamCMDPending.json") }
-    private static let preferenceKey = "MacWallpaperEngineSteamCMDPath"
+    private static let preferenceKey = "WallpaperMachineSteamCMDPath"
     private var managedURL: URL { supportDirectory.appendingPathComponent("SteamCMD", isDirectory: true) }
 
     init(downloader: any SteamCMDDownloadActivity, supportDirectory: URL = ClientPaths.supportURL,
@@ -710,7 +710,7 @@ final class SteamCMDSetupStore {
         let fm = FileManager.default
         var total: Int64 = 0
         let canonicalRoot = resolvedPath(root) + "/"
-        let quarantine = "0083;\(String(Int(Date().timeIntervalSince1970), radix: 16));MacWallpaperEngine;\(UUID().uuidString)"
+        let quarantine = "0083;\(String(Int(Date().timeIntervalSince1970), radix: 16));WallpaperMachine;\(UUID().uuidString)"
         func walk(_ directory: URL) throws {
             for file in try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
                 try Task.checkCancellation()

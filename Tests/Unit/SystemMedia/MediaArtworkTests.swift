@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// The thumbnail payload handed to author pages: a bounded PNG data URL and a palette
 /// whose text colour is actually readable on its background colour.

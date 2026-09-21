@@ -1,9 +1,9 @@
 import Foundation
 
 enum AppUpdateConfiguration {
-    static let repository = "bobbyhuang-dev/mac-wallpaper-engine"
-    static let bundleIdentifier = "app.mac-wallpaper-engine"
-    static let applicationName = "MacWallpaperEngine.app"
+    static let repository = "bobbyhuang-dev/WallpaperMachine"
+    static let bundleIdentifier = "app.wallpapermachine"
+    static let applicationName = "WallpaperMachine.app"
     static let maximumDownloadBytes: Int64 = 1_073_741_824
 
     static var repositoryURL: URL {
@@ -186,7 +186,7 @@ enum GitHubReleaseParser {
             let name = asset.name.lowercased()
             guard asset.isZip || asset.isDiskImage else { return false }
             if name.contains("blockmap") || name.contains(".yml") { return false }
-            return name.contains("macwallpaperengine") || name.contains("mac-wallpaper-engine")
+            return name.contains("wallpapermachine")
         }
         return candidates.first { $0.isZip && $0.name.lowercased().contains("arm64") }
             ?? candidates.first { $0.isZip }

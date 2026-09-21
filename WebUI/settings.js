@@ -315,7 +315,7 @@ function draw(view) {
   const updateActions = (update.showsAction && update.action ? button(update.actionLabel || t('Check for Updates'), update.action, {}, updateBusy || busy, update.status === 'available' || update.status === 'ready' ? 'settings-primary' : '') : '')
     + (update.showsReleases ? button(update.releasesLabel || t('Open GitHub Releases'), 'openReleases', {}, updateBusy) : '')
     + (update.showsReveal ? button(update.revealLabel || t('Show in Finder'), 'revealDownloadedUpdate', {}, updateBusy) : '');
-  const about = `<div class="settings-product"><h3>MacWallpaperEngine</h3><span class="settings-note">${e(t('Independent macOS client'))}</span></div>`
+  const about = `<div class="settings-product"><h3>WallpaperMachine</h3><span class="settings-note">${e(t('Independent macOS client'))}</span></div>`
     + versionRow('app-version', t('App version'), state.version)
     + versionRow('bridge-version', t('Bridge'), settings.bridgeVersion)
     + versionRow('core-version', t('Core'), settings.coreVersion)

@@ -2,7 +2,7 @@ import AppKit
 import ImageIO
 import QuartzCore
 import XCTest
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 @MainActor
 private final class MemoryDesktopWorkspace: DesktopPictureWorkspace {
@@ -324,7 +324,7 @@ final class DesktopWallpaperTests: XCTestCase {
         let sync = try DesktopWallpaperSync(folder: root, workspace: workspace,
                                             surfaces: { [DesktopPosterSurface(layer: layer, display: "1")] }, frameCenter: center)
         var requests = 0
-        let observer = center.addObserver(forName: Notification.Name("MacWallpaperEngine.requestDesktopPoster"), object: layer, queue: nil) { _ in requests += 1 }
+        let observer = center.addObserver(forName: Notification.Name("WallpaperMachine.requestDesktopPoster"), object: layer, queue: nil) { _ in requests += 1 }
         defer { center.removeObserver(observer); sync.stop() }
         sync.start()
         workspace.didEnumerate = { XCTAssertGreaterThan(requests, 0, "Request pixels before native synchronization") }
@@ -453,7 +453,7 @@ final class DesktopWallpaperTests: XCTestCase {
 
     @MainActor
     private func post(_ pixels: Data, layer: CAMetalLayer, center: NotificationCenter) {
-        center.post(name: Notification.Name("MacWallpaperEngine.desktopPosterReady"), object: layer,
+        center.post(name: Notification.Name("WallpaperMachine.desktopPosterReady"), object: layer,
                     userInfo: ["pixels": pixels, "width": 1, "height": 1, "bgra": false])
     }
 

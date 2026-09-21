@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 import WebKit
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Discover page: pagination, grid columns, download rings, telemetry and animated previews.
 @MainActor

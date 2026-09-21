@@ -144,7 +144,7 @@ function patch(node, fresh) {
 
 async function send(action, args = {}) {
   const bridge = window.webkit?.messageHandlers?.native;
-  if (!bridge) { localError = t('The native connection is unavailable. Open this panel in MacWallpaperEngine, then reconnect.'); renderError(); throw new Error(localError); }
+  if (!bridge) { localError = t('The native connection is unavailable. Open this panel in WallpaperMachine, then reconnect.'); renderError(); throw new Error(localError); }
   const key = actionKey(action, args);
   if (pending.has(key)) {
     if (['property', 'wallpaperSetting', 'displayConfig', 'workshopSearch', 'navigate', 'target'].includes(action)) {
@@ -184,7 +184,7 @@ function receive(snapshot) {
 window.wallpaperUI = { receive };
 function renderError() {
   const error = localError || state?.error || state?.downloadError;
-  if (!state && error) morph($('browser-empty'), `<h1>${escapeHTML(t('Native connection unavailable'))}</h1><p>${escapeHTML(t('Open this panel in MacWallpaperEngine. Use Reconnect above to try again.'))}</p>`);
+  if (!state && error) morph($('browser-empty'), `<h1>${escapeHTML(t('Native connection unavailable'))}</h1><p>${escapeHTML(t('Open this panel in WallpaperMachine. Use Reconnect above to try again.'))}</p>`);
   $('error-banner').hidden = !error;
   if (error) morph($('error-banner'), `<p>${escapeHTML(error)}</p>${button(t('Reconnect'), 'ready', {}, { icon: 'refresh' })}${button('', 'dismissError', {}, { icon: 'close', title: t('Dismiss error'), className: 'quiet icon-button' })}`);
 }
@@ -195,7 +195,7 @@ function render() {
   const settings = state.page === 'settings';
   document.querySelectorAll('.tabs [data-page]').forEach(tab => { if (tab.dataset.page === state.page) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current'); tab.disabled = busy('navigate', { page: tab.dataset.page }); });
   document.documentElement.style.setProperty('--window-controls-inset', `${Math.max(0, Number(state.windowControlsInset) || 0)}px`);
-  morph($('app-identity'), `<span class="app-title"><span class="app-name">MacWallpaperEngine</span>${state.version ? `<span class="app-version">${escapeHTML(state.version)}</span>` : ''}</span>${safeLink(state.repositoryURL) ? button('', 'openExternal', { url: state.repositoryURL }, { icon: 'github', title: t('MacWallpaperEngine on GitHub'), className: 'quiet icon-button github-link' }) : ''}`);
+  morph($('app-identity'), `<span class="app-title"><span class="app-name">WallpaperMachine</span>${state.version ? `<span class="app-version">${escapeHTML(state.version)}</span>` : ''}</span>${safeLink(state.repositoryURL) ? button('', 'openExternal', { url: state.repositoryURL }, { icon: 'github', title: t('WallpaperMachine on GitHub'), className: 'quiet icon-button github-link' }) : ''}`);
   morph($('top-actions'), `<label class="sr-only" for="target-display">${escapeHTML(t('Target display'))}</label><select id="target-display" data-change="target" aria-label="${escapeHTML(t('Target display'))}"${disabled(state.busy)}>${(state.displays || []).map(display => `<option value="${escapeHTML(display.id)}"${display.id === state.targetDisplayID ? ' selected' : ''}${disabled(!display.enabled || display.mode === 'mirror')}>${escapeHTML(display.title)}${display.mode === 'mirror' ? escapeHTML(t(' (mirrored)')) : !display.enabled ? escapeHTML(t(' (disabled)')) : ''}</option>`).join('')}</select>${queueButton()}`);
   $('library-page').hidden = settings;
   $('settings-content').hidden = !settings;

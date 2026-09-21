@@ -1,5 +1,5 @@
 import XCTest
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 final class WorkshopTests: XCTestCase {
     /// Skips the case unless live-network tests are opted in.
@@ -10,15 +10,15 @@ final class WorkshopTests: XCTestCase {
     /// gate red and invites a pointless re-run, so they are opt-in:
     ///
     /// ```
-    /// MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1 python3 scripts/test.py
+    /// WALLPAPER_MACHINE_NETWORK_TESTS=1 python3 scripts/test.py
     /// ```
     ///
     /// Steam's page format itself stays covered offline: `decodePage` is exercised
     /// against recorded markup by `WorkshopStoreTests`.
     private func skipUnlessNetworkTestsEnabled() throws {
         try XCTSkipUnless(
-            ProcessInfo.processInfo.environment["MAC_WALLPAPER_ENGINE_NETWORK_TESTS"] == "1",
-            "live Steam tests are opt-in; set MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1")
+            ProcessInfo.processInfo.environment["WALLPAPER_MACHINE_NETWORK_TESTS"] == "1",
+            "live Steam tests are opt-in; set WALLPAPER_MACHINE_NETWORK_TESTS=1")
     }
 
     func testLiveSearchRespectsTypeAndPagination() async throws {

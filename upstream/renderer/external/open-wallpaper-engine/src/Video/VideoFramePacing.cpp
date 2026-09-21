@@ -109,7 +109,7 @@ bool ContentPacingEnabled()
     const int state = g_content_pacing_state.load(std::memory_order_relaxed);
     if (state >= 0) return state == 1;
     const bool from_env =
-        ContentPacingEnabledByEnvironment(std::getenv("MAC_WALLPAPER_ENGINE_CONTENT_PACING"));
+        ContentPacingEnabledByEnvironment(std::getenv("WALLPAPER_MACHINE_CONTENT_PACING"));
     int expected = -1;
     g_content_pacing_state.compare_exchange_strong(
         expected, from_env ? 1 : 0, std::memory_order_relaxed);

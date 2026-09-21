@@ -16,14 +16,14 @@ bump_version = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(bump_version)
 
-SAMPLE_YML = """name: mac-wallpaper-engine
+SAMPLE_YML = """name: WallpaperMachine
 targets:
-  MacWallpaperEngine:
+  WallpaperMachine:
     settings:
       base:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
-  MacWallpaperExtension:
+  WallpaperMachineExtension:
     settings:
       base:
         MARKETING_VERSION: "0.1.0"
@@ -107,9 +107,9 @@ class FileUpdateTests(unittest.TestCase):
     def test_plan_and_apply(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "mac-wallpaper-engine.xcodeproj").mkdir()
+            (root / "WallpaperMachine.xcodeproj").mkdir()
             (root / "project.yml").write_text(SAMPLE_YML)
-            (root / "mac-wallpaper-engine.xcodeproj/project.pbxproj").write_text(SAMPLE_PBX)
+            (root / "WallpaperMachine.xcodeproj/project.pbxproj").write_text(SAMPLE_PBX)
             plan = bump_version.plan_bump(root, "minor")
             self.assertEqual(plan["new_marketing"], "0.2.0")
             self.assertEqual(plan["new_build"], "2")
@@ -119,7 +119,7 @@ class FileUpdateTests(unittest.TestCase):
             yml = (root / "project.yml").read_text()
             self.assertIn('MARKETING_VERSION: "0.2.0"', yml)
             self.assertIn('CURRENT_PROJECT_VERSION: "2"', yml)
-            self.assertIn("MARKETING_VERSION = 0.2.0;", (root / "mac-wallpaper-engine.xcodeproj/project.pbxproj").read_text())
+            self.assertIn("MARKETING_VERSION = 0.2.0;", (root / "WallpaperMachine.xcodeproj/project.pbxproj").read_text())
 
     def test_plan_skips_unchanged_explicit_version(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -156,7 +156,7 @@ class RepoFileTests(unittest.TestCase):
         marketing, build = bump_version.read_yml_versions((root / "project.yml").read_text())
         bump_version.parse_semver(marketing)
         self.assertGreaterEqual(int(build), 1)
-        pbx = (root / "mac-wallpaper-engine.xcodeproj/project.pbxproj").read_text()
+        pbx = (root / "WallpaperMachine.xcodeproj/project.pbxproj").read_text()
         self.assertGreaterEqual(len(bump_version.PBX_MARKETING.findall(pbx)), 2)
         self.assertGreaterEqual(len(bump_version.PBX_BUILD.findall(pbx)), 2)
 
@@ -165,9 +165,9 @@ class CLITests(unittest.TestCase):
     def test_ci_uses_release_spec_env(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "mac-wallpaper-engine.xcodeproj").mkdir()
+            (root / "WallpaperMachine.xcodeproj").mkdir()
             (root / "project.yml").write_text(SAMPLE_YML)
-            (root / "mac-wallpaper-engine.xcodeproj/project.pbxproj").write_text(SAMPLE_PBX)
+            (root / "WallpaperMachine.xcodeproj/project.pbxproj").write_text(SAMPLE_PBX)
             output = root / "github-output"
             env = {"RELEASE_SPEC": "patch", "GITHUB_OUTPUT": str(output)}
             with patch.dict(os.environ, env, clear=False), patch.object(
@@ -180,9 +180,9 @@ class CLITests(unittest.TestCase):
     def test_ci_reads_event_path(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "mac-wallpaper-engine.xcodeproj").mkdir()
+            (root / "WallpaperMachine.xcodeproj").mkdir()
             (root / "project.yml").write_text(SAMPLE_YML)
-            (root / "mac-wallpaper-engine.xcodeproj/project.pbxproj").write_text(SAMPLE_PBX)
+            (root / "WallpaperMachine.xcodeproj/project.pbxproj").write_text(SAMPLE_PBX)
             event = root / "event.json"
             event.write_text(json.dumps({"head_commit": {"message": "release: major\n"}}))
             output = root / "github-output"

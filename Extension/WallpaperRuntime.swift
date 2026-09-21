@@ -35,7 +35,7 @@ enum WallpaperRuntime {
 
   static func failure(_ message: String) -> NSError {
     NSError(
-      domain: "MacWallpaperEngine.LockScreen", code: 1,
+      domain: "WallpaperMachine.LockScreen", code: 1,
       userInfo: [NSLocalizedDescriptionKey: message])
   }
 

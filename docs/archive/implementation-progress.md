@@ -2404,9 +2404,9 @@ window's layer tree presents nothing to a screen.
 | `cargo test --release --workspace` | Pass; 969 cases total, `wallpaper-bridge` 264 including `native_video_routing` (19) |
 | `playback_gpu_test` | Pass, 39/39 on a real Apple M3 Max — Metal NV12 conversion, readback and 6144x3456 imports all executed |
 | `video_conversion_budget_test` | Pass, 37/37 (CPU only) |
-| `MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1 … NativeVideoPlayerMediaTests` | Pass, 7/7 with real decode |
+| `WALLPAPER_MACHINE_MEDIA_TESTS=1 … NativeVideoPlayerMediaTests` | Pass, 7/7 with real decode |
 | `python3 scripts/build.py --renderer-only` | Pass; bindings carry `admissionKey`, the new `rejectNativeVideo` signature and `videoConversionLiveBytes` / `videoConversionPeakLiveBytes` |
-| `python3 scripts/build.py --configuration Release` | **BUILD SUCCEEDED**; app and embedded `MacWallpaperExtension.appex` |
+| `python3 scripts/build.py --configuration Release` | **BUILD SUCCEEDED**; app and embedded `WallpaperMachineExtension.appex` |
 
 **The one failure is outside this round.**
 `testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes` fails
@@ -2975,7 +2975,7 @@ backend has no presentation-feedback source and none is invented.
 
 ### What the real player run actually established
 
-`NativeVideoPlayerMediaTests`, 9/9, with `MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1`.
+`NativeVideoPlayerMediaTests`, 9/9, with `WALLPAPER_MACHINE_MEDIA_TESTS=1`.
 These drive the production `NativeVideoPlayer` — real `AVQueuePlayer`,
 `AVPlayerLooper`, `AVPlayerLayer`, `AVPlayerItemVideoOutput` — against
 generated silent clips, so they decode on this machine's media hardware. That
@@ -3038,9 +3038,9 @@ authorized this round, and `python3 scripts/test.py --ui` was not run. This is
 the minimum list that a single authorized session would have to cover, in
 order, for V04 to have runtime and visual evidence at all:
 
-1. Launch `build/Build/Products/Release/MacWallpaperEngine.app` with
-   `MAC_WALLPAPER_ENGINE_DIAGNOSTICS=120` and an isolated
-   `MAC_WALLPAPER_ENGINE_HOME`.
+1. Launch `build/Build/Products/Release/WallpaperMachine.app` with
+   `WALLPAPER_MACHINE_DIAGNOSTICS=120` and an isolated
+   `WALLPAPER_MACHINE_HOME`.
 2. Turn the native video backend on and assign one plain local video whose
    frame rate is at or below the display's target, so admission accepts it.
 3. Observe, on one visible display: first frame appears; playback loops at
@@ -3151,7 +3151,7 @@ of them, not one. Removing that needs the source to wake the clock itself,
 which is a different change and is not in this round's scope.
 
 So the default is now the safe baseline: tick at the configured ceiling.
-`MAC_WALLPAPER_ENGINE_CONTENT_PACING=1` turns pacing on and is also the A/B
+`WALLPAPER_MACHINE_CONTENT_PACING=1` turns pacing on and is also the A/B
 entry point. The switch's polarity was inverted from round 2's opt-out, and
 `PacingIsOffUnlessTheEnvironmentExplicitlyOptsIn` pins the default.
 
@@ -3388,7 +3388,7 @@ the second column ran in this environment.
 | `python3 scripts/check_renderer.py` | Pass, exit 0; 10 generated cases `pixels_equal=true`, 0 diagnostics; every test binary exit 0 |
 | `cargo test --release --workspace` (`CARGO_TARGET_DIR` unset) | Pass; 241 `wallpaper-bridge` cases, every other crate green |
 | `python3 scripts/build.py --renderer-only` | Pass; bindings regenerated with `rendererCounters` and `setRendererCountersEnabled` |
-| `python3 scripts/build.py --configuration Release` | **BUILD SUCCEEDED**; app and embedded extension at `build/Build/Products/Release/MacWallpaperEngine.app` |
+| `python3 scripts/build.py --configuration Release` | **BUILD SUCCEEDED**; app and embedded extension at `build/Build/Products/Release/WallpaperMachine.app` |
 | `tests/timer_tests` | Pass, 18 cases (11 pre-existing, 7 new) |
 | `tests/video_frame_pacing_test` | Pass, 21 cases (all new) |
 | `tests/playback_gpu_test` | Pass, 32 cases |
@@ -3455,7 +3455,7 @@ window and produces one aggregated report.
 **Cost of the switch itself.** Enabling is a single relaxed atomic store; each
 counted event is one relaxed load plus, when on, one relaxed add on a path that
 already submits a command buffer or decodes a frame. Nothing polls. The
-application only opens a session when `MAC_WALLPAPER_ENGINE_DIAGNOSTICS=<seconds>`
+application only opens a session when `WALLPAPER_MACHINE_DIAGNOSTICS=<seconds>`
 is set, the in-process session expires on its own, and the renderer side is
 turned off again when it does. No per-frame JSON reaches Swift, and there is no
 screenshot, pixel readback or periodic disk write anywhere in the path.
@@ -4135,8 +4135,8 @@ authorization, and each item below states exactly what would be run.
 
 ### 1. Authorized desktop run with a counter session
 
-Launch the Release build with `MAC_WALLPAPER_ENGINE_DIAGNOSTICS=120` and an
-isolated `MAC_WALLPAPER_ENGINE_HOME`, then exercise, in one session:
+Launch the Release build with `WALLPAPER_MACHINE_DIAGNOSTICS=120` and an
+isolated `WALLPAPER_MACHINE_HOME`, then exercise, in one session:
 
 - Two displays, a window fully covering one wallpaper, then uncovering it.
 - Both displays covered, then a Space switch, then display sleep and wake.
@@ -4160,7 +4160,7 @@ The three claims to check against the report:
   the content rate while `video_frames_skipped` stays at zero,
   `video_frames_selected` tracks `video_decode_outputs`, and the playback
   timeline is unchanged. Repeat at 0.5x and 2x. Then repeat the whole run with
-  `MAC_WALLPAPER_ENGINE_DISABLE_CONTENT_PACING=1` for the A/B pair.
+  `WALLPAPER_MACHINE_DISABLE_CONTENT_PACING=1` for the A/B pair.
 
 Environment to record before starting, not assumed from an earlier session: the
 chip, the attached displays with their pixel geometry and refresh rate, the

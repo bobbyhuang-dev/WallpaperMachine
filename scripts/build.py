@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build MacWallpaperEngine's Rust/C++ renderer and SwiftUI application with Homebrew.
+"""Build WallpaperMachine's Rust/C++ renderer and SwiftUI application with Homebrew.
 
 Stages, in order: cargo builds the renderer workspace, `uniffi-bindgen` regenerates
 the Swift bridge into `App/Bridge/Generated`, `xcodegen` regenerates the Xcode project
@@ -47,7 +47,9 @@ def repository_commit(root=ROOT):
 def build_environment():
     result = os.environ.copy()
     prefix = subprocess.check_output(["brew", "--prefix"], text=True).strip()
-    packages = ["quickjs-ng", "glslang", "ffmpeg@8", "freetype", "lz4", "vulkan-loader", "vulkan-headers", "molten-vk", "eigen", "nlohmann-json", "argparse", "shaderc", "spirv-tools", "glm"]
+    if not (Path(prefix) / "opt/mwe-ffmpeg/lib/pkgconfig/libavcodec.pc").is_file():
+        raise SystemExit("Missing LGPL FFmpeg: run python3 scripts/install_ffmpeg.py; Homebrew ffmpeg is not a compatible substitute.")
+    packages = ["quickjs-ng", "glslang", "mwe-ffmpeg", "freetype", "lz4", "vulkan-loader", "vulkan-headers", "molten-vk", "eigen", "nlohmann-json", "argparse", "shaderc", "spirv-tools", "glm"]
     roots = [str(Path(prefix) / "opt" / name) for name in packages]
     result["PATH"] = f"{prefix}/bin:" + result.get("PATH", "")
     result["CMAKE_PREFIX_PATH"] = ";".join(roots + [prefix])
@@ -103,8 +105,8 @@ def main():
     # `--use-cache` skips rewriting the project when `project.yml` has not changed,
     # which keeps Xcode's incremental build state (and `scripts/test.py` agrees).
     run(["xcodegen", "generate", "--use-cache", "--quiet"], env=env, stage="xcodegen")
-    run(["xcodebuild", "-project", XCODEPROJ.name, "-scheme", "MacWallpaperEngine", "-configuration", args.configuration, "-derivedDataPath", BUILD, "build"], env=env, stage=f"xcodebuild-{args.configuration}")
-    print(f"{MARK.ok} Built {PRODUCTS / args.configuration / 'MacWallpaperEngine.app'}")
+    run(["xcodebuild", "-project", XCODEPROJ.name, "-scheme", "WallpaperMachine", "-configuration", args.configuration, "-derivedDataPath", BUILD, "build"], env=env, stage=f"xcodebuild-{args.configuration}")
+    print(f"{MARK.ok} Built {PRODUCTS / args.configuration / 'WallpaperMachine.app'}")
 
 
 if __name__ == "__main__":

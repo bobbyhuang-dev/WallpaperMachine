@@ -1,7 +1,7 @@
 import Darwin
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// `NetworkReceiveMeter` parsing and the transfer telemetry a download publishes.
 @MainActor
@@ -36,15 +36,15 @@ final class DownloadTelemetryTests: DownloaderTestCase {
 
   func testNetworkReceiveMeterAcceptsTerminalCRLFAndSplitLineEndings() {
     var meter = NetworkReceiveMeter(processID: 42)
-    meter.append(Data(",bytes_in,\r\nMacWallpaperEng.42,1,\r\n".utf8), at: 0)
+    meter.append(Data(",bytes_in,\r\nWallpaperMachin.42,1,\r\n".utf8), at: 0)
     XCTAssertNil(meter.rate(at: 0))
-    meter.append(Data(",bytes_in,\r\nMacWallpaperEng.42,1000,\r\n".utf8), at: 1)
+    meter.append(Data(",bytes_in,\r\nWallpaperMachin.42,1000,\r\n".utf8), at: 1)
     XCTAssertEqual(meter.rate(at: 1), 1000)
     meter.append(Data(",bytes_in,\r".utf8), at: 2)
-    meter.append(Data("\nMacWallpaperEng.42,2000,\r".utf8), at: 2)
+    meter.append(Data("\nWallpaperMachin.42,2000,\r".utf8), at: 2)
     meter.append(Data("\n".utf8), at: 2)
     XCTAssertEqual(meter.rate(at: 2), 1500)
-    meter.append(Data("MacWallpaperEng.42,0,\r\n".utf8), at: 3)
+    meter.append(Data("WallpaperMachin.42,0,\r\n".utf8), at: 3)
     XCTAssertEqual(meter.rate(at: 3), 1000)
   }
 

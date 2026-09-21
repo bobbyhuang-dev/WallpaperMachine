@@ -3,8 +3,8 @@ import Foundation
 /// The app publishes a complete immutable asset revision before replacing this file.
 /// The extension never reads draft options or the app's private configuration files.
 struct LockScreenConfiguration: Codable, Equatable {
-  static let extensionIdentifier = "app.mac-wallpaper-engine.wallpaper-extension"
-  static let changedNotification = "app.mac-wallpaper-engine.lock-screen.changed"
+  static let extensionIdentifier = "app.wallpapermachine.wallpaper-extension"
+  static let changedNotification = "app.wallpapermachine.lock-screen.changed"
   static let fileName = "configuration.json"
   static let supportedVersion = 1
 

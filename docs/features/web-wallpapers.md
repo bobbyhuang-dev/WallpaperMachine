@@ -2,7 +2,7 @@
 
 Wallpaper Engine projects with `"type": "web"` are HTML pages (`"file"` names the
 entry page, usually `index.html`) that talk to their host through
-`window.wallpaperPropertyListener`. MacWallpaperEngine renders them in a
+`window.wallpaperPropertyListener`. WallpaperMachine renders them in a
 `WKWebView` hosted by the app; the vendored scene renderer never opens a window
 for them.
 
@@ -177,8 +177,8 @@ WebKit and refused, a hard link is not. Both were measured, and together they fi
 the design.
 
 - `App/Services/UserAssets/ManagedUserAssetStore.swift` holds the app's own copy of
-  each chosen file under `~/Library/Application Support/mac-wallpaper-engine/UserAssets/`
-  (`MAC_WALLPAPER_ENGINE_HOME` relocates it), laid out as
+  each chosen file under `~/Library/Application Support/WallpaperMachine/UserAssets/`
+  (`WALLPAPER_MACHINE_HOME` relocates it), laid out as
   `<stableWallpaperId>/<propertyId>/<assetId>/<fileName>` with a `manifest.json` per
   wallpaper. The manifest, not the wallpaper package, is the system of record: it
   records the asset id, the user's original path, the size, the modification time, a

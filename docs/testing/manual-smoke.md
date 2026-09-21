@@ -165,7 +165,7 @@ never switches Spaces, restarts Dock or WallpaperAgent, or edits Apple's
 wallpaper plist. These are non-public APIs: if they are unavailable on a future
 macOS the app logs the limitation and falls back to `NSWorkspace`'s
 current-Space behavior. Originals and posters live under
-`~/Library/Application Support/mac-wallpaper-engine/DesktopPosters`.
+`~/Library/Application Support/WallpaperMachine/DesktopPosters`.
 
 ## Animated lock screen (experimental, opt-in)
 

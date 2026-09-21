@@ -24,7 +24,7 @@ enum WallpaperDeletionService {
     }
 
     private static func failure(_ message: String) -> NSError {
-        NSError(domain: "MacWallpaperEngine.Deletion", code: 1,
+        NSError(domain: "WallpaperMachine.Deletion", code: 1,
                 userInfo: [NSLocalizedDescriptionKey: message])
     }
 }

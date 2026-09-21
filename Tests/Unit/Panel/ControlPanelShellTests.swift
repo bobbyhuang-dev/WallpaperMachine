@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 import WebKit
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Window sizing, bundled asset routing, language, appearance, About/update and the top bar.
 @MainActor
@@ -576,7 +576,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       XCTAssertLessThanOrEqual(
         link?["offCenter"] as? Double ?? .infinity, 1,
         "The product name must sit on the window's horizontal center, not after the tabs")
-      XCTAssertEqual(link?["title"] as? String, "MacWallpaperEngine")
+      XCTAssertEqual(link?["title"] as? String, "WallpaperMachine")
       XCTAssertEqual(panel.controller.windowControlsInset, 0)
       // Title-bar gestures reply without a snapshot and never fail when there is no window.
       for action in ["dragWindow", "titleDoubleClick"] {
@@ -684,7 +684,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       XCTAssertEqual(
         first?["background"] as? String, first?["theme"] as? String == "dark" ? "rgb(0, 0, 0)" : "rgb(255, 255, 255)",
         "Black or white by the resolved appearance, never translucent")
-      XCTAssertEqual(first?["title"] as? String, "Welcome to MacWallpaperEngine")
+      XCTAssertEqual(first?["title"] as? String, "Welcome to WallpaperMachine")
       XCTAssertEqual(first?["languages"] as? [String], ["system"] + AppLanguage.supported.map(\.tag))
       XCTAssertEqual(first?["themes"] as? [String], ["system", "light", "dark"])
       XCTAssertEqual(first?["checked"] as? [String], ["language:system", "theme:system"], "Defaults are selected")

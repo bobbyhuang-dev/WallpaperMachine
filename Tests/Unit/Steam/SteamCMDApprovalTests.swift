@@ -1,6 +1,6 @@
 import Darwin
 import XCTest
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 @MainActor
 final class SteamCMDApprovalTests: XCTestCase {

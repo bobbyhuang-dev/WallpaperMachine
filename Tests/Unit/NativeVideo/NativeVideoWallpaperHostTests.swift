@@ -1,7 +1,7 @@
 import AppKit
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// The routing and fallback contract of the experimental native video backend.
 ///
@@ -640,7 +640,7 @@ final class NativeVideoWallpaperHostTests: XCTestCase {
 
         var published: [UInt32] = []
         let observer = center.addObserver(
-            forName: Notification.Name("MacWallpaperEngine.desktopPoster"), object: nil,
+            forName: Notification.Name("WallpaperMachine.desktopPoster"), object: nil,
             queue: .main
         ) { note in
             if let id = note.userInfo?["displayID"] as? UInt32 { published.append(id) }
@@ -648,7 +648,7 @@ final class NativeVideoWallpaperHostTests: XCTestCase {
         defer { center.removeObserver(observer) }
 
         center.post(
-            name: Notification.Name("MacWallpaperEngine.requestDesktopPoster"), object: nil,
+            name: Notification.Name("WallpaperMachine.requestDesktopPoster"), object: nil,
             userInfo: ["displayID": UInt32(7)])
         // Replace the wallpaper while the request is still in flight.
         await host.apply([wallpaper(id: "301", admissionKey: 2)])
@@ -670,7 +670,7 @@ final class NativeVideoWallpaperHostTests: XCTestCase {
 
         var published: [UInt32] = []
         let observer = center.addObserver(
-            forName: Notification.Name("MacWallpaperEngine.desktopPoster"), object: nil,
+            forName: Notification.Name("WallpaperMachine.desktopPoster"), object: nil,
             queue: .main
         ) { note in
             if let id = note.userInfo?["displayID"] as? UInt32 { published.append(id) }
@@ -678,7 +678,7 @@ final class NativeVideoWallpaperHostTests: XCTestCase {
         defer { center.removeObserver(observer) }
 
         center.post(
-            name: Notification.Name("MacWallpaperEngine.requestDesktopPoster"), object: nil,
+            name: Notification.Name("WallpaperMachine.requestDesktopPoster"), object: nil,
             userInfo: ["displayID": UInt32(7)])
         try? await Task.sleep(for: .milliseconds(200))
 

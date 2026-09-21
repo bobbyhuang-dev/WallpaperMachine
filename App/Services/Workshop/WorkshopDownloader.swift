@@ -50,7 +50,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
     @ObservationIgnored private var loggedStatus = ""
     @ObservationIgnored private var recentOutput = ""
     @ObservationIgnored private var outputBuffer = [UInt8](repeating: 0, count: 8192)
-    nonisolated static let stagingPrefix = ".mac-wallpaper-engine-workshop-"
+    nonisolated static let stagingPrefix = ".WallpaperMachine-workshop-"
     nonisolated private static let ownerName = "owner"
     @ObservationIgnored private var lastActivity = Date()
     @ObservationIgnored private var failure: String?
@@ -353,7 +353,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         var master: Int32 = 0
         var slave: Int32 = 0
         guard openpty(&master, &slave, nil, nil, nil) == 0 else {
-            throw WorkshopFailure(message: "Could not create a private terminal for SteamCMD. Restart MacWallpaperEngine and retry.")
+            throw WorkshopFailure(message: "Could not create a private terminal for SteamCMD. Restart WallpaperMachine and retry.")
         }
         var settings = termios()
         if tcgetattr(slave, &settings) == 0 {
@@ -364,7 +364,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         let child = FileHandle(fileDescriptor: slave, closeOnDealloc: true)
         let flags = fcntl(master, F_GETFL)
         guard flags >= 0, fcntl(master, F_SETFL, flags | O_NONBLOCK) == 0 else {
-            throw WorkshopFailure(message: "Could not read SteamCMD’s private terminal without blocking. Restart MacWallpaperEngine and retry.")
+            throw WorkshopFailure(message: "Could not read SteamCMD’s private terminal without blocking. Restart WallpaperMachine and retry.")
         }
         terminal = input
         let installDirectory = isInstallingAssets ? staging.appendingPathComponent("wallpaper-engine") : staging

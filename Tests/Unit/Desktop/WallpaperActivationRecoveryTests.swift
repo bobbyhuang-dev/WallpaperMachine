@@ -1,5 +1,5 @@
 import XCTest
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// A wallpaper that refuses to render leaves the engine restoring its previous
 /// configuration. The Library must stay usable so another wallpaper can be
@@ -18,11 +18,11 @@ final class WallpaperActivationRecoveryTests: XCTestCase {
             .write(to: folder.appendingPathComponent("project.json"))
         try Data("<!doctype html><title>Failing</title>".utf8)
             .write(to: folder.appendingPathComponent("index.html"))
-        setenv("MAC_WALLPAPER_ENGINE_HOME", home.path, 1)
+        setenv("WALLPAPER_MACHINE_HOME", home.path, 1)
     }
 
     override func tearDownWithError() throws {
-        unsetenv("MAC_WALLPAPER_ENGINE_HOME")
+        unsetenv("WALLPAPER_MACHINE_HOME")
         try FileManager.default.removeItem(at: home)
     }
 

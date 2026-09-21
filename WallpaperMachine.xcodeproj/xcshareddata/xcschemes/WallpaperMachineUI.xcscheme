@@ -15,10 +15,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "D5FB953C2E956126BB4E2759"
-               BuildableName = "MacWallpaperEngine.app"
-               BlueprintName = "MacWallpaperEngine"
-               ReferencedContainer = "container:mac-wallpaper-engine.xcodeproj">
+               BlueprintIdentifier = "FB5FD001F43484BDD8B8C528"
+               BuildableName = "WallpaperMachine.app"
+               BlueprintName = "WallpaperMachine"
+               ReferencedContainer = "container:WallpaperMachine.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -32,10 +32,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "D5FB953C2E956126BB4E2759"
-            BuildableName = "MacWallpaperEngine.app"
-            BlueprintName = "MacWallpaperEngine"
-            ReferencedContainer = "container:mac-wallpaper-engine.xcodeproj">
+            BlueprintIdentifier = "FB5FD001F43484BDD8B8C528"
+            BuildableName = "WallpaperMachine.app"
+            BlueprintName = "WallpaperMachine"
+            ReferencedContainer = "container:WallpaperMachine.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -44,10 +44,10 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "7C5ABDA5E6AC2997D1EA17C8"
-               BuildableName = "MacWallpaperEngineUITests.xctest"
-               BlueprintName = "MacWallpaperEngineUITests"
-               ReferencedContainer = "container:mac-wallpaper-engine.xcodeproj">
+               BlueprintIdentifier = "CB77B114121D065A90B775BE"
+               BuildableName = "WallpaperMachineUITests.xctest"
+               BlueprintName = "WallpaperMachineUITests"
+               ReferencedContainer = "container:WallpaperMachine.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -68,10 +68,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "D5FB953C2E956126BB4E2759"
-            BuildableName = "MacWallpaperEngine.app"
-            BlueprintName = "MacWallpaperEngine"
-            ReferencedContainer = "container:mac-wallpaper-engine.xcodeproj">
+            BlueprintIdentifier = "FB5FD001F43484BDD8B8C528"
+            BuildableName = "WallpaperMachine.app"
+            BlueprintName = "WallpaperMachine"
+            ReferencedContainer = "container:WallpaperMachine.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -85,10 +85,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "D5FB953C2E956126BB4E2759"
-            BuildableName = "MacWallpaperEngine.app"
-            BlueprintName = "MacWallpaperEngine"
-            ReferencedContainer = "container:mac-wallpaper-engine.xcodeproj">
+            BlueprintIdentifier = "FB5FD001F43484BDD8B8C528"
+            BuildableName = "WallpaperMachine.app"
+            BlueprintName = "WallpaperMachine"
+            ReferencedContainer = "container:WallpaperMachine.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

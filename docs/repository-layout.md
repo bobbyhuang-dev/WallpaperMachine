@@ -9,11 +9,12 @@ For how the pieces interact at runtime, see [architecture.md](architecture.md).
 AGENTS.md                          agent rules; authoritative for automated contributors
 CLAUDE.md -> AGENTS.md              Claude entry point; relative symlink, same rules
 CONTRIBUTING.md                    contributor working agreement
-LICENSING.md                       license-compatibility record for the vendored renderer
+LICENSE                            GNU GPL version 2 text; the license of this repository's source (verbatim copy of upstream/renderer/LICENSE)
+LICENSING.md                       GPL-2.0-only policy, sales model, component licenses and distribution blockers
 README.md                          product overview, quickstart, documentation index
 project.yml                        XcodeGen spec: the only source of truth for targets/settings/versions
-mac-wallpaper-engine.xcodeproj/    generated from project.yml by xcodegen; committed, never hand-edited
-App/                               MacWallpaperEngine application target sources only
+WallpaperMachine.xcodeproj/    generated from project.yml by xcodegen; committed, never hand-edited
+App/                               WallpaperMachine application target sources only
   WallpaperEngineApp.swift         @main AppKit entry point; no scene/UI logic
   AppDelegate.swift                lifecycle, menu bar, window and shutdown ordering
   Bridge/                          BridgeEnvironment.swift (Vulkan ICD) and Generated/ (uniffi output; not hand-edited)
@@ -37,26 +38,28 @@ App/                               MacWallpaperEngine application target sources
   ViewModels/                      BridgeStore and editor draft state; observable, no view code
   Views/ControlPanel/              SwiftUI container, WKWebView host, snapshot builder, action handlers
   Resources/                       Info.plist, string catalogs, Assets.xcassets; app resources only
-Extension/                         MacWallpaperExtension sources, Info.plist, entitlements, bridging header
+Extension/                         WallpaperMachineExtension sources, Info.plist, entitlements, bridging header
 Shared/                            contracts compiled into both targets: LockScreenConfiguration,
                                    RuntimeCounters, WallpaperPresentationAuthority
 WebUI/                             HTML/CSS/JS control panel; bundled verbatim as the app resource folder WebUI
   locales/                         one panel catalog module per shipped language (zh-Hans.js), registered in i18n.js
 Resources/StarterWallpaper/        bundled sample wallpaper (Aurora.mp4, preview.jpg, project.json)
-Tests/Unit/<Domain>/               MacWallpaperEngineTests, grouped Appearance, Desktop, Diagnostics, GitHub,
+Tests/Unit/<Domain>/               WallpaperMachineTests, grouped Appearance, Desktop, Diagnostics, GitHub,
                                    Library, Localization, LockScreen, NativeVideo, Panel, Steam, SystemMedia,
                                    UserAssets, WebWallpaper, Workshop; hosted in the app binary
-Tests/UI/                          MacWallpaperEngineUITests; desktop-driving XCUITest suite
+Tests/UI/                          WallpaperMachineUITests; desktop-driving XCUITest suite
 docs/                              all project documentation; see docs/README.md for the index
   archive/                         retired plans and records; rg skips them (repository .ignore, `rg -u` to search)
 scripts/                           developer command line; Python only
   lib/                             shared helpers (glyphs.py status markers, paths.py repo paths,
                                    xcode.py quiet runner: full tool output to artifacts/, failures on screen)
   tests/                           unit tests for the scripts, run by scripts/test.py
+Formula/                           mwe-ffmpeg.rb: the LGPL-2.1-or-later FFmpeg build the app links (scripts/install_ffmpeg.py)
 upstream/                          vendored third-party code only
   provenance.json                  repositories, pinned revisions, modification status
   renderer/                        Rust workspace (crates/), C++ scene engine (external/), cargo target/;
                                    trimmed to what the build and renderer checks use
+  mediaremote-adapter/             ungive/mediaremote-adapter, BSD-3-Clause, unmodified; built as an embedded framework
 artifacts/                         Git-ignored: all test and verification evidence
 build/                             Git-ignored: Xcode derived data and built products only
 .agents/                           agent skills and agent-tooling notes
@@ -68,7 +71,7 @@ Things that must not appear:
 - No product code under `upstream/` — it is vendored renderer code only.
 - No app-target code under `Shared/`; it must stay compilable with
   `APPLICATION_EXTENSION_API_ONLY`.
-- No generated Xcode settings edited in `mac-wallpaper-engine.xcodeproj`; change `project.yml`.
+- No generated Xcode settings edited in `WallpaperMachine.xcodeproj`; change `project.yml`.
 - No test output, logs or `.xcresult` bundles anywhere but `artifacts/`.
 - No shell scripts in `scripts/`; the command surface is Python.
 
@@ -96,9 +99,10 @@ Things that must not appear:
 
 | Path | Status |
 |---|---|
-| `mac-wallpaper-engine.xcodeproj/` | Generated by `xcodegen generate` from `project.yml`, and committed. Regenerate rather than edit. |
+| `WallpaperMachine.xcodeproj/` | Generated by `xcodegen generate` from `project.yml`, and committed. Regenerate rather than edit. |
 | `App/Bridge/Generated/` | Produced by `scripts/build.py` (`uniffi-bindgen` over `libwallpaper_bridge.a`). Hand edits are overwritten. |
 | `upstream/` | Vendored third-party code, governed by `upstream/provenance.json` and [../LICENSING.md](../LICENSING.md). |
+| `Formula/` | `mwe-ffmpeg.rb`, the LGPL-2.1-or-later FFmpeg build the app links; installed by `scripts/install_ffmpeg.py`. |
 | `artifacts/` | Disposable, Git-ignored. Test and verification evidence, including the full `xcodebuild`/`cargo` logs the scripts keep off the terminal; removable with `scripts/clean.py`. |
 | `build/` | Disposable, Git-ignored. Xcode derived data and built products only. |
 | `.ignore` | Paths `rg`/`fd` skip by default: `docs/archive/`, `docs/testing/archive/`, `App/Bridge/Generated/`, `upstream/`. `rg -u` searches them. |
@@ -114,5 +118,5 @@ Things that must not appear:
 | Python tests | `test_<module>.py` under `scripts/tests/` |
 | Web panel files | lowercase, one concern per file (`panel.js`, `settings.css`, `theme.js`) |
 | Markdown under `docs/` | lowercase-hyphenated (`repository-layout.md`, `development-tools.md`); `README.md` is the only uppercase name |
-| Root Markdown | uppercase (`README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `LICENSING.md`) |
-| Bundle identifiers | `app.mac-wallpaper-engine` and `app.mac-wallpaper-engine.wallpaper-extension` |
+| Root Markdown | uppercase (`README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `LICENSING.md`); the license text is the extensionless `LICENSE` |
+| Bundle identifiers | `app.wallpapermachine` and `app.wallpapermachine.wallpaper-extension` |

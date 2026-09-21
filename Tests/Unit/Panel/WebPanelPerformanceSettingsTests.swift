@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Covers the validation the panel performs on quality settings before they reach
 /// the engine, and the snapshot keys the settings page reads back.

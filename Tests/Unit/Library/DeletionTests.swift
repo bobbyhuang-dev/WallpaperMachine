@@ -1,5 +1,5 @@
 import XCTest
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 final class DeletionTests: XCTestCase {
     private var root: URL!

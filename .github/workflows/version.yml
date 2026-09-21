@@ -3,7 +3,7 @@
 # Commit subject (or any line in a pushed commit, including a squash title):
 #   release: patch | minor | major | x.y.z | vx.y.z
 #
-# CI updates project.yml and mac-wallpaper-engine.xcodeproj, commits
+# CI updates project.yml and WallpaperMachine.xcodeproj, commits
 # `chore: bump version to x.y.z`, tags `vx.y.z`, and calls Build for that tag.
 # The call is required: a tag pushed with GITHUB_TOKEN never starts Release itself.
 name: Version
@@ -58,7 +58,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add project.yml mac-wallpaper-engine.xcodeproj/project.pbxproj
+          git add project.yml WallpaperMachine.xcodeproj/project.pbxproj
           git diff --cached --quiet && { echo "No version file changes to commit."; exit 0; }
           git commit -m "chore: bump version to ${VERSION}"
           git tag "${TAG}"

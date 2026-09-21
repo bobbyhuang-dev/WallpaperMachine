@@ -2,7 +2,7 @@ import AppKit
 import WebKit
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Covers the `file` and `directory` property editors: what the panel sends to the
 /// engine, what the page is given to render, and what it does with a value that

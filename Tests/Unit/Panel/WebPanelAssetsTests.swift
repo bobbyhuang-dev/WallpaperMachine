@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 import WebKit
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Stands in for WebKit's scheme task so a load can be started, stopped and restarted on
 /// the same object identity, which is what a freed-and-reallocated task looks like.
@@ -87,10 +87,10 @@ final class WebPanelAssetsTests: XCTestCase {
   func testRestartedTaskStillReceivesItsResponse() async throws {
     let home = FileManager.default.temporaryDirectory
       .appendingPathComponent("mwe-assets-\(UUID().uuidString)", isDirectory: true)
-    let previous = ProcessInfo.processInfo.environment["MAC_WALLPAPER_ENGINE_HOME"]
-    setenv("MAC_WALLPAPER_ENGINE_HOME", home.path, 1)
+    let previous = ProcessInfo.processInfo.environment["WALLPAPER_MACHINE_HOME"]
+    setenv("WALLPAPER_MACHINE_HOME", home.path, 1)
     defer {
-      if let previous { setenv("MAC_WALLPAPER_ENGINE_HOME", previous, 1) } else { unsetenv("MAC_WALLPAPER_ENGINE_HOME") }
+      if let previous { setenv("WALLPAPER_MACHINE_HOME", previous, 1) } else { unsetenv("WALLPAPER_MACHINE_HOME") }
       try? FileManager.default.removeItem(at: home)
     }
     let folder = ClientPaths.libraryURL.appendingPathComponent("42", isDirectory: true)

@@ -1,6 +1,6 @@
 import AppKit
 import XCTest
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 @MainActor
 private final class PolicyProbe {

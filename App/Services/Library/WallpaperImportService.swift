@@ -33,7 +33,7 @@ actor WallpaperImportService {
         let managedRoot = library.resolvingSymlinksInPath().standardizedFileURL
         // A sibling staging directory is on the same volume but invisible to the library scanner.
         let staging = managedRoot.deletingLastPathComponent()
-            .appendingPathComponent(".mac-wallpaper-engine-import-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent(".WallpaperMachine-import-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: staging, withIntermediateDirectories: false)
         defer { try? fm.removeItem(at: staging) }
         var report = Report()
@@ -52,7 +52,7 @@ actor WallpaperImportService {
                     await progress("Importing \(candidate.lastPathComponent)…")
                     do {
                         guard !isWithin(canonical, managedRoot), !isWithin(managedRoot, canonical) else {
-                            throw ImportError(message: "Choose a source outside MacWallpaperEngine’s managed library.")
+                            throw ImportError(message: "Choose a source outside WallpaperMachine’s managed library.")
                         }
                         let isDirectory = try candidate.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true
                         let preferredID = isDirectory ? candidate.lastPathComponent : "local-" + candidate.lastPathComponent

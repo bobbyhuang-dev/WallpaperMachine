@@ -1,8 +1,8 @@
-# mac-wallpaper-engine 改进计划
+# WallpaperMachine 改进计划
 ## 以壁纸运行时功耗为首要目标的源码审查与实施路线
 
 **审查日期：2026-09-17**  
-**仓库：bobbyhuang-dev/mac-wallpaper-engine**  
+**仓库：bobbyhuang-dev/WallpaperMachine**  
 **固定基线：`6dc8c327c6f7e2594d84722413f11d7168eb5898`**  
 **状态：设计 / 待实施；未修改远程仓库。**
 
@@ -716,27 +716,27 @@ Synthetic fixtures：有限灰阶/色条、透明合成、多级 compose、含�
 
 ### 源码索引
 
-- **S01** — [项目 README](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/README.md)；`README.md`。
-- **S02** — [总体架构 / 数据流 / 输入与面板设计](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/architecture.md)；`docs/architecture.md`。
-- **S03** — [全局呈现策略](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/Desktop/WallpaperPresentationPolicy.swift)；`App/Services/Desktop/WallpaperPresentationPolicy.swift`。
-- **S04** — [纯视频构造为场景（重点审查文件前 300 行）](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/SceneWallpaper.cpp)；`upstream/renderer/external/open-wallpaper-engine/src/Scene/SceneWallpaper.cpp`。
-- **S05** — [Rust 软件视频解码路径](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/core/src/media/video/decoder.rs)；`upstream/renderer/crates/core/src/media/video/decoder.rs`。
-- **S06** — [Apple 视频互操作 / 色彩转换 / 纹理池](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Platform/Apple/FfmpegVideoInterop.mm)；`upstream/renderer/external/open-wallpaper-engine/src/Platform/Apple/FfmpegVideoInterop.mm`。
-- **S07** — [生产 C++ 视频解码器与临时文件路径](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Video/FfmpegVideoTextureSource.cpp)；`upstream/renderer/external/open-wallpaper-engine/src/Video/FfmpegVideoTextureSource.cpp`。
-- **S08** — [WebView 页面 / JS 回调 / 崩溃恢复](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/WebWallpaper/WebWallpaperWindow.swift)；`App/Services/WebWallpaper/WebWallpaperWindow.swift`。
-- **S09** — [逐显示器 Web 窗口 / descriptor diff / poster](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/WebWallpaper/WebWallpaperHost.swift)；`App/Services/WebWallpaper/WebWallpaperHost.swift`。
-- **S10** — [渲染帧定时器与单帧背压](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/Timer/FrameTimer.cpp)；`upstream/renderer/external/open-wallpaper-engine/src/Scene/Timer/FrameTimer.cpp`。
-- **S11** — [条件变量计时线程](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/Timer/ThreadTimer.cpp)；`upstream/renderer/external/open-wallpaper-engine/src/Scene/Timer/ThreadTimer.cpp`。
-- **S12** — [Vulkan 呈现 / 同步 / render extent / 恢复](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/VulkanRender/VulkanRender.cpp)；`upstream/renderer/external/open-wallpaper-engine/src/Scene/VulkanRender/VulkanRender.cpp`。
-- **S13** — [原生后端构建与链接](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/CMakeLists.txt)；`upstream/renderer/external/open-wallpaper-engine/src/CMakeLists.txt`。
-- **S15** — [测试分层与可验证性边界](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/testing/README.md)；`docs/testing/README.md`。
-- **S16** — [GPU probe / 已有语义回归 / 兼容性限制](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/testing/renderer.md)；`docs/testing/renderer.md`。
-- **S17** — [Core Audio capture / callback（审查主要实现 1–270、300–600 行）](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/core/src/media/audio/capture.rs)；`upstream/renderer/crates/core/src/media/audio/capture.rs`。
-- **S18** — [音频 controller / resampler（审查前 550 行）](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/core/src/media/audio/mod.rs)；`upstream/renderer/crates/core/src/media/audio/mod.rs`。
-- **S20** — [锁屏 Surface 与策略（审查前 280 行）](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/Extension/WallpaperSurface.swift)；`Extension/WallpaperSurface.swift`。
-- **S21** — [Web 壁纸已声明的不支持功能](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/features/web-wallpapers.md)；`docs/features/web-wallpapers.md`。
-- **S22** — [Web 指针路由与 event monitor](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/WebWallpaper/WebWallpaperMouseForwarder.swift)；`App/Services/WebWallpaper/WebWallpaperMouseForwarder.swift`。
-- **S23** — [IOKit 电源通知与 runloop](https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/bridge/src/power.rs)；`upstream/renderer/crates/bridge/src/power.rs`。
+- **S01** — [项目 README](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/README.md)；`README.md`。
+- **S02** — [总体架构 / 数据流 / 输入与面板设计](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/architecture.md)；`docs/architecture.md`。
+- **S03** — [全局呈现策略](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/Desktop/WallpaperPresentationPolicy.swift)；`App/Services/Desktop/WallpaperPresentationPolicy.swift`。
+- **S04** — [纯视频构造为场景（重点审查文件前 300 行）](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/SceneWallpaper.cpp)；`upstream/renderer/external/open-wallpaper-engine/src/Scene/SceneWallpaper.cpp`。
+- **S05** — [Rust 软件视频解码路径](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/core/src/media/video/decoder.rs)；`upstream/renderer/crates/core/src/media/video/decoder.rs`。
+- **S06** — [Apple 视频互操作 / 色彩转换 / 纹理池](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Platform/Apple/FfmpegVideoInterop.mm)；`upstream/renderer/external/open-wallpaper-engine/src/Platform/Apple/FfmpegVideoInterop.mm`。
+- **S07** — [生产 C++ 视频解码器与临时文件路径](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Video/FfmpegVideoTextureSource.cpp)；`upstream/renderer/external/open-wallpaper-engine/src/Video/FfmpegVideoTextureSource.cpp`。
+- **S08** — [WebView 页面 / JS 回调 / 崩溃恢复](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/WebWallpaper/WebWallpaperWindow.swift)；`App/Services/WebWallpaper/WebWallpaperWindow.swift`。
+- **S09** — [逐显示器 Web 窗口 / descriptor diff / poster](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/WebWallpaper/WebWallpaperHost.swift)；`App/Services/WebWallpaper/WebWallpaperHost.swift`。
+- **S10** — [渲染帧定时器与单帧背压](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/Timer/FrameTimer.cpp)；`upstream/renderer/external/open-wallpaper-engine/src/Scene/Timer/FrameTimer.cpp`。
+- **S11** — [条件变量计时线程](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/Timer/ThreadTimer.cpp)；`upstream/renderer/external/open-wallpaper-engine/src/Scene/Timer/ThreadTimer.cpp`。
+- **S12** — [Vulkan 呈现 / 同步 / render extent / 恢复](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/VulkanRender/VulkanRender.cpp)；`upstream/renderer/external/open-wallpaper-engine/src/Scene/VulkanRender/VulkanRender.cpp`。
+- **S13** — [原生后端构建与链接](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/CMakeLists.txt)；`upstream/renderer/external/open-wallpaper-engine/src/CMakeLists.txt`。
+- **S15** — [测试分层与可验证性边界](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/testing/README.md)；`docs/testing/README.md`。
+- **S16** — [GPU probe / 已有语义回归 / 兼容性限制](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/testing/renderer.md)；`docs/testing/renderer.md`。
+- **S17** — [Core Audio capture / callback（审查主要实现 1–270、300–600 行）](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/core/src/media/audio/capture.rs)；`upstream/renderer/crates/core/src/media/audio/capture.rs`。
+- **S18** — [音频 controller / resampler（审查前 550 行）](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/core/src/media/audio/mod.rs)；`upstream/renderer/crates/core/src/media/audio/mod.rs`。
+- **S20** — [锁屏 Surface 与策略（审查前 280 行）](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/Extension/WallpaperSurface.swift)；`Extension/WallpaperSurface.swift`。
+- **S21** — [Web 壁纸已声明的不支持功能](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/features/web-wallpapers.md)；`docs/features/web-wallpapers.md`。
+- **S22** — [Web 指针路由与 event monitor](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/WebWallpaper/WebWallpaperMouseForwarder.swift)；`App/Services/WebWallpaper/WebWallpaperMouseForwarder.swift`。
+- **S23** — [IOKit 电源通知与 runloop](https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/bridge/src/power.rs)；`upstream/renderer/crates/bridge/src/power.rs`。
 
 ### 官方 API 参考
 
@@ -751,27 +751,27 @@ Synthetic fixtures：有限灰阶/色条、透明合成、多级 compose、含�
 
 ### 引用定义
 
-[S01]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/README.md
-[S02]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/architecture.md
-[S03]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/Desktop/WallpaperPresentationPolicy.swift
-[S04]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/SceneWallpaper.cpp
-[S05]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/core/src/media/video/decoder.rs
-[S06]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Platform/Apple/FfmpegVideoInterop.mm
-[S07]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Video/FfmpegVideoTextureSource.cpp
-[S08]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/WebWallpaper/WebWallpaperWindow.swift
-[S09]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/WebWallpaper/WebWallpaperHost.swift
-[S10]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/Timer/FrameTimer.cpp
-[S11]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/Timer/ThreadTimer.cpp
-[S12]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/VulkanRender/VulkanRender.cpp
-[S13]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/CMakeLists.txt
-[S15]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/testing/README.md
-[S16]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/testing/renderer.md
-[S17]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/core/src/media/audio/capture.rs
-[S18]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/core/src/media/audio/mod.rs
-[S20]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/Extension/WallpaperSurface.swift
-[S21]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/features/web-wallpapers.md
-[S22]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/WebWallpaper/WebWallpaperMouseForwarder.swift
-[S23]: https://github.com/bobbyhuang-dev/mac-wallpaper-engine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/bridge/src/power.rs
+[S01]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/README.md
+[S02]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/architecture.md
+[S03]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/Desktop/WallpaperPresentationPolicy.swift
+[S04]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/SceneWallpaper.cpp
+[S05]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/core/src/media/video/decoder.rs
+[S06]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Platform/Apple/FfmpegVideoInterop.mm
+[S07]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Video/FfmpegVideoTextureSource.cpp
+[S08]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/WebWallpaper/WebWallpaperWindow.swift
+[S09]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/WebWallpaper/WebWallpaperHost.swift
+[S10]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/Timer/FrameTimer.cpp
+[S11]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/Timer/ThreadTimer.cpp
+[S12]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/Scene/VulkanRender/VulkanRender.cpp
+[S13]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/external/open-wallpaper-engine/src/CMakeLists.txt
+[S15]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/testing/README.md
+[S16]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/testing/renderer.md
+[S17]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/core/src/media/audio/capture.rs
+[S18]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/core/src/media/audio/mod.rs
+[S20]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/Extension/WallpaperSurface.swift
+[S21]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/docs/features/web-wallpapers.md
+[S22]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/App/Services/WebWallpaper/WebWallpaperMouseForwarder.swift
+[S23]: https://github.com/bobbyhuang-dev/WallpaperMachine/blob/6dc8c327c6f7e2594d84722413f11d7168eb5898/upstream/renderer/crates/bridge/src/power.rs
 [A01]: https://ffmpeg.org/doxygen/trunk/group__lavc__encdec.html
 [A02]: https://developer.apple.com/documentation/corevideo/cvmetaltexturecachecreatetexturefromimage(_:_:_:_:_:_:_:_:_:)
 [A03]: https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/preferredframeraterange

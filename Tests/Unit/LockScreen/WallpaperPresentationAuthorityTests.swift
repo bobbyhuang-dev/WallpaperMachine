@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Presentation eligibility for the surfaces the lock-screen extension hosts.
 /// The rules are shared with the extension target, so these cases bind what

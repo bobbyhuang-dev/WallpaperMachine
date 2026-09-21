@@ -241,7 +241,7 @@ struct AppUpdateWorkspace: Sendable {
         AppUpdateWorkspace(
             archiveURL: { version, name in
                 let folder = ClientPaths.supportURL.appendingPathComponent("Updates", isDirectory: true)
-                let sanitized = name.isEmpty ? "MacWallpaperEngine-\(version).zip" : name
+                let sanitized = name.isEmpty ? "WallpaperMachine-\(version).zip" : name
                 return folder.appendingPathComponent(sanitized)
             },
             reveal: { url in

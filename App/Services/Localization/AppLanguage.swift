@@ -39,7 +39,7 @@ struct AppLanguage: Equatable, Sendable {
 @MainActor
 final class AppLanguageStore: ObservableObject {
   static let shared = AppLanguageStore()
-  static let defaultsKey = "MacWallpaperEngine.appLanguage"
+  static let defaultsKey = "WallpaperMachine.appLanguage"
   static let appleLanguagesKey = "AppleLanguages"
   static let systemChoice = "system"
 

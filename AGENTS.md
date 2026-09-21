@@ -1,6 +1,6 @@
 # Agent rules
 
-MacWallpaperEngine: macOS/arm64; AppKit/SwiftUI, WKWebView panel, Rust/C++ renderer,
+WallpaperMachine: macOS/arm64; AppKit/SwiftUI, WKWebView panel, Rust/C++ renderer,
 sandboxed ExtensionKit lock screen. `CLAUDE.md` must stay a relative symlink to `AGENTS.md`.
 
 ## Read on demand
@@ -26,12 +26,12 @@ the whole file. `.ignore` keeps `rg` out of `docs/archive/`, `docs/testing/archi
   extension-API-safe. Tests: `Tests/Unit/<Domain>/` and opt-in `Tests/UI/`.
 - `scripts/`: Python CLI; reuse `scripts/lib/` (paths, glyphs); tests in `scripts/tests/`.
 - `project.yml` owns targets/settings/versions: run `xcodegen generate`, never hand-edit
-  `mac-wallpaper-engine.xcodeproj`. Regenerate `App/Bridge/Generated/` via
+  `WallpaperMachine.xcodeproj`. Regenerate `App/Bridge/Generated/` via
   `scripts/build.py` after bridge changes; never patch generated bindings.
 - `upstream/` is vendored renderer code, not app code. Every change requires updating
   `upstream/provenance.json`; preserve notices and [licensing constraints](LICENSING.md).
 - Match surrounding conventions; reuse `ClientPaths`, `AppLog`, localization and
-  dependency injection. Isolate tests with `MAC_WALLPAPER_ENGINE_HOME`; assert behavior,
+  dependency injection. Isolate tests with `WALLPAPER_MACHINE_HOME`; assert behavior,
   not wording/wiring. Migrate changed APIs completely; preserve others' concurrent edits.
 - `artifacts/` = disposable evidence; `build/` = disposable Xcode output. Neither is
   durable evidence or committable; keep secrets/private assets/screenshots/traces out too.
@@ -78,7 +78,7 @@ the whole file. `.ignore` keeps `rg` out of `docs/archive/`, `docs/testing/archi
   `python3 scripts/build.py --swift-only --configuration Release` for Swift/WebUI/resources/config
   with current renderer/bindings; `python3 scripts/build.py --configuration Release`
   for renderer/bridge changes or missing outputs.
-- Delivered app: `build/Build/Products/Release/MacWallpaperEngine.app`. Claim delivery
+- Delivered app: `build/Build/Products/Release/WallpaperMachine.app`. Claim delivery
   only after a successful Release build containing the changes; report path and remind
   the user to quit/reopen. Never launch/quit automatically. Failed/blocked builds ≠ delivery.
 - Update the owning docs; index new/removed documents in [docs/README.md](docs/README.md).

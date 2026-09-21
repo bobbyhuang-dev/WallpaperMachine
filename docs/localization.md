@@ -8,7 +8,7 @@ Chinese (`zh-Hans`) is the first translation. The user-facing behaviour is in
 ## Which language the app shows
 
 `AppLanguageStore` (`App/Services/Localization/AppLanguage.swift`) holds one
-preference under `MacWallpaperEngine.appLanguage`: `system`, or the tag of a
+preference under `WallpaperMachine.appLanguage`: `system`, or the tag of a
 shipped language. The effective language is
 
 1. the saved tag, when the user chose one in **Settings → General → Language**;

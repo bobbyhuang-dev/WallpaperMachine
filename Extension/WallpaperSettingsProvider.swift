@@ -82,15 +82,15 @@ enum WallpaperSettingsProvider {
       descriptor: WallpaperChoiceDescriptor(
         provider: provider, identifier: "current", files: [], configuration: Data("current".utf8)))
     let choice = WallpaperChoice(
-      id: identity, provider: provider, identifier: "current", name: "MacWallpaperEngine",
+      id: identity, provider: provider, identifier: "current", name: "WallpaperMachine",
       localizedDescription: "Applied wallpaper — animate on lock screen", thumbnail: thumbnail,
       isDownloaded: true, options: [])
     let item = WallpaperSettingsItem(
-      id: identity, localizedName: "MacWallpaperEngine", thumbnail: thumbnail, choice: choice,
+      id: identity, localizedName: "WallpaperMachine", thumbnail: thumbnail, choice: choice,
       contentBadge: .video, showInTopLevel: true, sortOrder: 0, disposability: .none)
     let group = WallpaperSettingsGroup(
-      id: WallpaperGroupIdentity(id: "mac-wallpaper-engine"), items: [item],
-      localizedName: "MacWallpaperEngine", disposability: .none, sortOrder: -100,
+      id: WallpaperGroupIdentity(id: "WallpaperMachine"), items: [item],
+      localizedName: "WallpaperMachine", disposability: .none, sortOrder: -100,
       sortID: WallpaperGroupIdentity(id: "com.apple.wallpaper.aerials"), shouldHideItemLabels: false
     )
     let model = WallpaperSettingsModel(

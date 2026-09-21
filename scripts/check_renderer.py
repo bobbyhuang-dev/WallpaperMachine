@@ -252,7 +252,7 @@ def check_generated_pixels(data, index):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--assets", type=Path, default=Path.home() / "Library/Application Support/mac-wallpaper-engine/SceneAssets")
+    parser.add_argument("--assets", type=Path, default=Path.home() / "Library/Application Support/WallpaperMachine/SceneAssets")
     parser.add_argument("--project", action="append", type=Path, default=[], help="Additional local scene project; repeatable")
     parser.add_argument("--skip-build", action="store_true")
     args = parser.parse_args()

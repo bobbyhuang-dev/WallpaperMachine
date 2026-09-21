@@ -120,7 +120,7 @@ final class WallpaperController {
       reload()
       guard let scene = selectScene(displayID: displayID) else {
         throw WallpaperRuntime.failure(
-          "No applied wallpaper is available for this display. Enable Animate Lock Screen in MacWallpaperEngine."
+          "No applied wallpaper is available for this display. Enable Animate Lock Screen in WallpaperMachine."
         )
       }
       if let existing = surfaces[id], existing.scene == scene, existing.size == size,

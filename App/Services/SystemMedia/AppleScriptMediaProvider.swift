@@ -234,7 +234,7 @@ final class AppleScriptMediaProvider: SystemMediaProvider {
 final class NSAppleScriptNowPlayingRunner: AppleScriptRunning {
     /// `NSAppleScript` is not thread safe, so one serial queue owns every
     /// instance this type ever compiles.
-    private let queue = DispatchQueue(label: "mac-wallpaper-engine.applescript-now-playing")
+    private let queue = DispatchQueue(label: "WallpaperMachine.applescript-now-playing")
     private let session: URLSession
 
     init(session: URLSession = .shared) {

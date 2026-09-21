@@ -2,18 +2,18 @@ import AppKit
 import CoreGraphics
 import XCTest
 
-final class MacWallpaperEngineUITests: XCTestCase {
+final class WallpaperMachineUITests: XCTestCase {
   private var app: XCUIApplication!
   private var panel: XCUIElement { app.webViews.firstMatch }
 
   override func setUpWithError() throws {
     continueAfterFailure = false
-    app = XCUIApplication(bundleIdentifier: "app.mac-wallpaper-engine")
-    app.launchEnvironment["MAC_WALLPAPER_ENGINE_HOME"] =
-      NSTemporaryDirectory() + "mac-wallpaper-engine-ui-" + UUID().uuidString
+    app = XCUIApplication(bundleIdentifier: "app.wallpapermachine")
+    app.launchEnvironment["WALLPAPER_MACHINE_HOME"] =
+      NSTemporaryDirectory() + "WallpaperMachine-ui-" + UUID().uuidString
     if name.contains("testInvalidVideo") {
       let root = URL(
-        fileURLWithPath: try XCTUnwrap(app.launchEnvironment["MAC_WALLPAPER_ENGINE_HOME"]))
+        fileURLWithPath: try XCTUnwrap(app.launchEnvironment["WALLPAPER_MACHINE_HOME"]))
       let folder = root.appendingPathComponent("Library/broken-video")
       try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
       try Data("not valid media".utf8).write(to: folder.appendingPathComponent("broken.mp4"))
@@ -84,7 +84,7 @@ final class MacWallpaperEngineUITests: XCTestCase {
     // Empty native windows can be absent from the accessibility tree. Ignore
     // the menu bar and desktop wallpaper windows in the WindowServer check.
     let pid = NSRunningApplication.runningApplications(
-      withBundleIdentifier: "app.mac-wallpaper-engine"
+      withBundleIdentifier: "app.wallpapermachine"
     )
     .max { ($0.launchDate ?? .distantPast) < ($1.launchDate ?? .distantPast) }?.processIdentifier
     XCTAssertNotNil(pid)

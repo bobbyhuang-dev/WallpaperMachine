@@ -42,7 +42,7 @@ struct GitHubReleaseClient: AppUpdateClient {
 
     func fetchLatestRelease() async throws -> GitHubRelease {
         var request = URLRequest(url: latestURL)
-        request.setValue("MacWallpaperEngine", forHTTPHeaderField: "User-Agent")
+        request.setValue("WallpaperMachine", forHTTPHeaderField: "User-Agent")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         let data: Data
@@ -135,7 +135,7 @@ final class GitHubReleaseDownload: NSObject, URLSessionDataDelegate, @unchecked 
                     let queue = OperationQueue()
                     queue.maxConcurrentOperationCount = 1
                     var request = URLRequest(url: source)
-                    request.setValue("MacWallpaperEngine", forHTTPHeaderField: "User-Agent")
+                    request.setValue("WallpaperMachine", forHTTPHeaderField: "User-Agent")
                     request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
                     let session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
                     self.session = session

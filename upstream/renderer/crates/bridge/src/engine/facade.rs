@@ -681,7 +681,7 @@ impl AudioCaptureWorker {
                                     }
                                 }
                                 controller.set_scene_capturing(handle, enabled)
-                                    .map_err(|error| format!("Audio response could not {}: {error}. Check MacWallpaperEngine in System Settings > Privacy & Security > Screen & System Audio Recording.", if enabled { "start" } else { "stop" }))?;
+                                    .map_err(|error| format!("Audio response could not {}: {error}. Check WallpaperMachine in System Settings > Privacy & Security > Screen & System Audio Recording.", if enabled { "start" } else { "stop" }))?;
                             }
                             None => {}
                         }

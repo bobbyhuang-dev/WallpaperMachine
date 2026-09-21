@@ -43,8 +43,8 @@
     "Up to three downloads run at once, each in its own private SteamCMD session. Extra requests wait in the order added. Close details, search, or switch pages while downloads continue; Download Details keeps every item available for progress, Steam Guard, retry, and cancellation. Quit stops active and queued downloads." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Up to three downloads run at once, each in its own private SteamCMD session. Extra requests wait in the order added. Close details, search, or switch pages while downloads continue; Download Details keeps every item available for progress, Steam Guard, retry, and cancellation. Quit stops active and queued downloads."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "最多同时进行三个下载，每项使用独立的私有 SteamCMD 会话。其余请求按添加顺序排队。关闭详情、搜索或切换页面时下载仍会继续；“下载详情”可查看每项任务的进度、完成 Steam 令牌验证、重试或取消。退出应用会停止正在进行和排队的下载。"}}}
     },
-    "MacWallpaperEngine runs private copies of SteamCMD and removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Sign-in settings and Forget are locked while any downloads are active or queued. Once they finish, turn the setting off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "MacWallpaperEngine runs private copies of SteamCMD and removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Sign-in settings and Forget are locked while any downloads are active or queued. Once they finish, turn the setting off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "MacWallpaperEngine 运行 SteamCMD 的私有副本，并清理临时下载目录。“在此 Mac 上保持登录”仅在私有应用支持目录保存 Steam 签发的登录缓存，不保存提交的密码或 Steam 令牌验证码。存在正在进行或排队的下载时，登录设置和忘记登录操作会锁定。任务结束后，可关闭该设置或选择“忘记已保存的 Steam 登录”移除本地缓存；其他 Steam 设备仍保持登录。缓存过期、撤销或安全检查后，Steam 可能要求重新验证。首次启动时 SteamCMD 更新可能使下载耗时更长。"}}}
+    "WallpaperMachine runs private copies of SteamCMD and removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Sign-in settings and Forget are locked while any downloads are active or queued. Once they finish, turn the setting off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "WallpaperMachine runs private copies of SteamCMD and removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Sign-in settings and Forget are locked while any downloads are active or queued. Once they finish, turn the setting off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "WallpaperMachine 运行 SteamCMD 的私有副本，并清理临时下载目录。“在此 Mac 上保持登录”仅在私有应用支持目录保存 Steam 签发的登录缓存，不保存提交的密码或 Steam 令牌验证码。存在正在进行或排队的下载时，登录设置和忘记登录操作会锁定。任务结束后，可关闭该设置或选择“忘记已保存的 Steam 登录”移除本地缓存；其他 Steam 设备仍保持登录。缓存过期、撤销或安全检查后，Steam 可能要求重新验证。首次启动时 SteamCMD 更新可能使下载耗时更长。"}}}
     },
     "Reacts to sound playing in other apps, not the microphone. macOS asks for system audio recording access when an enabled wallpaper starts. Wallpaper volume and mute do not affect this input." : {
       "localizations": {
@@ -186,12 +186,12 @@
         }
       }
     },
-    "MacWallpaperEngine removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Sign-in settings and Forget are locked while any downloads are active or queued. Once they finish, turn the setting off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates." : {
+    "WallpaperMachine removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Sign-in settings and Forget are locked while any downloads are active or queued. Once they finish, turn the setting off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates." : {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "MacWallpaperEngine 会清理临时下载目录。“在这台 Mac 上保持登录”会将 Steam 签发的登录缓存保存在私有的应用支持目录中，绝不保存输入的密码或 Steam 令牌验证码。有下载正在进行或排队时，登录设置和清除按钮会锁定。全部结束后，关闭此设置或选择“清除已保存的 Steam 登录”即可删除本地缓存；其他 Steam 设备仍保持登录。缓存过期、被撤销或触发安全检查时，Steam 可能要求重新验证。首次启动时 SteamCMD 需要更新，下载可能耗时更长。"
+            "value": "WallpaperMachine 会清理临时下载目录。“在这台 Mac 上保持登录”会将 Steam 签发的登录缓存保存在私有的应用支持目录中，绝不保存输入的密码或 Steam 令牌验证码。有下载正在进行或排队时，登录设置和清除按钮会锁定。全部结束后，关闭此设置或选择“清除已保存的 Steam 登录”即可删除本地缓存；其他 Steam 设备仍保持登录。缓存过期、被撤销或触发安全检查时，Steam 可能要求重新验证。首次启动时 SteamCMD 需要更新，下载可能耗时更长。"
           }
         }
       }
@@ -253,8 +253,8 @@
     "Workshop" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Workshop"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "创意工坊"}}}
     },
-    "MacWallpaperEngine" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "MacWallpaperEngine"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "MacWallpaperEngine"}}}
+    "WallpaperMachine" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "WallpaperMachine"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "WallpaperMachine"}}}
     },
     "This wallpaper is no longer in your library. Refresh Library and retry." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper is no longer in your library. Refresh Library and retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此壁纸已不在壁纸库中。请刷新壁纸库后重试。"}}}
@@ -370,8 +370,8 @@
     "Preparing import…" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Preparing import…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在准备导入…"}}}
     },
-    "Import to MacWallpaperEngine" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Import to MacWallpaperEngine"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入到 MacWallpaperEngine"}}}
+    "Import to WallpaperMachine" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Import to WallpaperMachine"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入到 WallpaperMachine"}}}
     },
     "Your originals stay exactly where they are." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Your originals stay exactly where they are."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "原始文件会保留在原位置。"}}}
@@ -730,8 +730,8 @@
     "Reinstall SteamCMD" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Reinstall SteamCMD"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "重新安装 SteamCMD"}}}
     },
-    "Replace only MacWallpaperEngine’s managed SteamCMD installation. The current installation is kept until the replacement passes validation. Saved Steam sign-in and wallpapers are not removed." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Replace only MacWallpaperEngine’s managed SteamCMD installation. The current installation is kept until the replacement passes validation. Saved Steam sign-in and wallpapers are not removed."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "仅替换由 MacWallpaperEngine 管理的 SteamCMD 安装。在新安装通过验证前，会保留当前安装。不会移除已保存的 Steam 登录或壁纸。"}}}
+    "Replace only WallpaperMachine’s managed SteamCMD installation. The current installation is kept until the replacement passes validation. Saved Steam sign-in and wallpapers are not removed." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Replace only WallpaperMachine’s managed SteamCMD installation. The current installation is kept until the replacement passes validation. Saved Steam sign-in and wallpapers are not removed."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "仅替换由 WallpaperMachine 管理的 SteamCMD 安装。在新安装通过验证前，会保留当前安装。不会移除已保存的 Steam 登录或壁纸。"}}}
     },
     "Not installed" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Not installed"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "未安装"}}}
@@ -766,8 +766,8 @@
     "Apple’s app security guide" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Apple’s app security guide"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Apple 的 App 安全指南"}}}
     },
-    "MacWallpaperEngine does not change signatures, remove quarantine, or approve system security requests." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "MacWallpaperEngine does not change signatures, remove quarantine, or approve system security requests."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "MacWallpaperEngine 不会修改签名、移除隔离标记或批准系统安全请求。"}}}
+    "WallpaperMachine does not change signatures, remove quarantine, or approve system security requests." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "WallpaperMachine does not change signatures, remove quarantine, or approve system security requests."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "WallpaperMachine 不会修改签名、移除隔离标记或批准系统安全请求。"}}}
     },
     "Locate SteamCMD" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Locate SteamCMD"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择 SteamCMD"}}}
@@ -781,8 +781,8 @@
     "Discover your next desktop" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Discover your next desktop"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "发现下一张桌面壁纸"}}}
     },
-    "Steam Workshop · Community-made wallpapers, in MacWallpaperEngine" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam Workshop · Community-made wallpapers, in MacWallpaperEngine"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 创意工坊 · 在 MacWallpaperEngine 中浏览社区壁纸"}}}
+    "Steam Workshop · Community-made wallpapers, in WallpaperMachine" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam Workshop · Community-made wallpapers, in WallpaperMachine"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 创意工坊 · 在 WallpaperMachine 中浏览社区壁纸"}}}
     },
     "Download setup" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Download setup"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载设置"}}}
@@ -877,8 +877,8 @@
     "Submit" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Submit"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "提交"}}}
     },
-    "Sent directly to SteamCMD’s private terminal; never saved by MacWallpaperEngine." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Sent directly to SteamCMD’s private terminal; never saved by MacWallpaperEngine."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "直接发送到 SteamCMD 的私有终端；MacWallpaperEngine 绝不保存。"}}}
+    "Sent directly to SteamCMD’s private terminal; never saved by WallpaperMachine." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Sent directly to SteamCMD’s private terminal; never saved by WallpaperMachine."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "直接发送到 SteamCMD 的私有终端；WallpaperMachine 绝不保存。"}}}
     },
     "You can keep browsing. Open Download Details to complete Steam Guard. Downloads stop after 5 minutes without SteamCMD output or 30 minutes overall." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "You can keep browsing. Open Download Details to complete Steam Guard. Downloads stop after 5 minutes without SteamCMD output or 30 minutes overall."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "你可以继续浏览。打开“下载详情”以完成 Steam 令牌验证。SteamCMD 连续 5 分钟无输出或下载总时长达到 30 分钟时，下载会停止。"}}}
@@ -1000,8 +1000,8 @@
     "Show in Library" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Show in Library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "在壁纸库中显示"}}}
     },
-    "Application wallpapers contain Windows executables. MacWallpaperEngine will not download or run them. Choose a Scene wallpaper instead." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Application wallpapers contain Windows executables. MacWallpaperEngine will not download or run them. Choose a Scene wallpaper instead."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "应用程序壁纸包含 Windows 可执行文件。MacWallpaperEngine 不会下载或运行它们。请选择场景壁纸。"}}}
+    "Application wallpapers contain Windows executables. WallpaperMachine will not download or run them. Choose a Scene wallpaper instead." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Application wallpapers contain Windows executables. WallpaperMachine will not download or run them. Choose a Scene wallpaper instead."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "应用程序壁纸包含 Windows 可执行文件。WallpaperMachine 不会下载或运行它们。请选择场景壁纸。"}}}
     },
     "Set up scene assets" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Set up scene assets"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "设置场景资源"}}}
@@ -1036,8 +1036,8 @@
     "Wallpaper library" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wallpaper library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸库"}}}
     },
-    "Imports are copied into MacWallpaperEngine. Your original files and Steam library are left untouched." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Imports are copied into MacWallpaperEngine. Your original files and Steam library are left untouched."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入内容会复制到 MacWallpaperEngine。原始文件和 Steam 库保持不变。"}}}
+    "Imports are copied into WallpaperMachine. Your original files and Steam library are left untouched." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Imports are copied into WallpaperMachine. Your original files and Steam library are left untouched."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入内容会复制到 WallpaperMachine。原始文件和 Steam 库保持不变。"}}}
     },
     "Scene wallpapers need shared resources in addition to the Workshop download. Install them once through Steam or choose your purchased installation’s assets folder. Videos do not require it. Scene support is experimental; some effects and scripts may differ from Windows." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scene wallpapers need shared resources in addition to the Workshop download. Install them once through Steam or choose your purchased installation’s assets folder. Videos do not require it. Scene support is experimental; some effects and scripts may differ from Windows."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "场景壁纸除了创意工坊下载内容外，还需要共享资源。通过 Steam 安装一次，或选择你已购买版本安装目录中的 assets 文件夹即可。视频无需这些资源。场景支持仍处于实验阶段，部分效果和脚本可能与 Windows 不同。"}}}
@@ -2795,13 +2795,13 @@
         }
       }
     },
-    "MacWallpaperEngine runs a private copy of SteamCMD and removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Turn it off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates." : {
+    "WallpaperMachine runs a private copy of SteamCMD and removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Turn it off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates." : {
       "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "MacWallpaperEngine runs a private copy of SteamCMD and removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Turn it off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates."}},
+        "en" : {"stringUnit" : {"state" : "translated", "value" : "WallpaperMachine runs a private copy of SteamCMD and removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Turn it off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates."}},
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "MacWallpaperEngine 运行独立的 SteamCMD 副本，并清理临时下载目录。“在这台 Mac 上保持登录”会将 Steam 签发的登录缓存保存在私有的应用支持目录中，绝不保存你输入的密码或 Steam 令牌验证码。关闭此选项或选择“清除已保存的 Steam 登录”即可删除本地缓存，其他设备仍保持 Steam 登录。缓存过期、被撤销或触发安全检查时，Steam 可能要求重新验证。首次启动时 SteamCMD 需要更新，下载可能耗时更长。"
+            "value" : "WallpaperMachine 运行独立的 SteamCMD 副本，并清理临时下载目录。“在这台 Mac 上保持登录”会将 Steam 签发的登录缓存保存在私有的应用支持目录中，绝不保存你输入的密码或 Steam 令牌验证码。关闭此选项或选择“清除已保存的 Steam 登录”即可删除本地缓存，其他设备仍保持 Steam 登录。缓存过期、被撤销或触发安全检查时，Steam 可能要求重新验证。首次启动时 SteamCMD 需要更新，下载可能耗时更长。"
           }
         }
       }

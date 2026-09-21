@@ -3118,7 +3118,7 @@ std::filesystem::path LocalSceneAssetsRoot()
     }
     const char* home = std::getenv("HOME");
     if (home == nullptr || *home == '\0') return {};
-    return std::filesystem::path(home) / "Library/Application Support/mac-wallpaper-engine/SceneAssets";
+    return std::filesystem::path(home) / "Library/Application Support/WallpaperMachine/SceneAssets";
 }
 
 std::size_t DifferingBytes(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b)

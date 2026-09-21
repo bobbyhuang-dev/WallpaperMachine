@@ -57,7 +57,7 @@ a correctly suspended surface look busy.
 
 `RuntimeDiagnosticsSession` opens both halves for a bounded window and produces
 one aggregated report. The application starts one when
-`MAC_WALLPAPER_ENGINE_DIAGNOSTICS=<seconds>` is set in the environment; without
+`WALLPAPER_MACHINE_DIAGNOSTICS=<seconds>` is set in the environment; without
 that variable nothing is started, nothing counts and no timer exists.
 
 The counters exist to answer one question per condition: did the work for a
@@ -80,7 +80,7 @@ decode-correctness defect.
 
 | Switch | Off (default) | On |
 |---|---|---|
-| `MAC_WALLPAPER_ENGINE_CONTENT_PACING=1` | Tick at the configured ceiling | Pace video to its observed content rate |
+| `WALLPAPER_MACHINE_CONTENT_PACING=1` | Tick at the configured ceiling | Pace video to its observed content rate |
 | `experimental.native_video_backend` in the app config | Every wallpaper on the scene engine | Eligible plain local videos on the platform player |
 
 Demand-driven pacing is off by default because its remaining exposure cannot be
@@ -94,7 +94,7 @@ A four-way attribution therefore needs: the baseline; baseline plus R02;
 baseline plus I01; and the native backend opted in. R02 and I01 are not switched
 — they are correctness and resource changes, so comparing them needs a separate
 build directory or worktree. Whichever way two versions are compared, they need
-isolated `MAC_WALLPAPER_ENGINE_HOME` directories and must be measured serially,
+isolated `WALLPAPER_MACHINE_HOME` directories and must be measured serially,
 never concurrently.
 
 ### What the native backend cannot report

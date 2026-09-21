@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 final class LockScreenWallpaperTests: XCTestCase {
   private var root: URL!

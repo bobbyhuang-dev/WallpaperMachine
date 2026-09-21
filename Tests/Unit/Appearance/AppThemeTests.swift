@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 @MainActor
 final class AppThemeTests: XCTestCase {

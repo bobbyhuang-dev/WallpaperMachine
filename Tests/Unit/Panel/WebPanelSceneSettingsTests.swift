@@ -2,7 +2,7 @@ import AppKit
 import WebKit
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// The panel half of whole-scene on-demand updating, the scene renderer choice,
 /// and the managed-asset storage row.

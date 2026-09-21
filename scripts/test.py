@@ -12,8 +12,8 @@ the raw stream. See docs/testing/README.md.
 iteration on a small change; the full gate is still the default and the final word.
 
 Opt-in layers are off by default and are requested through the environment:
-`MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1` (real video decoding) and
-`MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1` (live Steam pages).
+`WALLPAPER_MACHINE_MEDIA_TESTS=1` (real video decoding) and
+`WALLPAPER_MACHINE_NETWORK_TESTS=1` (live Steam pages).
 """
 import argparse
 from datetime import datetime
@@ -28,13 +28,13 @@ from lib.xcode import run_quiet, test_summary
 
 MARK = markers()
 SCRIPT_TESTS = sorted((ROOT / "scripts/tests").glob("test_*.py"))
-NATIVE_TARGET = "MacWallpaperEngineTests"
-UI_TARGET = "MacWallpaperEngineUITests"
+NATIVE_TARGET = "WallpaperMachineTests"
+UI_TARGET = "WallpaperMachineUITests"
 
 # Opt-in test layers. xcodebuild does not hand its own environment to the hosted test
 # process; `TEST_RUNNER_`-prefixed variables are forwarded with the prefix stripped,
 # which is what makes these reach the tests that gate themselves on them.
-OPT_IN_VARIABLES = ("MAC_WALLPAPER_ENGINE_MEDIA_TESTS", "MAC_WALLPAPER_ENGINE_NETWORK_TESTS")
+OPT_IN_VARIABLES = ("WALLPAPER_MACHINE_MEDIA_TESTS", "WALLPAPER_MACHINE_NETWORK_TESTS")
 
 # Result bundles are tens of megabytes each and only the newest ones are ever read.
 KEPT_RESULT_BUNDLES = 5
@@ -61,7 +61,7 @@ def xcodebuild_command(scheme, target, result, only=None, parallel=True):
     ]
     command += ["-only-testing:" + identifier for identifier in test_identifiers(target, only)]
     # Test classes run in parallel worker processes. Every suite already isolates its
-    # state through `MAC_WALLPAPER_ENGINE_HOME`, temporary directories and per-test
+    # state through `WALLPAPER_MACHINE_HOME`, temporary directories and per-test
     # `UserDefaults` suites, so workers do not share a home, a preferences domain or a
     # staging tree. Most of the wall clock is spent waiting on debounce intervals and
     # child-process reaping, which overlaps well.
@@ -95,7 +95,7 @@ def main():
         help="Echo the whole xcodebuild stream instead of only failures; the log gets it either way.",
     )
     args = parser.parse_args()
-    scheme = "MacWallpaperEngineUI" if args.ui else "MacWallpaperEngine"
+    scheme = "WallpaperMachineUI" if args.ui else "WallpaperMachine"
     target = UI_TARGET if args.ui else NATIVE_TARGET
     if args.ui:
         print(f"{MARK.warn} Desktop automation explicitly enabled: do not use the mouse or keyboard during this run.", flush=True)

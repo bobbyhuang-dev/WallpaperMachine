@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 import WebKit
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// State push while hidden, page-scoped pushes, option fetches and display-title resolution.
 @MainActor

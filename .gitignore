@@ -12,7 +12,7 @@ artifacts/
 *.log
 
 # Release archives produced by scripts/package.py
-MacWallpaperEngine-*.zip
+WallpaperMachine-*.zip
 
 # Local private wallpaper corpus and its notes; see docs/testing/wallpaper-corpus.md
 wallpaper-corpus/

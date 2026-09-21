@@ -1,4 +1,4 @@
-# Building MacWallpaperEngine
+# Building WallpaperMachine
 
 Authoritative build document. Everything here is driven by `scripts/build.py` and
 `scripts/package.py`; the Xcode project itself is generated from
@@ -20,8 +20,9 @@ Homebrew packages the renderer links against, exactly as listed in
 `build_environment()` in `scripts/build.py`:
 
 ```sh
-brew install quickjs-ng glslang ffmpeg@8 freetype lz4 vulkan-loader \
+brew install quickjs-ng glslang freetype lz4 vulkan-loader \
   vulkan-headers molten-vk eigen nlohmann-json argparse shaderc spirv-tools glm
+python3 scripts/install_ffmpeg.py
 ```
 
 Plus the build tooling those packages are compiled and consumed with:
@@ -34,13 +35,22 @@ Steam Workshop downloads additionally need `steamcmd`, which is a runtime
 dependency of the app, not of the build. See
 [features/workshop-downloads.md](features/workshop-downloads.md).
 
-Licensing constraints on the resulting bundle (notably the Homebrew FFmpeg
-build) are recorded in [../LICENSING.md](../LICENSING.md) and are not repeated
-here.
+FFmpeg is not Homebrew's `ffmpeg` formula but the repository's own
+`Formula/mwe-ffmpeg.rb`: the same FFmpeg release configured as an
+LGPL-2.1-or-later library set (`--disable-gpl --disable-version3
+--disable-nonfree --disable-autodetect`, native decoders and encoders plus the
+VideoToolbox/AudioToolbox encoders, no network or device support), because
+Homebrew's build is GPLv3 and links OpenSSL, neither of which the GPL-2.0-only
+application may bundle ([../LICENSING.md](../LICENSING.md)).
+`scripts/install_ffmpeg.py` publishes the formula into a local git-less tap
+(`WallpaperMachine/local`), installs it, and reinstalls it when the formula
+file or the installed receipt differs from it; `--check` only reports.
+`scripts/package.py` refuses to bundle FFmpeg libraries that are not an LGPL
+build (see [Packaging and installing](#packaging-and-installing)).
 
-`ffmpeg@8` is keg-only and reached through `pkg-config`, but Homebrew links
+`mwe-ffmpeg` is keg-only and reached through `pkg-config`, but Homebrew links
 whichever FFmpeg formula is not keg-only into the shared `/opt/homebrew/include`
-— and several other dependencies put that prefix on the include path. The two
+— and several other dependencies put that prefix on the include path. Different
 majors' `AVFrame` and `AVCodecContext` differ by removed members, so compiling
 against one and linking the other is accepted by the compiler and then reads
 frame metadata at the wrong offsets at runtime. The renderer's CMake therefore
@@ -59,7 +69,7 @@ command produces the same build from a terminal, an editor, or CI.
 | Variable | Value | Why |
 |---|---|---|
 | `PATH` | `$(brew --prefix)/bin` prepended | Finds Homebrew `cmake`, `ninja`, `glslangValidator` and friends ahead of anything else. |
-| `CMAKE_PREFIX_PATH` | `;`-joined `opt/<package>` roots plus the Homebrew prefix | CMake resolves each dependency from its own keg, including keg-only ones like `ffmpeg@8`, instead of guessing. |
+| `CMAKE_PREFIX_PATH` | `;`-joined `opt/<package>` roots plus the Homebrew prefix | CMake resolves each dependency from its own keg, including keg-only ones like `mwe-ffmpeg`, instead of guessing. |
 | `PKG_CONFIG_PATH` | `:`-joined `opt/<package>/lib/pkgconfig` | `pkg-config` consumers (FFmpeg, freetype, lz4) find the matching `.pc` files. |
 | `OWE_NIX_LIBRARY_PATH` | `:`-joined `opt/<package>/lib` plus `<prefix>/lib` | The vendored scene engine's build scripts use this to locate native libraries to link. |
 | `LIBCLANG_PATH` | `$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib` | Rust `bindgen`/`uniffi` need `libclang` from the selected Xcode toolchain. |
@@ -91,10 +101,10 @@ python3 scripts/build.py --renderer-only          # renderer + bindings only
    and module map. `App/Bridge/Generated` is build output: never edit it, and
    regenerate it whenever the bridge crate's interface changes.
 3. **Project generation** — `xcodegen generate` rewrites
-   `mac-wallpaper-engine.xcodeproj` from `project.yml`.
-4. **Xcode build** — `xcodebuild -project mac-wallpaper-engine.xcodeproj -scheme
-   MacWallpaperEngine -configuration <cfg> -derivedDataPath build build`. The app
-   target embeds the `MacWallpaperExtension` ExtensionKit extension.
+   `WallpaperMachine.xcodeproj` from `project.yml`.
+4. **Xcode build** — `xcodebuild -project WallpaperMachine.xcodeproj -scheme
+   WallpaperMachine -configuration <cfg> -derivedDataPath build build`. The app
+   target embeds the `WallpaperMachineExtension` ExtensionKit extension.
    It also builds and embeds the unlinked `MediaRemoteAdapter.framework` from
    the pinned BSD-3-Clause sources under `upstream/mediaremote-adapter`, and
    includes its Perl entry point and license as app resources. Building or
@@ -104,8 +114,8 @@ Products:
 
 | Path | Contents |
 |---|---|
-| `build/Build/Products/Debug/MacWallpaperEngine.app` | Debug app, used by `scripts/test.py` |
-| `build/Build/Products/Release/MacWallpaperEngine.app` | Release app; this is the bundle the user runs |
+| `build/Build/Products/Debug/WallpaperMachine.app` | Debug app, used by `scripts/test.py` |
+| `build/Build/Products/Release/WallpaperMachine.app` | Release app; this is the bundle the user runs |
 | `upstream/renderer/target/release/` | Renderer static library, `uniffi-bindgen`, renderer check binaries |
 | `App/Bridge/Generated/` | Generated uniffi Swift bindings |
 
@@ -138,10 +148,37 @@ python3 scripts/package.py --configuration Release --install
 ```
 
 `scripts/package.py` takes the already-built bundle at
-`build/Build/Products/<configuration>/MacWallpaperEngine.app` and makes it
+`build/Build/Products/<configuration>/WallpaperMachine.app` and makes it
 self-contained. It exits with `Build the application first using
 scripts/build.py` when that bundle is absent.
 
+0. **Preflight**, before anything is modified (`--check` runs only this step
+   and leaves the bundle unchanged):
+   - The bundle must be fresh build output. A bundle that already carries
+     `Contents/Frameworks/*.dylib`, or whose app/extension binaries already
+     load a non-Swift `@rpath` dependency, is refused: packaging is one-way and
+     never deletes anything from an existing bundle. An incremental
+     `scripts/build.py` run does not clear `Contents/Frameworks`, so the fix is
+     a clean build. **`python3 scripts/clean.py --all` deletes `build/`
+     entirely, including `build/Build/Products/Release/WallpaperMachine.app`,
+     the locally delivered app.** Preview with `--dry-run`, keep a copy of any
+     app you still need, and only then clean and rebuild; nothing cleans
+     automatically.
+   - Every FFmpeg library the app links (`libav*`, `libsw*`, `libpostproc`) is
+     inspected at the resolved Homebrew file it would copy: the license string
+     FFmpeg's configure embeds must be exactly `LGPL version 2.1 or later` and
+     the embedded configure line must not contain `--enable-gpl`,
+     `--enable-version3` or `--enable-nonfree`. Otherwise it exits 1 with
+     `MISSING Refusing to bundle FFmpeg libraries that are not an LGPL build
+     (install the project's with python3 scripts/install_ffmpeg.py; see
+     LICENSING.md):` and one line per offending library.
+   - The notice payload must exist: repository `LICENSE`, `LICENSING.md`,
+     `upstream/renderer/LICENSE`, `upstream/provenance.json`, the
+     Xcode-bundled `Resources/LICENSE` (mediaremote-adapter, BSD-3-Clause) and
+     the extension's `Phosphene-LICENSE.txt`, and a `LICENSE*`/`COPYING*`/
+     `COPYRIGHT*`/`NOTICE*` file in every Homebrew keg the link closure
+     reaches. Otherwise `MISSING Missing license payload:` lists what is
+     absent.
 1. **Dylib relocation.** Starting from `libMoltenVK.dylib` and the app and
    extension binaries, it walks `otool -L` transitively. Every dependency under
    the Homebrew prefix is copied into `Contents/Frameworks`, given an
@@ -149,25 +186,35 @@ scripts/build.py` when that bundle is absent.
    `install_name_tool -change`. Absolute `LC_RPATH` entries pointing into the
    Homebrew prefix or the repository are deleted, and
    `@executable_path/../Frameworks` (or `@executable_path/../../../../Frameworks`
-   for the embedded `.appex`) is added instead.
+   for the embedded `.appex`) is added instead. `@rpath` dependencies are no
+   longer guessed against `<prefix>/lib`.
 2. **MoltenVK ICD.** A `MoltenVK_icd.json` is written into the app's `Resources`
    and into each extension's `Resources`, each pointing at the bundled
    `libMoltenVK.dylib` with the correct relative depth, so Vulkan resolves the
    portability driver inside the bundle.
-3. **License payload.** `upstream/renderer/LICENSE` is copied in as
-   `Renderer-LICENSE.txt` and `upstream/provenance.json` as `provenance.json`.
+3. **License payload.** The root `LICENSE` is copied in as
+   `WallpaperMachine-LICENSE.txt`, `LICENSING.md` as `LICENSING.md`,
+   `upstream/renderer/LICENSE` as `Renderer-LICENSE.txt`,
+   `upstream/provenance.json` as `provenance.json`, each bundled keg's notices
+   under `Licenses/<formula>-<version>/`, and the vendored miniaudio and
+   spirv_reflect notices under `Licenses/renderer-third-party/`. `Licenses/` is
+   rebuilt on every run.
 4. **Ad-hoc signing.** Each bundled dylib, then each extension
    (`--preserve-metadata=entitlements`), then the app are signed with `-`, and
-   the result is checked with `codesign --verify --deep --strict`.
+   the result is checked with `codesign --verify --deep --strict`. No Developer
+   ID identity is used and nothing is notarized; see
+   [../LICENSING.md](../LICENSING.md#signing-and-notarization).
 5. **Dependency audit.** Every binary is re-scanned. A remaining Homebrew-prefixed
    load command fails with `Unbundled dependency: …`; an `@rpath` dependency with
    no matching file in `Contents/Frameworks` fails with `Missing bundled
    dependency: …` (Swift runtime libraries are exempt).
 6. **Archive.** The version is read from the bundle's
    `CFBundleShortVersionString` with `PlistBuddy`, and `ditto -c -k --keepParent`
-   writes `MacWallpaperEngine-<version>-arm64.zip` beside the app. The in-app
-   updater depends on that name; see [release.md](release.md).
-7. **`--install`.** Copies the bundle to `~/Applications/MacWallpaperEngine.app`.
+   writes `WallpaperMachine-<version>-arm64.zip` beside the app. The in-app
+   updater depends on that name; see [release.md](release.md). The archive is
+   labelled as not cleared for distribution: it is for local use until
+   [../LICENSING.md](../LICENSING.md) records the blockers as resolved.
+7. **`--install`.** Copies the bundle to `~/Applications/WallpaperMachine.app`.
    It refuses to overwrite an existing installation: quit and remove the old copy
    first.
 
@@ -176,11 +223,11 @@ After a successful Release build, quit and reopen the app to load it.
 ## Runtime data locations
 
 The app never writes into the repository. Managed wallpapers live at
-`~/Library/Application Support/mac-wallpaper-engine/Library`; imports copy files
+`~/Library/Application Support/WallpaperMachine/Library`; imports copy files
 there and leave the originals untouched. Sibling directories under
-`~/Library/Application Support/mac-wallpaper-engine/` hold scene assets
+`~/Library/Application Support/WallpaperMachine/` hold scene assets
 (`SceneAssets`), the private SteamCMD runtime (`SteamCMD`) and the optional saved
-Steam sign-in (`SteamSession`). Setting `MAC_WALLPAPER_ENGINE_HOME` relocates the
+Steam sign-in (`SteamSession`). Setting `WALLPAPER_MACHINE_HOME` relocates the
 whole tree, which is how tests stay isolated from your real library.
 
 ## Troubleshooting
@@ -194,7 +241,10 @@ whole tree, which is how tests stay isolated from your real library.
 | `xcodegen: command not found` | XcodeGen missing; both `scripts/build.py` and `scripts/test.py` regenerate the project | `brew install xcodegen`. |
 | Renderer changes have no effect on the app | The run used `--swift-only` | Rebuild without the flag. |
 | `Unbundled dependency:` or `Missing bundled dependency:` during packaging | A new native dependency is reachable from a binary but was not copied into `Contents/Frameworks` — usually loaded through an `@rpath` name with no Homebrew `lib/<name>` counterpart | Add the library to the Homebrew package list so the relocation walk can find it, then repackage. Never ship the bundle with the audit bypassed. |
-| `An installation already exists: …` | `--install` will not replace `~/Applications/MacWallpaperEngine.app` | Quit and remove the installed copy, then rerun. |
+| `Refusing to bundle FFmpeg libraries that are not an LGPL build` during packaging | The app was linked against Homebrew's GPLv3 `ffmpeg@8` (or another non-LGPL build) instead of `mwe-ffmpeg` | `python3 scripts/install_ffmpeg.py`, then a fresh `python3 scripts/build.py` so the link resolves to the project's build. Never bypass the check; see [../LICENSING.md](../LICENSING.md). |
+| `Packaging requires fresh, unrelocated build output` | The bundle in `build/` was packaged before; incremental builds keep `Contents/Frameworks` and the rewritten load commands, and packaging never undoes them | Preview `python3 scripts/clean.py --all --dry-run`, copy any delivered app you still need out of `build/`, then `python3 scripts/clean.py --all` and rebuild. `--all` deletes the delivered Release app. |
+| `Missing license payload:` during packaging | A repository notice file, an Xcode-bundled notice, or a keg `LICENSE*`/`COPYING*` file is absent | Restore the listed file; the payload list is in [Packaging and installing](#packaging-and-installing). |
+| `An installation already exists: …` | `--install` will not replace `~/Applications/WallpaperMachine.app` | Quit and remove the installed copy, then rerun. |
 | `CodeSign` fails with `resource fork, Finder information, or similar detritus not allowed in object file` | The built `.app`/`.appex` **directory** in `build/` picked up `com.apple.FinderInfo` or File Provider xattrs (`com.apple.fileprovider.fpfs#P`). It comes from the file provider syncing the checkout's parent directory, not from anything committed: source files carry only `com.apple.provenance`, which codesign accepts | `xattr -cr build/Build/Products/<configuration>` and rerun the same command. It recurs on synced checkouts; clearing the products directory is the fix, not a rebuild |
 | `codesign --verify --deep --strict` fails | A dylib or the extension was modified after signing | Rerun packaging on a fresh build rather than re-signing pieces by hand. |
 

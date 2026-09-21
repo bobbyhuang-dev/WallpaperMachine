@@ -112,7 +112,7 @@ final class NativeVideoWallpaperHost {
     func start() {
         guard posterObserver == nil else { return }
         posterObserver = frameCenter.addObserver(
-            forName: Notification.Name("MacWallpaperEngine.requestDesktopPoster"),
+            forName: Notification.Name("WallpaperMachine.requestDesktopPoster"),
             object: nil, queue: .main
         ) { [weak self] notification in
             MainActor.assumeIsolated { self?.answerPosterRequest(notification) }
@@ -395,7 +395,7 @@ final class NativeVideoWallpaperHost {
             // a frame of the wrong clip, and publishing it would show it.
             guard self.surfaces[displayID] === surface else { return }
             self.frameCenter.post(
-                name: Notification.Name("MacWallpaperEngine.desktopPoster"), object: nil,
+                name: Notification.Name("WallpaperMachine.desktopPoster"), object: nil,
                 userInfo: ["displayID": displayID, "image": image])
         }
     }

@@ -15,20 +15,20 @@ PASSING_RUN = """\
 Command line invocation:
     /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -project x.xcodeproj test
 2026-09-19 18:01:14.073 xcodebuild[51232:5680671] [MT] DVTPlugInExtensionFaulting: Failed to fire fault for extension Xcode.Device.CoreDevice: Error Domain=DVTPlugInErrorDomain Code=2 "Loading a plug-in failed."
-2026-09-19 18:01:17.349188+0800 MacWallpaperEngine[51359:5681081] [Connection] Unable to get synchronousRemoteObjectProxy, error: Error Domain=NSCocoaErrorDomain Code=4097
+2026-09-19 18:01:17.349188+0800 WallpaperMachine[51359:5681081] [Connection] Unable to get synchronousRemoteObjectProxy, error: Error Domain=NSCocoaErrorDomain Code=4097
 CompileSwift normal arm64 /repo/App/AppDelegate.swift
 /repo/App/AppDelegate.swift:12:5: warning: variable 'x' was never used
-Test Case '-[MacWallpaperEngineTests.AppThemeTests testDamagedSavedColor]' started.
-Test Case '-[MacWallpaperEngineTests.AppThemeTests testDamagedSavedColor]' passed (0.002 seconds).
+Test Case '-[WallpaperMachineTests.AppThemeTests testDamagedSavedColor]' started.
+Test Case '-[WallpaperMachineTests.AppThemeTests testDamagedSavedColor]' passed (0.002 seconds).
 Test Suite 'AppThemeTests' passed at 2026-09-19 18:01:17.400.
 \t Executed 3 tests, with 0 failures (0 unexpected) in 0.006 (0.007) seconds
 ** TEST SUCCEEDED **
 """
 
 FAILING_RUN = """\
-Test Case '-[MacWallpaperEngineTests.DownloaderTests testFoo]' started.
-/repo/Tests/Unit/Workshop/DownloaderTests.swift:120: error: -[MacWallpaperEngineTests.DownloaderTests testFoo] : XCTAssertEqual failed: ("1") is not equal to ("2")
-Test Case '-[MacWallpaperEngineTests.DownloaderTests testFoo]' failed (0.100 seconds).
+Test Case '-[WallpaperMachineTests.DownloaderTests testFoo]' started.
+/repo/Tests/Unit/Workshop/DownloaderTests.swift:120: error: -[WallpaperMachineTests.DownloaderTests testFoo] : XCTAssertEqual failed: ("1") is not equal to ("2")
+Test Case '-[WallpaperMachineTests.DownloaderTests testFoo]' failed (0.100 seconds).
 \t Executed 2 tests, with 1 failure (0 unexpected) in 0.2 (0.3) seconds
 Testing failed:
 \tDownloaderTests.testFoo(): XCTAssertEqual failed: ("1") is not equal to ("2")
@@ -41,7 +41,7 @@ CompileSwift normal arm64 /repo/App/Foo.swift
 /repo/App/Foo.swift:7:9: error: cannot find 'bar' in scope
 /repo/App/Foo.swift:7:9: error: cannot find 'bar' in scope
 The following build commands failed:
-\tSwiftCompile normal arm64 /repo/App/Foo.swift (in target 'MacWallpaperEngine' from project 'x')
+\tSwiftCompile normal arm64 /repo/App/Foo.swift (in target 'WallpaperMachine' from project 'x')
 (1 failure)
 ** BUILD FAILED **
 """
@@ -56,17 +56,17 @@ class FilterLines(unittest.TestCase):
 
     def test_failing_test_shows_assertion_and_verdict_once(self):
         lines = self.filtered(FAILING_RUN)
-        self.assertIn("/repo/Tests/Unit/Workshop/DownloaderTests.swift:120: error: -[MacWallpaperEngineTests.DownloaderTests testFoo] : XCTAssertEqual failed: (\"1\") is not equal to (\"2\")", lines)
-        self.assertIn("Test Case '-[MacWallpaperEngineTests.DownloaderTests testFoo]' failed (0.100 seconds).", lines)
+        self.assertIn("/repo/Tests/Unit/Workshop/DownloaderTests.swift:120: error: -[WallpaperMachineTests.DownloaderTests testFoo] : XCTAssertEqual failed: (\"1\") is not equal to (\"2\")", lines)
+        self.assertIn("Test Case '-[WallpaperMachineTests.DownloaderTests testFoo]' failed (0.100 seconds).", lines)
         self.assertIn("** TEST FAILED **", lines)
         self.assertIn("\t Executed 2 tests, with 1 failure (0 unexpected) in 0.2 (0.3) seconds", lines)
-        self.assertNotIn("Test Case '-[MacWallpaperEngineTests.DownloaderTests testFoo]' started.", lines)
+        self.assertNotIn("Test Case '-[WallpaperMachineTests.DownloaderTests testFoo]' started.", lines)
 
     def test_failure_block_body_is_kept_and_duplicates_dropped(self):
         lines = self.filtered(BROKEN_BUILD)
         self.assertEqual(lines.count("/repo/App/Foo.swift:7:9: error: cannot find 'bar' in scope"), 1)
         self.assertIn("The following build commands failed:", lines)
-        self.assertIn("\tSwiftCompile normal arm64 /repo/App/Foo.swift (in target 'MacWallpaperEngine' from project 'x')", lines)
+        self.assertIn("\tSwiftCompile normal arm64 /repo/App/Foo.swift (in target 'WallpaperMachine' from project 'x')", lines)
         self.assertIn("(1 failure)", lines)
         self.assertIn("** BUILD FAILED **", lines)
         self.assertNotIn("CompileSwift normal arm64 /repo/App/Foo.swift", lines)

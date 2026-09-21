@@ -1,7 +1,7 @@
 import WebKit
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// The Wallpaper Engine author APIs as a page actually sees them: audio, the
 /// five media listeners, random-file requests and directory callbacks, driven

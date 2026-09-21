@@ -14,7 +14,7 @@ final class LockScreenWallpaperService {
   @ObservationIgnored var beforeActivation: (() throws -> Void)?
   @ObservationIgnored var afterDeactivation: (() throws -> Void)?
 
-  private static let preference = "MacWallpaperEngineAnimateLockScreen"
+  private static let preference = "WallpaperMachineAnimateLockScreen"
   @ObservationIgnored private let scenes: () async throws -> [BridgeLockScreenScene]
   /// Whether any applied wallpaper is a web wallpaper. Web has no lock-screen
   /// renderer, so the app has to be able to say "not applicable" instead of

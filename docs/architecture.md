@@ -1,6 +1,6 @@
 # Architecture
 
-MacWallpaperEngine is a native macOS wallpaper client built on a vendored Rust/C++ renderer.
+WallpaperMachine is a native macOS wallpaper client built on a vendored Rust/C++ renderer.
 It ships as one application bundle that embeds one ExtensionKit extension, and it links a Rust
 static library that in turn statically links a C++ scene renderer.
 
@@ -112,9 +112,9 @@ Services are grouped by domain under `App/Services/`.
 | `WebWallpaper/` | `WebWallpaperHost`, `WebWallpaperWindow`, `WebWallpaperPage` | Desktop-level `WKWebView` windows for `type: "web"` projects, driven by the bridge's `webWallpapers()`; see [features/web-wallpapers.md](features/web-wallpapers.md) |
 
 `ClientPaths` fixes the on-disk contract: everything lives under
-`~/Library/Application Support/mac-wallpaper-engine` (overridable with
-`MAC_WALLPAPER_ENGINE_HOME`) with `Library/`, `SceneAssets/`, `SteamCMD/` beneath it, and it
-exports `MAC_WALLPAPER_ENGINE_SUPPORT_ROOT`, `_LIBRARY_ROOT` and `_ASSETS_ROOT` so the Rust side
+`~/Library/Application Support/WallpaperMachine` (overridable with
+`WALLPAPER_MACHINE_HOME`) with `Library/`, `SceneAssets/`, `SteamCMD/` beneath it, and it
+exports `WALLPAPER_MACHINE_SUPPORT_ROOT`, `_LIBRARY_ROOT` and `_ASSETS_ROOT` so the Rust side
 resolves the same paths.
 
 ### Desktop wallpaper windows and private-API handling
@@ -156,8 +156,8 @@ Swift keeps the *system* wallpaper consistent with that window:
 `wallpaper-bridge` crate. Swift sees a `WallpaperBridge` object plus the `Bridge*` value types
 (`BridgeAppSnapshot`, `BridgeLibrarySnapshot`, `BridgeSettingsSnapshot`,
 `BridgeWallpaperOptionsSnapshot`, `BridgeMonitorInformationSnapshot`, `BridgePropertyDescriptor`,
-`BridgeScalingMode`, `BridgeLockScreenScene`, `BridgeError`, …). The `MacWallpaperEngine` and
-`MacWallpaperEngineTests` targets consume it through `SWIFT_INCLUDE_PATHS`,
+`BridgeScalingMode`, `BridgeLockScreenScene`, `BridgeError`, …). The `WallpaperMachine` and
+`WallpaperMachineTests` targets consume it through `SWIFT_INCLUDE_PATHS`,
 `HEADER_SEARCH_PATHS` and `-Xcc -fmodule-map-file=…/WallpaperBridgeFFI.modulemap`; the two
 generated FFI files are excluded from the compile sources list and reached through the module map
 instead.
@@ -195,7 +195,7 @@ contracts, not persisted or uniffi snapshot fields.
 
 ### Lock-screen extension
 
-`Extension/` builds `MacWallpaperExtension`, an `extensionkit-extension` target for the
+`Extension/` builds `WallpaperMachineExtension`, an `extensionkit-extension` target for the
 `com.apple.wallpaper` extension point (`Extension/Info.plist`). It is a separate, sandboxed
 process; the app cannot call into it directly.
 
@@ -203,7 +203,7 @@ process; the app cannot call into it directly.
 |---|---|
 | `WallpaperExtension.swift` | `@main AppExtension`; XPC handler for `acquire`/`update`/`invalidate`/`snapshot`/`provideSettingsViewModels`/`isChoiceDownloaded`/`selectedChoicesDidChange`, and connection acceptance |
 | `WallpaperRuntime.swift` | Loads and checks the private hosting ABI, verifies the caller's code signature via its audit token, resolves `CAContext`, reads the published configuration and asset paths, logging |
-| `WallpaperController.swift` | Singleton surface registry; reacts to screen sleep/wake, `com.apple.screenIsLocked`/`Unlocked`, and the Darwin notification `app.mac-wallpaper-engine.lock-screen.changed` |
+| `WallpaperController.swift` | Singleton surface registry; reacts to screen sleep/wake, `com.apple.screenIsLocked`/`Unlocked`, and the Darwin notification `app.wallpapermachine.lock-screen.changed` |
 | `WallpaperSurface.swift` | One `WallpaperID` to one `CAContext`/`CAMetalLayer` surface with bounded dimensions, first-frame and snapshot waiters |
 | `WallpaperSettingsProvider.swift` | Encodes the private wallpaper settings view-model payload |
 | `WallpaperExtensionBridge.h` | Objective-C bridging header declaring the private `CAContext`, `NSXPCConnection.auditToken` and the XPC protocol; also includes `SceneWallpaperBindings.h` |
@@ -236,9 +236,9 @@ See [features/lock-screen.md](features/lock-screen.md) for the user-facing behav
    `upstream/renderer/target/release/libwallpaper_bridge.a` and the `uniffi-bindgen` binary.
 2. `uniffi-bindgen generate --library target/release/libwallpaper_bridge.a --language swift
    --no-format` into `App/Bridge/Generated`.
-3. `xcodegen generate` to regenerate `mac-wallpaper-engine.xcodeproj` from `project.yml`.
-4. `xcodebuild -scheme MacWallpaperEngine -derivedDataPath build`, producing
-   `build/Build/Products/<Configuration>/MacWallpaperEngine.app`.
+3. `xcodegen generate` to regenerate `WallpaperMachine.xcodeproj` from `project.yml`.
+4. `xcodebuild -scheme WallpaperMachine -derivedDataPath build`, producing
+   `build/Build/Products/<Configuration>/WallpaperMachine.app`.
 
 `--renderer-only` stops after step 2; `--swift-only` skips steps 1–2. See
 [build.md](build.md) for the full toolchain and [testing/README.md](testing/README.md) for what
@@ -248,14 +248,17 @@ verification runs.
 
 | Path | Origin |
 |---|---|
-| `App/`, `Extension/`, `Shared/`, `WebUI/`, `Tests/`, `scripts/`, `docs/`, `project.yml` | This project |
+| `App/`, `Extension/`, `Shared/`, `WebUI/`, `Tests/`, `scripts/`, `Formula/`, `project.yml` | This project, GPL-2.0-only (root `LICENSE`); `App/` is a derived work of the renderer's former `app/WallpaperEngine` |
 | `App/Bridge/Generated/` | Build output of the vendored bridge crate |
 | `upstream/renderer/` | Fork of `bigsaltyfishes/wallpaper-engine-for-macos`, GPL-2.0-only, modified |
-| `upstream/renderer/external/open-wallpaper-engine/` | Fork of `bigsaltyfishes/open-wallpaper-engine`, modified |
+| `upstream/renderer/external/open-wallpaper-engine/` | Fork of `bigsaltyfishes/open-wallpaper-engine`, modified; vendors Apache-2.0 `spirv_reflect` and public-domain/MIT-0 `miniaudio` under `third_party/` |
+| `upstream/mediaremote-adapter/` | `ungive/mediaremote-adapter`, BSD-3-Clause, unmodified |
 
-`upstream/provenance.json` records the repositories, pinned revisions and modification status;
-`scripts/package.py` copies both `upstream/renderer/LICENSE` (as `Renderer-LICENSE.txt`) and
-`upstream/provenance.json` into the bundle's Resources. Licence compatibility analysis lives in
+`upstream/provenance.json` records the repositories, pinned revisions, modification status and
+the current `distributionStatus`. `scripts/package.py` copies the root `LICENSE`, `LICENSING.md`,
+`upstream/renderer/LICENSE` (as `Renderer-LICENSE.txt`), `upstream/provenance.json` and every
+bundled keg's notices into the bundle's Resources ([build.md](build.md#packaging-and-installing)).
+Licence policy, the sales model and the open distribution blockers live in
 [../LICENSING.md](../LICENSING.md). The Workshop browser is recorded there and in the provenance
 file as independently implemented.
 
@@ -267,30 +270,35 @@ Both the app and the extension link the same renderer flag set (`project.yml` an
 -lswresample -lavfilter -lavdevice -lswscale`), `-lqjs` (quickjs-ng), `-lglslang`, `-lSPIRV`,
 `-lglslang-default-resource-limits`, `-liconv`, and the system frameworks (Metal, QuartzCore,
 CoreAudio, CoreVideo, VideoToolbox, IOSurface, …). Library search paths point at
-`upstream/renderer/target/release`, `/opt/homebrew/lib`, and the `ffmpeg@8`, `quickjs-ng` and
-`glslang` opt prefixes.
+`upstream/renderer/target/release`, `/opt/homebrew/lib`, and the `mwe-ffmpeg`, `quickjs-ng` and
+`glslang` opt prefixes. The FFmpeg libraries come from `Formula/mwe-ffmpeg.rb`, not Homebrew's
+GPLv3 `ffmpeg@8`; `libSPIRV` in turn loads Apache-2.0 SPIRV-Tools, and `libvulkan` opens the
+Apache-2.0 MoltenVK ICD, which is why the bundle is not distributable
+([../LICENSING.md](../LICENSING.md#remaining-blockers)).
 
 A freshly built app therefore still depends on Homebrew. `scripts/package.py` makes the bundle
-self-contained: it copies `libMoltenVK.dylib` and, transitively, every Homebrew-prefixed
-dependency of the app binary, the `.appex` binaries and the copied dylibs into
+self-contained: after a preflight that refuses an already-packaged bundle, non-LGPL FFmpeg
+libraries and a missing notice, it copies `libMoltenVK.dylib` and, transitively, every
+Homebrew-prefixed dependency of the app binary, the `.appex` binaries and the copied dylibs into
 `Contents/Frameworks`; rewrites install names and `-change` entries to `@rpath/<name>`; deletes
 Homebrew and source-tree `LC_RPATH` entries and adds `@executable_path/../Frameworks`
 (`@executable_path/../../../../Frameworks` for extension binaries); writes a `MoltenVK_icd.json`
-next to both the app and each extension pointing at the bundled driver; ad-hoc signs the dylibs,
-each extension (preserving entitlements) and the app; verifies with `codesign --verify --deep
---strict`; fails if any dependency is still unbundled; and zips
-`MacWallpaperEngine-<version>-arm64.zip`.
+next to both the app and each extension pointing at the bundled driver; writes the license
+payload; ad-hoc signs the dylibs, each extension (preserving entitlements) and the app (no
+Developer ID, no notarization); verifies with `codesign --verify --deep --strict`; fails if any
+dependency is still unbundled; and zips `WallpaperMachine-<version>-arm64.zip`, labelled as
+not cleared for distribution.
 
 ## Targets
 
 | Target | Type | Sources | Notes |
 |---|---|---|---|
-| `MacWallpaperEngine` | application | `App/`, `Shared/`, `Resources/StarterWallpaper` and `WebUI` as resource folders | Embeds the extension; uses `App/Resources/Info.plist` verbatim |
-| `MacWallpaperExtension` | extensionkit-extension | `Extension/`, `Shared/`, the starter preview image | Sandboxed, `APPLICATION_EXTENSION_API_ONLY`, Objective-C bridging header |
-| `MacWallpaperEngineTests` | bundle.unit-test | `Tests/Unit/` | Hosted in the app binary (`TEST_HOST`/`BUNDLE_LOADER`) |
-| `MacWallpaperEngineUITests` | bundle.ui-testing | `Tests/UI/` | Separate runner, `TEST_TARGET_NAME: MacWallpaperEngine` |
+| `WallpaperMachine` | application | `App/`, `Shared/`, `Resources/StarterWallpaper` and `WebUI` as resource folders | Embeds the extension; uses `App/Resources/Info.plist` verbatim |
+| `WallpaperMachineExtension` | extensionkit-extension | `Extension/`, `Shared/`, the starter preview image | Sandboxed, `APPLICATION_EXTENSION_API_ONLY`, Objective-C bridging header |
+| `WallpaperMachineTests` | bundle.unit-test | `Tests/Unit/` | Hosted in the app binary (`TEST_HOST`/`BUNDLE_LOADER`) |
+| `WallpaperMachineUITests` | bundle.ui-testing | `Tests/UI/` | Separate runner, `TEST_TARGET_NAME: WallpaperMachine` |
 
-Schemes: `MacWallpaperEngine` (run + unit tests) and `MacWallpaperEngineUI` (UI tests).
+Schemes: `WallpaperMachine` (run + unit tests) and `WallpaperMachineUI` (UI tests).
 
 ## Runtime and build relationships
 
@@ -307,12 +315,12 @@ flowchart TD
   BridgeLib --> Core["wallpaper-core (windows, media, display)"]
   Core --> Shader["shader crate (naga)"]
   Core --> OWE["Open Wallpaper Engine (C++ wescene-renderer)"]
-  Core --> Brew["Homebrew: ffmpeg, MoltenVK, quickjs-ng, glslang, freetype, lz4"]
-  Services -->|"Shared/LockScreenConfiguration.json + Darwin notification"| Ext["MacWallpaperExtension (sandboxed)"]
+  Core --> Brew["Homebrew: mwe-ffmpeg (Formula/), MoltenVK, quickjs-ng, glslang, freetype, lz4"]
+  Services -->|"Shared/LockScreenConfiguration.json + Darwin notification"| Ext["WallpaperMachineExtension (sandboxed)"]
   Ext --> BridgeLib
   Cargo["scripts/build.py: cargo + uniffi-bindgen"] --> Generated
   Cargo --> BridgeLib
-  XcodeGen["project.yml -> xcodegen -> xcodebuild"] --> App["MacWallpaperEngine.app"]
+  XcodeGen["project.yml -> xcodegen -> xcodebuild"] --> App["WallpaperMachine.app"]
   Generated --> App
   Ext --> App
 ```
@@ -320,7 +328,7 @@ flowchart TD
 ## Invariants and constraints
 
 - `project.yml` is the single source of truth for targets, settings, versions and schemes.
-  `mac-wallpaper-engine.xcodeproj` is regenerated by `xcodegen generate`; never edit the
+  `WallpaperMachine.xcodeproj` is regenerated by `xcodegen generate`; never edit the
   `.pbxproj` by hand.
 - `App/Bridge/Generated/` is build output. Regenerate it through `scripts/build.py`; hand edits
   are lost on the next build.

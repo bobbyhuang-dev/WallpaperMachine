@@ -3,14 +3,14 @@ import Darwin
 import Foundation
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 final class LockScreenWallpaperServiceTests: XCTestCase {
   private var root: URL!
   private var defaults: UserDefaults!
   private var defaultsSuite: String!
   private var timers: [Timer] = []
-  private let preference = "MacWallpaperEngineAnimateLockScreen"
+  private let preference = "WallpaperMachineAnimateLockScreen"
   private var store: URL { root.appendingPathComponent("Index.plist") }
   private var journal: URL { root.appendingPathComponent("journal.plist") }
   private var documents: URL { root.appendingPathComponent("Documents") }
@@ -31,8 +31,8 @@ final class LockScreenWallpaperServiceTests: XCTestCase {
     try FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
     // The managed user-asset store lives under the support root; every test that
     // publishes one has to land in a throwaway home, not the user's own.
-    previousHome = ProcessInfo.processInfo.environment["MAC_WALLPAPER_ENGINE_HOME"]
-    setenv("MAC_WALLPAPER_ENGINE_HOME", home.path, 1)
+    previousHome = ProcessInfo.processInfo.environment["WALLPAPER_MACHINE_HOME"]
+    setenv("WALLPAPER_MACHINE_HOME", home.path, 1)
     try Data(#"{"type":"video","title":"t","file":"a.mp4"}"#.utf8).write(
       to: project.appendingPathComponent("project.json"))
     try Data([0x00]).write(to: project.appendingPathComponent("a.mp4"))
@@ -44,9 +44,9 @@ final class LockScreenWallpaperServiceTests: XCTestCase {
     defaults.removePersistentDomain(forName: defaultsSuite)
     try FileManager.default.removeItem(at: root)
     if let previousHome {
-      setenv("MAC_WALLPAPER_ENGINE_HOME", previousHome, 1)
+      setenv("WALLPAPER_MACHINE_HOME", previousHome, 1)
     } else {
-      unsetenv("MAC_WALLPAPER_ENGINE_HOME")
+      unsetenv("WALLPAPER_MACHINE_HOME")
     }
   }
 
@@ -101,7 +101,7 @@ final class LockScreenWallpaperServiceTests: XCTestCase {
   }
 
   /// The managed store as the app writes it, isolated per test through
-  /// `MAC_WALLPAPER_ENGINE_HOME`.
+  /// `WALLPAPER_MACHINE_HOME`.
   @discardableResult
   private func writeManagedAsset(
     propertyId: String, fileName: String, bytes: String, kind: String = "file"

@@ -104,7 +104,7 @@ final class LockScreenWallpaperSelection {
         if desired.contains(entry.path) {
           throw LockScreenWallpaperFailure(
             message:
-              "A native wallpaper override was removed outside MacWallpaperEngine. Disable Animate Lock Screen before enabling it again."
+              "A native wallpaper override was removed outside WallpaperMachine. Disable Animate Lock Screen before enabling it again."
           )
         }
         continue
@@ -115,7 +115,7 @@ final class LockScreenWallpaperSelection {
         guard desktopOwned && idleOwned else {
           throw LockScreenWallpaperFailure(
             message:
-              "The system wallpaper was changed outside MacWallpaperEngine. Disable Animate Lock Screen before enabling it again; external choices will be preserved."
+              "The system wallpaper was changed outside WallpaperMachine. Disable Animate Lock Screen before enabling it again; external choices will be preserved."
           )
         }
         // Reloading the extension's manifest does not invalidate WallpaperAgent's

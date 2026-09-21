@@ -1,7 +1,7 @@
 import Darwin
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// `SteamCMDRuntimeService` rejects shells and malformed Mach-O without touching the source.
 @MainActor

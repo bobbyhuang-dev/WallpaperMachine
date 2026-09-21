@@ -29,7 +29,8 @@ live under `testing/`.
 | [release.md](release.md) | Versioning, release specs, CI pipeline, in-app updater contract |
 | [development-tools.md](development-tools.md) | Optional diagnostics and the desktop authorization boundary |
 | [../AGENTS.md](../AGENTS.md) / [../CLAUDE.md](../CLAUDE.md) | Agent rules; CLAUDE.md is a symlink, not a separate policy |
-| [../LICENSING.md](../LICENSING.md) | License-compatibility record and distribution constraints |
+| [../LICENSING.md](../LICENSING.md) | GPL-2.0-only source policy, sales model (official build plus priority support), component licenses, distribution blockers |
+| [../LICENSE](../LICENSE) | GNU GPL version 2 text, the license of this repository's source |
 
 ## Testing
 

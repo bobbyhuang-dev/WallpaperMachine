@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-pub const BUNDLE_IDENTIFIER: &str = "app.mac-wallpaper-engine";
+pub const BUNDLE_IDENTIFIER: &str = "app.wallpapermachine";
 
 #[derive(Clone, Debug)]
 pub struct BridgePaths {
@@ -30,7 +30,7 @@ impl BridgePaths {
 
     #[must_use]
     pub fn app_support_root(&self) -> PathBuf {
-        if let Some(root) = std::env::var_os("MAC_WALLPAPER_ENGINE_SUPPORT_ROOT") {
+        if let Some(root) = std::env::var_os("WALLPAPER_MACHINE_SUPPORT_ROOT") {
             return PathBuf::from(root);
         }
         self.home.as_deref().map_or_else(
@@ -45,7 +45,7 @@ impl BridgePaths {
 
     #[must_use]
     pub fn steam_workshop_root(&self) -> PathBuf {
-        if let Some(root) = std::env::var_os("MAC_WALLPAPER_ENGINE_LIBRARY_ROOT") {
+        if let Some(root) = std::env::var_os("WALLPAPER_MACHINE_LIBRARY_ROOT") {
             return PathBuf::from(root);
         }
         self.home.as_deref().map_or_else(
@@ -56,7 +56,7 @@ impl BridgePaths {
 
     #[must_use]
     pub fn assets_root(&self) -> PathBuf {
-        if let Some(root) = std::env::var_os("MAC_WALLPAPER_ENGINE_ASSETS_ROOT") {
+        if let Some(root) = std::env::var_os("WALLPAPER_MACHINE_ASSETS_ROOT") {
             return PathBuf::from(root);
         }
         self.home.as_deref().map_or_else(
@@ -77,7 +77,7 @@ impl BridgePaths {
     /// cache clean must never reach them.
     #[must_use]
     pub fn user_assets_root(&self) -> PathBuf {
-        if let Some(root) = std::env::var_os("MAC_WALLPAPER_ENGINE_USER_ASSETS_ROOT") {
+        if let Some(root) = std::env::var_os("WALLPAPER_MACHINE_USER_ASSETS_ROOT") {
             return PathBuf::from(root);
         }
         self.app_support_root().join("UserAssets")

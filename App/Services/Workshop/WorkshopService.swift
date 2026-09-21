@@ -122,7 +122,7 @@ actor WorkshopService {
         var request = URLRequest(url: Self.browseURL(search: search, kind: kind, sort: sort, page: page, tags: tags,
                                                      excludedTags: excludedTags))
         request.timeoutInterval = 35
-        request.setValue("MacWallpaperEngine/1.0 (macOS; public Workshop browser)", forHTTPHeaderField: "User-Agent")
+        request.setValue("WallpaperMachine/1.0 (macOS; public Workshop browser)", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {

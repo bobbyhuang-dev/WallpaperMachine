@@ -1,7 +1,7 @@
 import Darwin
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Shared fixture for the `WorkshopDownloader` suites: a shell `steamcmd` stand-in on a real PTY,
 /// session and parallel runtimes, and the assertions every suite makes about staging and
@@ -225,7 +225,7 @@ class DownloaderTestCase: XCTestCase {
   {
     let children = try FileManager.default.contentsOfDirectory(atPath: root.path)
     XCTAssertFalse(
-      children.contains { $0.hasPrefix(".mac-wallpaper-engine-workshop-") }, file: file, line: line)
+      children.contains { $0.hasPrefix(".WallpaperMachine-workshop-") }, file: file, line: line)
   }
 
   func sessionEntries(in root: URL) throws -> [URL] {

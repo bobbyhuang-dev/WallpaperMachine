@@ -2,14 +2,14 @@ import AppKit
 import Darwin
 import Foundation
 
-/// MacWallpaperEngine keeps imports separate from Steam's installation and never edits source wallpapers.
+/// WallpaperMachine keeps imports separate from Steam's installation and never edits source wallpapers.
 enum ClientPaths {
     static var supportURL: URL {
-        if let override = ProcessInfo.processInfo.environment["MAC_WALLPAPER_ENGINE_HOME"], !override.isEmpty {
+        if let override = ProcessInfo.processInfo.environment["WALLPAPER_MACHINE_HOME"], !override.isEmpty {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
         return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/mac-wallpaper-engine", isDirectory: true)
+            .appendingPathComponent("Library/Application Support/WallpaperMachine", isDirectory: true)
     }
 
     static var libraryURL: URL { supportURL.appendingPathComponent("Library", isDirectory: true) }
@@ -22,7 +22,7 @@ enum ClientPaths {
     /// the user's imported files with it.
     static var userAssetsURL: URL { supportURL.appendingPathComponent("UserAssets", isDirectory: true) }
     static var assetsURL: URL {
-        if let configured = UserDefaults.standard.string(forKey: "MacWallpaperEngineAssetsPath"), !configured.isEmpty {
+        if let configured = UserDefaults.standard.string(forKey: "WallpaperMachineAssetsPath"), !configured.isEmpty {
             let url = URL(fileURLWithPath: configured, isDirectory: true)
             if hasSceneAssets(at: url) { return url }
         }
@@ -52,10 +52,10 @@ enum ClientPaths {
            !FileManager.default.fileExists(atPath: starterMarker.path) {
             try Data().write(to: starterMarker, options: .atomic)
         }
-        setenv("MAC_WALLPAPER_ENGINE_SUPPORT_ROOT", supportURL.path, 1)
-        setenv("MAC_WALLPAPER_ENGINE_LIBRARY_ROOT", libraryURL.path, 1)
-        setenv("MAC_WALLPAPER_ENGINE_ASSETS_ROOT", assetsURL.path, 1)
-        setenv("MAC_WALLPAPER_ENGINE_USER_ASSETS_ROOT", userAssetsURL.path, 1)
+        setenv("WALLPAPER_MACHINE_SUPPORT_ROOT", supportURL.path, 1)
+        setenv("WALLPAPER_MACHINE_LIBRARY_ROOT", libraryURL.path, 1)
+        setenv("WALLPAPER_MACHINE_ASSETS_ROOT", assetsURL.path, 1)
+        setenv("WALLPAPER_MACHINE_USER_ASSETS_ROOT", userAssetsURL.path, 1)
     }
 
     static func hasSceneAssets(at url: URL) -> Bool {
@@ -72,8 +72,8 @@ enum ClientPaths {
         guard hasSceneAssets(at: url) else {
             throw WorkshopFailure(message: "This folder does not contain Wallpaper Engine’s shared shaders and materials. Choose its complete assets folder, or install scene assets through Steam.")
         }
-        UserDefaults.standard.set(url.path, forKey: "MacWallpaperEngineAssetsPath")
-        setenv("MAC_WALLPAPER_ENGINE_ASSETS_ROOT", url.path, 1)
+        UserDefaults.standard.set(url.path, forKey: "WallpaperMachineAssetsPath")
+        setenv("WALLPAPER_MACHINE_ASSETS_ROOT", url.path, 1)
     }
 
     static func installSceneAssets(from source: URL, to destination: URL) throws {

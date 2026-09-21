@@ -2,7 +2,7 @@ import AVFoundation
 import CoreMedia
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// The native backend's admission rule, exercised against real files.
 ///

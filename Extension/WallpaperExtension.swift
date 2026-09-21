@@ -90,7 +90,7 @@ private struct NativeWallpaperConfiguration: AppExtensionConfiguration {
 }
 
 @main
-final class MacWallpaperExtension: NSObject, AppExtension {
+final class WallpaperMachineExtension: NSObject, AppExtension {
   override required init() {
     super.init()
     do {

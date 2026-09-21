@@ -1,4 +1,4 @@
-# MacWallpaperEngine
+# WallpaperMachine
 
 A native macOS Wallpaper Engine client with scene, video and web wallpaper rendering and
 independently implemented Steam Workshop browsing and downloads. The app is a SwiftUI/AppKit
@@ -19,20 +19,21 @@ lock screen.
 
 ## Quickstart
 
-Requires macOS on Apple silicon with Xcode, a Rust toolchain, XcodeGen and the
-Homebrew dependencies listed in [docs/build.md](docs/build.md); scene wallpapers
+Requires macOS on Apple silicon with Xcode, a Rust toolchain, XcodeGen, the
+Homebrew dependencies listed in [docs/build.md](docs/build.md) and the project's
+own LGPL FFmpeg build (`python3 scripts/install_ffmpeg.py`); scene wallpapers
 additionally need shared resources from a purchased Wallpaper Engine
 installation.
 
 ```sh
 python3 scripts/build.py                     # renderer + bindings + xcodegen + xcodebuild
 python3 scripts/build.py --configuration Release
-python3 scripts/test.py                      # script tests + MacWallpaperEngineTests
+python3 scripts/test.py                      # script tests + WallpaperMachineTests
 python3 scripts/package.py --configuration Release --install
 ```
 
 The app used for local delivery is
-`build/Build/Products/Release/MacWallpaperEngine.app`. Quit and reopen it after a
+`build/Build/Products/Release/WallpaperMachine.app`. Quit and reopen it after a
 successful Release build. Full toolchain, packaging and installation details are
 in [docs/build.md](docs/build.md).
 
@@ -60,15 +61,25 @@ This repository includes the current application and renderer sources, tests,
 project configuration, and bundled resources. Build outputs, caches, local
 credentials, and app binaries are not published.
 
-This is a source snapshot, not a verified binary release. No build or desktop
-tests were run as part of publishing it.
+The source is offered under the GNU General Public License, version 2 only
+([LICENSE](LICENSE)); the vendored renderer is GPL-2.0-only and the
+application shell is derived from it. Upstream code keeps its own copyright and
+license notices, recorded in
+[upstream/provenance.json](upstream/provenance.json). Renderer and scene-engine
+sources are included directly rather than as Git submodules.
 
-Renderer and scene-engine sources are included directly in this snapshot rather
-than as Git submodules.
+The intended business is a paid official build - Developer ID signed and
+notarized, with priority support - sold under the GPL: recipients keep every
+right to use, modify, redistribute and resell it, and the corresponding source
+is offered alongside. Neither signing nor notarization is implemented yet;
+`scripts/package.py` signs ad hoc for local use.
 
-See [LICENSING.md](LICENSING.md) for implementation provenance and unresolved
-distribution considerations, and
-[upstream/provenance.json](upstream/provenance.json) for upstream revisions.
-Upstream source retains its license and copyright notices. Publishing this source
-snapshot does not mean that bundled binaries or third-party wallpaper assets are
-cleared for distribution.
+**No binary is cleared for distribution.** Homebrew's GPLv3 FFmpeg has been
+replaced by the LGPL build in `Formula/mwe-ffmpeg.rb`, but Apache-2.0
+components (MoltenVK, the Vulkan loader, SPIRV-Tools, parts of glslang, the
+vendored spirv_reflect) remain in every build's link closure and are not
+compatible with GPLv2. [LICENSING.md](LICENSING.md) records the policy, the
+sales model, each component's license, the open blockers and what would
+resolve them. Publishing this source does not clear the combined program,
+bundled binaries, Valve's software, Wallpaper Engine assets or Workshop content
+for distribution.

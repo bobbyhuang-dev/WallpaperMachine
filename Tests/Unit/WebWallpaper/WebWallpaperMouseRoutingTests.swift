@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// The routing policy decides whether an observed desktop pointer event
 /// belongs to a web wallpaper page. Window numbers stand in for AppKit windows.

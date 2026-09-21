@@ -1,7 +1,7 @@
 import Darwin
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// `WorkshopDownloadManager`: serial and parallel queues, slot limits and session conflicts.
 @MainActor

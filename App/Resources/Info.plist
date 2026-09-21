@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>MacWallpaperEngine</string>
+	<string>WallpaperMachine</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -25,8 +25,8 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>MacWallpaperEngine asks Music and Spotify what is playing, only while you have turned media integration on for a wallpaper.</string>
+	<string>WallpaperMachine asks Music and Spotify what is playing, only while you have turned media integration on for a wallpaper.</string>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>MacWallpaperEngine captures system audio only when you enable audio-reactive wallpapers.</string>
+	<string>WallpaperMachine captures system audio only when you enable audio-reactive wallpapers.</string>
 </dict>
 </plist>

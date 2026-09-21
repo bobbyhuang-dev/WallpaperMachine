@@ -13,12 +13,12 @@ use shader::{
 const SPIRV_MAGIC: u32 = 0x0723_0203;
 
 /// Wallpaper Engine's installed `assets/shaders` directory. Honors the same
-/// `MAC_WALLPAPER_ENGINE_ASSETS_ROOT` override the bridge uses
+/// `WALLPAPER_MACHINE_ASSETS_ROOT` override the bridge uses
 /// (`crates/bridge/src/paths.rs`), falling back to the standard Steam location
 /// under the current user's home. These assets are licensed content that never
 /// enters Git, so tests needing them skip when the directory is absent.
 fn asset_shader_root() -> Option<std::path::PathBuf> {
-    let root = std::env::var_os("MAC_WALLPAPER_ENGINE_ASSETS_ROOT")
+    let root = std::env::var_os("WALLPAPER_MACHINE_ASSETS_ROOT")
         .map(std::path::PathBuf::from)
         .or_else(|| {
             std::env::var_os("HOME").map(|home| {
@@ -32,9 +32,9 @@ fn asset_shader_root() -> Option<std::path::PathBuf> {
 }
 
 /// Root for shaders unpacked from workshop packages. Defaults to `unpack/` at
-/// the workspace root; override with `MAC_WALLPAPER_ENGINE_UNPACK_ROOT`.
+/// the workspace root; override with `WALLPAPER_MACHINE_UNPACK_ROOT`.
 fn unpack_root() -> std::path::PathBuf {
-    if let Some(root) = std::env::var_os("MAC_WALLPAPER_ENGINE_UNPACK_ROOT") {
+    if let Some(root) = std::env::var_os("WALLPAPER_MACHINE_UNPACK_ROOT") {
         return std::path::PathBuf::from(root);
     }
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -53,7 +53,7 @@ fn corpus_source_or_skip(path: &std::path::Path, test: &str) -> Option<String> {
         Err(error) => {
             eprintln!(
                 "skipping {test}: local wallpaper corpus file {} is unavailable ({error}). Set \
-                 MAC_WALLPAPER_ENGINE_ASSETS_ROOT / MAC_WALLPAPER_ENGINE_UNPACK_ROOT to run it.",
+                 WALLPAPER_MACHINE_ASSETS_ROOT / WALLPAPER_MACHINE_UNPACK_ROOT to run it.",
                 path.display()
             );
             None
@@ -2477,7 +2477,7 @@ fn pipeline_compiles_asset_genericimage4_without_widening_rotate_vec2_helper() {
     let Some(root) = asset_shader_root() else {
         eprintln!(
             "skipping {test}: no Wallpaper Engine assets/shaders directory. Set \
-             MAC_WALLPAPER_ENGINE_ASSETS_ROOT to run it."
+             WALLPAPER_MACHINE_ASSETS_ROOT to run it."
         );
         return;
     };

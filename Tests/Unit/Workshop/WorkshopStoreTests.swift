@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 @MainActor
 final class WorkshopStoreTests: XCTestCase {
@@ -638,8 +638,8 @@ final class WorkshopDownloadIntentTests: XCTestCase {
     home = FileManager.default.temporaryDirectory
       .appendingPathComponent("mwe-download-intents-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-    previousHome = ProcessInfo.processInfo.environment["MAC_WALLPAPER_ENGINE_HOME"]
-    setenv("MAC_WALLPAPER_ENGINE_HOME", home.path, 1)
+    previousHome = ProcessInfo.processInfo.environment["WALLPAPER_MACHINE_HOME"]
+    setenv("WALLPAPER_MACHINE_HOME", home.path, 1)
     suite = "WorkshopDownloadIntentTests.\(home.lastPathComponent)"
     defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
   }
@@ -654,9 +654,9 @@ final class WorkshopDownloadIntentTests: XCTestCase {
     fixtures.removeAll()
     defaults.removePersistentDomain(forName: suite)
     if let previousHome {
-      setenv("MAC_WALLPAPER_ENGINE_HOME", previousHome, 1)
+      setenv("WALLPAPER_MACHINE_HOME", previousHome, 1)
     } else {
-      unsetenv("MAC_WALLPAPER_ENGINE_HOME")
+      unsetenv("WALLPAPER_MACHINE_HOME")
     }
     try? FileManager.default.removeItem(at: home)
   }

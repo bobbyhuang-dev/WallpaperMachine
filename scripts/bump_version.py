@@ -23,7 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_YML = "project.yml"
-PBXPROJ = "mac-wallpaper-engine.xcodeproj/project.pbxproj"
+PBXPROJ = "WallpaperMachine.xcodeproj/project.pbxproj"
 
 RELEASE_LINE = re.compile(
     r"^release:\s*v?(major|minor|patch|\d+\.\d+\.\d+)\s*$",

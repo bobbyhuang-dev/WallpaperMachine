@@ -2,18 +2,18 @@ import AVFoundation
 import AppKit
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// The real `NativeVideoPlayer` against real media.
 ///
 /// **Opt-in.** These cases drive `AVQueuePlayer`, `AVPlayerLooper`,
 /// `AVPlayerLayer`, `AVPlayerItemVideoOutput` and the poster path, which means
 /// real video decoding on this machine's media hardware. They are skipped
-/// unless `MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1` is set, so the routine gate
+/// unless `WALLPAPER_MACHINE_MEDIA_TESTS=1` is set, so the routine gate
 /// stays a metadata-and-logic suite:
 ///
 /// ```
-/// MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1 python3 scripts/test.py
+/// WALLPAPER_MACHINE_MEDIA_TESTS=1 python3 scripts/test.py
 /// ```
 ///
 /// They still open no window and touch no desktop: an `AVPlayerLayer` that is
@@ -36,8 +36,8 @@ final class NativeVideoPlayerMediaTests: XCTestCase {
     override func setUpWithError() throws {
         try super.setUpWithError()
         try XCTSkipUnless(
-            ProcessInfo.processInfo.environment["MAC_WALLPAPER_ENGINE_MEDIA_TESTS"] == "1",
-            "media/device integration tests are opt-in; set MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1")
+            ProcessInfo.processInfo.environment["WALLPAPER_MACHINE_MEDIA_TESTS"] == "1",
+            "media/device integration tests are opt-in; set WALLPAPER_MACHINE_MEDIA_TESTS=1")
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("native-video-media-\(UUID().uuidString)")
         try FileManager.default.createDirectory(

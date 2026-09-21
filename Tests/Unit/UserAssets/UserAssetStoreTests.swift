@@ -1,6 +1,6 @@
 import Darwin
 import XCTest
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Staging for `file` and `directory` wallpaper properties.
 ///
@@ -17,19 +17,19 @@ final class UserAssetStoreTests: XCTestCase {
     private var staging: URL { UserAssetStore.stagingRoot(projectURL: project) }
 
     override func setUpWithError() throws {
-        previousHome = ProcessInfo.processInfo.environment["MAC_WALLPAPER_ENGINE_HOME"]
+        previousHome = ProcessInfo.processInfo.environment["WALLPAPER_MACHINE_HOME"]
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("user-assets-tests-\(UUID().uuidString)", isDirectory: true)
         project = root.appendingPathComponent("project", isDirectory: true)
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
-        setenv("MAC_WALLPAPER_ENGINE_HOME", root.appendingPathComponent("home").path, 1)
+        setenv("WALLPAPER_MACHINE_HOME", root.appendingPathComponent("home").path, 1)
     }
 
     override func tearDownWithError() throws {
         if let previousHome {
-            setenv("MAC_WALLPAPER_ENGINE_HOME", previousHome, 1)
+            setenv("WALLPAPER_MACHINE_HOME", previousHome, 1)
         } else {
-            unsetenv("MAC_WALLPAPER_ENGINE_HOME")
+            unsetenv("WALLPAPER_MACHINE_HOME")
         }
         // A read-only project directory would otherwise survive the run.
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: project.path)

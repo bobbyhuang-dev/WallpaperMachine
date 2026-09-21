@@ -20,7 +20,7 @@ final class DirectoryWatcher: DirectoryWatching {
     /// as a folder being populated by a copy, into one diff.
     static let defaultDebounce: TimeInterval = 0.25
 
-    private let queue = DispatchQueue(label: "app.mac-wallpaper-engine.user-assets.watch")
+    private let queue = DispatchQueue(label: "app.wallpapermachine.user-assets.watch")
     private let debounce: TimeInterval
     private let onChange: @MainActor () -> Void
     private let lock = NSLock()

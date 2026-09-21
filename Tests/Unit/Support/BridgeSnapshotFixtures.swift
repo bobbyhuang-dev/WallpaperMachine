@@ -1,6 +1,6 @@
 import Foundation
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Snapshot values for tests that need a settings snapshot but do not care what
 /// is in it.

@@ -1,7 +1,7 @@
 import Darwin
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Reading `file` and `directory` properties out of the bridge's
 /// `applyUserProperties` payload, and rewriting a `file` value to the staged
@@ -155,7 +155,7 @@ final class WebWallpaperPropertyPayloadTests: XCTestCase {
       try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
       // The managed user-asset store lives under the support root, so every test
       // import has to land in a throwaway home rather than the real one.
-      setenv("MAC_WALLPAPER_ENGINE_HOME", home.path, 1)
+      setenv("WALLPAPER_MACHINE_HOME", home.path, 1)
       let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
       // A name with a space and a plus: both load unescaped and must survive.
       try png.write(to: source.appendingPathComponent("a b+c.png"))
@@ -176,7 +176,7 @@ final class WebWallpaperPropertyPayloadTests: XCTestCase {
     }
 
     func remove() {
-      unsetenv("MAC_WALLPAPER_ENGINE_HOME")
+      unsetenv("WALLPAPER_MACHINE_HOME")
       try? FileManager.default.removeItem(at: home)
       try? FileManager.default.removeItem(at: project)
       try? FileManager.default.removeItem(at: source)

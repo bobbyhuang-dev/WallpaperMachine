@@ -4,7 +4,7 @@ import ImageIO
 import UniformTypeIdentifiers
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Stands in for the private framework. No test in this directory loads MediaRemote, calls
 /// it, or reads what the machine is actually playing: every answer here is written by the

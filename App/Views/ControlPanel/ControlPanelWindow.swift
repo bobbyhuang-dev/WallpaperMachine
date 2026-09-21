@@ -11,7 +11,7 @@ enum ControlPanelWindow {
     /// `body` min-width and the panel layout tests use the same figure.
     static let minimumContentSize = NSSize(width: 760, height: 560)
     static let initialContentSize = NSSize(width: 1240, height: 800)
-    static let frameAutosaveName = "MacWallpaperEngineMainWindow"
+    static let frameAutosaveName = "WallpaperMachineMainWindow"
 
     static func make(contentViewController: NSViewController, delegate: NSWindowDelegate?) -> NSWindow {
         let window = NSWindow(
@@ -20,14 +20,14 @@ enum ControlPanelWindow {
             backing: .buffered,
             defer: false
         )
-        window.title = "MacWallpaperEngine"
+        window.title = "WallpaperMachine"
         // The bundled page draws its own top bar in the title-bar strip. An empty unified
         // toolbar only sizes that strip so the traffic lights sit on the tab row; the page
         // reads their inset from the snapshot and handles dragging itself.
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unified
-        let titlebarSpacer = NSToolbar(identifier: "MacWallpaperEngineTitlebar")
+        let titlebarSpacer = NSToolbar(identifier: "WallpaperMachineTitlebar")
         titlebarSpacer.showsBaselineSeparator = false
         window.toolbar = titlebarSpacer
         window.delegate = delegate

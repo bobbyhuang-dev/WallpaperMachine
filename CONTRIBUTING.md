@@ -1,6 +1,6 @@
 # Contributing
 
-MacWallpaperEngine is a native macOS app (SwiftUI/AppKit plus a WKWebView control
+WallpaperMachine is a native macOS app (SwiftUI/AppKit plus a WKWebView control
 panel), a sandboxed lock-screen ExtensionKit extension, and a vendored Rust/C++
 renderer. This page gets you running and points at the document that owns each
 topic; it does not repeat them.
@@ -12,8 +12,9 @@ Apple Silicon, macOS 26 or later, and a full Xcode selected with
 
 ```sh
 brew install rust cmake ninja pkg-config xcodegen
-brew install quickjs-ng glslang ffmpeg@8 freetype lz4 vulkan-loader \
+brew install quickjs-ng glslang freetype lz4 vulkan-loader \
   vulkan-headers molten-vk eigen nlohmann-json argparse shaderc spirv-tools glm
+python3 scripts/install_ffmpeg.py   # the project's LGPL FFmpeg build, see LICENSING.md
 python3 scripts/build.py
 python3 scripts/test.py
 python3 scripts/check_dev_tools.py   # optional diagnostics only
@@ -29,7 +30,7 @@ generates the Xcode project and builds the app. Details, flags and failure modes
    `python3 scripts/build.py --swift-only`; renderer changes need a full
    `python3 scripts/build.py`.
 2. Run `python3 scripts/test.py` — Python script tests, project generation, then
-   `MacWallpaperEngineTests`. This never touches the desktop. Only failures and
+   `WallpaperMachineTests`. This never touches the desktop. Only failures and
    a verdict reach the terminal; the full log sits next to the result bundle in
    `artifacts/tests/` (`--verbose` streams it).
 3. Run the targeted check your change needs:
@@ -56,7 +57,7 @@ generates the Xcode project and builds the app. Details, flags and failure modes
 
 ## Hard rules
 
-- **Never hand-edit generated files.** `mac-wallpaper-engine.xcodeproj` comes from
+- **Never hand-edit generated files.** `WallpaperMachine.xcodeproj` comes from
   `project.yml`; `App/Bridge/Generated` comes from `uniffi-bindgen`. Change the
   source, regenerate, commit both.
 - **Never change `upstream/` without updating `upstream/provenance.json`.** That

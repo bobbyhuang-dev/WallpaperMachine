@@ -38,7 +38,7 @@ struct AppThemePreferences: Equatable {
 @MainActor
 final class AppThemeStore: ObservableObject {
   static let shared = AppThemeStore()
-  static let defaultsKey = "MacWallpaperEngine.appTheme"
+  static let defaultsKey = "WallpaperMachine.appTheme"
   @Published private(set) var preferences: AppThemePreferences
   private let defaults: UserDefaults
 

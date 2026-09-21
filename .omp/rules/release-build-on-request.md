@@ -1,5 +1,5 @@
 ---
-description: Release-build MacWallpaperEngine.app when delivery is requested, not after every feature
+description: Release-build WallpaperMachine.app when delivery is requested, not after every feature
 alwaysApply: true
 ---
 
@@ -27,7 +27,7 @@ tree:
 
 Confirm the built app actually contains the change (for WebUI, compare the
 bundled `Contents/Resources/WebUI/` files with `WebUI/`). Report the delivered
-path `build/Build/Products/Release/MacWallpaperEngine.app`, record the build in
+path `build/Build/Products/Release/WallpaperMachine.app`, record the build in
 `docs/testing/verification-log.md`, and remind the user to quit and reopen the
 app. Never launch or quit it yourself. A failed or blocked build is not
 delivery; say so explicitly.

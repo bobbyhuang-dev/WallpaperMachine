@@ -1,6 +1,6 @@
 import Darwin
 import XCTest
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 final class ImportTests: XCTestCase {
     private var root: URL!
@@ -8,7 +8,7 @@ final class ImportTests: XCTestCase {
     private let importer = WallpaperImportService()
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("mac-wallpaper-engine-tests-\(UUID().uuidString)")
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("WallpaperMachine-tests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
     override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }

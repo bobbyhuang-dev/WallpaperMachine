@@ -119,7 +119,7 @@ struct AppUpdateInstaller: AppUpdateInstalling {
         else {
             throw AppUpdateIssue(code: .verification, detail: String(localized: "The update couldn't be verified, so it wasn't installed."))
         }
-        let executable = app.appendingPathComponent("Contents/MacOS/MacWallpaperEngine")
+        let executable = app.appendingPathComponent("Contents/MacOS/WallpaperMachine")
         guard FileManager.default.isReadableFile(atPath: executable.path) else {
             throw AppUpdateIssue(code: .verification, detail: String(localized: "The update couldn't be verified, so it wasn't installed."))
         }

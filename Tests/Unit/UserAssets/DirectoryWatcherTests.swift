@@ -1,5 +1,5 @@
 import XCTest
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// The real FSEvents stream, as `UserAssetStore` uses it: one notification per settled
 /// burst, a further one for a later change, nothing after `stop()`, and no wake-up at all

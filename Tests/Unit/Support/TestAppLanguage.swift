@@ -1,6 +1,6 @@
 import Foundation
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 extension AppLanguageStore {
   /// A store pinned to English for tests that read rendered labels.
@@ -12,7 +12,7 @@ extension AppLanguageStore {
   /// specific language build their own with `systemLanguages`.
   @MainActor
   static func english() -> AppLanguageStore {
-    let suite = "app.mac-wallpaper-engine.tests.language-\(UUID().uuidString)"
+    let suite = "app.wallpapermachine.tests.language-\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
     defaults.removePersistentDomain(forName: suite)
     return AppLanguageStore(defaults: defaults, systemLanguages: ["en"])

@@ -173,7 +173,7 @@ final class WebWallpaperHost {
     func start() {
         guard posterObserver == nil else { return }
         posterObserver = frameCenter.addObserver(
-            forName: Notification.Name("MacWallpaperEngine.requestDesktopPoster"), object: nil, queue: .main
+            forName: Notification.Name("WallpaperMachine.requestDesktopPoster"), object: nil, queue: .main
         ) { [weak self] notification in
             MainActor.assumeIsolated { self?.answerPosterRequest(notification) }
         }
@@ -685,7 +685,7 @@ final class WebWallpaperHost {
                     return
                 }
                 guard let frame = Self.rgbaPixels(of: image) else { return }
-                center.post(name: Notification.Name("MacWallpaperEngine.desktopPosterReady"), object: layer,
+                center.post(name: Notification.Name("WallpaperMachine.desktopPosterReady"), object: layer,
                             userInfo: ["pixels": frame.pixels, "width": frame.width, "height": frame.height, "bgra": false])
             }
         }

@@ -98,7 +98,7 @@ final class DesktopWallpaperSync {
     func start() {
         guard frameObserver == nil, !stopped else { return }
         frameObserver = frameCenter.addObserver(
-            forName: Notification.Name("MacWallpaperEngine.desktopPosterReady"), object: nil, queue: .main
+            forName: Notification.Name("WallpaperMachine.desktopPosterReady"), object: nil, queue: .main
         ) { [weak self] notification in
             MainActor.assumeIsolated { self?.receive(notification) }
         }
@@ -138,7 +138,7 @@ final class DesktopWallpaperSync {
         // No debounce: an Apply must not wait for a 400 ms timer, another
         // snapshot, or an activeSpaceDidChange notification to request pixels.
         for surface in surfaces() {
-            frameCenter.post(name: Notification.Name("MacWallpaperEngine.requestDesktopPoster"), object: surface.layer)
+            frameCenter.post(name: Notification.Name("WallpaperMachine.requestDesktopPoster"), object: surface.layer)
         }
         synchronizeAllSpaces()
     }

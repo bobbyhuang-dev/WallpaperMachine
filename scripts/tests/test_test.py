@@ -86,7 +86,7 @@ class OptInVariables(unittest.TestCase):
     def test_both_opt_in_layers_are_forwarded(self):
         self.assertEqual(
             set(runner.OPT_IN_VARIABLES),
-            {"MAC_WALLPAPER_ENGINE_MEDIA_TESTS", "MAC_WALLPAPER_ENGINE_NETWORK_TESTS"},
+            {"WALLPAPER_MACHINE_MEDIA_TESTS", "WALLPAPER_MACHINE_NETWORK_TESTS"},
         )
 
 

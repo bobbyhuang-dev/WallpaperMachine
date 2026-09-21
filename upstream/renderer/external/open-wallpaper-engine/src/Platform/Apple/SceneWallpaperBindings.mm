@@ -124,7 +124,7 @@ void configure_desktop_poster(wallpaper::RenderInitInfo& info, void* metal_layer
     mailbox->layer = (__bridge CAMetalLayer*)metal_layer_handle;
     std::weak_ptr<DesktopPosterMailbox> weak_mailbox = mailbox;
     mailbox->observer = [[NSNotificationCenter defaultCenter]
-        addObserverForName:@"MacWallpaperEngine.requestDesktopPoster"
+        addObserverForName:@"WallpaperMachine.requestDesktopPoster"
         object:mailbox->layer queue:nil usingBlock:^(NSNotification*) {
             auto state = weak_mailbox.lock();
             if (state == nullptr) return;
@@ -182,7 +182,7 @@ void configure_desktop_poster(wallpaper::RenderInitInfo& info, void* metal_layer
             NSData* data = [NSData dataWithBytes:pixels.data() length:pixels.size()];
             dispatch_async(dispatch_get_main_queue(), ^{
                 [[NSNotificationCenter defaultCenter]
-                    postNotificationName:@"MacWallpaperEngine.desktopPosterReady"
+                    postNotificationName:@"WallpaperMachine.desktopPosterReady"
                     object:layer userInfo:@{ @"pixels": data, @"width": @(width),
                                             @"height": @(height), @"bgra": @(bgra) }];
             });

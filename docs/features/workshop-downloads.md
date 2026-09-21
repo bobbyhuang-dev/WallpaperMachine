@@ -289,7 +289,7 @@ scene's Workshop details, starts the installation; **Locate assets…** instead
 points at an existing purchased installation. Installation reuses the private
 SteamCMD login and cancellation flow and requests the Windows application with
 `app_update 431960 validate`. Only the validated `assets` tree is retained, at
-`~/Library/Application Support/mac-wallpaper-engine/SceneAssets`; the Windows
+`~/Library/Application Support/WallpaperMachine/SceneAssets`; the Windows
 executables are removed together with the temporary installation. Steam must
 confirm that the installation completed before assets are published. An empty or
 incomplete directory is rejected without replacing existing assets, and the
@@ -322,7 +322,7 @@ list once it has finished.
 and for scene-asset installation. After a successful authentication the app
 preserves the Steam-issued cached credentials and machine-authentication files
 of the last account at
-`~/Library/Application Support/mac-wallpaper-engine/SteamSession`. The next
+`~/Library/Application Support/WallpaperMachine/SteamSession`. The next
 download, including after an app restart, restores only that account's cache and
 pre-fills its login name. Cache directories are restricted to `0700` and files
 to `0600`. Submitted passwords and Steam Guard codes are sent only to the

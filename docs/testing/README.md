@@ -38,7 +38,7 @@ Routine verification **must not**:
 - change the user's wallpapers or system appearance,
 - initialize audio hardware or request system permissions,
 - sign in to Steam, run a real SteamCMD login, or approve a Gatekeeper prompt,
-- replace or restart the installed `/Applications/MacWallpaperEngine.app`.
+- replace or restart the installed `/Applications/WallpaperMachine.app`.
 
 Each of those requires an explicit user decision. `python3 scripts/test.py --ui`
 and the manual smoke checklist take over the desktop and are neither part of
@@ -56,17 +56,17 @@ scheme excludes UI tests.
 | Layer | Location | Command |
 | --- | --- | --- |
 | Python script tests | `scripts/tests/` | `python3 scripts/test.py` (runs first, before Xcode) |
-| Swift unit/integration | `Tests/Unit/<Domain>/` | `python3 scripts/test.py` (`MacWallpaperEngineTests`); `--only <TestClass>` for a subset |
+| Swift unit/integration | `Tests/Unit/<Domain>/` | `python3 scripts/test.py` (`WallpaperMachineTests`); `--only <TestClass>` for a subset |
 | XCUITest (desktop) | `Tests/UI/` | `python3 scripts/test.py --ui` — opt-in only |
-| Media/device integration | `Tests/Unit/NativeVideo/` | `MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1 python3 scripts/test.py` — opt-in only |
-| Live Steam pages | `Tests/Unit/Workshop/WorkshopTests.swift` | `MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1 python3 scripts/test.py` — opt-in only |
+| Media/device integration | `Tests/Unit/NativeVideo/` | `WALLPAPER_MACHINE_MEDIA_TESTS=1 python3 scripts/test.py` — opt-in only |
+| Live Steam pages | `Tests/Unit/Workshop/WorkshopTests.swift` | `WALLPAPER_MACHINE_NETWORK_TESTS=1 python3 scripts/test.py` — opt-in only |
 | Rust crates | `upstream/renderer/crates/` | `cargo test --release -p wallpaper-core --lib`, `cargo test --release -p wallpaper-bridge --lib`, `cargo test -p shader --test pipeline -- --nocapture` |
 | C++ renderer tests | `upstream/renderer/external/open-wallpaper-engine` | `python3 scripts/check_renderer.py` builds and runs them; see [renderer.md](renderer.md) |
 | Headless GPU probes | same CMake tree | explicitly invoked executables (`offscreen_scene_probe`, `scene_reload_cycle_probe`, `playback_gpu_test`, `wpdump`); see [renderer.md](renderer.md) |
 
 `python3 scripts/test.py` is the routine gate: it runs the Python script tests,
 runs `xcodegen generate --use-cache`, then builds and runs
-`MacWallpaperEngineTests` only, with test classes in parallel worker processes.
+`WallpaperMachineTests` only, with test classes in parallel worker processes.
 The terminal gets only what matters — compile errors, failing assertions, the
 `Testing failed:` block and a one-line verdict with counts — while the full
 `xcodebuild` stream goes to `artifacts/tests/Tests-<timestamp>.log` next to the
@@ -87,10 +87,10 @@ reach past this tree: they depend on the machine's media hardware and on Valve's
 live pages, so a failure there is not evidence about the code and a red gate
 invites a pointless re-run.
 
-- `MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1` — `NativeVideoPlayerMediaTests` decodes
+- `WALLPAPER_MACHINE_MEDIA_TESTS=1` — `NativeVideoPlayerMediaTests` decodes
   real video. It still opens no window, changes no wallpaper and configures no
   audio session; it is not a desktop test and not a substitute for one.
-- `MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1` — the two `testLive…` cases in
+- `WALLPAPER_MACHINE_NETWORK_TESTS=1` — the two `testLive…` cases in
   `WorkshopTests` fetch Steam's real community pages. Steam's page *format*
   stays covered offline: `decodePage` runs against recorded markup in
   `WorkshopStoreTests`, so only the assumption that Valve still serves that
@@ -107,7 +107,7 @@ Test classes run in parallel worker processes (`-parallel-testing-enabled YES`),
 which cuts the native phase roughly in half: most of its wall clock is spent
 waiting on debounce intervals and child-process reaping rather than on CPU.
 This is safe only as long as every suite keeps isolating its own state —
-`MAC_WALLPAPER_ENGINE_HOME`, a temporary directory, a per-test `UserDefaults`
+`WALLPAPER_MACHINE_HOME`, a temporary directory, a per-test `UserDefaults`
 suite — and never asserts on a process-wide singleton, a fixed port or a shared
 path. A test that passes alone but fails in the gate is the symptom; reproduce
 it with `python3 scripts/test.py --serial` and fix the shared state rather than
@@ -115,7 +115,7 @@ the scheduling. UI runs are always serial: they drive one desktop.
 
 The per-test `UserDefaults` suite is not only a parallelism concern: the unit
 bundle runs inside the real app as its test host, so `UserDefaults.standard`
-*is* `app.mac-wallpaper-engine`, the preferences of the installed app. Any
+*is* `app.wallpapermachine`, the preferences of the installed app. Any
 `WebPanelController` (or other store) built without `defaults:` writes there —
 the first-run welcome's `welcomeSeen` flag, sidebar choices, favorites — and
 silently changes what the app does at the next launch. Pass the test's own
@@ -165,7 +165,7 @@ runs.
 drives the real `AVQueuePlayer`, `AVPlayerLooper`, `AVPlayerLayer` and video
 output against generated silent clips, which means real video decoding on this
 machine's media hardware, so it skips itself unless
-`MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1` is set. It still opens no window, changes
+`WALLPAPER_MACHINE_MEDIA_TESTS=1` is set. It still opens no window, changes
 no wallpaper and configures no audio session; it is not a desktop test and is
 not a substitute for one.
 
@@ -178,7 +178,7 @@ not a substitute for one.
 | `artifacts/build/<stage>-<timestamp>.log` | `python3 scripts/build.py` (cargo, bindgen, xcodegen, xcodebuild) |
 | `artifacts/renderer/<run>/` | `python3 scripts/check_renderer.py` |
 | `artifacts/renderer/bin/` | renderer check binaries |
-| `build/Build/Products/{Debug,Release}/MacWallpaperEngine.app` | `python3 scripts/build.py` |
+| `build/Build/Products/{Debug,Release}/WallpaperMachine.app` | `python3 scripts/build.py` |
 
 `artifacts/` and `build/` are both Git-ignored and disposable; `python3
 scripts/clean.py` removes them. Result bundles are local: cite the numbers and

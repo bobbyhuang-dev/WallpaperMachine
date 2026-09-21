@@ -38,7 +38,7 @@ struct URLSessionThumbnailFetcher: WorkshopThumbnailFetching {
 
     func fetch(_ url: URL) async throws -> Data {
         var request = URLRequest(url: url)
-        request.setValue("MacWallpaperEngine/1.0 (macOS; public Workshop browser)", forHTTPHeaderField: "User-Agent")
+        request.setValue("WallpaperMachine/1.0 (macOS; public Workshop browser)", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await Self.session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw WorkshopThumbnailFailure(code: .httpStatus(http.statusCode))

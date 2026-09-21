@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 import WebKit
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Installed page: sorting, tile marks, filter sidebar, download setup and error dismissal.
 @MainActor
@@ -400,7 +400,7 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
       "download-ui-\(UUID().uuidString)")
     let defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
     defaults.set(
-      root.appendingPathComponent("missing-steamcmd").path, forKey: "MacWallpaperEngineSteamCMDPath"
+      root.appendingPathComponent("missing-steamcmd").path, forKey: "WallpaperMachineSteamCMDPath"
     )
     defer {
       defaults.removePersistentDomain(forName: root.lastPathComponent)

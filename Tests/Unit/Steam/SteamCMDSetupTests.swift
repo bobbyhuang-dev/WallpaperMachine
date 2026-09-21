@@ -1,10 +1,10 @@
 import Darwin
 import XCTest
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 @MainActor
 final class SteamCMDSetupTests: XCTestCase {
-    private let preferenceKey = "MacWallpaperEngineSteamCMDPath"
+    private let preferenceKey = "WallpaperMachineSteamCMDPath"
 
     func testInstallPublishesFilesAndNewStoreDiscoversSameRuntime() async throws {
         let fixture = try Fixture()
@@ -87,7 +87,7 @@ final class SteamCMDSetupTests: XCTestCase {
             await downloader.shutdown()
             await store.shutdown()
             XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path).contains {
-                $0.hasPrefix(".mac-wallpaper-engine-workshop-") || $0.hasPrefix(".mac-wallpaper-engine-import-")
+                $0.hasPrefix(".WallpaperMachine-workshop-") || $0.hasPrefix(".WallpaperMachine-import-")
             })
         } catch {
             await downloader.shutdown()
@@ -694,7 +694,7 @@ final class SteamCMDSetupTests: XCTestCase {
             let executable = directory.appendingPathComponent("steamcmd")
             try Data("old-executable".utf8).write(to: executable)
             try Data("old-library".utf8).write(to: directory.appendingPathComponent("steamconsole.dylib"))
-            defaults.set(executable.path, forKey: "MacWallpaperEngineSteamCMDPath")
+            defaults.set(executable.path, forKey: "WallpaperMachineSteamCMDPath")
             return executable
         }
     }

@@ -510,20 +510,20 @@ final class BridgeStore {
         if let file = manifest?["file"] as? String, (manifest?["type"] as? String)?.lowercased() == "video" {
             let asset = AVURLAsset(url: folder.appendingPathComponent(file))
             guard try await asset.load(.isPlayable), !(try await asset.loadTracks(withMediaType: .video)).isEmpty else {
-                throw NSError(domain: "MacWallpaperEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "This video cannot be decoded. Import a complete, playable video file before applying it.")])
+                throw NSError(domain: "WallpaperMachine", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "This video cannot be decoded. Import a complete, playable video file before applying it.")])
             }
         }
         if (manifest?["type"] as? String)?.lowercased() == "scene" {
             let assets = ClientPaths.assetsURL
             guard ClientPaths.hasSceneAssets(at: assets) else {
-                throw NSError(domain: "MacWallpaperEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: String(localized: "This wallpaper is downloaded, but Wallpaper Engine’s shared scene assets are not installed. Use Install scene assets… in Settings or the Workshop wallpaper, or locate the assets folder from your purchased installation.")])
+                throw NSError(domain: "WallpaperMachine", code: 2, userInfo: [NSLocalizedDescriptionKey: String(localized: "This wallpaper is downloaded, but Wallpaper Engine’s shared scene assets are not installed. Use Install scene assets… in Settings or the Workshop wallpaper, or locate the assets folder from your purchased installation.")])
             }
-            setenv("MAC_WALLPAPER_ENGINE_ASSETS_ROOT", assets.path, 1)
+            setenv("WALLPAPER_MACHINE_ASSETS_ROOT", assets.path, 1)
         }
         if (manifest?["type"] as? String)?.lowercased() == "web" {
             guard let file = manifest?["file"] as? String, !file.isEmpty,
                   FileManager.default.fileExists(atPath: folder.appendingPathComponent(file).path) else {
-                throw NSError(domain: "MacWallpaperEngine", code: 3, userInfo: [NSLocalizedDescriptionKey: String(localized: "This web wallpaper’s entry page is missing. Import the complete project folder, including its HTML file, before applying it.")])
+                throw NSError(domain: "WallpaperMachine", code: 3, userInfo: [NSLocalizedDescriptionKey: String(localized: "This web wallpaper’s entry page is missing. Import the complete project folder, including its HTML file, before applying it.")])
             }
         }
     }

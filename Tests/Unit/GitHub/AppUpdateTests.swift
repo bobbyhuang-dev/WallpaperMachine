@@ -1,5 +1,5 @@
 import XCTest
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 @MainActor
 final class AppUpdateTests: XCTestCase {
@@ -18,13 +18,13 @@ final class AppUpdateTests: XCTestCase {
         let release = try GitHubReleaseParser.decode(Self.releaseJSON(
             tag: "v1.2.3",
             assets: [
-                ("latest-mac.yml", "https://github.com/bobbyhuang-dev/mac-wallpaper-engine/releases/download/v1.2.3/latest-mac.yml", 100, nil),
-                ("MacWallpaperEngine-1.2.3.dmg", "https://github.com/bobbyhuang-dev/mac-wallpaper-engine/releases/download/v1.2.3/MacWallpaperEngine-1.2.3.dmg", 200, nil),
-                ("MacWallpaperEngine-1.2.3-arm64.zip", "https://github.com/bobbyhuang-dev/mac-wallpaper-engine/releases/download/v1.2.3/MacWallpaperEngine-1.2.3-arm64.zip", 300, "sha256:" + String(repeating: "ab", count: 32))
+                ("latest-mac.yml", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/latest-mac.yml", 100, nil),
+                ("WallpaperMachine-1.2.3.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/WallpaperMachine-1.2.3.dmg", 200, nil),
+                ("WallpaperMachine-1.2.3-arm64.zip", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/WallpaperMachine-1.2.3-arm64.zip", 300, "sha256:" + String(repeating: "ab", count: 32))
             ]
         ))
         XCTAssertEqual(release.version.display, "1.2.3")
-        XCTAssertEqual(GitHubReleaseParser.selectAsset(from: release)?.name, "MacWallpaperEngine-1.2.3-arm64.zip")
+        XCTAssertEqual(GitHubReleaseParser.selectAsset(from: release)?.name, "WallpaperMachine-1.2.3-arm64.zip")
         XCTAssertEqual(GitHubReleaseParser.selectAsset(from: release)?.digest, "sha256:" + String(repeating: "ab", count: 32))
     }
 
@@ -37,13 +37,13 @@ final class AppUpdateTests: XCTestCase {
     func testMissingAppArchiveBecomesManualFallback() throws {
         let release = try GitHubReleaseParser.decode(Self.releaseJSON(
             tag: "v1.2.3",
-            assets: [("notes.txt", "https://github.com/bobbyhuang-dev/mac-wallpaper-engine/releases/download/v1.2.3/notes.txt", 12, nil)]
+            assets: [("notes.txt", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/notes.txt", 12, nil)]
         ))
         XCTAssertNil(GitHubReleaseParser.selectAsset(from: release))
     }
 
     func testDownloadHostAllowlistAndDigestParsing() {
-        XCTAssertTrue(GitHubReleaseDownload.isAllowed(URL(string: "https://github.com/bobbyhuang-dev/mac-wallpaper-engine/releases/download/v1/app.zip")!))
+        XCTAssertTrue(GitHubReleaseDownload.isAllowed(URL(string: "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1/app.zip")!))
         XCTAssertTrue(GitHubReleaseDownload.isAllowed(URL(string: "https://objects.githubusercontent.com/github-production-release-asset/1")!))
         XCTAssertFalse(GitHubReleaseDownload.isAllowed(URL(string: "http://github.com/file")!))
         XCTAssertFalse(GitHubReleaseDownload.isAllowed(URL(string: "https://evil.example/file")!))
@@ -52,20 +52,20 @@ final class AppUpdateTests: XCTestCase {
     }
 
     func testInstallableLocationsAreApplicationsFolders() {
-        XCTAssertTrue(AppUpdateInstaller.isInstallableLocation(URL(fileURLWithPath: "/Applications/MacWallpaperEngine.app")))
+        XCTAssertTrue(AppUpdateInstaller.isInstallableLocation(URL(fileURLWithPath: "/Applications/WallpaperMachine.app")))
         XCTAssertTrue(AppUpdateInstaller.isInstallableLocation(
-            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/MacWallpaperEngine.app")))
-        XCTAssertFalse(AppUpdateInstaller.isInstallableLocation(URL(fileURLWithPath: "/tmp/MacWallpaperEngine.app")))
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/WallpaperMachine.app")))
+        XCTAssertFalse(AppUpdateInstaller.isInstallableLocation(URL(fileURLWithPath: "/tmp/WallpaperMachine.app")))
     }
 
     func testInstallerAcceptsOnlyThisAppsBundle() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("mwe-update-validate-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let app = root.appendingPathComponent("MacWallpaperEngine.app")
+        let app = root.appendingPathComponent("WallpaperMachine.app")
         try FileManager.default.createDirectory(at: app.appendingPathComponent("Contents/MacOS"), withIntermediateDirectories: true)
-        try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "app.mac-wallpaper-engine"], format: .xml, options: 0)
+        try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "app.wallpapermachine"], format: .xml, options: 0)
             .write(to: app.appendingPathComponent("Contents/Info.plist"))
-        try Data("binary".utf8).write(to: app.appendingPathComponent("Contents/MacOS/MacWallpaperEngine"))
+        try Data("binary".utf8).write(to: app.appendingPathComponent("Contents/MacOS/WallpaperMachine"))
         XCTAssertEqual(try AppUpdateInstaller.findApplication(in: root).path, app.path)
         try AppUpdateInstaller.validate(app)
 
@@ -214,15 +214,15 @@ private final class Fixture {
     func release(version: String, assets: [GitHubReleaseAsset]? = nil) -> GitHubRelease {
         let defaultAssets = [
             GitHubReleaseAsset(
-                name: "MacWallpaperEngine-\(version)-arm64.zip",
-                downloadURL: URL(string: "https://github.com/bobbyhuang-dev/mac-wallpaper-engine/releases/download/v\(version)/MacWallpaperEngine-\(version)-arm64.zip")!,
+                name: "WallpaperMachine-\(version)-arm64.zip",
+                downloadURL: URL(string: "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v\(version)/WallpaperMachine-\(version)-arm64.zip")!,
                 size: 1_000,
                 digest: nil
             )
         ]
         return GitHubRelease(
             version: SemanticVersion(version)!,
-            htmlURL: URL(string: "https://github.com/bobbyhuang-dev/mac-wallpaper-engine/releases/tag/v\(version)")!,
+            htmlURL: URL(string: "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/tag/v\(version)")!,
             prerelease: false,
             assets: assets ?? defaultAssets
         )
@@ -338,7 +338,7 @@ private extension AppUpdateTests {
             return "{\(fields)}"
         }.joined(separator: ",")
         return Data("""
-        {"tag_name":"\(tag)","html_url":"https://github.com/bobbyhuang-dev/mac-wallpaper-engine/releases/tag/\(tag)","prerelease":\(prerelease),"assets":[\(assetJSON)]}
+        {"tag_name":"\(tag)","html_url":"https://github.com/bobbyhuang-dev/WallpaperMachine/releases/tag/\(tag)","prerelease":\(prerelease),"assets":[\(assetJSON)]}
         """.utf8)
     }
 }

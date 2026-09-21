@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// The panel has to keep three things apart for both audio and media: what the
 /// user switched on, whether anything is actually being delivered, and whether

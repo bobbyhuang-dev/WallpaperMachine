@@ -1,7 +1,7 @@
 import WebKit
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Page identity, committed-state replay and the restart budget: the three ways
 /// a web wallpaper used to rebuild or lose itself. Offscreen `WKWebView`s only;

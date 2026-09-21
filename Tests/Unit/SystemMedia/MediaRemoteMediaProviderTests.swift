@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// The now-playing provider's state machine, driven entirely by injected fakes.
 ///

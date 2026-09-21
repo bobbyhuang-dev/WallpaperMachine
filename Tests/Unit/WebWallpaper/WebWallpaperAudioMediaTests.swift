@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// The two host-side machines behind the author APIs: the single audio poller
 /// shared by every display, and the media relay that decides what a page is

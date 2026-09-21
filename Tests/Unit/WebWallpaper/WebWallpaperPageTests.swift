@@ -1,7 +1,7 @@
 import WebKit
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Exercises the Wallpaper Engine host protocol against a real offscreen
 /// `WKWebView`: module scripts from the project folder, property and pause

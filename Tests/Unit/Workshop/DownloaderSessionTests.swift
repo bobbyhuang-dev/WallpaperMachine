@@ -1,7 +1,7 @@
 import Darwin
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Saved Steam sessions: persistence across relaunch, account switching and credential hygiene.
 @MainActor

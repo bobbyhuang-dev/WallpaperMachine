@@ -3,7 +3,7 @@ import ImageIO
 import UniformTypeIdentifiers
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 final class WorkshopThumbnailCacheTests: XCTestCase {
     private var root: URL!

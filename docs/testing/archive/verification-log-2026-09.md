@@ -15,6 +15,31 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — The stuck transport button: a press made it too small to catch its own release
+
+Reported with a screenshot: the next button sits flattened to a dash and the player never skips. Rendering the wallpaper offscreen showed all three buttons drawing correctly, so the cause was runtime state, not content.
+
+- The scene sets this button scale scripts hoScale to 0.1, so a held button shrinks to a tenth. It only restores itself from cursorUp
+- SceneRuntimeContext::DispatchCursorFrameEvents decided who hears a release by hit-testing at release time. The press shrank the button out from under the cursor, the hit test failed, cursorUp was skipped, and hover stayed latched -- the button can never come back
+- Fixed by capturing the press: a release now goes to whichever scripted values and scene scripts took that button down, wherever the cursor has since gone. Anything that did not take the press keeps the old rule
+- New AButtonThatShrinksWhileHeldStillGetsItsRelease reproduces it end to end through the parser and cursor dispatch: fails without the fix (button stuck at 0.1), passes with it
+- Also added APressedTransportButtonComesBackWhenItIsReleased, driving the wallpaper own scale script with the scene real hoScale of 0.1 and speed of 25
+- Offscreen render of the wallpaper with media events confirms all three transport buttons draw correctly, so nothing was wrong with the asset, model, material or scripts
+- scripts/test.py 534 passed / 0 failed / 11 skipped of 545; scene_schema_tests 80 passed with the two pre-existing pointer-commit timeouts; check_renderer.py 10 cases pixels_equal=True
+- Release rebuilt after the fix
+
+## 2026-09-21 — Why the transport buttons did nothing, and what the progress bar actually is
+
+Reported: the transport buttons still have no effect, and the progress bar cannot be dragged. Both were investigated against the installed wallpaper rather than assumed.
+
+- Cause of the dead buttons: `~/Library/.../wallpapers/3280146735.json` has `property_overrides: {}` and all three usershortcut values are empty, so dispatch correctly skipped every press. Defaulting to no action left buttons named play, next and previous doing nothing until their user found the picker
+- An unbound usershortcut now starts on the action its own name states; a name that says nothing stays unbound; an authored value is never overwritten. The override still wins and dispatch still carries the value, not the name (`unbound_transport_shortcuts_start_on_the_action_they_are_named_for`)
+- The progress bar has no pointer logic at all -- objects 187 and 370 carry no scripts, and 366 only moves its origin from `mediaTimelineChanged`. It was never draggable in any client; the question is whether it advances
+- New `TheProgressFillFollowsAPublishedTimeline` drives the wallpaper own origin script: a published timeline does place the fill exactly (-637 + position/duration * 620), keeps tracking, and does not jitter on a repeat
+- It also pins an upstream quirk: the author places the fill before recording the duration it divides by, so the first event divides by an unset `dur` and puts the layer at infinity until the next one arrives
+- scripts/test.py 534 passed / 0 failed / 11 skipped of 545; wallpaper-bridge 320; scene_schema_tests 78 passed with the two pre-existing pointer-commit timeouts
+- Release built and checked: media:playpause / media:previous / next_user_shortcut all present in the delivered binary
+
 ## 2026-09-21 — Power regression: two defects the restored dispatch and its guard exposed
 
 - Restoring CMD_SET_RENDER_SCALE dispatch made MetalRender::ApplyRenderScale reachable for the first time, and it had no same-value guard: it set scene.render_scale and called compile() unconditionally, which begins with releaseGraph() - video.release, images.clear, pipelines. apply_effective_render_scale pushes the scale to every open scene on scene creation and on every SetPowerSource/InitialFrameReady while the battery profile is on, and its own comment says it exists so a dragged quality control does not reparse the project or reopen its video. A Metal-preferred user would have taken a full rebuild plus video reopen on each plug and unplug at an unchanged value.
@@ -32,7 +57,7 @@ renderer behaviour and known-failing tests into
 - That promotion surfaced a second, pre-existing gap the earlier log check had missed because the target was not being recompiled: owe_scene_wallpaper_video_path did not name SceneVideoPath::Nv12ConvertedPreparing and reached OWE_SCENE_VIDEO_PATH_NONE by falling through. NONE is documented as covering a path that has drawn no frame yet, so the case is written out explicitly with the same result - behaviour unchanged, Metal-only in any case.
 - Two panel races fixed rather than documented as tolerable, since docs/testing/README.md already forbids that trade: the first-run guide settles with panel.quiet() before its 50 ms measurement window, and the top-bar layout test waits for window.innerWidth to reach the new frame width instead of reading getBoundingClientRect mid-reflow. The README paragraph now teaches both techniques and the revert-to-confirm-ownership check instead of granting an exemption.
 - Gates green: scripts/check_renderer.py all binaries 0, pixels equal, 0 diagnostics; scripts/test.py 531 passed / 0 failed / 11 skipped.
-- Release built 16:51: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval, the shared-ownership ImageSlotsRef constructor and handle_SET_RENDER_SCALE. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
+- Release built 16:51: build/Build/Products/Release/WallpaperMachine.app with Contents/Extensions/WallpaperMachineExtension.appex; both binaries carry SetMinInterval, the shared-ownership ImageSlotsRef constructor and handle_SET_RENDER_SCALE. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
 
 ## 2026-09-21 — Power regression: render scale dispatch restored, panel races fixed, gate green
 
@@ -43,7 +68,7 @@ renderer behaviour and known-failing tests into
 - Two panel tests were racing on wall clock, not on shared state. testFirstRunGuideCovers... latched a snapshot count, submitted a form and read the count 50ms later, counting any push already in flight; it settles with panel.quiet() first now. testTopBarKeepsTheRepositoryLink... measured getBoundingClientRect immediately after setFrameSize, reading the pre-reflow layout (744 vs 760, one whole reflow); it now waits for window.innerWidth to reach the new width.
 - The first of those was wrongly attributed to load at first. A control gate with only the SceneWallpaper dispatch hunk reverted still failed the same assertion, which exonerated the change and identified the test. An 11-failure gate earlier was separately explained by load average 165 and a 174s run versus the usual 30s.
 - Gate now green and stable: scripts/test.py 531 passed / 0 failed / 11 skipped, three consecutive runs (39s, 28s, 28s). check_renderer.py green after the C++ change: all binaries 0, pixels equal, 0 diagnostics.
-- Release rebuilt 16:26: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval, the shared-ownership ImageSlotsRef constructor and handle_SET_RENDER_SCALE. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
+- Release rebuilt 16:26: build/Build/Products/Release/WallpaperMachine.app with Contents/Extensions/WallpaperMachineExtension.appex; both binaries carry SetMinInterval, the shared-ownership ImageSlotsRef constructor and handle_SET_RENDER_SCALE. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
 
 ## 2026-09-21 — Power regression: advisory round 5 closeout
 
@@ -52,7 +77,7 @@ renderer behaviour and known-failing tests into
 - Stability: SceneMediaSinkTests run six consecutive times, 6 passed each time. Neither new test contains a pause-then-resume sequence, so the replay nondeterminism that made the earlier combined test flaky does not arise.
 - Renderer sources unchanged since the round-four gate, so check_renderer.py was not re-run; that run remains current evidence (all binaries 0, pixels equal, 0 diagnostics).
 - Gate: scripts/test.py 531 passed / 0 failed / 11 skipped.
-- Release rebuilt 15:33: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor, the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
+- Release rebuilt 15:33: build/Build/Products/Release/WallpaperMachine.app with Contents/Extensions/WallpaperMachineExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor, the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
 
 ## 2026-09-21 — Power regression: advisory round 4 - legal readback, ordered deliveries, delivery epoch
 
@@ -62,7 +87,7 @@ renderer behaviour and known-failing tests into
 - Two Swift tests replace the earlier over-specified one, after the real behaviour showed [1,1,1,2] (the extra 1s are legitimate resume replays, not a defect): testASlowCoverIsNotOvertakenByTheOneThatReplacedIt and testADeliveryRetiredByAPauseDoesNotReportItselfWhenItReturns. Removing the chain fails the first ('a later cover overtook the one still being applied: [2]'); removing the post-await epoch check fails the second ('a delivery retired by a pause still reported itself').
 - Test helper poll() now takes a label, so a timeout names the condition instead of reporting an anonymous 2s failure.
 - Gates: scripts/test.py 531 passed / 0 failed / 11 skipped; scripts/check_renderer.py all binaries 0, pixels equal, 0 diagnostics, including the reworked PlaybackGPU cover test.
-- Release rebuilt 14:45: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
+- Release rebuilt 14:45: build/Build/Products/Release/WallpaperMachine.app with Contents/Extensions/WallpaperMachineExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
 
 ## 2026-09-21 — Power regression: advisory round 3 - web delivery, listener identity, pixel-level lifetime proof
 
@@ -75,7 +100,7 @@ renderer behaviour and known-failing tests into
 - Corrected an earlier claim in that test: whether the outgoing image object survives is order-dependent and is no longer asserted. When the current slot refreshes first, nothing references the old image and it is correctly released while the previous slot takes an equivalent upload. What holds in both orders is what the two slots show.
 - Found, reported, NOT changed: RenderHandler::onMessageReceived has no CASE_CMD(SET_RENDER_SCALE) (SceneWallpaper.cpp:488-506), so CMD_SET_RENDER_SCALE posted at line 1877 never reaches handle_SET_RENDER_SCALE and m_render_scale keeps its 1.0 default. Pre-existing (git diff touches no CASE_CMD line). This corrects the earlier report: P1 item 5 is not 'already a no-op in Vulkan' but unreachable in the scene path. Enabling it changes rendering for anyone with a non-default internal quality and needs visual acceptance, so it is left for the user's call.
 - Gates: scripts/test.py 529 passed / 0 failed / 11 skipped; scripts/check_renderer.py all binaries 0, pixels equal, 0 diagnostics; cargo test -p wallpaper-bridge 319 passed.
-- Release rebuilt 14:17: build/Build/Products/Release/MacWallpaperEngine.app plus Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor, the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
+- Release rebuilt 14:17: build/Build/Products/Release/WallpaperMachine.app plus Contents/Extensions/WallpaperMachineExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor, the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
 
 ## 2026-09-21 — Power regression follow-up: texture lifetime, request handover, media gating completeness
 
@@ -88,7 +113,7 @@ renderer behaviour and known-failing tests into
 - Identical cover is now a true no-op: SYSTEM_MEDIA_ARTWORK is excluded from the blanket per-command requestFrame, and its handler requests a frame only when PublishSystemMediaArtwork reports the pixels moved.
 - upstream/provenance.json updated for this round (recorded 2026-09-21); renderer and sceneEngine notes prepended, revisions, licences and prior notes preserved.
 - Gates after all fixes: scripts/test.py 528 passed / 0 failed / 11 skipped; scripts/check_renderer.py all binaries 0, 10 pixel cases equal, 0 diagnostics, timer_tests 27/27, playback_gpu_test including the new lifetime test; cargo test -p wallpaper-bridge 319 passed.
-- Release rebuilt: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex (13:54). Both binaries contain SetMinInterval and the shared-ownership ImageSlotsRef constructor; the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
+- Release rebuilt: build/Build/Products/Release/WallpaperMachine.app with Contents/Extensions/WallpaperMachineExtension.appex (13:54). Both binaries contain SetMinInterval and the shared-ownership ImageSlotsRef constructor; the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
 
 ## 2026-09-21 — Power regression: frame ceiling, media consumers, cover updates
 
@@ -102,7 +127,7 @@ renderer behaviour and known-failing tests into
 - Counter wiring checked: Vulkan records OWE_RC_RENDER_SUBMISSIONS and OWE_RC_GPU_COMPLETIONS (VulkanRender.cpp:859/879/934/940); Metal records only OWE_RC_PRESENT_REQUESTS (MetalRender.mm:4226), so those two read 0 on Metal because they are unwired, not because the GPU is idle. Not added: no claim this round depends on them.
 - Tests: check_renderer.py all green (timer_tests 26/26 incl. 2 new, static_subgraph_cache_test, render_scale_test, playback_gpu_test, 10 pixel cases equal, 0 diagnostics); cargo test -p wallpaper-bridge 318 passed incl. new paused/suspended consumer test; media_thumbnail_texture_smoke 15 passed incl. new identical-cover test; scripts/test.py 526 passed / 0 failed / 11 skipped (first run hit a known-flaky ControlPanelShellTests power-probe timing assert, passed alone and on rerun).
 - Offscreen probe on the user's own wallpaper 3799253558: 249 passes (247 executed + 2 reused), 7 cacheable targets, 1 pinned - so the no-pin early-out does not fire for this scene, while the removed per-cover rebuild was re-preparing all 249 passes.
-- Release build OK: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries contain SetMinInterval and the app exports system_media_consent_handles. Not run: app launch, wallpaper change, screenshots, audio capture, power measurement - no watt or percentage claim.
+- Release build OK: build/Build/Products/Release/WallpaperMachine.app with Contents/Extensions/WallpaperMachineExtension.appex; both binaries contain SetMinInterval and the app exports system_media_consent_handles. Not run: app launch, wallpaper change, screenshots, audio capture, power measurement - no watt or percentage claim.
 
 ## 2026-09-21 — Installed page filters with Discover's sidebar boxes
 
@@ -140,7 +165,7 @@ python3 scripts/build.py --configuration Release, following the full gate.
 
 - Confirmed in the delivered binary: the bound transport value and the shortcut option label are present, and the reverted video-picker title is gone
 - Owning docs updated: media-integration.md no longer says transport is unimplemented, build.md records why the deployment pin is kept out of cargo, renderer.md lists the three new probe knobs. Link check clean apart from two pre-existing breaks in docs/archive/implementation-progress.md (f94ab32, not this work)
-- Delivered: `build/Build/Products/Release/MacWallpaperEngine.app` — quit and reopen the app to pick it up
+- Delivered: `build/Build/Products/Release/WallpaperMachine.app` — quit and reopen the app to pick it up
 
 ## 2026-09-21 — Corrected: two sound claims were wrong, and the video picker promised what cannot work
 
@@ -156,7 +181,7 @@ Three things in the entries below do not survive checking. The sound volume was 
 python3 scripts/build.py --configuration Release, after the full gate.
 
 - Confirmed in the delivered binary: the bound transport value, the picker title for a video-accepting project, and the shortcut option label are all present, and the bundled WebUI matches WebUI/ file for file
-- Delivered: `build/Build/Products/Release/MacWallpaperEngine.app` — quit and reopen the app to pick it up
+- Delivered: `build/Build/Products/Release/WallpaperMachine.app` — quit and reopen the app to pick it up
 
 ## 2026-09-21 — The missing background video was a picker that only ever offered images
 
@@ -181,7 +206,7 @@ The reported throw from thisScene.getLayer('button_press').play() does not repro
 python3 scripts/build.py --configuration Release, the first full renderer release build since the deployment-target fix -- which is what made it possible at all.
 
 - Confirmed the delivered app carries the change: the binary contains the bound-action value and the bridge call, the bundled WebUI matches WebUI/ file for file, and the bundled zh-Hans catalogue has the new option
-- Delivered: `build/Build/Products/Release/MacWallpaperEngine.app` — quit and reopen the app to pick it up
+- Delivered: `build/Build/Products/Release/WallpaperMachine.app` — quit and reopen the app to pick it up
 
 ## 2026-09-21 — A bound wallpaper button now reaches a real media player
 
@@ -367,7 +392,7 @@ std140 pads every array element to 16 bytes — what the host packs and the refl
 - Native: welcomeSeen persisted in UserDefaults (WebPanelController.welcomeSeenKey), snapshot field welcomeSeen, action welcomeSeen. Both links pass allowedExternalURL.
 - Localization: zh-Hans catalog extended; scripts/tests/test_panel_localization.py passes.
 - python3 scripts/test.py (full gate, once): 520 passed, 0 failed, 11 skipped (the usual opt-in media/network skips). New test ControlPanelShellTests/testFirstRunWelcomeShowsOnceLinksToSteamAndReturnsFromSettings.
-- Panel suites rerun after a test-only isolation fix (Shell/Library/Discover/Sync: 30 passed): every WebPanelController in tests now receives the test's own UserDefaults suite. Before that, test runs wrote welcomeSeen=1 into the real app.mac-wallpaper-engine domain; the key was deleted again with defaults delete.
+- Panel suites rerun after a test-only isolation fix (Shell/Library/Discover/Sync: 30 passed): every WebPanelController in tests now receives the test's own UserDefaults suite. Before that, test runs wrote welcomeSeen=1 into the real app.wallpapermachine domain; the key was deleted again with defaults delete.
 - Visual: offscreen WKWebView.takeSnapshot captures (throwaway test, deleted) at 760×560 dark en, 960×640 dark zh-Hans, 1240×800 light en; one overflow at the minimum window fixed by widening the card and relaxing the step measure. impeccable detect: no findings.
 - Not done: no Release build, no desktop run; the entrance animation and real-window focus were not observed live.
 
@@ -396,7 +421,7 @@ Agent-cost pass. `scripts/lib/xcode.py` streams xcodebuild/cargo output to `arti
 Follow-up to the tiered gate. Test classes now run in parallel worker processes
 (`-parallel-testing-enabled YES`, `--serial` to diagnose interference); the two
 `testLive…` Workshop cases became opt-in behind
-`MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1`; `scripts/test.py` keeps the five newest
+`WALLPAPER_MACHINE_NETWORK_TESTS=1`; `scripts/test.py` keeps the five newest
 result bundles; `scripts/build.py` also uses `xcodegen --use-cache`. Coverage
 inventory moved to `docs/testing/coverage.md`, `docs/architecture.md` gained a
 section index, and the Release build is now on request
@@ -407,7 +432,7 @@ section index, and the Release build is now on request
 - `python3 scripts/test.py` — Python script tests OK; native 529 tests, 518 passed,
   11 skipped, 0 failures, 1m12 wall clock (was 2m41 serial). Three parallel runs,
   no interference; skips are 9 asset/media + the 2 live Steam cases.
-- `MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1 python3 scripts/test.py --only WorkshopTests`
+- `WALLPAPER_MACHINE_NETWORK_TESTS=1 python3 scripts/test.py --only WorkshopTests`
   — 7 passed, 0 skipped; without the variable, 5 passed, 2 skipped.
 - No Release build: tooling and docs only, no delivery requested.
 
@@ -439,7 +464,7 @@ choice; they now pass `AppLanguageStore.english()` (`Tests/Unit/Support/`).
   9 skipped, 0 failures.
 - `python3 scripts/build.py --swift-only --configuration Release` — exit 0,
   `** BUILD SUCCEEDED **`; bundled `Contents/Resources/WebUI/` matches `WebUI/`.
-  Delivered `build/Build/Products/Release/MacWallpaperEngine.app`; not launched.
+  Delivered `build/Build/Products/Release/WallpaperMachine.app`; not launched.
   The rendered Chinese button was not screenshotted (no desktop run).
 
 ## 2026-09-20 — In-app language picker, per-language panel catalogs, registry checks
@@ -568,7 +593,7 @@ composite put it at x ∈ [0, 312] — never at the layer's world x.
   `** BUILD SUCCEEDED **`, twice: once for the re-parenting fix (binary
   14:43:10) and again after the instance-colour fix (binary 15:05:28, newer
   than every source edit in this entry). Delivered
-  `build/Build/Products/Release/MacWallpaperEngine.app`. The app was not
+  `build/Build/Products/Release/WallpaperMachine.app`. The app was not
   launched and no desktop state was changed.
 - Still open on this wallpaper: `engine.openUserShortcut` (transport buttons),
   the `getLayer(…).play()` throw for its press sounds, the per-frame
@@ -663,7 +688,7 @@ by itself proof that the user's cover square fills in.
   `scripts/test.py` nor `scripts/check_renderer.py` runs them.
 - `python3 scripts/build.py --configuration Release` — exit 0,
   `** BUILD SUCCEEDED **`. Delivered
-  `build/Build/Products/Release/MacWallpaperEngine.app`; its binary (13:37:33)
+  `build/Build/Products/Release/WallpaperMachine.app`; its binary (13:37:33)
   links a `libwescene-renderer.a` rebuilt at 13:35:27, after the parser edit at
   13:34:04. The app was not launched, and no wallpaper, display or audio state
   was changed.
@@ -691,7 +716,7 @@ session was started.
   directory the same binary passed 11/11.
 - `python3 scripts/build.py --configuration Release` — exit 0,
   `** BUILD SUCCEEDED **`. Delivered
-  `build/Build/Products/Release/MacWallpaperEngine.app` (Mach-O mtime
+  `build/Build/Products/Release/WallpaperMachine.app` (Mach-O mtime
   2026-09-20 15:00). Bundled `Contents/Resources/WebUI/panel.js` matches
   `WebUI/panel.js`. The binary contains `ffd3c76`,
   `submit_system_media_event`, `apply_system_media_artwork`,
@@ -726,7 +751,7 @@ Now Playing session was started.
   `cargo test -p wallpaper-bridge --release --lib` 316 passed.
 - `python3 scripts/build.py --configuration Release` — exit 0,
   `** BUILD SUCCEEDED **`. Delivered
-  `build/Build/Products/Release/MacWallpaperEngine.app`. Bundled
+  `build/Build/Products/Release/WallpaperMachine.app`. Bundled
   `Contents/Resources/WebUI/panel.js` matches `WebUI/panel.js`. The binary
   contains `submit_system_media_event`, `apply_system_media_artwork`,
   `system_media_scene_handles`, `$mediaThumbnail`, `$mediaPreviousThumbnail`,
@@ -836,7 +861,7 @@ the end.
   is authored leftovers, not a binding failure.
 - `python3 scripts/build.py --configuration Release` — exit 0, `** BUILD
   SUCCEEDED **`. Delivered
-  `build/Build/Products/Release/MacWallpaperEngine.app` carries
+  `build/Build/Products/Release/WallpaperMachine.app` carries
   `NSAppleEventsUsageDescription` in its `Info.plist` and contains
   `screenResolution`, `mediaPreviousThumbnail`, `systemMediaSceneHandles` and
   `applescript-now-playing`. No desktop run, no Peekaboo, no `--ui`; the app
@@ -910,7 +935,7 @@ check after quit/reopen.
   pump now-playing, so media script smoke on this package is host-side only.
 - `python3 scripts/build.py --configuration Release` — exit 0, `** BUILD
   SUCCEEDED **`. Delivered binary
-  `build/Build/Products/Release/MacWallpaperEngine.app` (Mach-O mtime 2026-09-20
+  `build/Build/Products/Release/WallpaperMachine.app` (Mach-O mtime 2026-09-20
   01:40). The app was not launched.
 
 ## 2026-09-20 — Leon rendering and system music information
@@ -954,7 +979,7 @@ even when the event's colors are unchanged.
   These are offscreen images, not desktop captures or proof of native Metal
   appearance or live Spotify/Apple Music/browser/local-player behavior.
 - `python3 scripts/build.py --configuration Release`: **passed** after the
-  final renderer change; app at `build/Build/Products/Release/MacWallpaperEngine.app`.
+  final renderer change; app at `build/Build/Products/Release/WallpaperMachine.app`.
   `codesign --verify --deep --strict` **passed**. App was not launched/restarted.
 - Scoped WebUI design detector returned **no findings**; non-generated
   `git diff --check` passed. Generated bindings were regenerated by the build
@@ -999,7 +1024,7 @@ are left unbound the same way. No default texture is bound.
   executed, 491 passed, 9 skipped, 0 failed.
 - `python3 scripts/build.py --configuration Release` — exit 0,
   `** BUILD SUCCEEDED **`. App:
-  `build/Build/Products/Release/MacWallpaperEngine.app`. Quit and reopen to
+  `build/Build/Products/Release/WallpaperMachine.app`. Quit and reopen to
   pick it up; nothing was launched or installed here.
 
 No desktop run, no screenshots, no power. Pixel-byte deltas are first vs last
@@ -1022,7 +1047,7 @@ displayed, installed, or compared with Wallpaper Engine.
 - Installed packages 3226487183 / 3680252478 / 3800629364 were read in place
   through `metal_scene_draw_smoke --gtest_filter=MetalSceneDraw.LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBackend`
   with `WE_TEST_METAL_PROJECTS` (colon-separated `project.json` paths) and
-  `WE_TEST_ASSETS` at `~/Library/Application Support/mac-wallpaper-engine/SceneAssets`.
+  `WE_TEST_ASSETS` at `~/Library/Application Support/WallpaperMachine/SceneAssets`.
   Exact printed lines: `3226487183: Compatibility after prepare -- an image a layer needs could not be loaded: `;
   `3680252478: Compatibility after prepare -- an image a layer needs could not be loaded: `;
   `3800629364: Compatibility after prepare -- an image a layer needs could not be loaded: `.
@@ -1267,7 +1292,7 @@ choice and no default changed. No power measurement was taken.
   is not read by the model parser, so it is drawn in its bind pose on both
   renderers.
 - The gate's `xcodegen generate` reordered one target line in
-  `mac-wallpaper-engine.xcodeproj/project.pbxproj`; nothing in `project.yml`
+  `WallpaperMachine.xcodeproj/project.pbxproj`; nothing in `project.yml`
   changed and the file was not hand-edited.
 - Not run: `python3 scripts/test.py --ui`, any desktop, window, screenshot,
   wallpaper change, lock screen, audio hardware or power measurement. Nothing
@@ -1327,7 +1352,7 @@ scene idling still follows its own off-by-default setting.
   `ControlPanelLayoutTests/testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes`
   (overflow 52), unrelated to this round and unchanged by it.
 - `python3 scripts/build.py --configuration Release` — BUILD SUCCEEDED, app and
-  extension, delivered at `build/Build/Products/Release/MacWallpaperEngine.app`.
+  extension, delivered at `build/Build/Products/Release/WallpaperMachine.app`.
 
 Measured rather than assumed, before any change was made, with the round's own
 fixtures: a scene with one static text layer reported `DynamicMesh` from the
@@ -1378,7 +1403,7 @@ existing string catalog. Final refinements distinguish “No scaling” from fil
   the relative `CLAUDE.md` symlink check passed.
 - `python3 scripts/build.py --swift-only --configuration Release` —
   **BUILD SUCCEEDED**. The delivered bundle at
-  `build/Build/Products/Release/MacWallpaperEngine.app` contains byte-identical
+  `build/Build/Products/Release/WallpaperMachine.app` contains byte-identical
   copies of all four localized WebUI files and native `zh-Hans` strings.
 - No renderer changes were made for localization; renderer/corpus checks were
   not run. No desktop interaction, app launch/restart, screenshot, permission
@@ -1458,7 +1483,7 @@ admits six animations at a time instead of two.
   with "Interrupted system call … build/Build/Products/Debug"). The Python
   suite and XcodeGen passed.
 - Same native suite via `xcodebuild … -derivedDataPath <scratch>
-  -only-testing:MacWallpaperEngineTests test` — 482 passed / 9 skipped /
+  -only-testing:WallpaperMachineTests test` — 482 passed / 9 skipped /
   9 failed. `WorkshopThumbnailCacheTests`, `WorkshopStoreTests`,
   `WebPanelAssetsTests` and
   `testDiscoverTilesRevealTheAnimatedPreviewOnlyWhileItIsBrightWithoutWindow`
@@ -1534,7 +1559,7 @@ is still the default and direct plane sampling is still off by default.
   `ControlPanelLayoutTests/testDiscoverGridReportsFullRowsAsPageSizeAndFollowsResizes`
   (overflow 52), unrelated to this round and unchanged by it.
 - `python3 scripts/build.py --configuration Release` — **BUILD SUCCEEDED**.
-  Delivered at `build/Build/Products/Release/MacWallpaperEngine.app`, verified to
+  Delivered at `build/Build/Products/Release/WallpaperMachine.app`, verified to
   contain the round's code (`nv12_converted_preparing`, the optional-variant
   queue label, the dynamic-mesh gate's reason text) and a bundled `settings.js`
   carrying the new video-path label.
@@ -1616,7 +1641,7 @@ default renderer.
   `_we_SampleVideoNv12_`, `nv12_direct`, `cannot be sampled as planes`) and the
   bundled `WebUI/settings.js` contains the new switch, its explainer and the
   scene optimisation **In force now** row. Delivered at
-  `build/Build/Products/Release/MacWallpaperEngine.app`.
+  `build/Build/Products/Release/WallpaperMachine.app`.
 - One environment trap worth recording: `metal_scene_draw_smoke` needs FFmpeg to
   encode its media, and this machine has a second FFmpeg under
   `/opt/homebrew/include` whose headers are two major versions older than the
@@ -1672,7 +1697,7 @@ built; the blocker is recorded in the progress document.
   contain this round's strings (`PRENDER_SPRITE`, "the scene draws particle
   trails"), and the bundled `WebUI/settings.js` contains the rewritten Scene
   optimisation and Scene renderer copy. Delivered at
-  `build/Build/Products/Release/MacWallpaperEngine.app`.
+  `build/Build/Products/Release/WallpaperMachine.app`.
 - All three gates above were re-run after the last source change (limiting
   multi-slot image import to sprite sheets), so they describe the delivered
   tree rather than an earlier one.
@@ -2205,7 +2230,7 @@ in the progress doc was corrected.
 - `cargo test --release --workspace` (from `upstream/renderer`, with
   `scripts/build.py`'s environment and `CARGO_TARGET_DIR` unset): pass,
   including `wallpaper-bridge` **264** with `native_video_routing` at 19.
-- `MAC_WALLPAPER_ENGINE_MEDIA_TESTS=1` `NativeVideoPlayerMediaTests`: **9/9**
+- `WALLPAPER_MACHINE_MEDIA_TESTS=1` `NativeVideoPlayerMediaTests`: **9/9**
   with real decode — 2 observed loop wraps, poster obtained from the playing
   item after both wraps with 0 image-generator fallbacks, concurrent requests
   coalesced, paused poster returned without resuming, item create/release
@@ -2216,7 +2241,7 @@ in the progress doc was corrected.
   `admissionKey`, the three-argument `rejectNativeVideo`, and
   `videoConversionLiveBytes` / `videoConversionPeakLiveBytes`.
 - `python3 scripts/build.py --configuration Release`: **BUILD SUCCEEDED**, app
-  and embedded `MacWallpaperExtension.appex`.
+  and embedded `WallpaperMachineExtension.appex`.
 
 A second review pass over this round's own work found fifteen further defects in it
 and they were fixed before yielding: the conversion domain could hand the same
@@ -2359,7 +2384,7 @@ removal are unchanged.
   download. Row text, the enabled/disabled `logOutSteam` button and the
   disclosure wording were checked; clicking dispatched `["logOutSteam", {}]`.
 - `python3 scripts/build.py --swift-only --configuration Release`: BUILD
-  SUCCEEDED; `build/Build/Products/Release/MacWallpaperEngine.app` bundles the
+  SUCCEEDED; `build/Build/Products/Release/WallpaperMachine.app` bundles the
   updated `WebUI/settings.js` (`logOutSteam` present).
 - Not exercised: the native confirm sheet and a real SteamSession removal from
   the running app (no desktop run requested); the service path is covered by
@@ -2415,7 +2440,7 @@ in `WebUI/panel.css` (`.dialog-guide`, `.dialog-steps`). Documented in
 - `python3 scripts/test.py`: Python 50 tests OK (1 + 24 + 4 + 10 + 11),
   XcodeGen regenerated, native suite 336 passed, 0 failed, 0 skipped.
 - `python3 scripts/build.py --swift-only --configuration Release`: succeeded;
-  `build/Build/Products/Release/MacWallpaperEngine.app` carries the new dialog
+  `build/Build/Products/Release/WallpaperMachine.app` carries the new dialog
   copy (bundled `panel.js` contains the Steam Client step).
 - Headless preview (Chrome `--headless=new --screenshot` of a scratch page that
   reuses the dialog functions from `panel.js` and the real `panel.css`) showed
@@ -2507,7 +2532,7 @@ results are from the rebased tree.
   `shader_cache_metadata_test` 1, `text_object_runtime_test` 60 with the 2
   opt-in corpus cases skipped. The ten generated GPU cases and the reload
   cycles **did not run**: the shared
-  `~/Library/Application Support/mac-wallpaper-engine/SceneAssets` directory is
+  `~/Library/Application Support/WallpaperMachine/SceneAssets` directory is
   absent on this machine (the app data went with the earlier uninstall), so
   every probe exited 1 at asset mount. Environmental, not a renderer result;
   re-run once the app has restored its shared assets.
@@ -2582,7 +2607,7 @@ Discover pages` with a `release: minor` line and pushed to `main`.
 - Version workflow: bumped `0.3.2` -> `0.4.0` (build 15), committed
   `chore: bump version to 0.4.0`, pushed `v0.4.0`; the called Build job
   succeeded and GitHub Release `v0.4.0` carries
-  `MacWallpaperEngine-0.4.0-arm64.zip` as its only asset.
+  `WallpaperMachine-0.4.0-arm64.zip` as its only asset.
 - Local checkout was re-cloned from `origin/main` at the bump commit after an
   uninstaller (Pearcleaner) moved the working copy and its `build/` output to
   the Trash; `python3 scripts/build.py --configuration Release` on the fresh
@@ -2687,7 +2712,7 @@ runtime, visual and power verification tracked separately:
   regenerated with `rendererCounters` and `setRendererCountersEnabled`.
 - `python3 scripts/build.py --configuration Release`: **BUILD SUCCEEDED**, app
   and embedded extension, at
-  `build/Build/Products/Release/MacWallpaperEngine.app`. Not installed, not
+  `build/Build/Products/Release/WallpaperMachine.app`. Not installed, not
   launched, and `/Applications` was not touched.
 - Counter-example checked by running it, not by assertion: with
   `FrameTimer::SuspensionThreshold` temporarily cut back to the old fixed 5 s
@@ -3147,7 +3172,7 @@ renderer label; the bridge and persisted state are untouched.
   UUID) and `testDisplayTitlesUseTheSystemNameEverywhereTheRendererLabelAppears`.
 - `python3 scripts/build.py --swift-only --configuration Release` after the
   fix: BUILD SUCCEEDED, delivered to
-  `build/Build/Products/Release/MacWallpaperEngine.app`. The user's own
+  `build/Build/Products/Release/WallpaperMachine.app`. The user's own
   Release build of the first cut still showed the vendor/model label, which
   is what exposed the id mismatch.
 - Not run: a desktop check of the rebuilt panel; the name shown depends on
@@ -3693,7 +3718,7 @@ General gained *Keep windows in place when clicking the wallpaper*, which writes
 Verified:
 
 - `python3 scripts/test.py`: Python script tests passed; `xcodegen generate`;
-  `MacWallpaperEngineTests` **232 passed**, 0 failed, 0 skipped (~90 s). New
+  `WallpaperMachineTests` **232 passed**, 0 failed, 0 skipped (~90 s). New
   `WebWallpaperMouseRoutingTests` (desktop-only routing, press/drag/release
   continuity per button, single hover exit, cross-display exit) and
   `WebWallpaperPageTests.testForwardedPointerEventsReachThePageWithoutANativeContextMenu`
@@ -3718,7 +3743,7 @@ Verified:
   on this build; no desktop run was authorized and the preference was not
   written during development.
 - `python3 scripts/build.py --swift-only --configuration Release`: BUILD
-  SUCCEEDED; delivered `build/Build/Products/Release/MacWallpaperEngine.app`
+  SUCCEEDED; delivered `build/Build/Products/Release/WallpaperMachine.app`
   with the changes above (existing renderer/bindings reused).
 
 ## 2026-09-16 — Web wallpapers render in a host WKWebView
@@ -3740,7 +3765,7 @@ Verified:
 - `python3 scripts/build.py --renderer-only` regenerated `App/Bridge/Generated`
   with `webWallpapers()` / `BridgeWebWallpaper`.
 - `python3 scripts/test.py`: Python script tests passed; `xcodegen generate`;
-  `MacWallpaperEngineTests` **227 passed**, 0 failed, 0 skipped (~90 s). New
+  `WallpaperMachineTests` **227 passed**, 0 failed, 0 skipped (~90 s). New
   `WebWallpaperPageTests` load a synthetic project offscreen: ES module from the
   project folder, late-listener replay of properties/fps/pause, presentation
   suspension composed with user pause, top-frame navigation lockdown, no window.
@@ -3779,7 +3804,7 @@ the 154 px minimum tile; the Installed grid is unchanged.
 Verified:
 
 - `python3 scripts/test.py`: Python script tests **24** and **10** passed;
-  `xcodegen generate`; `MacWallpaperEngineTests` **225 passed**, 0 failed,
+  `xcodegen generate`; `WallpaperMachineTests` **225 passed**, 0 failed,
   0 skipped (~90 s).
 - `impeccable detect --json WebUI/panel.css`: no findings.
 - No renderer or bridge changes; `python3 scripts/check_renderer.py` not run.
@@ -3805,7 +3830,7 @@ Re-verified on the merged tree:
   known-pixel assertions and pooled/isolated byte comparisons; **8 projects × 2
   reloads** passed; the three test binaries exited 0.
 - `python3 scripts/build.py --configuration Release` rebuilt
-  `build/Build/Products/Release/MacWallpaperEngine.app` from the merged tree;
+  `build/Build/Products/Release/WallpaperMachine.app` from the merged tree;
   the binary exports both this change's cursor symbols and the merged
   `PuppetAnimationControl`. The app was not launched or quit.
 
@@ -3866,7 +3891,7 @@ Results:
 - `python3 scripts/test.py`: Python **24** and **10** passed; native
   **225 passed**, 0 failed, 0 skipped.
 - `python3 scripts/build.py --configuration Release` succeeded and refreshed
-  `build/Build/Products/Release/MacWallpaperEngine.app`. The delivered binary
+  `build/Build/Products/Release/WallpaperMachine.app`. The delivered binary
   exports `ComputeWallpaperCursorMapping`,
   `SceneRuntimeContext::SetCursorViewport`,
   `SceneRuntimeContext::CursorInsidePresentedContent` and
@@ -3900,7 +3925,7 @@ opens that section.
 Verified:
 
 - `python3 scripts/test.py`: Python script tests **24** and **10**
-  passed; `xcodegen generate`; `MacWallpaperEngineTests` **225 passed**,
+  passed; `xcodegen generate`; `WallpaperMachineTests` **225 passed**,
   0 failed, 0 skipped (~95 s of test execution). New coverage:
   `testUpdateSnapshotExposesCheckDownloadAndReadyActions` and
   `testAboutUpdateControlsCheckDownloadAndBlockInstallWithoutWindow`
@@ -4375,7 +4400,7 @@ were removed. Rust formatting was scoped to edited ranges; unrelated existing
 formatting drift was not rewritten.
 
 Not verified: no Release application was built or delivered and the running
-`/Applications/MacWallpaperEngine.app` was not replaced or restarted. Desktop
+`/Applications/WallpaperMachine.app` was not replaced or restarted. Desktop
 visuals, real input and audio capture, and actual battery/power savings remain
 unverified. FPS, render resolution, video/animation timelines, audio-response
 preferences, renderer fences and the lock-screen strategy were not changed.
@@ -4448,7 +4473,7 @@ downloads. No Release build was performed.
 
 Results: `python3 scripts/test.py` passed **all 152 native tests**, and
 `python3 scripts/build.py --swift-only --configuration Release` succeeded,
-updating `build/Build/Products/Release/MacWallpaperEngine.app` (quit and reopen
+updating `build/Build/Products/Release/WallpaperMachine.app` (quit and reopen
 the app to load it). The bundled interface was additionally exercised outside
 the app against a synthetic state fixture in a local browser: tab routing, tag
 filtering re-querying the Workshop, property and display actions carrying their
@@ -4567,7 +4592,7 @@ and every visible combo contained its current selection. That run recorded **202
 passing checks** (201 permanent tests plus the removed local-asset probe).
 Native verification passed **all 86 tests**. The full
 `python3 scripts/build.py --configuration Release` build succeeded, regenerating
-Swift bindings and updating `build/Build/Products/Release/MacWallpaperEngine.app`
+Swift bindings and updating `build/Build/Products/Release/WallpaperMachine.app`
 (quit and reopen the app to load it).
 
 Not verified: no desktop, wallpaper setter or real UI was exercised. Check the
@@ -4626,7 +4651,7 @@ Results:
   capture.
 - `python3 scripts/test.py` passed **all 82 native tests**. The full
   `python3 scripts/build.py --configuration Release` build succeeded and updated
-  `build/Build/Products/Release/MacWallpaperEngine.app` (quit and reopen the app
+  `build/Build/Products/Release/WallpaperMachine.app` (quit and reopen the app
   to load the rebuilt renderer and settings UI).
 
 Not verified: live system authorization, device switching and desktop
@@ -4729,7 +4754,7 @@ artifact path.
   subsequent valid-wallpaper recovery passed against the real desktop UI. Native
   UI and renderer pixel captures plus a machine-readable report recorded the
   exercised behavior and the unverified prerequisites.
-- Installed-release checks at `~/Applications/MacWallpaperEngine.app`: the code
+- Installed-release checks at `~/Applications/WallpaperMachine.app`: the code
   signature and the bundled dynamic-library paths were verified locally.
   Invalid-video recovery was additionally exercised against that installed
   release — an actionable decoding error appeared, and Aurora Drift applied
@@ -4799,7 +4824,7 @@ artifact path.
   Simplified Chinese remember/forget labels and the remembered-account
   presentation were checked in the native UI.
 - The remembered-session Release was packaged, signed and installed at
-  `~/Applications/MacWallpaperEngine.app`; the previous app was retained
+  `~/Applications/WallpaperMachine.app`; the previous app was retained
   separately as disposable build output. The installed bundle passed deep strict
   signature verification. Wallpaper and library data and the user's separately
   installed SteamCMD were left unchanged.
@@ -4848,7 +4873,7 @@ now-playing on the desktop. Cause was not "models discarded":
   undefined remains on a few HUD scripts. No desktop / Peekaboo / `--ui`.
 - `python3 scripts/build.py --configuration Release` — exit 0, `** BUILD
   SUCCEEDED **`. Delivered binary
-  `build/Build/Products/Release/MacWallpaperEngine.app`. The app was not
+  `build/Build/Products/Release/WallpaperMachine.app`. The app was not
   launched.
 
 ## 2026-09-20 — Launch crash: MediaRemote copied a non-escaping reply block
@@ -4873,6 +4898,6 @@ desktop check after quit/reopen.
   detritus not allowed` on the existing Release `.app` /
   `.appex`, `com.apple.FinderInfo` + File Provider xattrs). Cleared those
   with `xattr -cr` and the same command exited 0, `** BUILD SUCCEEDED **`.
-  Delivered binary `build/Build/Products/Release/MacWallpaperEngine.app`.
+  Delivered binary `build/Build/Products/Release/WallpaperMachine.app`.
   The app was not launched.
 

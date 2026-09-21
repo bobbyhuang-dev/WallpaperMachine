@@ -232,13 +232,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// no timer exists: the renderer's counters stay off and the in-process
     /// counters stay outside a session.
     ///
-    /// `MAC_WALLPAPER_ENGINE_DIAGNOSTICS` is a duration in seconds. One
+    /// `WALLPAPER_MACHINE_DIAGNOSTICS` is a duration in seconds. One
     /// aggregated report is written to the log when it elapses; nothing is
     /// emitted per frame, and no screenshot, pixel readback or periodic disk
     /// write is involved.
     private func startDiagnosticsSessionIfRequested() {
         guard let store,
-              let raw = ProcessInfo.processInfo.environment["MAC_WALLPAPER_ENGINE_DIAGNOSTICS"],
+              let raw = ProcessInfo.processInfo.environment["WALLPAPER_MACHINE_DIAGNOSTICS"],
               let seconds = Int(raw), seconds > 0
         else { return }
         let session = RuntimeDiagnosticsSession(store: store)
@@ -454,13 +454,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private func installApplicationMenu() {
         let menu = NSMenu()
         let applicationItem = NSMenuItem()
-        let applicationMenu = NSMenu(title: "MacWallpaperEngine")
+        let applicationMenu = NSMenu(title: "WallpaperMachine")
         let settings = menuItem(titleKey: "Settings…", action: #selector(openSettings))
         settings.keyEquivalent = ","
         applicationMenu.addItem(settings)
         applicationMenu.addItem(menuItem(titleKey: "Check for Updates…", action: #selector(checkForUpdates)))
         applicationMenu.addItem(.separator())
-        let quit = menuItem(titleKey: "Quit MacWallpaperEngine", action: #selector(exitApplication))
+        let quit = menuItem(titleKey: "Quit WallpaperMachine", action: #selector(exitApplication))
         quit.keyEquivalent = "q"
         applicationMenu.addItem(quit)
         applicationItem.submenu = applicationMenu

@@ -1,7 +1,7 @@
 import WebKit
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Host-side suspension for pages that do not cooperate. The Wallpaper Engine
 /// `setPaused` callback is optional, so a page can ignore it and keep its

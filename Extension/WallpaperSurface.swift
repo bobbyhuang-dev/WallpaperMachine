@@ -99,7 +99,7 @@ final class WallpaperSurface {
       layer = metal
       CATransaction.flush()
       frameObserver = NotificationCenter.default.addObserver(
-        forName: .init("MacWallpaperEngine.desktopPosterReady"), object: metal, queue: .main
+        forName: .init("WallpaperMachine.desktopPosterReady"), object: metal, queue: .main
       ) { [weak self] notification in
         MainActor.assumeIsolated { self?.receive(notification) }
       }
@@ -153,7 +153,7 @@ final class WallpaperSurface {
   private func requestFrame() {
     if let layer {
       NotificationCenter.default.post(
-        name: .init("MacWallpaperEngine.requestDesktopPoster"), object: layer)
+        name: .init("WallpaperMachine.requestDesktopPoster"), object: layer)
     }
   }
 

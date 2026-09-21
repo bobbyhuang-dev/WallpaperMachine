@@ -42,11 +42,11 @@ def project(root, name, staged=("a.png",)):
 class UserAssetDiscoveryTests(unittest.TestCase):
     def setUp(self):
         self.home = Path(tempfile.mkdtemp())
-        os.environ["MAC_WALLPAPER_ENGINE_HOME"] = str(self.home / "support")
+        os.environ["WALLPAPER_MACHINE_HOME"] = str(self.home / "support")
         self.library = self.home / "support/Library"
 
     def tearDown(self):
-        os.environ.pop("MAC_WALLPAPER_ENGINE_HOME", None)
+        os.environ.pop("WALLPAPER_MACHINE_HOME", None)
 
     def found(self):
         with mock.patch.object(clean.Path, "home", staticmethod(lambda: self.home)):
@@ -87,7 +87,7 @@ class ManagedUserAssetTests(unittest.TestCase):
     def setUp(self):
         self.home = Path(tempfile.mkdtemp())
         self.support = self.home / "support"
-        os.environ["MAC_WALLPAPER_ENGINE_HOME"] = str(self.support)
+        os.environ["WALLPAPER_MACHINE_HOME"] = str(self.support)
         self.managed = self.support / clean.MANAGED_USER_ASSETS_DIR / "2001" / "cover" / "abc"
         self.managed.mkdir(parents=True)
         self.asset = self.managed / "clouds.png"
@@ -108,7 +108,7 @@ class ManagedUserAssetTests(unittest.TestCase):
         return {path: path.exists() for path in (REAL_ARTIFACTS, REAL_BUILD)}
 
     def tearDown(self):
-        os.environ.pop("MAC_WALLPAPER_ENGINE_HOME", None)
+        os.environ.pop("WALLPAPER_MACHINE_HOME", None)
         # The check that would have caught cleaning the wrong tree: the real
         # `artifacts/` and `build/` are exactly as they were before this test ran.
         for path, existed in self.real.items():

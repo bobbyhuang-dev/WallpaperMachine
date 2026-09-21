@@ -23,7 +23,7 @@ GENERATED_BRIDGE = APP / "Bridge/Generated"
 RENDERER = ROOT / "upstream/renderer"
 
 PROJECT_YML = ROOT / "project.yml"
-XCODEPROJ = ROOT / "mac-wallpaper-engine.xcodeproj"
+XCODEPROJ = ROOT / "WallpaperMachine.xcodeproj"
 
 BUILD = ROOT / "build"
 PRODUCTS = BUILD / "Build/Products"
@@ -37,4 +37,4 @@ RENDERER_ARTIFACTS = ARTIFACTS / "renderer"
 
 def app_bundle(configuration="Debug"):
     """Path of the built application for a build configuration."""
-    return PRODUCTS / configuration / "MacWallpaperEngine.app"
+    return PRODUCTS / configuration / "WallpaperMachine.app"

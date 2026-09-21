@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 import WebKit
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Shared fixture for the offscreen control-panel suites: a `BridgeStore` over a snapshot-only
 /// bridge, a `WebPanelController` driven through its real `WKWebView` without a window, and the
@@ -136,14 +136,14 @@ final class PanelUpdateClient: AppUpdateClient, @unchecked Sendable {
     GitHubRelease(
       version: SemanticVersion(version)!,
       htmlURL: URL(
-        string: "https://github.com/bobbyhuang-dev/mac-wallpaper-engine/releases/tag/v\(version)")!,
+        string: "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/tag/v\(version)")!,
       prerelease: false,
       assets: [
         GitHubReleaseAsset(
-          name: "MacWallpaperEngine-\(version)-arm64.zip",
+          name: "WallpaperMachine-\(version)-arm64.zip",
           downloadURL: URL(
             string:
-              "https://github.com/bobbyhuang-dev/mac-wallpaper-engine/releases/download/v\(version)/MacWallpaperEngine-\(version)-arm64.zip"
+              "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v\(version)/WallpaperMachine-\(version)-arm64.zip"
           )!,
           size: 1_000, digest: nil)
       ])
@@ -188,8 +188,8 @@ final class PanelFixture {
     self.store = store
     self.bridge = bridge
     defaults = try XCTUnwrap(UserDefaults(suiteName: root.lastPathComponent))
-    defaults.set(root.appendingPathComponent("missing").path, forKey: "MacWallpaperEngineSteamCMDPath")
-    previousHome = ProcessInfo.processInfo.environment["MAC_WALLPAPER_ENGINE_HOME"]
+    defaults.set(root.appendingPathComponent("missing").path, forKey: "WallpaperMachineSteamCMDPath")
+    previousHome = ProcessInfo.processInfo.environment["WALLPAPER_MACHINE_HOME"]
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     executable = root.appendingPathComponent("steamcmd")
     // A download prints its password prompt and blocks until `advance` appears; a sign-in-only
@@ -211,7 +211,7 @@ final class PanelFixture {
 
       """.utf8).write(to: executable)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
-    setenv("MAC_WALLPAPER_ENGINE_HOME", root.path, 1)
+    setenv("WALLPAPER_MACHINE_HOME", root.path, 1)
     let downloader = WorkshopDownloadManager(
       sessionDirectory: root.appendingPathComponent("session"), runtimeProvider: PanelRuntime())
     workshop = WorkshopStore(
@@ -329,8 +329,8 @@ final class PanelFixture {
     await workshop.downloader.shutdown()
     await workshop.steamCMDSetup.shutdown()
     defaults.removePersistentDomain(forName: root.lastPathComponent)
-    if let previousHome { setenv("MAC_WALLPAPER_ENGINE_HOME", previousHome, 1) }
-    else { unsetenv("MAC_WALLPAPER_ENGINE_HOME") }
+    if let previousHome { setenv("WALLPAPER_MACHINE_HOME", previousHome, 1) }
+    else { unsetenv("WALLPAPER_MACHINE_HOME") }
     try? FileManager.default.removeItem(at: root)
   }
 }

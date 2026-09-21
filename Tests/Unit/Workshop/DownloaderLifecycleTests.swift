@@ -1,7 +1,7 @@
 import Darwin
 import XCTest
 
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Single-download lifecycle: staging, prompts, progress, scene assets and failure paths.
 @MainActor
@@ -153,7 +153,7 @@ final class DownloaderLifecycleTests: DownloaderTestCase {
     XCTAssertTrue(downloader.wasCancelled)
     XCTAssertNil(downloader.downloadedID)
     let children = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
-    XCTAssertFalse(children.contains { $0.hasPrefix(".mac-wallpaper-engine-workshop-") })
+    XCTAssertFalse(children.contains { $0.hasPrefix(".WallpaperMachine-workshop-") })
   }
 
   func testShortSplitPromptsAllowPasswordAndGuardCodeBeforeDownload() async throws {
@@ -541,7 +541,7 @@ final class DownloaderLifecycleTests: DownloaderTestCase {
       XCTAssertNil(downloader.downloadedID)
       XCTAssertFalse(
         try FileManager.default.contentsOfDirectory(atPath: root.path).contains {
-          $0.hasPrefix(".mac-wallpaper-engine-workshop-")
+          $0.hasPrefix(".WallpaperMachine-workshop-")
         })
 
       try Data().write(to: root.appendingPathComponent("approve-next-login"))

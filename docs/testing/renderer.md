@@ -62,7 +62,7 @@ It assembles the Homebrew environment from `scripts/build.py`, then:
 | --- | --- |
 | `--skip-build` | Reuse the existing binaries instead of rebuilding |
 | `--project PATH` | Add a local scene `project.json`; repeatable |
-| `--assets PATH` | Shared assets directory (default `~/Library/Application Support/mac-wallpaper-engine/SceneAssets`) |
+| `--assets PATH` | Shared assets directory (default `~/Library/Application Support/WallpaperMachine/SceneAssets`) |
 
 Reports, SHA-256 hashes, logs, the generated synthetic fixtures and private GPU
 output go under a fresh `artifacts/renderer/<run>/` directory, with
@@ -88,8 +88,8 @@ device requests the same extension set as the wallpaper renderer, including
 imports its frames here instead of rendering empty texture slots.
 
 ```sh
-WE_TEST_PROJECT="$HOME/Library/Application Support/mac-wallpaper-engine/Library/<id>/project.json" \
-WE_TEST_ASSETS="$HOME/Library/Application Support/mac-wallpaper-engine/SceneAssets" \
+WE_TEST_PROJECT="$HOME/Library/Application Support/WallpaperMachine/Library/<id>/project.json" \
+WE_TEST_ASSETS="$HOME/Library/Application Support/WallpaperMachine/SceneAssets" \
 WE_TEST_OUTPUT="$PWD/artifacts/renderer/scratch" \
 artifacts/renderer/bin/tests/offscreen_scene_probe
 ```
@@ -622,9 +622,9 @@ elapsed time instead of one ideal frame, while an eight-hour gap is still
 treated as a resume. Before that change a scene paced at the clamp lost the
 difference on every frame and fell steadily behind.
 
-`MAC_WALLPAPER_ENGINE_DISABLE_CONTENT_PACING=1` switches pacing off in the same
-binary so a comparison measures one strategy rather than two builds. The default
-is the paced path; an unset or empty value never disables it.
+`WALLPAPER_MACHINE_CONTENT_PACING=1` switches content pacing on in the same
+binary so a comparison measures one strategy rather than two builds. The
+default is the fixed cadence; an unset or empty value never enables pacing.
 
 ### Renderer work counters
 

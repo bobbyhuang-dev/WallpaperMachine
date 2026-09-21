@@ -1,5 +1,5 @@
 import XCTest
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Batch deletion must trash every valid wallpaper even when one entry fails,
 /// report the failure per id, and refresh the library exactly once.
@@ -14,11 +14,11 @@ final class BatchDeletionTests: XCTestCase {
             try FileManager.default.createDirectory(
                 at: library.appendingPathComponent(id), withIntermediateDirectories: true)
         }
-        setenv("MAC_WALLPAPER_ENGINE_HOME", home.path, 1)
+        setenv("WALLPAPER_MACHINE_HOME", home.path, 1)
     }
 
     override func tearDownWithError() throws {
-        unsetenv("MAC_WALLPAPER_ENGINE_HOME")
+        unsetenv("WALLPAPER_MACHINE_HOME")
         try FileManager.default.removeItem(at: home)
     }
 

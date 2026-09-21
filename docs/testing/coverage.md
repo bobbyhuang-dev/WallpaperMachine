@@ -19,7 +19,7 @@ Swift tests cover, without starting the app:
   change while a page loads), superseded requests, cancellation, and exact
   failed-request retry through the real page parser. Two `testLive…` cases fetch
   Steam's real pages and are opt-in
-  (`MAC_WALLPAPER_ENGINE_NETWORK_TESTS=1`, see
+  (`WALLPAPER_MACHINE_NETWORK_TESTS=1`, see
   [README.md](README.md#opt-in-layers)); the page format itself stays covered
   offline through `decodePage` against recorded markup. Thumbnail cache: CDN scaling only for Steam image
   hosts, still-frame JPEG extraction from animated previews (skipping a black

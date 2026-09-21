@@ -30,8 +30,8 @@ any machine. Never hardcode a home directory in a test.
 
 | Variable | Default | Used by |
 | --- | --- | --- |
-| `MAC_WALLPAPER_ENGINE_ASSETS_ROOT` | `~/Library/Application Support/Steam/steamapps/common/wallpaper_engine/assets` | Wallpaper Engine's shipped `assets/shaders` (`crates/shader/tests/pipeline.rs`, and the bridge at runtime) |
-| `MAC_WALLPAPER_ENGINE_UNPACK_ROOT` | `upstream/renderer/unpack` | shaders unpacked from workshop packages |
+| `WALLPAPER_MACHINE_ASSETS_ROOT` | `~/Library/Application Support/Steam/steamapps/common/wallpaper_engine/assets` | Wallpaper Engine's shipped `assets/shaders` (`crates/shader/tests/pipeline.rs`, and the bridge at runtime) |
+| `WALLPAPER_MACHINE_UNPACK_ROOT` | `upstream/renderer/unpack` | shaders unpacked from workshop packages |
 
 A skipped case is **not** a passing case. Run
 `cargo test -p shader --test pipeline -- --nocapture` and read the `skipping …`

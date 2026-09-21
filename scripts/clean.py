@@ -4,7 +4,7 @@
 Default pass deletes only regenerable evidence: `artifacts/`, stray result bundles
 and logs left in `build/`, `__pycache__` directories, and `.DS_Store` files. Xcode's
 derived data and the built app survive unless `--derived` or `--all` is requested,
-because `build/Build/Products/Release/MacWallpaperEngine.app` is the locally
+because `build/Build/Products/Release/WallpaperMachine.app` is the locally
 delivered app. See docs/testing/README.md for the evidence policy.
 `--user-assets` is separate from all of that: it deletes the regenerable bridge each
 wallpaper keeps inside its own folder, which is live wallpaper state rather than a
@@ -79,10 +79,10 @@ def derived():
 
 def support_root():
     """The app's data directory, mirroring ClientPaths.supportURL."""
-    override = os.environ.get("MAC_WALLPAPER_ENGINE_HOME")
+    override = os.environ.get("WALLPAPER_MACHINE_HOME")
     if override:
         return Path(override)
-    return Path.home() / "Library/Application Support/mac-wallpaper-engine"
+    return Path.home() / "Library/Application Support/WallpaperMachine"
 
 
 def user_assets():

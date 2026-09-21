@@ -98,16 +98,16 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
   var dismissedErrorRevision: UInt64 = 0
   var dismissedLibraryError: String?
   var dismissedDownloadError: String?
-  static let favoriteKey = "MacWallpaperEngine.favoriteWallpaperIDs"
+  static let favoriteKey = "WallpaperMachine.favoriteWallpaperIDs"
   /// Where each page's sidebar choice is stored; Discover keeps the key earlier builds used.
   static let filtersCollapsedKeys = [
-    "discover": "MacWallpaperEngine.workshopFiltersCollapsed",
-    "installed": "MacWallpaperEngine.installedFiltersCollapsed",
+    "discover": "WallpaperMachine.workshopFiltersCollapsed",
+    "installed": "WallpaperMachine.installedFiltersCollapsed",
   ]
-  static let welcomeSeenKey = "MacWallpaperEngine.welcomeSeen"
+  static let welcomeSeenKey = "WallpaperMachine.welcomeSeen"
   /// Earlier builds stored a dragged inspector width here; the width now follows the
   /// window alone, so the key is cleared rather than read.
-  static let legacyInspectorWidthKey = "MacWallpaperEngine.inspectorWidth"
+  static let legacyInspectorWidthKey = "WallpaperMachine.inspectorWidth"
 
   init(
     store: BridgeStore, navigation: ControlPanelNavigation, workshop: WorkshopStore,

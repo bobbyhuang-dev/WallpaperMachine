@@ -25,13 +25,38 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — Renamed the project from MacWallpaperEngine to WallpaperMachine
+
+The rename was half applied and was rebased onto the nineteen renderer/media commits already on origin/main, so the incoming work had to be carried onto the new name as well.
+
+- Zero occurrences of MacWallpaperEngine / MacWallpaperExtension / mac-wallpaper-engine / MAC_WALLPAPER_ENGINE remain in the tracked tree (build output and artifacts/ excluded)
+- Runtime breaks the partial rename had left: upstream/renderer/crates/bridge/src/paths.rs read MAC_WALLPAPER_ENGINE_* while ClientPaths exports WALLPAPER_MACHINE_*, and SceneWallpaperBindings.mm observed MacWallpaperEngine.requestDesktopPoster while the host posts WallpaperMachine.requestDesktopPoster; both boundaries now pair on every name
+- Also renamed in the vendored tree: BUNDLE_IDENTIFIER app.wallpapermachine, WALLPAPER_MACHINE_CONTENT_PACING in VideoFramePacing.cpp, the SceneAssets fallback in metal_scene_draw_smoke.mm, the shader pipeline test overrides, and the audio-permission message; recorded in upstream/provenance.json
+- docs/testing/renderer.md claimed MAC_WALLPAPER_ENGINE_DISABLE_CONTENT_PACING=1 disables pacing off a paced default; no such variable exists. Corrected to WALLPAPER_MACHINE_CONTENT_PACING=1 enabling pacing over a fixed-cadence default, matching VideoFramePacing.cpp and power-benchmark.md
+- DownloadTelemetryTests nettop fixtures used the 15-character truncation MacWallpaperEng.42; now WallpaperMachin.42
+- WallpaperMachine.xcodeproj regenerated with xcodegen after the rebase; this dropped SceneMediaCoordinator.swift, which origin had removed in 9cd8719 and the pre-rebase project still referenced
+- The stale prebuilt bridge library failed to link system_media_consent_handles (added by the incoming commits); python3 scripts/build.py --renderer-only rebuilt it and left App/Bridge/Generated/ unchanged
+- python3 scripts/test.py — 535 passed, 0 failed, 11 skipped of 546
+- python3 scripts/check_renderer.py — 21 gtest binaries, 0 failures, 408 assertions; 10 probe cases pooled+isolated exit 0, pixels_equal=True, 0 diagnostics; reload cycles 0
+- artifacts/renderer/bin held a CMake cache pinned to the old directory name and had to be deleted before the renderer could configure; that is what the rename costs an existing checkout
+- Not rebuilt: no Release build was requested, so build/Build/Products/Release still holds the old bundle
+
+## 2026-09-21 — GPL licensing and commercial distribution policy
+
+- Replaced Homebrew GPLv3 FFmpeg with Formula/mwe-ffmpeg.rb (8.1.2, LGPL-2.1-or-later); installed formula and brew test passed; actual avcodec_license/configuration and otool dependencies verified.
+- python3 scripts/build.py --renderer-only passed; python3 scripts/check_renderer.py passed ten generated pooled/isolated scenes, reload cycles and renderer suites; three local-fixture tests skipped.
+- python3 scripts/test.py: 529 passed, 0 failed, 11 skipped; Python script tests passed.
+- python3 scripts/package.py --configuration Debug --check passed; existing GPLv3 Release input rejected without mutation. Disposable Debug copy fully packaged and codesign verified; GPL and keg notices checked; repackaging refused; temporary app/archive removed.
+- Installer idempotence and interrupted-reinstall receipt recovery exercised. No desktop launch, install, Developer ID signing or notarization performed; Release app not rebuilt.
+- Public binary CI blocked: GPL-2.0-only with Apache-2.0 Vulkan/shader dependencies still requires copyright-holder permissions or compatible replacements. Selling signed binaries and priority support does not override GPL recipient/source rights.
+
 ## 2026-09-21 — Release build delivered with the camera-layer fix
 
 Supersedes the "Not rebuilt" line of the previous entry: the Release build was requested afterwards. Renderer change, so the full build, not --swift-only. Nothing was launched, no wallpaper changed.
 
 - `python3 scripts/build.py --configuration Release` — exit 0 in 54s; cargo workspace, uniffi-bindgen, xcodegen, xcodebuild all clean (14 + 26 warning lines in the logs)
 - Contains the change: WPSceneParser.cpp edited 22:48:40, its object under `target/release/build/wallpaper-core/*/open_wallpaper_engine/build` recompiled 23:07:06, `libwallpaper_bridge.a` 23:07:16, app binary 23:07:47 — each newer than the last
-- `build/Build/Products/Release/MacWallpaperEngine.app` — 42,069,648-byte arm64 Mach-O, ad-hoc signed, app.mac-wallpaper-engine 0.5.0 (16)
+- `build/Build/Products/Release/WallpaperMachine.app` — 42,069,648-byte arm64 Mach-O, ad-hoc signed, app.wallpapermachine 0.5.0 (16)
 - No tracked file moved: `App/Bridge/Generated/` and the Xcode project are unchanged by the regeneration, so the bridge API is the same
 - Not run: the app was not launched or quit, no wallpaper was applied, no screenshot or desktop check. On-screen behaviour of 3605722997 and 3292361861 stays unverified until the user reopens the app
 
@@ -117,28 +142,3 @@ The button pressed and released correctly after the capture fix, but the player 
 - New an_unbound_transport_shortcut_reaches_the_scene_engine asserts the scene receives {"nextsongbutton":"media:next","playpausebutton":"media:playpause"} with no user overrides, that an unguessable name stays out of it, and that choosing no action still sends the empty string
 - scripts/test.py 534 passed / 0 failed / 11 skipped of 545; wallpaper-bridge 321 passed
 - Release rebuilt
-
-## 2026-09-21 — The stuck transport button: a press made it too small to catch its own release
-
-Reported with a screenshot: the next button sits flattened to a dash and the player never skips. Rendering the wallpaper offscreen showed all three buttons drawing correctly, so the cause was runtime state, not content.
-
-- The scene sets this button scale scripts hoScale to 0.1, so a held button shrinks to a tenth. It only restores itself from cursorUp
-- SceneRuntimeContext::DispatchCursorFrameEvents decided who hears a release by hit-testing at release time. The press shrank the button out from under the cursor, the hit test failed, cursorUp was skipped, and hover stayed latched -- the button can never come back
-- Fixed by capturing the press: a release now goes to whichever scripted values and scene scripts took that button down, wherever the cursor has since gone. Anything that did not take the press keeps the old rule
-- New AButtonThatShrinksWhileHeldStillGetsItsRelease reproduces it end to end through the parser and cursor dispatch: fails without the fix (button stuck at 0.1), passes with it
-- Also added APressedTransportButtonComesBackWhenItIsReleased, driving the wallpaper own scale script with the scene real hoScale of 0.1 and speed of 25
-- Offscreen render of the wallpaper with media events confirms all three transport buttons draw correctly, so nothing was wrong with the asset, model, material or scripts
-- scripts/test.py 534 passed / 0 failed / 11 skipped of 545; scene_schema_tests 80 passed with the two pre-existing pointer-commit timeouts; check_renderer.py 10 cases pixels_equal=True
-- Release rebuilt after the fix
-
-## 2026-09-21 — Why the transport buttons did nothing, and what the progress bar actually is
-
-Reported: the transport buttons still have no effect, and the progress bar cannot be dragged. Both were investigated against the installed wallpaper rather than assumed.
-
-- Cause of the dead buttons: `~/Library/.../wallpapers/3280146735.json` has `property_overrides: {}` and all three usershortcut values are empty, so dispatch correctly skipped every press. Defaulting to no action left buttons named play, next and previous doing nothing until their user found the picker
-- An unbound usershortcut now starts on the action its own name states; a name that says nothing stays unbound; an authored value is never overwritten. The override still wins and dispatch still carries the value, not the name (`unbound_transport_shortcuts_start_on_the_action_they_are_named_for`)
-- The progress bar has no pointer logic at all -- objects 187 and 370 carry no scripts, and 366 only moves its origin from `mediaTimelineChanged`. It was never draggable in any client; the question is whether it advances
-- New `TheProgressFillFollowsAPublishedTimeline` drives the wallpaper own origin script: a published timeline does place the fill exactly (-637 + position/duration * 620), keeps tracking, and does not jitter on a repeat
-- It also pins an upstream quirk: the author places the fill before recording the duration it divides by, so the first event divides by an unset `dur` and puts the layer at infinity until the next one arrives
-- scripts/test.py 534 passed / 0 failed / 11 skipped of 545; wallpaper-bridge 320; scene_schema_tests 78 passed with the two pre-existing pointer-commit timeouts
-- Release built and checked: media:playpause / media:previous / next_user_shortcut all present in the delivered binary

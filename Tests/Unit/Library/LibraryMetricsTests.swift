@@ -1,5 +1,5 @@
 import XCTest
-@testable import MacWallpaperEngine
+@testable import WallpaperMachine
 
 /// Installed sorts by folder size and date added, which the renderer's library snapshot
 /// does not carry. The service reads them from the library folders off the main thread,

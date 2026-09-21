@@ -3,6 +3,12 @@
 # Called by Version right after it pushes a bump tag, and by Release for hand-pushed
 # tags. Version has to call it directly: a tag pushed with GITHUB_TOKEN never starts
 # another workflow, so Release alone would never run for CI-produced tags.
+#
+# Publishing is blocked: the first step fails before anything is built. LICENSING.md
+# records the open distribution issues (GPL-2.0-only renderer and app shell combined
+# with Apache-2.0 MoltenVK, vulkan-loader, SPIRV-Tools and glslang) and what resolves
+# them. Delete that step only in the commit that records the resolution there; there
+# is no input or secret that bypasses it. Local packaging (docs/build.md) is unaffected.
 name: Build
 
 on:
@@ -21,6 +27,13 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 120
     steps:
+      - name: Distribution is blocked pending LICENSING.md
+        run: |
+          echo "::error::Publishing WallpaperMachine-${TAG}-arm64.zip is blocked: LICENSING.md lists unresolved distribution issues (GPL-2.0-only renderer/app shell with Apache-2.0 MoltenVK, vulkan-loader, SPIRV-Tools and glslang). Resolve them there first; this step is the only gate."
+          exit 1
+        env:
+          TAG: ${{ inputs.tag }}
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag }}
@@ -28,9 +41,11 @@ jobs:
       - name: Install renderer and Xcode project dependencies
         run: |
           set -euo pipefail
-          brew install --quiet xcodegen cmake quickjs-ng glslang ffmpeg@8 freetype lz4 \
+          brew install --quiet xcodegen cmake quickjs-ng glslang freetype lz4 \
             vulkan-loader vulkan-headers molten-vk eigen nlohmann-json argparse shaderc \
             spirv-tools glm
+          # The bundled FFmpeg is the repository's LGPL build, not Homebrew's GPLv3 one (LICENSING.md).
+          python3 scripts/install_ffmpeg.py
 
       - name: Cache renderer build
         uses: actions/cache@v4
@@ -57,7 +72,7 @@ jobs:
           set -euo pipefail
           # package.py names the archive from CFBundleShortVersionString, so a mismatch here
           # means the bump never reached the build the in-app updater would download.
-          archive="build/Build/Products/Release/MacWallpaperEngine-${TAG#v}-arm64.zip"
+          archive="build/Build/Products/Release/WallpaperMachine-${TAG#v}-arm64.zip"
           if [ ! -f "$archive" ]; then
             echo "Built archive does not match ${TAG}:"
             ls build/Build/Products/Release/*.zip || true

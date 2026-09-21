@@ -1594,7 +1594,10 @@ impl WallpaperBridge {
             let Some(event) = event else {
                 return Err(BridgeError::engine("the engine stopped reporting user shortcuts"));
             };
-            if self.system_media_scene_handles().await?.contains(&event.scene_handle) {
+            // Consent, not liveness: this asks whether the user allowed this
+            // wallpaper near their media, which does not stop being true
+            // because playback is paused or a display went dark.
+            if self.system_media_consent_handles().await?.contains(&event.scene_handle) {
                 return Ok(event);
             }
             log::debug!("ignored a user shortcut from a wallpaper without media consent");
@@ -1604,6 +1607,19 @@ impl WallpaperBridge {
     pub async fn system_media_scene_handles(&self) -> Result<Vec<u64>, BridgeError> {
         self.actor
             .ask(crate::actor::messages::GetSystemMediaSceneHandles)
+            .await
+    }
+
+    /// Handles whose user allowed media integration, whether or not they are
+    /// currently being fed. Use `system_media_scene_handles` to decide whether
+    /// to consume at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bridge actor is gone.
+    pub async fn system_media_consent_handles(&self) -> Result<Vec<u64>, BridgeError> {
+        self.actor
+            .ask(crate::actor::messages::GetSystemMediaConsentHandles)
             .await
     }
 

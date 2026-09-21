@@ -59,10 +59,166 @@ final class SceneMediaSinkTests: XCTestCase {
         try await poll { provider.consumers == 0 }
     }
 
-    private func poll(timeout: TimeInterval = 2, until condition: () -> Bool) async throws {
+    /// A pause and a resume each start a reconcile, and each awaits the bridge.
+    /// The answers can come back in the other order, and the older one must not
+    /// re-open the provider the newer one closed.
+    func testAStaleReconcileCannotReopenTheProviderALaterOneClosed() async throws {
+        let provider = ScriptedSystemMediaProvider()
+        let session = DesktopMediaSession(provider: provider)
+        var release: CheckedContinuation<Void, Never>?
+        var calls = 0
+        var answers: [Set<UInt64>] = [[11], [], [11]]
+        let sink = SceneMediaSink(
+            session: session, submit: { _ in }, applyArtwork: { _, _, _ in },
+            fetchHandles: {
+                calls += 1
+                let answer = answers.isEmpty ? Set<UInt64>() : answers.removeFirst()
+                // Only the first call is slow, so it answers last.
+                if calls == 1 { await withCheckedContinuation { release = $0 } }
+                return answer
+            })
+
+        sink.reconcile() // parks: "still presenting"
+        try await poll { release != nil }
+        sink.reconcile() // lands first: "nothing is presenting"
+        try await poll { calls == 2 }
+
+        release?.resume() // the stale answer arrives now
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(
+            provider.consumers, 0,
+            "a stale reconcile re-opened the provider a later one had closed")
+
+        // Control: the sink is not simply stuck — a current answer still works.
+        sink.reconcile()
+        try await poll { provider.consumers == 1 }
+    }
+
+    /// A visible web wallpaper keeps the shared provider running. A scene that
+    /// stopped presenting must not still be handed every event through it:
+    /// that is artwork copied, JSON serialised and a bridge call made for a
+    /// surface nobody can see.
+    func testASceneThatStoppedConsumingIsNotFedThroughAProviderWebKeepsAlive() async throws {
+        let provider = ScriptedSystemMediaProvider()
+        let session = DesktopMediaSession(provider: provider)
+        var submitted: [String] = []
+        var handles: Set<UInt64> = [11]
+        let sink = SceneMediaSink(
+            session: session, submit: { submitted.append($0) }, applyArtwork: { _, _, _ in },
+            fetchHandles: { handles })
+
+        sink.reconcile()
+        try await poll { provider.consumers == 1 }
+
+        // Something else — a web wallpaper still on screen — holds the relay.
+        final class WebConsumer {}
+        let web = WebConsumer()
+        session.relay.setConsuming(true, for: ObjectIdentifier(web))
+        try await poll { provider.consumers == 2 }
+
+        handles = []
+        sink.reconcile()
+        try await poll { provider.consumers == 1 }
+
+        submitted.removeAll()
+        provider.emitPlaying(title: "Under Pressure")
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertTrue(
+            submitted.isEmpty,
+            "a scene that stopped presenting was still fed \(submitted.count) event(s)")
+        XCTAssertEqual(provider.consumers, 1, "the web consumer still holds the provider")
+    }
+
+    /// A cover the engine is slow with must not be overtaken by the one that
+    /// replaced it.
+    ///
+    /// The engine shows whatever arrives last, so two deliveries racing would
+    /// leave the previous track's cover on screen — and the slower a cover is
+    /// to apply, the likelier it wins.
+    func testASlowCoverIsNotOvertakenByTheOneThatReplacedIt() async throws {
+        let provider = ScriptedSystemMediaProvider()
+        let session = DesktopMediaSession(provider: provider)
+        var appliedCovers: [UInt8] = []
+        var holdFirstCover: CheckedContinuation<Void, Never>?
+        var coverCalls = 0
+        let sink = SceneMediaSink(
+            session: session, submit: { _ in },
+            applyArtwork: { _, _, data in
+                coverCalls += 1
+                if coverCalls == 1 { await withCheckedContinuation { holdFirstCover = $0 } }
+                appliedCovers.append(data.first ?? 0)
+            },
+            fetchHandles: { [11] })
+
+        sink.reconcile()
+        try await poll("initial consumer") { provider.consumers == 1 }
+        provider.emitThumbnail(marker: 1)
+        try await poll("first cover reached the engine") { holdFirstCover != nil }
+
+        provider.emitThumbnail(marker: 2)
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertTrue(
+            appliedCovers.isEmpty,
+            "a later cover overtook the one still being applied: \(appliedCovers)")
+
+        holdFirstCover?.resume()
+        try await poll("both covers applied") { appliedCovers.count >= 2 }
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(
+            appliedCovers.last, 2,
+            "the cover left on screen is not the one published last: \(appliedCovers)")
+        XCTAssertEqual(
+            appliedCovers.firstIndex(of: 2), appliedCovers.count - 1,
+            "a later cover was applied before an earlier one finished: \(appliedCovers)")
+    }
+
+    /// A delivery already inside the engine when the scene pauses must not
+    /// report itself afterwards.
+    ///
+    /// The call in flight cannot be taken back, but everything after its await
+    /// belongs to a scene that has stopped presenting. A boolean cannot decide
+    /// that — a resume would set it true again — so the check is an epoch that
+    /// only moves forward.
+    func testADeliveryRetiredByAPauseDoesNotReportItselfWhenItReturns() async throws {
+        let provider = ScriptedSystemMediaProvider()
+        let session = DesktopMediaSession(provider: provider)
+        var submitted: [String] = []
+        var holdCover: CheckedContinuation<Void, Never>?
+        var coverCalls = 0
+        var handles: Set<UInt64> = [11]
+        let sink = SceneMediaSink(
+            session: session, submit: { submitted.append($0) },
+            applyArtwork: { _, _, _ in
+                coverCalls += 1
+                if coverCalls == 1 { await withCheckedContinuation { holdCover = $0 } }
+            },
+            fetchHandles: { handles })
+
+        sink.reconcile()
+        try await poll("initial consumer") { provider.consumers == 1 }
+        provider.emitThumbnail(marker: 1)
+        try await poll("cover reached the engine") { holdCover != nil }
+
+        handles = []
+        sink.reconcile()
+        try await poll("pause removed the consumer") { provider.consumers == 0 }
+        submitted.removeAll()
+
+        holdCover?.resume()
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertTrue(
+            submitted.isEmpty,
+            "a delivery retired by a pause still reported itself: \(submitted)")
+    }
+
+    private func poll(
+        _ label: String = "", timeout: TimeInterval = 2, until condition: () -> Bool
+    ) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
-            if Date() > deadline { return XCTFail("condition not reached within \(timeout)s") }
+            if Date() > deadline {
+                return XCTFail("condition \(label.isEmpty ? "" : "'\(label)' ")not reached within \(timeout)s")
+            }
             try await Task.sleep(for: .milliseconds(5))
         }
     }
@@ -100,5 +256,16 @@ final class ScriptedSystemMediaProvider: SystemMediaProvider {
             tertiaryColor: "rgb(190, 150, 100)", textColor: "rgb(255, 255, 255)",
             highContrastColor: "rgb(0, 0, 0)", rgba: [232, 80, 58, 255], width: 1, height: 1)
         replayCurrentState()
+    }
+
+    /// A distinguishable cover: `marker` is the first RGBA byte, so a test can
+    /// tell which publication a delivery carried.
+    func emitThumbnail(marker: UInt8) {
+        thumbnail = SystemMediaThumbnail(
+            pngBase64DataURL: "data:image/png;base64,\(marker)",
+            primaryColor: "rgb(\(marker), 0, 0)", secondaryColor: "rgb(0, 0, 0)",
+            tertiaryColor: "rgb(0, 0, 0)", textColor: "rgb(255, 255, 255)",
+            highContrastColor: "rgb(0, 0, 0)", rgba: [marker, 0, 0, 255], width: 1, height: 1)
+        onThumbnailChanged?(thumbnail!)
     }
 }

@@ -90,6 +90,11 @@ final class WebWallpaperMediaRelay {
 
     private func emit(_ event: Event) {
         onChange?(event)
+        // Every listener, unconditionally. A listener key is not a consumer
+        // key: the web host registers one listener for all its pages and
+        // counts consumers per page, so filtering here by consumer membership
+        // would silence every visible page. A listener that has nothing to
+        // feed drops the event itself.
         for handler in extraListeners.values { handler(event) }
     }
 

@@ -58,7 +58,12 @@ final class WebWallpaperHost {
     private var audioSubscriptionTask: Task<Void, Never>?
     private var audioSubscriptions: [UInt32: Bool] = [:]
     private let mediaRelay: WebWallpaperMediaRelay
-    private let mediaListenerKey = ObjectIdentifier(MediaListenerKey())
+    /// Held, not derived from a temporary. `ObjectIdentifier` is an address,
+    /// and an address freed the moment it was taken can be handed to the next
+    /// allocation — which would let two listeners share one key in a shared
+    /// relay and silently overwrite or remove each other.
+    private let mediaListenerToken = MediaListenerKey()
+    private var mediaListenerKey: ObjectIdentifier { ObjectIdentifier(mediaListenerToken) }
     private final class MediaListenerKey {}
     /// Pages currently able to receive media events, which is not the same as
     /// the pages consuming the provider: a page whose user turned integration

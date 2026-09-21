@@ -156,6 +156,39 @@ final class WebWallpaperAudioMediaTests: XCTestCase {
     XCTAssertEqual(events.first, .properties(SystemMediaProperties(title: "Next", artist: "Artist")))
   }
 
+  /// A listener key and a consumer key name different things, and the shared
+  /// relay must not assume otherwise.
+  ///
+  /// `WebWallpaperHost` registers exactly one listener for all of its pages
+  /// and then counts consumers per page, so its listener key is never itself a
+  /// consumer. A relay that only delivered to listeners it also counted as
+  /// consumers would therefore silence every visible web wallpaper. The real
+  /// host is built here on a shared relay so the production registration runs.
+  func testEveryListenerIsFedEvenThoughListenerKeysAreNeverConsumerKeys() {
+    let provider = FakeSystemMediaProvider()
+    let relay = WebWallpaperMediaRelay(provider: provider)
+    let host = WebWallpaperHost(fetch: { [] }, screens: { [] }, mediaRelay: relay)
+    XCTAssertNotNil(host, "the host registers its listener on the shared relay")
+
+    // A second listener, registered the same way the host and the scene sink
+    // do: under its own identity, never as a consumer.
+    final class Listener {}
+    let listener = Listener()
+    var delivered: [WebWallpaperMediaRelay.Event] = []
+    relay.addListener(ObjectIdentifier(listener)) { delivered.append($0) }
+
+    // Pages vote separately, under their own keys.
+    final class Page {}
+    let page = Page()
+    relay.setConsuming(true, for: ObjectIdentifier(page))
+    delivered.removeAll()
+
+    provider.onPlaybackChanged?(.playing)
+    XCTAssertEqual(
+      delivered, [.playback(.playing)],
+      "a listener was dropped because its key was not also a consumer key")
+  }
+
   func testATimelineTheProviderWithdrewEmitsNothingRatherThanZero() {
     let provider = FakeSystemMediaProvider()
     let relay = WebWallpaperMediaRelay(provider: provider)

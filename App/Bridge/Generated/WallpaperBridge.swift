@@ -1228,6 +1228,17 @@ public protocol WallpaperBridgeProtocol : AnyObject {
      */
     func submitSystemMediaEvent(json: String) async throws 
     
+    /**
+     * Handles whose user allowed media integration, whether or not they are
+     * currently being fed. Use `system_media_scene_handles` to decide whether
+     * to consume at all.
+     *
+     * # Errors
+     *
+     * Returns an error when the bridge actor is gone.
+     */
+    func systemMediaConsentHandles() async throws  -> [UInt64]
+    
     func systemMediaSceneHandles() async throws  -> [UInt64]
     
     /**
@@ -2951,6 +2962,32 @@ open func submitSystemMediaEvent(json: String)async throws  {
             completeFunc: ffi_wallpaper_bridge_rust_future_complete_void,
             freeFunc: ffi_wallpaper_bridge_rust_future_free_void,
             liftFunc: { $0 },
+            errorHandler: FfiConverterTypeBridgeError.lift
+        )
+}
+    
+    /**
+     * Handles whose user allowed media integration, whether or not they are
+     * currently being fed. Use `system_media_scene_handles` to decide whether
+     * to consume at all.
+     *
+     * # Errors
+     *
+     * Returns an error when the bridge actor is gone.
+     */
+open func systemMediaConsentHandles()async throws  -> [UInt64] {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_wallpaper_bridge_fn_method_wallpaperbridge_system_media_consent_handles(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_wallpaper_bridge_rust_future_poll_rust_buffer,
+            completeFunc: ffi_wallpaper_bridge_rust_future_complete_rust_buffer,
+            freeFunc: ffi_wallpaper_bridge_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceUInt64.lift,
             errorHandler: FfiConverterTypeBridgeError.lift
         )
 }
@@ -8693,6 +8730,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_submit_system_media_event() != 19034) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_system_media_consent_handles() != 3790) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallpaper_bridge_checksum_method_wallpaperbridge_system_media_scene_handles() != 58499) {

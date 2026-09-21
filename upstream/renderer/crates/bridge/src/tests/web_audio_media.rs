@@ -479,6 +479,205 @@ async fn scene_media_handles_follow_consent_so_nothing_reads_the_player_without_
     );
 }
 
+/// Consent says a wallpaper *may* receive media. It does not say anything is
+/// there to receive it.
+///
+/// Every pause reason leaves the handle alive and the setting on, so asking
+/// only "is there still a handle" kept the adapter process, its timeline
+/// ticker and every fan-out running to update surfaces that had stopped
+/// presenting. An incoming shortcut is judged on consent instead, which pause
+/// does not revoke.
+#[tokio::test]
+async fn paused_and_suspended_scenes_stop_consuming_media_but_keep_their_consent() {
+    let engine = FakeEngineFacade::default();
+    engine.set_snapshot(vec![DisplaySnapshotEntry {
+        handle: Some(SceneHandle::new(11)),
+        accepts_pointer_input: true,
+        window_active: true,
+        assignment: Some(WallpaperAssignment::Direct(
+            SceneTemplate::builder("/workshop/content/431960/100/project.json")
+                .build()
+                .unwrap(),
+        )),
+        ..display_snapshot(7)
+    }]);
+    let bridge = BridgeBuilder::new(engine.clone())
+        .with_state(crate::actor::state::BridgeActorState::default())
+        .build()
+        .unwrap();
+    bridge
+        .inject_scene_wallpaper_config_for_test("100", "Scene")
+        .await;
+    bridge
+        .set_display_config_enabled("100".into(), "7".into(), true)
+        .await
+        .unwrap();
+    bridge.apply_wallpaper_options("100".into()).await.unwrap();
+    bridge
+        .set_media_integration_enabled("100".into(), true)
+        .await
+        .unwrap();
+    assert_eq!(bridge.system_media_scene_handles().await.unwrap(), vec![11]);
+
+    bridge.pause_all().await.unwrap();
+    assert!(
+        bridge.system_media_scene_handles().await.unwrap().is_empty(),
+        "a paused wallpaper kept the host reading the system player"
+    );
+    assert_eq!(
+        bridge.system_media_consent_handles().await.unwrap(),
+        vec![11],
+        "pausing is not the user withdrawing permission"
+    );
+
+    let before = engine.media_event_calls().len();
+    bridge
+        .submit_system_media_event(r#"{"type":"mediaPlaybackChanged","state":1}"#.into())
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.media_event_calls().len(),
+        before,
+        "a paused wallpaper was still being fed events"
+    );
+
+    bridge.play_all().await.unwrap();
+    assert_eq!(
+        bridge.system_media_scene_handles().await.unwrap(),
+        vec![11],
+        "resuming did not bring the consumer back"
+    );
+
+    // The same surface, stopped for a reason that is not global playback.
+    bridge
+        .set_display_presentation_suspended("7".into(), true)
+        .await
+        .unwrap();
+    assert!(
+        bridge.system_media_scene_handles().await.unwrap().is_empty(),
+        "an occluded display kept its scene consuming media"
+    );
+    bridge
+        .set_display_presentation_suspended("7".into(), false)
+        .await
+        .unwrap();
+    assert_eq!(bridge.system_media_scene_handles().await.unwrap(), vec![11]);
+
+    bridge.set_presentation_suspended(true).await.unwrap();
+    assert!(
+        bridge.system_media_scene_handles().await.unwrap().is_empty(),
+        "a global presentation suspend kept its scenes consuming media"
+    );
+}
+
+/// One dark display must not silence the one the user is still looking at, and
+/// must not keep being fed itself — through any entry point.
+///
+/// The fan-out and the older `GetSceneMediaWallpapers` / `UpdateSceneMedia`
+/// pair answered different questions: the second pair looked only at global
+/// playback, so a scene on an occluded display stayed eligible there after the
+/// fan-out had already dropped it.
+#[tokio::test]
+async fn one_suspended_display_stops_only_its_own_scene_on_every_entry_point() {
+    let scene = |id: u32| DisplaySnapshotEntry {
+        handle: Some(SceneHandle::new(u64::from(id))),
+        accepts_pointer_input: true,
+        window_active: true,
+        assignment: Some(WallpaperAssignment::Direct(
+            SceneTemplate::builder("/workshop/content/431960/100/project.json")
+                .build()
+                .unwrap(),
+        )),
+        ..display_snapshot(id)
+    };
+    let engine = FakeEngineFacade::default();
+    engine.set_snapshot(vec![scene(7), scene(8)]);
+    let bridge = BridgeBuilder::new(engine.clone())
+        .with_state(crate::actor::state::BridgeActorState::default())
+        .build()
+        .unwrap();
+    bridge
+        .inject_scene_wallpaper_config_for_test("100", "Scene")
+        .await;
+    for display in ["7", "8"] {
+        bridge
+            .set_display_config_enabled("100".into(), display.into(), true)
+            .await
+            .unwrap();
+    }
+    bridge.apply_wallpaper_options("100".into()).await.unwrap();
+    bridge
+        .set_media_integration_enabled("100".into(), true)
+        .await
+        .unwrap();
+
+    let mut both = bridge.system_media_scene_handles().await.unwrap();
+    both.sort_unstable();
+    assert_eq!(both, vec![7, 8]);
+    assert_eq!(
+        bridge.scene_media_wallpaper_ids().await.unwrap(),
+        vec!["100".to_string()],
+        "both displays are presenting, so the wallpaper is listed"
+    );
+
+    bridge
+        .set_display_presentation_suspended("7".into(), true)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        bridge.system_media_scene_handles().await.unwrap(),
+        vec![8],
+        "the visible display kept consuming; only the dark one dropped out"
+    );
+    assert_eq!(
+        bridge.scene_media_wallpaper_ids().await.unwrap(),
+        vec!["100".to_string()],
+        "a wallpaper still visible somewhere stays listed"
+    );
+
+    let events_before = engine.media_event_calls().len();
+    let artwork_before = engine.media_artwork_calls().len();
+    bridge
+        .submit_system_media_event(r#"{"type":"mediaPlaybackChanged","state":1}"#.into())
+        .await
+        .unwrap();
+    bridge
+        .apply_system_media_artwork(2, 2, vec![0u8; 16])
+        .await
+        .unwrap();
+
+    let events: Vec<SceneHandle> = engine.media_event_calls()[events_before..]
+        .iter()
+        .map(|(handle, _)| *handle)
+        .collect();
+    assert_eq!(
+        events,
+        vec![SceneHandle::new(8)],
+        "the suspended display was still being fed events"
+    );
+    let artwork: Vec<SceneHandle> = engine.media_artwork_calls()[artwork_before..]
+        .iter()
+        .map(|call| call.0)
+        .collect();
+    assert_eq!(
+        artwork,
+        vec![SceneHandle::new(8)],
+        "the suspended display was still being sent covers"
+    );
+
+    // Suspend the other one too: nothing is presenting, so nothing consumes.
+    bridge
+        .set_display_presentation_suspended("8".into(), true)
+        .await
+        .unwrap();
+    assert!(bridge.system_media_scene_handles().await.unwrap().is_empty());
+    assert!(
+        bridge.scene_media_wallpaper_ids().await.unwrap().is_empty(),
+        "the legacy list still named a wallpaper no display was showing"
+    );
+}
+
 #[tokio::test]
 async fn scene_optimization_defaults_on_and_survives_a_restart() {
     let temp = tempfile::tempdir().unwrap();

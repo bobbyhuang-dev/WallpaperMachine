@@ -38,7 +38,8 @@ use crate::{
             SetAudioResponseEnabled, SetBatteryQualityProfile, SetContentPacingEnabled,
             SetDisplayConfigEnabled, SetDisplayEnabled, SetDisplayMode,
             SetDisplayPresentationSuspended,
-            FanOutSystemMediaArtwork, FanOutSystemMediaEvent, GetSystemMediaSceneHandles, SetFilter,
+            FanOutSystemMediaArtwork, FanOutSystemMediaEvent, GetSystemMediaConsentHandles,
+            GetSystemMediaSceneHandles, SetFilter,
             SetGlobalPlayback,
             SetLaunchAtLogin, SetMediaIntegrationEnabled,
             SetMirrorMuted, SetMirrorScalingFactor,
@@ -3136,7 +3137,34 @@ impl<E: EngineFacade + Clone> Message<SetMediaIntegrationEnabled> for BridgeActo
 }
 
 impl<E: EngineFacade + Clone> BridgeActor<E> {
-    fn media_scene_handles(&self) -> Vec<SceneHandle> {
+    /// Displays that cannot present right now, as scene handles.
+    ///
+    /// Per-display occlusion is not part of `playback_paused`, which is the
+    /// set of reasons that stop every display at once; it has to be composed
+    /// on top, and a handle is how the media paths name a surface.
+    fn suspended_display_handles(&self) -> HashSet<SceneHandle> {
+        if self.state.suspended_displays.is_empty() {
+            return HashSet::new();
+        }
+        self.engine
+            .display_snapshot()
+            .iter()
+            .filter(|entry| {
+                self.state
+                    .suspended_displays
+                    .contains(&entry.desc.display_id)
+            })
+            .filter_map(|entry| entry.handle)
+            .collect()
+    }
+
+    /// Scene handles whose user allowed this wallpaper near their media.
+    ///
+    /// Consent is a setting, not a state: it does not change because playback
+    /// stopped. This answers "may this surface take part in media at all",
+    /// which is the question an incoming user shortcut has to pass before it
+    /// is allowed to reach a media player.
+    fn media_consent_handles(&self) -> Vec<SceneHandle> {
         let mut handles = Vec::new();
         let mut seen = HashSet::new();
         for (id, config) in &self.state.wallpaper_configs {
@@ -3157,17 +3185,44 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
         }
         handles
     }
+
+    /// Scene handles that should be fed system media *now*.
+    ///
+    /// Opting in is not consuming. A wallpaper the user paused, one the power
+    /// policy suspended, one behind a global presentation suspend and one on an
+    /// occluded display all still have a live handle and an enabled setting, so
+    /// "there is still a handle" kept the adapter process, its timeline ticker
+    /// and every conversion and fan-out alive to update surfaces nobody can
+    /// see. The effective set is the consenting set minus every pause reason.
+    ///
+    /// This is the set the host asks for when it decides whether to consume at
+    /// all, so it going empty is what releases the shared provider — while a
+    /// web wallpaper that is still visible keeps its own vote.
+    fn media_scene_handles(&self) -> Vec<SceneHandle> {
+        if self.playback_paused() {
+            return Vec::new();
+        }
+        let suspended = self.suspended_display_handles();
+        let mut handles = self.media_consent_handles();
+        handles.retain(|handle| !suspended.contains(handle));
+        handles
+    }
 }
 
 impl<E: EngineFacade + Clone> Message<messages::GetSceneMediaWallpapers> for BridgeActor<E> {
     type Reply = Result<Vec<String>, BridgeError>;
     async fn handle(&mut self, _msg: messages::GetSceneMediaWallpapers,
         _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        if self.playback_paused() { return Ok(Vec::new()); }
+        // The same effective set the fan-out uses. Answering from
+        // `playback_paused` alone left a scene on an occluded display eligible
+        // here while the fan-out had already dropped it, so the two entry
+        // points disagreed about who was consuming.
+        let effective: HashSet<SceneHandle> = self.media_scene_handles().into_iter().collect();
+        if effective.is_empty() { return Ok(Vec::new()); }
         Ok(self.state.library.iter().filter(|entry| {
             entry.kind == crate::api::BridgeWallpaperKind::ProjectScene
                 && self.state.wallpaper_configs.get(&entry.id).is_some_and(|c| c.media_integration_enabled)
-                && !self.wallpaper_handles(&entry.id, true).is_empty()
+                && self.wallpaper_handles(&entry.id, true).iter().any(|handle| effective.contains(handle))
         }).map(|entry| entry.id.clone()).collect())
     }
 }
@@ -3176,9 +3231,11 @@ impl<E: EngineFacade + Clone> Message<messages::UpdateSceneMedia> for BridgeActo
     type Reply = Result<(), BridgeError>;
     async fn handle(&mut self, msg: messages::UpdateSceneMedia,
         _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        if self.playback_paused() || !self.state.wallpaper_configs.get(&msg.wallpaper_id)
+        if !self.state.wallpaper_configs.get(&msg.wallpaper_id)
             .is_some_and(|c| c.media_integration_enabled) { return Ok(()); }
+        let effective: HashSet<SceneHandle> = self.media_scene_handles().into_iter().collect();
         for handle in self.wallpaper_handles(&msg.wallpaper_id, true) {
+            if !effective.contains(&handle) { continue; }
             self.engine.update_media(handle, true, msg.state.clone()).await
                 .map_err(|error| BridgeError::engine(error.to_string()))?;
         }
@@ -3232,6 +3289,22 @@ impl<E: EngineFacade + Clone> Message<GetSystemMediaSceneHandles> for BridgeActo
     ) -> Self::Reply {
         Ok(self
             .media_scene_handles()
+            .into_iter()
+            .map(SceneHandle::raw)
+            .collect())
+    }
+}
+
+impl<E: EngineFacade + Clone> Message<GetSystemMediaConsentHandles> for BridgeActor<E> {
+    type Reply = messages::GetSystemMediaConsentHandlesReply;
+
+    async fn handle(
+        &mut self,
+        _msg: GetSystemMediaConsentHandles,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .media_consent_handles()
             .into_iter()
             .map(SceneHandle::raw)
             .collect())

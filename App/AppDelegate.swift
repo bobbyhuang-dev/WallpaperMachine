@@ -167,6 +167,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     Task {
                         do {
                             try await store.setPresentationSuspendedAsync(suspended)
+                            // Presentation suspend commits without producing a
+                            // snapshot, so nothing else would recompute who is
+                            // still consuming system media. Without this the
+                            // adapter process and its timeline ticker keep
+                            // running for scenes that stopped presenting, until
+                            // some unrelated UI change happens to apply one.
+                            self.sceneMediaSink?.reconcile()
                             completion(.success(()))
                         } catch {
                             AppLog.error("presentation suspend failed: \(error.localizedDescription)")
@@ -186,6 +193,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                         do {
                             try await store.setDisplayPresentationSuspendedAsync(
                                 displayID: displayID, suspended: suspended)
+                            // Same reason as the global path: a display going
+                            // dark changes the effective consumer set and
+                            // produces no snapshot of its own.
+                            self.sceneMediaSink?.reconcile()
                             completion(.success(()))
                         } catch {
                             AppLog.error("""

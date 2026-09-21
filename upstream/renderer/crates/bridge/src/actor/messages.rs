@@ -265,14 +265,23 @@ pub struct FanOutSystemMediaArtwork {
     pub rgba: Vec<u8>,
 }
 
-/// Asks which applied desktop scenes have consented to now-playing.
+/// Asks which applied desktop scenes should be fed now-playing right now.
 ///
 /// The host reads the system player only while something would receive it, so
-/// an empty answer is what keeps a machine with the setting off from being
-/// asked for Automation permission. The handles themselves matter too: a scene
-/// that has just been created starts with no media state, and the host can
-/// only know to replay for it by seeing a handle it has not fed.
+/// an empty answer is what keeps a machine with the setting off — or one whose
+/// wallpapers are all paused or suspended — from being asked for Automation
+/// permission and from running the adapter. The handles themselves matter too:
+/// a scene that has just been created starts with no media state, and the host
+/// can only know to replay for it by seeing a handle it has not fed.
 pub struct GetSystemMediaSceneHandles;
+
+/// Asks which applied desktop scenes their user allowed near media at all.
+///
+/// Distinct from `GetSystemMediaSceneHandles`, which answers "should this be
+/// receiving media now" and therefore shrinks when playback stops. Consent does
+/// not shrink: a wallpaper whose button press is on its way must be judged on
+/// what its user permitted, not on whether it happens to be presenting.
+pub struct GetSystemMediaConsentHandles;
 
 /// Stores the absolute path the host staged for a file or directory property,
 /// or clears it. The path is persisted exactly as given.
@@ -403,6 +412,7 @@ pub type SetMediaIntegrationEnabledReply = WallpaperMutationReply;
 pub type FanOutSystemMediaEventReply = Result<(), BridgeError>;
 pub type FanOutSystemMediaArtworkReply = Result<(), BridgeError>;
 pub type GetSystemMediaSceneHandlesReply = Result<Vec<u64>, BridgeError>;
+pub type GetSystemMediaConsentHandlesReply = Result<Vec<u64>, BridgeError>;
 pub type SetPropertyPathReply = WallpaperMutationReply;
 pub type GetNativeVideoWallpapersReply = Result<Vec<BridgeNativeVideoWallpaper>, BridgeError>;
 pub type RejectNativeVideoReply = Result<(), BridgeError>;

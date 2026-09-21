@@ -25,6 +25,19 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-22 — Re-verified and delivered on the renamed tree, with the LGPL FFmpeg
+
+The trail fix was verified before the rename landed; rebasing onto it made both gates unrunnable because `Formula/mwe-ffmpeg.rb` was not installed. Installed with the user's authorization, then everything re-run on the rebased tree.
+
+- `python3 scripts/install_ffmpeg.py` — exit 0 in 93s; `--check` reports mwe-ffmpeg 8.1.2 installed from the current formula
+- `artifacts/renderer/bin` deleted first: its CMake cache still pointed at Homebrew ffmpeg@8, which is what made the pre-install test host abort with "search path '/opt/homebrew/opt/mwe-ffmpeg/lib' not found"
+- `python3 scripts/test.py` — exit 0; 535 passed, 11 skipped of 546
+- `python3 scripts/check_renderer.py --assets <old SceneAssets> --project 3605722997` — exit 0 in 156s; every gtest binary 0 including particle_mouse_controlpoint_test, 10 generated cases pixel-equal with 0 diagnostics, local project pooled+isolated exit 0 and pixels_equal=True, reload cycles 0
+- `python3 scripts/build.py --configuration Release` — exit 0; ParticleSystem.cpp 23:43:31, its object 00:06:27, libwallpaper_bridge.a 00:06:56, app binary 00:07:34
+- `build/Build/Products/Release/WallpaperMachine.app` — 42,039,392-byte arm64 Mach-O, ad-hoc signed, app.wallpapermachine 0.5.0 (16); otool shows libavcodec/libavformat/libavutil/libswscale resolved to /opt/homebrew/opt/mwe-ffmpeg, not Homebrew ffmpeg@8. Stale MacWallpaperEngine.* products removed from the Release directory
+- Gap the rename leaves, not this change: nothing migrates ~/Library/Application Support/mac-wallpaper-engine to .../WallpaperMachine and the defaults domain moved from app.mac-wallpaper-engine to the empty app.wallpapermachine, so the new bundle starts with no library and default settings until the data is moved
+- Not run: the app was not launched, no wallpaper applied, no desktop check. Trail and interaction behaviour on screen stay unverified
+
 ## 2026-09-21 — The mouse trail tracked the canvas, not the window
 
 A particle system's mouse-linked control point derived its own scene coordinate as `pointerPosition * ortho` while the scripts used the presentation's cursor viewport. Reported as a trail that tracks in the middle of the screen and slides away toward the sides, on more than one wallpaper. `SetCursorInput` now publishes its mapped point to `Scene::pointerScenePosition` and the control point reads it.
@@ -36,6 +49,7 @@ A particle system's mouse-linked control point derived its own scene coordinate 
 - `python3 scripts/test.py` — exit 0; 535 passed, 11 skipped of 546
 - `python3 scripts/build.py --configuration Release` — exit 0 in 64s; ParticleSystem.cpp edited 23:27:58, its object 23:40:21, libwallpaper_bridge.a 23:40:50, app binary 23:41:21
 - Not covered: nothing exercises SceneWallpaper's message loop offscreen, so the host half — polling the pointer, publishing the viewport — is still only unit-covered. On-screen trail behaviour unverified until the user reopens the app
+
 ## 2026-09-21 — Renamed the project from MacWallpaperEngine to WallpaperMachine
 
 The rename was half applied and was rebased onto the nineteen renderer/media commits already on origin/main, so the incoming work had to be carried onto the new name as well.
@@ -129,17 +143,4 @@ The instrumented build logged 'Stopped waiting for wallpaper shortcuts' at start
 - New a_reported_press_comes_back_out_of_the_bridge: fails with the forwarder removed ("the bridge never installed its sink"), passes with it
 - Two robustness fixes alongside: a failed consent lookup no longer kills the loop permanently, and the Swift loop retries five times with backoff and logs the actual error instead of discarding it
 - scripts/test.py 535 passed / 0 failed / 11 skipped of 546; wallpaper-bridge 322 passed
-- Release rebuilt
-
-## 2026-09-21 — Nothing was waiting at the end of the shortcut chain
-
-Presses still did nothing after the value fix. Instrumenting each hop and reading the user's log settled it in one press instead of another round of reasoning.
-
-- Log evidence: `openUserShortcut nextsongbutton -> "media:next"` and `user shortcut reported: request=1 callback=1 value="media:next"` both appear, so the value fix works and the request crosses the main looper
-- Neither the consent-drop line nor the carried-out line appears, which places the break after the engine and before anything acts
-- Cause: SceneMediaCoordinator, which owned the nextUserShortcut long poll, was never constructed. It appeared only in two stop() calls. The class was dead code, so the whole Swift half of the chain never ran
-- The wait now belongs to SceneMediaSink, the object that already holds the one live DesktopMediaSession and is actually constructed; DesktopMediaSession gained send(_:). The dead coordinator is deleted rather than started, which would have double-subscribed the provider
-- Verified the last link directly against the machine before changing anything: the bundled adapter toggled Spotify False -> True -> False, so send was never the problem
-- New testAPressReachesThePlayer: three presses in, two commands out, and a binding this host cannot carry out never reaches the player
-- scripts/test.py 535 passed / 0 failed / 11 skipped of 546; SceneMediaSinkTests 7 passed
 - Release rebuilt

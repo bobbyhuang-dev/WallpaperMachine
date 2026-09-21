@@ -15,6 +15,19 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — Nothing was waiting at the end of the shortcut chain
+
+Presses still did nothing after the value fix. Instrumenting each hop and reading the user's log settled it in one press instead of another round of reasoning.
+
+- Log evidence: `openUserShortcut nextsongbutton -> "media:next"` and `user shortcut reported: request=1 callback=1 value="media:next"` both appear, so the value fix works and the request crosses the main looper
+- Neither the consent-drop line nor the carried-out line appears, which places the break after the engine and before anything acts
+- Cause: SceneMediaCoordinator, which owned the nextUserShortcut long poll, was never constructed. It appeared only in two stop() calls. The class was dead code, so the whole Swift half of the chain never ran
+- The wait now belongs to SceneMediaSink, the object that already holds the one live DesktopMediaSession and is actually constructed; DesktopMediaSession gained send(_:). The dead coordinator is deleted rather than started, which would have double-subscribed the provider
+- Verified the last link directly against the machine before changing anything: the bundled adapter toggled Spotify False -> True -> False, so send was never the problem
+- New testAPressReachesThePlayer: three presses in, two commands out, and a binding this host cannot carry out never reaches the player
+- scripts/test.py 535 passed / 0 failed / 11 skipped of 546; SceneMediaSinkTests 7 passed
+- Release rebuilt
+
 ## 2026-09-21 — The bound shortcut never reached the scene engine
 
 The button pressed and released correctly after the capture fix, but the player still did not skip. The default bound in the last change only existed on the panel side.
@@ -37,6 +50,7 @@ Reported with a screenshot: the next button sits flattened to a dash and the pla
 - Offscreen render of the wallpaper with media events confirms all three transport buttons draw correctly, so nothing was wrong with the asset, model, material or scripts
 - scripts/test.py 534 passed / 0 failed / 11 skipped of 545; scene_schema_tests 80 passed with the two pre-existing pointer-commit timeouts; check_renderer.py 10 cases pixels_equal=True
 - Release rebuilt after the fix
+
 ## 2026-09-21 — Why the transport buttons did nothing, and what the progress bar actually is
 
 Reported: the transport buttons still have no effect, and the progress bar cannot be dragged. Both were investigated against the installed wallpaper rather than assumed.

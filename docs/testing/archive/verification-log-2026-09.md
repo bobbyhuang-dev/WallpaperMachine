@@ -15,6 +15,16 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — The button sound reaches the runtime and plays; the Metal brightness predates the blur chain
+
+Two open questions closed by measurement. The sound: parsed through WPSoundParser, the layer registers, starts silent as its author asked, and PlaySoundLayer makes it play -- so nothing between the click handler and the stream is swallowing it. If a user still hears nothing, the remaining suspects are app-side output, which this does not cover.
+
+- `AButtonSoundStartsSilentAndPlaysWhenAsked` pins both halves: quiet at rest, playing after the ask
+- Metal: dumping all 64 targets with their bright tail shows every post-processing intermediate -- _downscaled1/2, _full1/_full2, _rt_FullCompoBuffer1, both _rt_QuarterCompoBuffers -- already at p99 255 with mean ~101, so the bright content exists before that chain rather than being made by it
+- Two earlier suspects are ruled out: `_coc` reads 255 because its Mask mode writes CAST4(mask) with mask 1.0, and it is an rg88 target an RGBA readback reports oddly; the clouds effect input is a white card on both backends by design
+- Still not isolated: which pass first writes the tail. Visibility gating, blend factors and the alpha write mask are identical between backends, and clamping LOD moves the mean onto Vulkan without moving the tail
+- `scene_schema_tests` 77 passed plus the two known pointer timeouts
+
 ## 2026-09-21 — Release build after the revert and the doc updates
 
 python3 scripts/build.py --configuration Release, following the full gate.
@@ -73,6 +83,7 @@ The Swift side takes presses off the bridge's long poll and carries them out thr
 - Combo labels now go through `t()` in the panel, with the four actions in the zh-Hans catalogue. "No action" rather than "None" — that key already means deselect-all
 - `scripts/test.py` — 526 passed, 0 failed, 11 skipped of 537; `cargo test --release -p wallpaper-bridge --lib` 317 passed
 - Unverified: no desktop run. Whether a press moves a real player was not observed here, only that the command is handed to the adapter the state comes from
+
 ## 2026-09-21 — A wallpaper's shortcut press now reaches the host, gated on the user's media consent
 
 The engine pushes each request to an installed observer instead of holding it, because a request no host has taken is a press the user already stopped waiting for. WallpaperBridge::next_user_shortcut long-polls a bounded channel outside the actor, so waiting for a rare press stalls no other request and costs no idle wakeup, and it drops requests from wallpapers missing from system_media_scene_handles.

@@ -25,6 +25,14 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — Power regression: two defects the restored dispatch and its guard exposed
+
+- Restoring CMD_SET_RENDER_SCALE dispatch made MetalRender::ApplyRenderScale reachable for the first time, and it had no same-value guard: it set scene.render_scale and called compile() unconditionally, which begins with releaseGraph() - video.release, images.clear, pipelines. apply_effective_render_scale pushes the scale to every open scene on scene creation and on every SetPowerSource/InitialFrameReady while the battery profile is on, and its own comment says it exists so a dragged quality control does not reparse the project or reopen its video. A Metal-preferred user would have taken a full rebuild plus video reopen on each plug and unplug at an unchanged value.
+- MetalRender::ApplyRenderScale now clamps to kMinRenderScale..1.0 and returns early when scene.render_scale already equals it, mirroring VulkanRender::Impl::applyRenderScale. Caught by review before the behaviour shipped; the earlier round had recorded this path as Metal-only and unreachable, which stopped being true the moment the dispatch was fixed.
+- The -Werror=switch guard's second catch was a live misreport, not a stale warning. crates/core/src/owe/scene_registry.rs:103 feeds owe_scene_wallpaper_video_path into SceneVideoPath::from_raw, which maps 5 to Nv12ConvertedPreparing, but the C enumeration stopped at NV12_MIXED = 4 and the switch fell through to OWE_SCENE_VIDEO_PATH_NONE. A scene that had chosen the converted path and was preparing it reported having no video path at all. Corrected by adding OWE_SCENE_VIDEO_PATH_NV12_CONVERTED_PREPARING = 5 and returning it, rather than the earlier mapping to NONE.
+- Gates on these two fixes: scripts/check_renderer.py all binaries 0, pixels equal, 0 diagnostics; scripts/test.py 534 passed / 0 failed / 11 skipped.
+- Not run: launch, wallpaper change, screenshots, audio capture, power measurement. No watt or percentage claimed. Metal-preferred rendering and non-default internal quality still need the user's visual acceptance.
+
 ## 2026-09-21 — Power regression: render scale was never wired, switch guard made hard, delivery
 
 - Archaeology settles it: git log -S 'CASE_CMD(SET_RENDER_SCALE)' returns nothing, while the enumerator arrives in 48b8df2 'feat(quality): internal render scale, quality settings, shared video decode'. The case never existed, so internal render scale never worked for scene wallpapers - this is never-wired, not a regression, and therefore cannot explain a power increase. It does explain why lowering internal quality never saved anything.
@@ -125,14 +133,3 @@ Giving the Vulkan probe the same target dump the Metal harness has makes the two
 - Alpha is 255 on every written target on both backends, so that shader reduces to a plain four-tap average and must preserve the mean. Metal does (100.5 to 101.1); Vulkan gains 39% (105.5 to 147.2) — so the pass that deviates is the Compatibility one, not Native Metal
 - Everything downstream inherits it: _full1/_full2 143.2 vs 100.6, the quarter buffers 122.9 vs 101.1, and finally _rt_default 98.8/p99 121 against 81.8/p99 202
 - `scripts/check_renderer.py` clean — 10 generated cases pixels_equal=True; `metal_scene_draw_smoke` 33 passed
-
-## 2026-09-21 — The button sound reaches the runtime and plays; the Metal brightness predates the blur chain
-
-Two open questions closed by measurement. The sound: parsed through WPSoundParser, the layer registers, starts silent as its author asked, and PlaySoundLayer makes it play -- so nothing between the click handler and the stream is swallowing it. If a user still hears nothing, the remaining suspects are app-side output, which this does not cover.
-
-- `AButtonSoundStartsSilentAndPlaysWhenAsked` pins both halves: quiet at rest, playing after the ask
-- Metal: dumping all 64 targets with their bright tail shows every post-processing intermediate -- _downscaled1/2, _full1/_full2, _rt_FullCompoBuffer1, both _rt_QuarterCompoBuffers -- already at p99 255 with mean ~101, so the bright content exists before that chain rather than being made by it
-- Two earlier suspects are ruled out: `_coc` reads 255 because its Mask mode writes CAST4(mask) with mask 1.0, and it is an rg88 target an RGBA readback reports oddly; the clouds effect input is a white card on both backends by design
-- Still not isolated: which pass first writes the tail. Visibility gating, blend factors and the alpha write mask are identical between backends, and clamping LOD moves the mean onto Vulkan without moving the tail
-- `scene_schema_tests` 77 passed plus the two known pointer timeouts
-

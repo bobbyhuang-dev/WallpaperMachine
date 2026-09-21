@@ -117,6 +117,16 @@ struct ImageSlots : NoCopy {
 struct ImageSlotsRef {
     std::vector<ImageParameters> slots;
     std::shared_ptr<const void> video_frame_owner;
+    /// Keeps a cached image alive for as long as anything is still bound to
+    /// it.
+    ///
+    /// `slots` are raw handles, and the cache is keyed by `Image::key`, so
+    /// dropping a cache entry is not proof that nothing samples it any more:
+    /// two runtime names may alias one image — `$mediaThumbnail` and
+    /// `$mediaPreviousThumbnail` do exactly that on every cover change — and
+    /// replacing one of them would otherwise free the image the other is
+    /// still reading from.
+    std::shared_ptr<const void> image_owner;
 
     idx active { 0 };
 
@@ -131,6 +141,8 @@ struct ImageSlotsRef {
     ImageSlotsRef(ImageSlotsRef&&) noexcept = default;
     ImageSlotsRef& operator=(ImageSlotsRef&&) noexcept = default;
     ImageSlotsRef(const ImageSlots&);
+    /// Binds to a cached image and shares its lifetime.
+    explicit ImageSlotsRef(const std::shared_ptr<ImageSlots>&);
 };
 
 } // namespace vulkan

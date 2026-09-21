@@ -83,5 +83,11 @@ ImageSlotsRef::ImageSlotsRef(const ImageSlots& o)
     : slots(std::vector<ImageParameters>(o.slots.begin(), o.slots.end())),
       video_frame_owner() {}
 
+ImageSlotsRef::ImageSlotsRef(const std::shared_ptr<ImageSlots>& o)
+    : slots(o == nullptr ? std::vector<ImageParameters>()
+                         : std::vector<ImageParameters>(o->slots.begin(), o->slots.end())),
+      video_frame_owner(),
+      image_owner(o) {}
+
 } // namespace vulkan
 } // namespace wallpaper

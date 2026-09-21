@@ -801,15 +801,16 @@ ImageSlotsRef TextureCache::CreateTex(Image& image, TextureUploadSynchronization
         return CreateVideoTex(image, std::move(source));
     }
 
-    if (exists(m_tex_map, image.key)) {
-        return m_tex_map.at(image.key);
+    if (auto cached = m_tex_map.find(image.key); cached != m_tex_map.end()) {
+        return ImageSlotsRef(cached->second);
     }
 
     ImageSlots img_slots;
     bool       submitted_upload = false;
     auto       fail_texture_upload       = [&]() -> ImageSlotsRef {
         if (submitted_upload) {
-            m_retired_runtime_textures.emplace_back(std::move(img_slots));
+            m_retired_runtime_textures.emplace_back(
+                std::make_shared<ImageSlots>(std::move(img_slots)));
             std::string error;
             if (! waitForPendingTextureUploads(&error) && ! error.empty()) {
                 LOG_ERROR(
@@ -917,8 +918,9 @@ ImageSlotsRef TextureCache::CreateTex(Image& image, TextureUploadSynchronization
             return fail_texture_upload();
         }
     }
-    m_tex_map[image.key] = std::move(img_slots);
-    return m_tex_map[image.key];
+    auto stored        = std::make_shared<ImageSlots>(std::move(img_slots));
+    m_tex_map[image.key] = stored;
+    return ImageSlotsRef(stored);
 }
 
 ImageSlotsRef TextureCache::CreateVideoTex(
@@ -1060,6 +1062,11 @@ void TextureCache::collectCompletedTextureUploads() {
 void TextureCache::retireRuntimeTexture(std::string_view key) {
     auto iter = m_tex_map.find(key);
     if (iter == m_tex_map.end()) return;
+    // Retires the name, not necessarily the memory. Two runtime names can
+    // alias one image — a cover change makes `$mediaPreviousThumbnail` hold
+    // exactly what `$mediaThumbnail` held — so a pass still bound to it keeps
+    // its own reference and the image goes when the last holder does, not
+    // when this key is dropped.
     m_retired_runtime_textures.emplace_back(std::move(iter->second));
     m_tex_map.erase(iter);
 }

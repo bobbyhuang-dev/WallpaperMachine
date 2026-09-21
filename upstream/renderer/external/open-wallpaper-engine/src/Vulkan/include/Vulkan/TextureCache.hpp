@@ -254,7 +254,10 @@ private:
     uint64_t                              m_video_import_submit_serial { 0 };
 
     const Device&                m_device;
-    Map<std::string, ImageSlots> m_tex_map;
+    /// Shared, because a cache entry is not the only holder: a pass bound to
+    /// an image keeps its own reference, so replacing or clearing a key
+    /// retires the name while the image itself lives until nothing samples it.
+    Map<std::string, std::shared_ptr<ImageSlots>> m_tex_map;
     struct ImportedVideoFrame {
         /// Owns the imported frame: the Core Video texture wrapper, the pixel
         /// buffer and the Metal texture retire together when the last holder of
@@ -341,7 +344,7 @@ private:
     bool m_device_lost { false };
     std::vector<TextureUploadSubmissionSlot>    m_texture_upload_slots;
     uint64_t                                    m_texture_upload_submit_serial { 0 };
-    std::vector<ImageSlots>                     m_retired_runtime_textures;
+    std::vector<std::shared_ptr<ImageSlots>>    m_retired_runtime_textures;
     void*                                       m_metal_device { nullptr };
     bool                                        m_metal_device_queried { false };
 

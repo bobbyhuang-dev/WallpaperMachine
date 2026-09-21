@@ -19,6 +19,7 @@
 
 #include "Image.hpp"
 #include "Interface/IShaderValueUpdater.h"
+#include "Runtime/RuntimeImageSource.hpp"
 #include "Platform/Apple/FfmpegVideoInterop.hpp"
 #include "Shader/RustShaderBridge.hpp"
 #include "Video/VideoColorConversion.hpp"
@@ -2402,6 +2403,141 @@ TEST_F(PlaybackGPU, DirectTranslucentEdgesBlendAgainstTheSameClearColor) {
             ASSERT_NEAR(rgba[offset+2],x<16 ? 128 : 255,1);
             ASSERT_EQ(rgba[offset+3],255);
         }
+    }
+}
+
+/// A cover change makes two runtime names hold one image, and replacing either
+/// of them must not free what the other is sampling.
+///
+/// `$mediaPreviousThumbnail` becomes exactly what `$mediaThumbnail` was, so
+/// both names resolve to one `Image::key` and one cached texture. The bindings
+/// are refreshed independently, in whatever order the author's texture slots
+/// happen to be in, and whichever of them moves second retires the key the
+/// first has just bound to. The binding that lost the race never refreshes
+/// again either, because its own key did not change — so it samples freed
+/// memory for the rest of the scene's life. This ran only once the cover stopped
+/// rebuilding the graph, which used to clear the whole cache and re-prepare
+/// every binding.
+TEST_F(PlaybackGPU, AnAliasedCoverOutlivesTheNameItSharesBeingReplaced) {
+    if (! initialized) GTEST_SKIP() << "no surface-free Vulkan device";
+
+    const std::array<std::vector<uint8_t>, 3> covers {
+        std::vector<uint8_t> { 0x11, 0x22, 0x33, 0xFF },
+        std::vector<uint8_t> { 0x44, 0x55, 0x66, 0xFF },
+        std::vector<uint8_t> { 0x77, 0x88, 0x99, 0xFF },
+    };
+
+    // Both orders the texture slots can be refreshed in.
+    for (const bool previous_first : { true, false }) {
+        RuntimeImageSource images(nullptr);
+        auto&              cache = device.tex_cache();
+
+        struct Binding {
+            std::string   name;
+            std::string   key;
+            ImageSlotsRef ref;
+        };
+        Binding current { "$mediaThumbnail", {}, {} };
+        Binding previous { "$mediaPreviousThumbnail", {}, {} };
+
+        // What `CustomShaderPass::prepare` does: parse once, upload once.
+        for (Binding* binding : { &current, &previous }) {
+            auto image     = images.Parse(binding->name);
+            ASSERT_NE(image, nullptr);
+            binding->key = image->key;
+            binding->ref = cache.CreateTex(*image);
+            ASSERT_FALSE(binding->ref.slots.empty());
+        }
+
+        // What the per-frame `update_op` does, for one binding.
+        const auto refresh = [&](Binding& binding) {
+            auto image = images.Parse(binding.name);
+            ASSERT_NE(image, nullptr);
+            if (image->key == binding.key) return;
+            binding.ref = cache.ReplaceTex(*image, binding.key);
+            binding.key = image->key;
+            ASSERT_FALSE(binding.ref.slots.empty());
+        };
+
+        // Cached images carry TRANSFER_DST|SAMPLED, never TRANSFER_SRC, so
+        // they cannot legally be copied straight out. Sampling each one
+        // through an ordinary pass into a render target is both legal and
+        // closer to what the scene does with them, and the target is
+        // readback-capable.
+        auto& current_pass  = Pass();
+        auto& previous_pass = Pass();
+        const auto sampled  = [&](CustomShaderPass& pass, const ImageSlotsRef& ref) {
+            Bind(pass, ref);
+            Draw(pass);
+            return Read(pass.desc().vk_output);
+        };
+
+        // The cover each slot should show. Before any track both slots hold
+        // the 1x1 transparent starter the runtime image source publishes.
+        const std::vector<uint8_t> starter { 0x00, 0x00, 0x00, 0x00 };
+        for (std::size_t index = 0; index < covers.size(); ++index) {
+            const auto& cover    = covers[index];
+            const auto& outgoing = index == 0 ? starter : covers[index - 1];
+            ASSERT_NE(current.ref.image_owner, nullptr)
+                << "a bound image must be owned, not borrowed from the cache";
+            ASSERT_TRUE(PublishSystemMediaArtwork(images, 1, 1, cover.data(), cover.size()));
+
+            if (previous_first) {
+                refresh(previous);
+                refresh(current);
+            } else {
+                refresh(current);
+                refresh(previous);
+            }
+            // Drain first, so nothing survives merely because an upload is
+            // still in flight, then release everything the cache holds on its
+            // own behalf. Only bindings keep anything alive past this point.
+            std::string error;
+            ASSERT_TRUE(cache.WaitForPendingUploads(&error)) << error;
+            cache.CollectCompletedUploads();
+
+            ASSERT_NE(current.ref.image_owner, nullptr);
+            ASSERT_NE(previous.ref.image_owner, nullptr);
+
+            // Drawn, then read back off the target. This is where a binding
+            // that lost its image shows up: whichever slot refreshed second
+            // retires the key the first just bound to, and before bindings
+            // shared ownership that retire destroyed the image the first was
+            // still sampling.
+            //
+            // Whether the outgoing image object itself survives is
+            // deliberately not asserted: in one refresh order nothing
+            // references it any more and it is correctly released, with the
+            // previous slot taking an equivalent upload. What must hold in
+            // both orders is what the two slots actually draw.
+            const auto shown = sampled(current_pass, current.ref);
+            const auto faded = sampled(previous_pass, previous.ref);
+            ASSERT_GE(shown.size(), 4u);
+            ASSERT_GE(faded.size(), 4u);
+            EXPECT_EQ(std::vector<uint8_t>(shown.begin(), shown.begin() + 4), cover)
+                << "the current slot does not draw the cover that was published (previous_first="
+                << previous_first << ", cover " << index << ")";
+            EXPECT_EQ(std::vector<uint8_t>(faded.begin(), faded.begin() + 4), outgoing)
+                << "the previous slot does not draw the cover it replaced (previous_first="
+                << previous_first << ", cover " << index << ")";
+            EXPECT_NE(current.ref.getActive().handle, previous.ref.getActive().handle)
+                << "a cross-fade needs two images, not one";
+        }
+
+        // The image outlives every cache reference and dies with its last
+        // holder, which is what makes the sampling above safe rather than
+        // lucky. The passes are holders too, so they let go first.
+        Bind(current_pass, ImageSlotsRef {});
+        Bind(previous_pass, ImageSlotsRef {});
+        std::weak_ptr<const void> watch = previous.ref.image_owner;
+        ASSERT_FALSE(watch.expired()) << "a bound image must be owned, not borrowed";
+        auto copy = previous.ref;
+        previous.ref = {};
+        EXPECT_FALSE(watch.expired()) << "an image was freed while a binding still held it";
+        copy         = {};
+        current.ref  = {};
+        cache.Clear();
+        EXPECT_TRUE(watch.expired()) << "the image outlived its last holder";
     }
 }
 } // namespace

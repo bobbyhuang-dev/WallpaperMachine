@@ -15,6 +15,16 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — Power regression: advisory round 4 - legal readback, ordered deliveries, delivery epoch
+
+- Cover lifetime test made legal Vulkan: cached images carry TRANSFER_DST|SAMPLED only (TextureCache.cpp:857-862), so ReadbackImageSample's transition to TRANSFER_SRC was invalid usage MoltenVK happened to tolerate. The test now binds each slot into an ordinary PlaybackGPU pass, draws, and reads the render target, which is readback-capable.
+- That path is a cleaner detector than the previous one: with ImageSlotsRef reverted to borrowing, the test no longer crashes but fails with the previous slot drawing {0,0,0,0} instead of its cover, at previous_first=true, covers 1 and 2. With shared ownership both refresh orders draw the exact published bytes across three covers.
+- SceneMediaSink deliveries are now chained and epoch-bound. Chaining fixes ordering: a slow cover must not be overtaken by the one that replaced it, because the engine shows whatever arrives last. The epoch moves only on effective-demand transitions and is checked at task entry and again after the artwork await, so a delivery retired by a pause stops there; a boolean could not, since a resume sets it true again.
+- Two Swift tests replace the earlier over-specified one, after the real behaviour showed [1,1,1,2] (the extra 1s are legitimate resume replays, not a defect): testASlowCoverIsNotOvertakenByTheOneThatReplacedIt and testADeliveryRetiredByAPauseDoesNotReportItselfWhenItReturns. Removing the chain fails the first ('a later cover overtook the one still being applied: [2]'); removing the post-await epoch check fails the second ('a delivery retired by a pause still reported itself').
+- Test helper poll() now takes a label, so a timeout names the condition instead of reporting an anonymous 2s failure.
+- Gates: scripts/test.py 531 passed / 0 failed / 11 skipped; scripts/check_renderer.py all binaries 0, pixels equal, 0 diagnostics, including the reworked PlaybackGPU cover test.
+- Release rebuilt 14:45: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
+
 ## 2026-09-21 — Power regression: advisory round 3 - web delivery, listener identity, pixel-level lifetime proof
 
 - Regression I introduced and reverted: gating WebWallpaperMediaRelay.emit on consumer membership silenced every visible web wallpaper. WebWallpaperHost registers one listener under mediaListenerKey (WebWallpaperHost.swift:105) but counts consumers per page (ObjectIdentifier(page), line 436), so a listener key is never a consumer key. emit is unconditional again; the decision not to work moved into SceneMediaSink, which knows its own effective demand.

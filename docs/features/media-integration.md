@@ -174,6 +174,15 @@ and what was finally carried out. Without that trail an unbound button, a
 request that never reached the host and a command nothing executed all look
 exactly alike.
 
+A scene that binds one of the system cover slots is refused by the Native
+Metal backend and drawn by Compatibility, with that reason reported. The native
+backend uploads an image when it prepares and never asks the runtime again, so
+it kept drawing the empty placeholder those slots start with: no cover, and
+everything a wallpaper derives from the cover drawn from nothing. Accepting the
+scene and leaving that out is worse than not taking it. Text layers are
+published the same way and are not affected -- the backend does keep those
+current -- so the refusal names the media slots only.
+
 ### Rendering one without a desktop
 
 `offscreen_scene_probe` takes the same events the app would send, so a media

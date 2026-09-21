@@ -1,3 +1,4 @@
+#include "Runtime/RuntimeImageSource.hpp"
 #include "MetalRender/MetalCapability.hpp"
 
 #include "MetalRender/MetalShaderReflection.hpp"
@@ -382,6 +383,7 @@ std::string SceneMetalStructuralRejection(const Scene& scene)
     // host has a dedicated path for it.
     if (scene.single_video_source) return "the wallpaper is a video";
 
+    const auto* runtime_images = dynamic_cast<const RuntimeImageSource*>(scene.imageParser.get());
     for (const auto& [name, texture] : scene.textures) {
         // A sprite sheet is one uploaded image whose frame rectangle arrives as
         // a uniform, so it is not refused any more. A sheet that is also a
@@ -390,6 +392,19 @@ std::string SceneMetalStructuralRejection(const Scene& scene)
             if (auto reason = MetalVideoTextureRejection(scene, name); ! reason.empty()) {
                 return reason;
             }
+        }
+        // The system media slots -- the album cover and the one before it --
+        // are republished whenever the track changes. This backend uploads an
+        // image when it prepares and never asks again, so it draws the empty
+        // placeholder the source starts with: no cover, and everything the
+        // wallpaper derives from it drawn from nothing. Refuse the whole scene
+        // rather than accept it and quietly leave out the part it is about.
+        //
+        // Narrower than "any runtime image" on purpose: text layers are
+        // published the same way and this backend does keep those current.
+        if (runtime_images != nullptr && name.starts_with("$media") &&
+            runtime_images->IsRuntimeImage(name)) {
+            return "the wallpaper draws the album cover, which the runtime republishes";
         }
     }
 

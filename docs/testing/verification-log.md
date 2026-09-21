@@ -25,6 +25,18 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — Native Metal never saw the album cover, and the wallpaper has no cover background
+
+Reported as the background not looking like the official example. Two separate things, established by rendering both backends against the same injected now-playing state.
+
+- metal_scene_draw_smoke now takes WE_TEST_MEDIA_ARTWORK and WE_TEST_MEDIA_EVENTS the same way the probe does. Without them a media-driven wallpaper renders flat grey on both backends and the comparison says nothing
+- With the same cover and colours: Compatibility background chroma 29.2 and the cover drawn; Native Metal chroma 0.00 and no cover at all. The native backend uploads an image when it prepares and never sees the runtime republish it, so it drew the transparent placeholder the media slots start with
+- A scene binding a system cover slot now falls back whole, reporting "the wallpaper draws the album cover, which the runtime republishes". Narrowed to $media* on purpose: text layers are runtime-published too and the backend does keep those current -- rejecting all runtime images broke 9 text tests
+- New MetalCapability.ARuntimeRepublishedImageSendsTheWholeSceneBack pins it; the live wallpaper now reports Compatibility with that reason
+- Separately, and not a defect: this wallpaper has no album-art background. Only objects 297 and 295 bind $mediaThumbnail as a texture, both cover displays; every background layer is util/white tinted from the event colours. The blurred-cover background in the official shot comes from its Use Custom Background option
+- scripts/test.py 535 passed / 0 failed / 11 skipped of 546; metal_backend_test 36; metal_scene_draw_smoke 33; check_renderer.py 10 cases pixels_equal=True
+- Release rebuilt
+
 ## 2026-09-21 — A trait default swallowed the sink that kept the shortcut channel open
 
 The instrumented build logged 'Stopped waiting for wallpaper shortcuts' at startup, before any press, which placed the fault in the bridge rather than anywhere downstream.
@@ -123,13 +135,3 @@ Reported: the transport buttons still have no effect, and the progress bar canno
 - Renderer sources unchanged since the round-four gate, so check_renderer.py was not re-run; that run remains current evidence (all binaries 0, pixels equal, 0 diagnostics).
 - Gate: scripts/test.py 531 passed / 0 failed / 11 skipped.
 - Release rebuilt 15:33: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor, the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
-
-## 2026-09-21 — Power regression: advisory round 4 - legal readback, ordered deliveries, delivery epoch
-
-- Cover lifetime test made legal Vulkan: cached images carry TRANSFER_DST|SAMPLED only (TextureCache.cpp:857-862), so ReadbackImageSample's transition to TRANSFER_SRC was invalid usage MoltenVK happened to tolerate. The test now binds each slot into an ordinary PlaybackGPU pass, draws, and reads the render target, which is readback-capable.
-- That path is a cleaner detector than the previous one: with ImageSlotsRef reverted to borrowing, the test no longer crashes but fails with the previous slot drawing {0,0,0,0} instead of its cover, at previous_first=true, covers 1 and 2. With shared ownership both refresh orders draw the exact published bytes across three covers.
-- SceneMediaSink deliveries are now chained and epoch-bound. Chaining fixes ordering: a slow cover must not be overtaken by the one that replaced it, because the engine shows whatever arrives last. The epoch moves only on effective-demand transitions and is checked at task entry and again after the artwork await, so a delivery retired by a pause stops there; a boolean could not, since a resume sets it true again.
-- Two Swift tests replace the earlier over-specified one, after the real behaviour showed [1,1,1,2] (the extra 1s are legitimate resume replays, not a defect): testASlowCoverIsNotOvertakenByTheOneThatReplacedIt and testADeliveryRetiredByAPauseDoesNotReportItselfWhenItReturns. Removing the chain fails the first ('a later cover overtook the one still being applied: [2]'); removing the post-await epoch check fails the second ('a delivery retired by a pause still reported itself').
-- Test helper poll() now takes a label, so a timeout names the condition instead of reporting an anonymous 2s failure.
-- Gates: scripts/test.py 531 passed / 0 failed / 11 skipped; scripts/check_renderer.py all binaries 0, pixels equal, 0 diagnostics, including the reworked PlaybackGPU cover test.
-- Release rebuilt 14:45: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.

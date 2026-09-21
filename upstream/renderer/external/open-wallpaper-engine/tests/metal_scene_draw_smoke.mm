@@ -13,6 +13,7 @@
 /// Creates only private GPU textures and an offscreen layer. No window, no
 /// desktop, no audio device, no screen capture.
 
+#include "Runtime/RuntimeImageSource.hpp"
 #include "MetalRender/MetalBackendRouter.hpp"
 #include "MetalRender/MetalCapability.hpp"
 #include "MetalRender/MetalRender.hpp"
@@ -3446,6 +3447,49 @@ uint16_t PackageVersionOf(const std::string& path)
                : SceneParseRequest::kUnknownPkgVersion;
 }
 
+} // namespace
+
+namespace {
+/// Feeds the scene the now-playing state the app would deliver, with the same
+/// two variables `offscreen_scene_probe` takes and the same meaning.
+///
+/// A wallpaper whose background is drawn from the current cover renders as flat
+/// grey without one, so the two backends cannot be compared on the thing that
+/// actually differs unless both can be given the same cover.
+void InjectSystemMediaForMetal(Scene& scene) {
+    const char* events  = std::getenv("WE_TEST_MEDIA_EVENTS");
+    const char* artwork = std::getenv("WE_TEST_MEDIA_ARTWORK");
+    if (events == nullptr && artwork == nullptr) return;
+    if (scene.runtime == nullptr) return;
+    scene.runtime->SetMediaIntegrationEnabled(true);
+
+    if (artwork != nullptr) {
+        unsigned width = 0, height = 0, rgb = 0;
+        if (std::sscanf(artwork, "%ux%u:%x", &width, &height, &rgb) == 3 && width >= 1 &&
+            width <= 4096 && height >= 1 && height <= 4096) {
+            if (auto* images = dynamic_cast<RuntimeImageSource*>(scene.imageParser.get())) {
+                std::vector<uint8_t> rgba(std::size_t(width) * height * 4);
+                for (std::size_t i = 0; i < rgba.size(); i += 4) {
+                    rgba[i + 0] = uint8_t((rgb >> 16) & 0xFF);
+                    rgba[i + 1] = uint8_t((rgb >> 8) & 0xFF);
+                    rgba[i + 2] = uint8_t(rgb & 0xFF);
+                    rgba[i + 3] = 0xFF;
+                }
+                PublishSystemMediaArtwork(*images, width, height, rgba.data(), rgba.size());
+            }
+        }
+    }
+
+    if (events != nullptr) {
+        const auto parsed = nlohmann::json::parse(events, nullptr, false);
+        if (!parsed.is_discarded() && parsed.is_array()) {
+            for (const auto& event : parsed) {
+                if (event.is_object()) scene.runtime->DispatchMediaEventJson(event.dump());
+            }
+            scene.runtime->Tick(1.0 / 60.0);
+        }
+    }
+}
 } // namespace
 
 TEST_F(MetalSceneDraw, LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBackend)

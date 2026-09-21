@@ -15,6 +15,16 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — The cloud divergence starts at the bokeh downsample, and Compatibility is the deviant one
+
+Giving the Vulkan probe the same target dump the Metal harness has makes the two comparable target by target. Walking the chain, everything upstream agrees and the first disagreement is sharp.
+
+- `_rt_FullCompoBuffer1` (blurprecise output, what the bokeh chain reads) agrees: mean 105.5 on Vulkan against 100.5 on Metal
+- `_downscaled1` (the bokeh effect's first pass, a 4-tap downsample of exactly that) does not: 147.2 against 101.1
+- Alpha is 255 on every written target on both backends, so that shader reduces to a plain four-tap average and must preserve the mean. Metal does (100.5 to 101.1); Vulkan gains 39% (105.5 to 147.2) — so the pass that deviates is the Compatibility one, not Native Metal
+- Everything downstream inherits it: _full1/_full2 143.2 vs 100.6, the quarter buffers 122.9 vs 101.1, and finally _rt_default 98.8/p99 121 against 81.8/p99 202
+- `scripts/check_renderer.py` clean — 10 generated cases pixels_equal=True; `metal_scene_draw_smoke` 33 passed
+
 ## 2026-09-21 — The button sound reaches the runtime and plays; the Metal brightness predates the blur chain
 
 Two open questions closed by measurement. The sound: parsed through WPSoundParser, the layer registers, starts silent as its author asked, and PlaySoundLayer makes it play -- so nothing between the click handler and the stream is swallowing it. If a user still hears nothing, the remaining suspects are app-side output, which this does not cover.

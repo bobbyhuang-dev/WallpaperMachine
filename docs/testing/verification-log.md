@@ -25,6 +25,18 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — Why the transport buttons did nothing, and what the progress bar actually is
+
+Reported: the transport buttons still have no effect, and the progress bar cannot be dragged. Both were investigated against the installed wallpaper rather than assumed.
+
+- Cause of the dead buttons: `~/Library/.../wallpapers/3280146735.json` has `property_overrides: {}` and all three usershortcut values are empty, so dispatch correctly skipped every press. Defaulting to no action left buttons named play, next and previous doing nothing until their user found the picker
+- An unbound usershortcut now starts on the action its own name states; a name that says nothing stays unbound; an authored value is never overwritten. The override still wins and dispatch still carries the value, not the name (`unbound_transport_shortcuts_start_on_the_action_they_are_named_for`)
+- The progress bar has no pointer logic at all -- objects 187 and 370 carry no scripts, and 366 only moves its origin from `mediaTimelineChanged`. It was never draggable in any client; the question is whether it advances
+- New `TheProgressFillFollowsAPublishedTimeline` drives the wallpaper own origin script: a published timeline does place the fill exactly (-637 + position/duration * 620), keeps tracking, and does not jitter on a repeat
+- It also pins an upstream quirk: the author places the fill before recording the duration it divides by, so the first event divides by an unset `dur` and puts the layer at infinity until the next one arrives
+- scripts/test.py 534 passed / 0 failed / 11 skipped of 545; wallpaper-bridge 320; scene_schema_tests 78 passed with the two pre-existing pointer-commit timeouts
+- Release built and checked: media:playpause / media:previous / next_user_shortcut all present in the delivered binary
+
 ## 2026-09-21 — Power regression: two defects the restored dispatch and its guard exposed
 
 - Restoring CMD_SET_RENDER_SCALE dispatch made MetalRender::ApplyRenderScale reachable for the first time, and it had no same-value guard: it set scene.render_scale and called compile() unconditionally, which begins with releaseGraph() - video.release, images.clear, pipelines. apply_effective_render_scale pushes the scale to every open scene on scene creation and on every SetPowerSource/InitialFrameReady while the battery profile is on, and its own comment says it exists so a dragged quality control does not reparse the project or reopen its video. A Metal-preferred user would have taken a full rebuild plus video reopen on each plug and unplug at an unchanged value.
@@ -123,13 +135,3 @@ goes. Trimming is allowed; editing an entry's recorded result is not.
 - python3 scripts/test.py (full gate, before rebase onto origin/main): 525 passed, 0 failed, 11 skipped (opt-in media/network layers).
 - Docs: control-panel.md Filtering + layout table, workshop-downloads.md cross-reference.
 - Not done: no Release build; sidebar not viewed on the desktop (offscreen WebKit tests only).
-
-## 2026-09-21 — The cloud divergence starts at the bokeh downsample, and Compatibility is the deviant one
-
-Giving the Vulkan probe the same target dump the Metal harness has makes the two comparable target by target. Walking the chain, everything upstream agrees and the first disagreement is sharp.
-
-- `_rt_FullCompoBuffer1` (blurprecise output, what the bokeh chain reads) agrees: mean 105.5 on Vulkan against 100.5 on Metal
-- `_downscaled1` (the bokeh effect's first pass, a 4-tap downsample of exactly that) does not: 147.2 against 101.1
-- Alpha is 255 on every written target on both backends, so that shader reduces to a plain four-tap average and must preserve the mean. Metal does (100.5 to 101.1); Vulkan gains 39% (105.5 to 147.2) — so the pass that deviates is the Compatibility one, not Native Metal
-- Everything downstream inherits it: _full1/_full2 143.2 vs 100.6, the quarter buffers 122.9 vs 101.1, and finally _rt_default 98.8/p99 121 against 81.8/p99 202
-- `scripts/check_renderer.py` clean — 10 generated cases pixels_equal=True; `metal_scene_draw_smoke` 33 passed

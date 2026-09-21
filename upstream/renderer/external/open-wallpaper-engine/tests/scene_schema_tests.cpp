@@ -21,6 +21,9 @@
 #include "Project/ProjectProperties.hpp"
 #include "Runtime/DynamicValue.hpp"
 #include "Runtime/SceneRuntimeContext.hpp"
+#include "Runtime/ScriptedDynamicValue.hpp"
+
+#include <cmath>
 #include "Scene/SceneCamera.h"
 #include "Scene/SceneNode.h"
 #include "SpecTexs.hpp"
@@ -4473,4 +4476,132 @@ TEST(SceneSchema, AButtonSoundStartsSilentAndPlaysWhenAsked) {
     EXPECT_TRUE(runtime->PlaySoundLayer("button_press"));
     EXPECT_TRUE(runtime->SoundLayerPlaying("button_press"))
         << "the click reached the runtime and the sound stayed silent";
+}
+
+TEST(SceneSchema, TheProgressFillFollowsAPublishedTimeline) {
+    // The bar this wallpaper draws is not draggable and never was: nothing on
+    // it reads the cursor. It is a fill whose origin a script moves, driven
+    // only by what the host publishes, so a bar that never moves means the
+    // events never arrived rather than that a drag was lost.
+    //
+    // The author's arithmetic is self-consistent -- `updatePosition` stores
+    // milliseconds and the placement divides them back out -- so the fill is
+    // pinned at a position the formula makes exact:
+    //   -637 + (30 / 300) * 620 = -575
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    ASSERT_NE(runtime, nullptr);
+
+    // `thisLayer.origin = ...` is a layer write, not this value's result: it
+    // lands on the runtime's node translate, which is what the scene draws.
+    SceneNode node;
+    runtime->RegisterNodeTranslate("Solid", &node,
+                                   std::make_unique<DynamicValue>(
+                                       Eigen::Vector3f(0.0F, 700.0F, 0.0F)));
+
+    ScriptedDynamicValue fill(*runtime, R"JS('use strict';
+
+var lastTitle = null;
+var lastPosition = -1;
+var displayPosition = -1;
+var lastUpdateTime = Date.now();
+var isPlaying = false;
+var pauseStartTime = null;
+var dur = ""; // Variabile per la durata della canzone
+
+export function mediaTimelineChanged(event) {
+    var position = event.position;
+    updatePosition(position);
+    dur = event.duration; // Aggiorna la durata quando la timeline cambia
+    console.log("Durata della canzone:", dur);
+}
+
+/*
+Reset timer to 0 when song title changes
+*/
+export function mediaPropertiesChanged(event) {
+    if (lastTitle !== event.title) {
+        lastTitle = event.title;
+        lastPosition = -1;
+        displayPosition = 0;
+        lastUpdateTime = Date.now();
+    }
+}
+
+export function mediaPlaybackChanged(event) {
+    if (event.state === MediaPlaybackEvent.PLAYBACK_PAUSED || event.state === MediaPlaybackEvent.PLAYBACK_STOPPED) {
+        isPlaying = false;
+        pauseStartTime = Date.now();
+    } else {
+        isPlaying = true;
+        if (pauseStartTime !== null) {
+            lastUpdateTime += Date.now() - pauseStartTime;
+            pauseStartTime = null;
+        }
+    }
+}
+
+export function update(event) {
+    if (!isPlaying || dur === "") {
+        return;
+    }
+
+    var currentTime = Date.now();
+    var elapsedSeconds = currentTime - lastUpdateTime;
+    if (elapsedSeconds >= 1000) {
+        displayPosition += elapsedSeconds;
+        var lengthOfYourBar = 620; // Imposta la lunghezza totale della barra
+        var startingXCoordinateOfYourBar = -637; // Coordinata X di partenza della barra
+        var YCoordinateOfYourBar = 0; // Coordinata Y della barra
+
+        // Calcola la posizione della barra in base alla durata
+        thisLayer.origin = new Vec3(startingXCoordinateOfYourBar + (Math.round(displayPosition / 1000) / dur) * lengthOfYourBar, YCoordinateOfYourBar, 0);
+        lastUpdateTime = currentTime;
+    }
+}
+
+function updatePosition(position) {
+    if (position !== lastPosition) {
+        lastPosition = position;
+        displayPosition = position * 1000;
+        var lengthOfYourBar = 620; // Imposta la lunghezza totale della barra
+        var startingXCoordinateOfYourBar = -637; // Coordinata X di partenza della barra
+        var YCoordinateOfYourBar = 0; // Coordinata Y della barra
+
+        // Calcola la posizione della barra in base alla durata
+        thisLayer.origin = new Vec3(startingXCoordinateOfYourBar + (Math.round(displayPosition / 1000) / dur) * lengthOfYourBar, YCoordinateOfYourBar, 0);
+        lastUpdateTime = Date.now();
+    }
+}
+
+export function getDuration() {
+    return dur; // Restituisce la durata della canzone
+}
+)JS", "Solid", {},
+                              DynamicValue(Eigen::Vector3f(0.0F, 700.0F, 0.0F)));
+
+    // The author places the fill before recording the duration it divides by,
+    // so the very first event divides by an unset `dur` and puts the layer at
+    // infinity. That is this wallpaper's own ordering, reproduced here rather
+    // than papered over, because it is why the bar can start out misplaced.
+    fill.DispatchMediaEventJson(
+        R"({"type":"mediaTimelineChanged","position":30.0,"duration":300.0})");
+    EXPECT_FALSE(std::isfinite(runtime->NodeTranslate("Solid").x()))
+        << "the author's first-event ordering was silently corrected";
+
+    // From the next event on the mapping is exact, which is what the bar
+    // advancing at all depends on: -637 + (150 / 300) * 620 = -327.
+    fill.DispatchMediaEventJson(
+        R"({"type":"mediaTimelineChanged","position":150.0,"duration":300.0})");
+    EXPECT_NEAR(runtime->NodeTranslate("Solid").x(), -327.0F, 0.5F)
+        << "a published timeline did not move the fill";
+
+    // Repeating a position carries no new information and must not jitter.
+    fill.DispatchMediaEventJson(
+        R"({"type":"mediaTimelineChanged","position":150.0,"duration":300.0})");
+    EXPECT_NEAR(runtime->NodeTranslate("Solid").x(), -327.0F, 0.5F);
+
+    // And it keeps tracking rather than latching on whatever arrived first.
+    fill.DispatchMediaEventJson(
+        R"({"type":"mediaTimelineChanged","position":300.0,"duration":300.0})");
+    EXPECT_NEAR(runtime->NodeTranslate("Solid").x(), -17.0F, 0.5F);
 }

@@ -134,8 +134,17 @@ name of one of its `usershortcut` properties. The engine resolves that property
 against the wallpaper's own declarations -- naming another throws -- and reports
 the request with the property's **value**, which is the user's choice. The
 property reaches the panel as a picker offering no action, play / pause, next
-track and previous track; it defaults to no action, so a button does nothing
-until its user binds it.
+track and previous track.
+
+An author ships these empty, because Wallpaper Engine has the user bind them
+in its own editor. Honouring that literally leaves every transport button dead
+until its user finds the picker, so an unbound shortcut starts on the action
+its own name states -- `playpausebutton`, `nextsongbutton` and
+`previoussongbutton` begin bound to play / pause, next and previous. A name
+that says nothing stays unbound rather than guessing. This is a starting value
+only: the user's choice is stored as an override and always wins, including
+choosing no action, and dispatch still carries the **value**, never the name,
+so rebinding a button really rebinds it.
 
 `WallpaperBridge.next_user_shortcut` long-polls for those presses and drops any
 from a wallpaper the user has not consented to media integration for. The app

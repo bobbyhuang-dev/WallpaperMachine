@@ -206,6 +206,20 @@ impl ProjectModel {
                     let order = object.get("order").and_then(Value::as_i64).unwrap_or(0);
                     let index = object.get("index").and_then(Value::as_i64).unwrap_or(0);
                     let default_value = match (&kind, object.get("value")) {
+                        (PropertyKind::Combo, value)
+                            if object
+                                .get("type")
+                                .and_then(Value::as_str)
+                                .is_some_and(|raw| raw.eq_ignore_ascii_case("usershortcut")) =>
+                        {
+                            let authored =
+                                value.map_or_else(String::new, PropertyValue::json_scalar_to_string);
+                            PropertyValue::String(if authored.is_empty() {
+                                suggested_user_shortcut(id).unwrap_or_default().to_owned()
+                            } else {
+                                authored
+                            })
+                        }
                         (
                             PropertyKind::File | PropertyKind::Directory | PropertyKind::Texture,
                             Some(Value::Null) | None,
@@ -587,6 +601,69 @@ mod tests {
         );
         assert_eq!(by_id("mystery").metadata, PropertyMetadata::Unknown);
     }
+
+    #[test]
+    fn unbound_transport_shortcuts_start_on_the_action_they_are_named_for() {
+        let m = ProjectModel::parse(
+            "1",
+            r#"{
+            "type":"scene","general":{"properties":{
+                "playpausebutton":{"type":"usershortcut","value":"","order":1},
+                "nextsongbutton":{"type":"usershortcut","value":"","order":2},
+                "previoussongbutton":{"type":"usershortcut","value":"","order":3},
+                "secretbutton":{"type":"usershortcut","value":"","order":4},
+                "nextsongbutton2":{"type":"usershortcut","value":"media:playpause","order":5}
+            }}}"#,
+        )
+        .expect("manifest");
+        let value = |id: &str| {
+            m.properties
+                .iter()
+                .find(|property| property.id == id)
+                .map(|property| property.default_value.clone())
+                .expect(id)
+        };
+
+        // An author ships these empty because Wallpaper Engine binds them in
+        // its own editor. Honouring that literally leaves the buttons dead.
+        assert_eq!(value("playpausebutton"), PropertyValue::String("media:playpause".into()));
+        assert_eq!(value("nextsongbutton"), PropertyValue::String("media:next".into()));
+        assert_eq!(
+            value("previoussongbutton"),
+            PropertyValue::String("media:previous".into())
+        );
+        // A name that says nothing gets nothing: silence beats a wrong guess.
+        assert_eq!(value("secretbutton"), PropertyValue::String(String::new()));
+        // An author who did write a value keeps it, even one its name contradicts.
+        assert_eq!(value("nextsongbutton2"), PropertyValue::String("media:playpause".into()));
+    }
+}
+
+/// The media action a `usershortcut` most likely stands for, read from its name.
+///
+/// Wallpaper Engine has the user bind these in its own editor, so authors ship
+/// them empty. A host that honours that literally leaves every transport button
+/// dead until the user finds the dropdown, which is how a wallpaper whose
+/// buttons are named play, next and previous ends up doing nothing at all.
+///
+/// This is a starting value only. The user's own choice is stored as an
+/// override and always wins, including choosing no action, and dispatch never
+/// consults the name -- it carries the value -- so rebinding a button really
+/// rebinds it rather than running whatever its name suggests.
+fn suggested_user_shortcut(id: &str) -> Option<&'static str> {
+    let id = id.to_ascii_lowercase();
+    // Longest first: "playpause" also contains "play", and "previous" is only
+    // distinguishable from a bare "prev" by trying it first.
+    [
+        ("playpause", "media:playpause"),
+        ("previous", "media:previous"),
+        ("prev", "media:previous"),
+        ("next", "media:next"),
+        ("pause", "media:playpause"),
+        ("play", "media:playpause"),
+    ]
+    .into_iter()
+    .find_map(|(needle, action)| id.contains(needle).then_some(action))
 }
 
 /// What a `usershortcut` property may be bound to.

@@ -15,6 +15,15 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — Corrected: the deployment target had to move, not disappear
+
+The fix below dropped MACOSX_DEPLOYMENT_TARGET from cargo's environment outright. That variable is also what cmake-rs turns into CMAKE_OSX_DEPLOYMENT_TARGET for the C++ engine, so dropping it silently rebuilt the engine against the SDK default instead of the app's minimum. The 55 s build that looked like a success had reused C++ objects from an earlier run built with the pin.
+
+- Measured on a clean build of the renderer crate: with the variable the engine archive reports `minos 26.0`, without it `minos 27.0`
+- The pin is renamed rather than removed -- `cargo_environment()` exports `OWE_MACOSX_DEPLOYMENT_TARGET`, and the crate build script passes it as CMAKE_OSX_DEPLOYMENT_TARGET with rerun-if-env-changed, so the host proc-macro dylibs stay loadable and the engine keeps the app\s minimum
+- `cargo clean --release` then `cargo build --release --workspace` — clean build passes, archive at minos 26.0
+- `scripts/check_renderer.py` clean — 10 generated cases pixels_equal=True; `scripts/tests` 99 passed
+
 ## 2026-09-21 — A pinned deployment target was breaking every release renderer build
 
 scripts/build.py handed cargo a MACOSX_DEPLOYMENT_TARGET. Cargo builds proc-macro crates and build scripts for the host and then dlopens them in the running compiler, and the pinned host dylibs this toolchain produces are rejected at load with "mis-aligned LINKEDIT" -- which rustc reports as `can't find crate for <macro>`, so arc-swap, tokio, zerocopy, miette, futures-util and uniffi_meta all failed to compile. Any renderer release build was dead; --swift-only hid it by skipping cargo.

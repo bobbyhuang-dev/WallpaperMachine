@@ -25,6 +25,16 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — The cloud divergence starts at the bokeh downsample, and Compatibility is the deviant one
+
+Giving the Vulkan probe the same target dump the Metal harness has makes the two comparable target by target. Walking the chain, everything upstream agrees and the first disagreement is sharp.
+
+- `_rt_FullCompoBuffer1` (blurprecise output, what the bokeh chain reads) agrees: mean 105.5 on Vulkan against 100.5 on Metal
+- `_downscaled1` (the bokeh effect's first pass, a 4-tap downsample of exactly that) does not: 147.2 against 101.1
+- Alpha is 255 on every written target on both backends, so that shader reduces to a plain four-tap average and must preserve the mean. Metal does (100.5 to 101.1); Vulkan gains 39% (105.5 to 147.2) — so the pass that deviates is the Compatibility one, not Native Metal
+- Everything downstream inherits it: _full1/_full2 143.2 vs 100.6, the quarter buffers 122.9 vs 101.1, and finally _rt_default 98.8/p99 121 against 81.8/p99 202
+- `scripts/check_renderer.py` clean — 10 generated cases pixels_equal=True; `metal_scene_draw_smoke` 33 passed
+
 ## 2026-09-21 — The button sound reaches the runtime and plays; the Metal brightness predates the blur chain
 
 Two open questions closed by measurement. The sound: parsed through WPSoundParser, the layer registers, starts silent as its author asked, and PlaySoundLayer makes it play -- so nothing between the click handler and the stream is swallowing it. If a user still hears nothing, the remaining suspects are app-side output, which this does not cover.
@@ -103,12 +113,3 @@ The engine pushes each request to an installed observer instead of holding it, b
 - Also corrected: `cargo_environment()` derives the pin from the popped value instead of repeating the literal
 - Measured across the release archives: the C++ engine is `minos 26.0` on all 39 objects, and nothing anywhere exceeds the app minimum
 - `cargo test --release -p wallpaper-core --lib` 213 passed; `-p wallpaper-bridge --lib` 317 passed
-
-## 2026-09-21 — Corrected: the deployment target had to move, not disappear
-
-The fix below dropped MACOSX_DEPLOYMENT_TARGET from cargo's environment outright. That variable is also what cmake-rs turns into CMAKE_OSX_DEPLOYMENT_TARGET for the C++ engine, so dropping it silently rebuilt the engine against the SDK default instead of the app's minimum. The 55 s build that looked like a success had reused C++ objects from an earlier run built with the pin.
-
-- Measured on a clean build of the renderer crate: with the variable the engine archive reports `minos 26.0`, without it `minos 27.0`
-- The pin is renamed rather than removed -- `cargo_environment()` exports `OWE_MACOSX_DEPLOYMENT_TARGET`, and the crate build script passes it as CMAKE_OSX_DEPLOYMENT_TARGET with rerun-if-env-changed, so the host proc-macro dylibs stay loadable and the engine keeps the app\s minimum
-- `cargo clean --release` then `cargo build --release --workspace` — clean build passes, archive at minos 26.0
-- `scripts/check_renderer.py` clean — 10 generated cases pixels_equal=True; `scripts/tests` 99 passed

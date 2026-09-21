@@ -64,6 +64,20 @@ void Ppm(const std::filesystem::path& path, const uint8_t* rgba, int w, int h) {
     file << "P6\n" << w << ' ' << h << "\n255\n";
     for (int i = 0; i < w * h; ++i) file.write(reinterpret_cast<const char*>(rgba + i * 4), 3);
 }
+/// The alpha channel on its own, as grey.
+///
+/// Effects that weight by coverage -- the bokeh downsample divides by the sum
+/// of the taps' alpha -- produce completely different colour from the same RGB
+/// when alpha differs, so a colour-only dump cannot explain them.
+void PpmAlpha(const std::filesystem::path& path, const uint8_t* rgba, int w, int h) {
+    std::ofstream file(path, std::ios::binary);
+    file << "P6\n" << w << ' ' << h << "\n255\n";
+    for (int i = 0; i < w * h; ++i) {
+        const char grey[3] { static_cast<char>(rgba[i * 4 + 3]), static_cast<char>(rgba[i * 4 + 3]),
+                             static_cast<char>(rgba[i * 4 + 3]) };
+        file.write(grey, 3);
+    }
+}
 void CheckRecording(Device& device, RenderingResources& rr, VkResult result) {
     if (result == VK_SUCCESS) return;
     // No draw submission happened. A reset failure must retain pins/uploads
@@ -147,6 +161,13 @@ void ReadImage(Device& device, RenderingResources& rr, const ImageParameters& im
     Check(buffer.handle.MapMemory(&bytes) == VK_SUCCESS, "map readback");
     Check(vmaInvalidateAllocation(device.vma_allocator(), buffer.handle.Allocation(), 0, VK_WHOLE_SIZE) == VK_SUCCESS, "invalidate readback");
     Ppm(path, static_cast<const uint8_t*>(bytes), image.extent.width, image.extent.height);
+    if (std::getenv("WE_TEST_DUMP_ALPHA") != nullptr) {
+        auto alpha_path = path;
+        alpha_path.replace_extension("");
+        alpha_path += "-alpha.ppm";
+        PpmAlpha(alpha_path, static_cast<const uint8_t*>(bytes), image.extent.width,
+                 image.extent.height);
+    }
     buffer.handle.UnMapMemory();
 }
 
@@ -669,6 +690,24 @@ int main() {
             }
             Submit(device, rr);
             ReadImage(device, rr, *result, out / ("frame-" + std::to_string(frame) + ".ppm"));
+            // The same knob the Metal harness takes, so a target can be held
+            // against its counterpart on the other backend instead of the two
+            // being described from different code. Names carry a per-run
+            // suffix, so `*` is the only way to ask for one across processes.
+            if (const char* wanted = std::getenv("WE_TEST_DUMP_TARGETS");
+                wanted != nullptr && *wanted != '\0' && frame == frame_count - 1) {
+                for (const auto& [name, target] : scene->renderTargets) {
+                    if (std::string_view(wanted) != "*" &&
+                        std::string_view(wanted).find(name) == std::string_view::npos) {
+                        continue;
+                    }
+                    auto dumped = device.tex_cache().Query(name, ToTexKey(target), true);
+                    if (! dumped.has_value()) continue;
+                    std::string safe = name;
+                    std::replace(safe.begin(), safe.end(), '/', '_');
+                    ReadImage(device, rr, *dumped, out / ("target-" + safe + ".ppm"));
+                }
+            }
             if (frame == 0) milestone("first-frame");
             if (frame_step > 0.0 || audio_hz_env)
                 scene->PassFrameTime(frame_step > 0.0 ? frame_step : 1.0 / 60.0);

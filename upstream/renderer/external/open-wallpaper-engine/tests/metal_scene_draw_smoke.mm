@@ -3687,6 +3687,22 @@ TEST_F(MetalSceneDraw, LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBack
                     for (std::size_t i = 0; i < std::size_t(width) * height; ++i) {
                         image.write(reinterpret_cast<const char*>(rgba.data() + i * 4), 3);
                     }
+                    // Alpha on its own. Effects that weight by coverage -- the
+                    // bokeh downsample divides by the sum of its taps' alpha --
+                    // make completely different colour from the same RGB when
+                    // alpha differs, so a colour-only dump cannot explain them.
+                    if (std::getenv("WE_TEST_DUMP_ALPHA") != nullptr) {
+                        std::ofstream alpha(std::filesystem::path(output) /
+                                                ("metal-" + label + "-" + safe + "-alpha.ppm"),
+                                            std::ios::binary);
+                        alpha << "P6\n" << width << " " << height << "\n255\n";
+                        for (std::size_t i = 0; i < std::size_t(width) * height; ++i) {
+                            const char grey[3] { static_cast<char>(rgba[i * 4 + 3]),
+                                                 static_cast<char>(rgba[i * 4 + 3]),
+                                                 static_cast<char>(rgba[i * 4 + 3]) };
+                            alpha.write(grey, 3);
+                        }
+                    }
                 }
             }
             render.destroy();

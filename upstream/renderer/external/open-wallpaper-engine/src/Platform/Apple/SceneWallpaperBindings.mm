@@ -931,11 +931,11 @@ extern "C" int owe_scene_wallpaper_video_path(void* scene)
     case wallpaper::SceneVideoPath::Nv12Direct: return OWE_SCENE_VIDEO_PATH_NV12_DIRECT;
     case wallpaper::SceneVideoPath::Nv12Converted: return OWE_SCENE_VIDEO_PATH_NV12_CONVERTED;
     case wallpaper::SceneVideoPath::Nv12Mixed: return OWE_SCENE_VIDEO_PATH_NV12_MIXED;
-    // Both mean "no path to report yet", which is what `NONE` documents: a
-    // scene that has drawn no frame on this path. Written out rather than left
-    // to fall through, so the enum staying in step with this mapping is the
-    // compiler's problem and not the next reader's.
-    case wallpaper::SceneVideoPath::Nv12ConvertedPreparing: break;
+    // The host already decodes 5 as "converted, preparing"; only this end was
+    // missing, so a scene between choosing that path and having it ready was
+    // reported as having no video path at all.
+    case wallpaper::SceneVideoPath::Nv12ConvertedPreparing:
+        return OWE_SCENE_VIDEO_PATH_NV12_CONVERTED_PREPARING;
     case wallpaper::SceneVideoPath::None: break;
     }
     return OWE_SCENE_VIDEO_PATH_NONE;

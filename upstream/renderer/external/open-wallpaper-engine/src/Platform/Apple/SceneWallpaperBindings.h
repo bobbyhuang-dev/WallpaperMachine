@@ -339,7 +339,8 @@ typedef enum owe_scene_video_path {
     OWE_SCENE_VIDEO_PATH_BGRA = 1,
     OWE_SCENE_VIDEO_PATH_NV12_DIRECT = 2,
     OWE_SCENE_VIDEO_PATH_NV12_CONVERTED = 3,
-    OWE_SCENE_VIDEO_PATH_NV12_MIXED = 4
+    OWE_SCENE_VIDEO_PATH_NV12_MIXED = 4,
+    OWE_SCENE_VIDEO_PATH_NV12_CONVERTED_PREPARING = 5
 } owe_scene_video_path;
 
 /*
@@ -347,6 +348,11 @@ typedef enum owe_scene_video_path {
  * `OWE_SCENE_VIDEO_PATH_NONE` when it has none, has drawn no frame yet, or is
  * not on the native backend. Textures on different paths report the mixed
  * value, which is the honest answer for a scene whose materials differ.
+ *
+ * `..._NV12_CONVERTED_PREPARING` is the converted path before its conversion
+ * is ready. It is distinct from `NONE` because the scene does have a path and
+ * is working towards it; reporting `NONE` there told the host there was no
+ * video at all.
  */
 int owe_scene_wallpaper_video_path(void* scene);
 

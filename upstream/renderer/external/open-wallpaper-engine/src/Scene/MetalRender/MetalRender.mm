@@ -3753,7 +3753,19 @@ bool MetalRender::compileRenderGraph(Scene& scene, rg::RenderGraph& graph)
 
 bool MetalRender::ApplyRenderScale(Scene& scene, rg::RenderGraph& graph, double scale)
 {
-    scene.render_scale = scale;
+    // The same guard the compatibility backend has, and for a sharper reason
+    // here: `compile` starts by releasing the graph, which closes every video
+    // and drops every uploaded image. The host pushes this as a live property
+    // to every open scene whenever the value *might* have moved — on scene
+    // creation, and on each power-source change while the battery profile is
+    // on — precisely so a quality control the user drags does not reparse the
+    // project or reopen its video. Acting on an unchanged value would turn
+    // every plug and unplug into exactly that.
+    if (! std::isfinite(scale) || scale <= 0.0) return true;
+    const double clamped = std::min(1.0, std::max(vulkan::kMinRenderScale, scale));
+    if (scene.render_scale == clamped) return true;
+
+    scene.render_scale = clamped;
     @autoreleasepool {
         return pImpl->compile(scene, graph);
     }

@@ -604,6 +604,10 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       let widths: [Double] = [760, 840, 900, 1040, 1240]
       for width in widths {
         panel.web.setFrameSize(NSSize(width: width, height: 640))
+        // The frame change reaches the page asynchronously. Measuring straight
+        // after setting it reads the previous layout, which is why this only
+        // ever failed on a busy machine and always by a whole reflow.
+        try await panel.waitJS("Math.round(window.innerWidth) === \(Int(width))")
         let layout = try await panel.js("""
           const base = window.powerProbe.received.at(-1);
           const job = { id: 'bar-fixture', wallpaperID: 'bar-fixture', title: 'Bar fixture',
@@ -697,6 +701,13 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       try await panel.waitJS("document.querySelector('#welcome .welcome-page')?.dataset.step === 'steam'")
 
       // Steam: the two links the requirement implies, plain validation, then a real sign-in.
+      //
+      // Settle first. The count below is latched and then read 50 ms later, so
+      // a snapshot already in flight when it was latched lands inside that
+      // window and is indistinguishable from one the submit caused — which is
+      // what made this assertion fail whenever the machine was busy enough to
+      // delay an unrelated push into it.
+      try await panel.quiet()
       let steam = try await panel.js("""
         const region = document.getElementById('welcome');
         const links = [...region.querySelectorAll('.welcome-steam-links [data-action="openExternal"]')].map(link => link.dataset.url);

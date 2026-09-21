@@ -115,12 +115,15 @@ pub trait EngineFacade: Send + Sync + 'static {
     );
     /// Installs the sink for `engine.openUserShortcut` requests. Pushed rather
     /// than polled: a press is rare and must not cost an idle wakeup to notice.
+    ///
+    /// Required, with no default: the caller hands over the only thing keeping
+    /// its channel open, and a forwarder that quietly dropped it closed that
+    /// channel before the first press, which looks exactly like a wallpaper
+    /// whose buttons are unbound.
     fn set_user_shortcut_callback(
         &self,
         callback: Option<wallpaper_core::UserShortcutObserverCallback>,
-    ) {
-        let _ = callback;
-    }
+    );
     /// Globally suspends or resumes system-audio capture. Per-scene audio
     /// response settings are preserved across the transition.
     fn set_audio_capture_suspended(&self, suspended: bool) -> EngineFuture<()> {
@@ -734,6 +737,11 @@ pub struct FakeEngineFacade {
     rendered_scenes: Arc<ArcSwap<Vec<SceneDesc>>>,
     snapshot: Arc<ArcSwap<Vec<DisplaySnapshotEntry>>>,
     pointer_consumer: Arc<std::sync::Mutex<PointerConsumerObserver>>,
+    /// Held, so a test can report a press the way the engine would. Keeping
+    /// it also keeps whatever the caller handed over alive, which is the whole
+    /// point of installing it.
+    user_shortcut:
+        Arc<std::sync::Mutex<Option<wallpaper_core::UserShortcutObserverCallback>>>,
     snapshot_after_refresh: Arc<ArcSwap<Option<Vec<DisplaySnapshotEntry>>>>,
     refresh_failure: Arc<ArcSwap<Option<String>>>,
     paused_calls: Arc<ArcSwap<Vec<bool>>>,
@@ -854,6 +862,17 @@ impl ReconcileDone {
 
 #[cfg(test)]
 impl FakeEngineFacade {
+    /// Reports a press the way the engine does when a wallpaper calls
+    /// `engine.openUserShortcut`. Returns false when nothing is installed,
+    /// which is the failure this exists to catch.
+    #[must_use]
+    pub fn report_user_shortcut(&self, handle: SceneHandle, property: &str, value: &str) -> bool {
+        let sink = self.user_shortcut.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(callback) = sink.as_ref() else { return false };
+        callback(handle, property.to_owned(), value.to_owned());
+        true
+    }
+
     pub fn media_calls(&self) -> Vec<(SceneHandle, bool, wallpaper_core::media::MediaPollResult)> {
         load_log(&self.media_calls)
     }
@@ -1664,5 +1683,13 @@ impl EngineFacade for FakeEngineFacade {
         if let Some(callback) = &observer.callback {
             callback(observer.has_consumers);
         }
+    }
+
+    fn set_user_shortcut_callback(
+        &self,
+        callback: Option<wallpaper_core::UserShortcutObserverCallback>,
+    ) {
+        let mut sink = self.user_shortcut.lock().unwrap_or_else(|error| error.into_inner());
+        *sink = callback;
     }
 }

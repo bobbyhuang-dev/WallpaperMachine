@@ -25,6 +25,18 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — A trait default swallowed the sink that kept the shortcut channel open
+
+The instrumented build logged 'Stopped waiting for wallpaper shortcuts' at startup, before any press, which placed the fault in the bridge rather than anywhere downstream.
+
+- EngineFacade::set_user_shortcut_callback carried a default no-op body. ArcEngineFacade, which BridgeBuilder::build wraps every facade in, never overrode it, so the callback was dropped on the floor
+- That callback owned the only sender for the shortcut channel. Dropping it closed the channel immediately, so the very first next_user_shortcut returned "the engine stopped reporting user shortcuts" and the loop gave up before the user touched anything
+- The default body is removed; the method is now required, and the compiler found ArcEngineFacade plus three test fakes. FakeEngineFacade keeps the callback and gained report_user_shortcut so a test can report a press the way the engine does
+- New a_reported_press_comes_back_out_of_the_bridge: fails with the forwarder removed ("the bridge never installed its sink"), passes with it
+- Two robustness fixes alongside: a failed consent lookup no longer kills the loop permanently, and the Swift loop retries five times with backoff and logs the actual error instead of discarding it
+- scripts/test.py 535 passed / 0 failed / 11 skipped of 546; wallpaper-bridge 322 passed
+- Release rebuilt
+
 ## 2026-09-21 — Nothing was waiting at the end of the shortcut chain
 
 Presses still did nothing after the value fix. Instrumenting each hop and reading the user's log settled it in one press instead of another round of reasoning.
@@ -121,16 +133,3 @@ Reported: the transport buttons still have no effect, and the progress bar canno
 - Test helper poll() now takes a label, so a timeout names the condition instead of reporting an anonymous 2s failure.
 - Gates: scripts/test.py 531 passed / 0 failed / 11 skipped; scripts/check_renderer.py all binaries 0, pixels equal, 0 diagnostics, including the reworked PlaybackGPU cover test.
 - Release rebuilt 14:45: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
-
-## 2026-09-21 — Power regression: advisory round 3 - web delivery, listener identity, pixel-level lifetime proof
-
-- Regression I introduced and reverted: gating WebWallpaperMediaRelay.emit on consumer membership silenced every visible web wallpaper. WebWallpaperHost registers one listener under mediaListenerKey (WebWallpaperHost.swift:105) but counts consumers per page (ObjectIdentifier(page), line 436), so a listener key is never a consumer key. emit is unconditional again; the decision not to work moved into SceneMediaSink, which knows its own effective demand.
-- SceneMediaSink now records consuming from each applied reconcile and checks it both before enqueuing a delivery and again inside the task, so an event queued before a pause does no artwork copy, JSON encode or bridge call after it. shutdown clears it with the generation.
-- Listener identity fixed in both places: SceneMediaSink.listenerKey and WebWallpaperHost.mediaListenerKey were ObjectIdentifier of a temporary that died immediately, so the address could be reused by another listener in the shared relay. Both hold a strong token and derive the key from it.
-- New Swift test testEveryListenerIsFedEvenThoughListenerKeysAreNeverConsumerKeys builds the real WebWallpaperHost on a shared relay and proves a non-consumer listener still receives events; it fails with the consumer filter restored (verified) and passes without it.
-- Cover lifetime test strengthened per review: CollectCompletedUploads is nonblocking, so it now drains with WaitForPendingUploads first and then reads actual RGBA back off the GPU through TextureCache::ReadbackImageSample for both slots, across three covers and both refresh orders.
-- That readback is a real use-after-free detector, no sanitizer needed: with ImageSlotsRef reverted to borrowing (image_owner not bound to the cached ImageSlots) the test process dies during readback; with shared ownership it passes with exact pixels in both orders.
-- Corrected an earlier claim in that test: whether the outgoing image object survives is order-dependent and is no longer asserted. When the current slot refreshes first, nothing references the old image and it is correctly released while the previous slot takes an equivalent upload. What holds in both orders is what the two slots show.
-- Found, reported, NOT changed: RenderHandler::onMessageReceived has no CASE_CMD(SET_RENDER_SCALE) (SceneWallpaper.cpp:488-506), so CMD_SET_RENDER_SCALE posted at line 1877 never reaches handle_SET_RENDER_SCALE and m_render_scale keeps its 1.0 default. Pre-existing (git diff touches no CASE_CMD line). This corrects the earlier report: P1 item 5 is not 'already a no-op in Vulkan' but unreachable in the scene path. Enabling it changes rendering for anyone with a non-default internal quality and needs visual acceptance, so it is left for the user's call.
-- Gates: scripts/test.py 529 passed / 0 failed / 11 skipped; scripts/check_renderer.py all binaries 0, pixels equal, 0 diagnostics; cargo test -p wallpaper-bridge 319 passed.
-- Release rebuilt 14:17: build/Build/Products/Release/MacWallpaperEngine.app plus Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor, the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.

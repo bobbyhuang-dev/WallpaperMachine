@@ -78,14 +78,26 @@ final class SceneMediaSink {
         // A sink with no source of presses simply has none to carry out.
         guard shortcuts == nil, nextShortcut != nil else { return }
         shortcuts = Task { [weak self] in
+            // One bad answer is not a reason to stop taking presses for the
+            // rest of the session. Giving up on the first one is how every
+            // button in a wallpaper goes quiet before its user has touched
+            // anything, with the cause recorded once and then never again.
+            var failures = 0
             while !Task.isCancelled {
                 guard let next = self?.nextShortcut else { return }
                 let event: BridgeUserShortcut
                 do {
                     event = try await next()
+                    failures = 0
                 } catch {
-                    AppLog.warn("Stopped waiting for wallpaper shortcuts.")
-                    return
+                    failures += 1
+                    AppLog.warn("Waiting for wallpaper shortcuts failed (\(failures)): \(error)")
+                    if failures >= 5 {
+                        AppLog.warn("Stopped waiting for wallpaper shortcuts.")
+                        return
+                    }
+                    try? await Task.sleep(for: .seconds(1))
+                    continue
                 }
                 guard let self, !Task.isCancelled else { return }
                 await self.perform(event)

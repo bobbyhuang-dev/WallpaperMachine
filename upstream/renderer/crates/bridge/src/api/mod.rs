@@ -717,6 +717,13 @@ impl EngineFacade for ArcEngineFacade {
     ) {
         self.0.set_pointer_consumer_callback(callback);
     }
+
+    fn set_user_shortcut_callback(
+        &self,
+        callback: Option<wallpaper_core::UserShortcutObserverCallback>,
+    ) {
+        self.0.set_user_shortcut_callback(callback);
+    }
 }
 
 #[uniffi::export]
@@ -1592,12 +1599,22 @@ impl WallpaperBridge {
                 receiver.recv().await
             };
             let Some(event) = event else {
+                log::warn!("the user shortcut channel closed: every sender was dropped");
                 return Err(BridgeError::engine("the engine stopped reporting user shortcuts"));
             };
             // Consent, not liveness: this asks whether the user allowed this
             // wallpaper near their media, which does not stop being true
             // because playback is paused or a display went dark.
-            let consented = self.system_media_consent_handles().await?;
+            // A momentary failure to read consent is not a reason to stop
+            // taking presses; the caller would have to treat it as the channel
+            // having closed, which is permanent.
+            let consented = match self.system_media_consent_handles().await {
+                Ok(handles) => handles,
+                Err(error) => {
+                    log::warn!("could not read media consent for a user shortcut: {error}");
+                    continue;
+                }
+            };
             if consented.contains(&event.scene_handle) {
                 return Ok(event);
             }

@@ -4,7 +4,9 @@ use std::{
 };
 
 use wallpaper_core::{
-    DisplayDesc, DisplayIdentity, DisplaySelector, DisplaySnapshotEntry, project::SceneHandle,
+    DisplayDesc, DisplayIdentity, DisplaySelector, DisplaySnapshotEntry,
+    WallpaperAssignment,
+    project::{SceneHandle, SceneTemplate},
 };
 
 use crate::{
@@ -2222,6 +2224,57 @@ async fn mirror_scene_tracks_source_rebuild_settings_except_monitor_overrides() 
     );
     assert_f32_close(f32::from(mirror.audio_volume), 0.6);
     assert!(mirror.audio_muted);
+}
+
+#[tokio::test]
+async fn a_reported_press_comes_back_out_of_the_bridge() {
+    // The sink the bridge installs owns the only sender for its channel. A
+    // facade that accepted it and dropped it closed that channel before the
+    // first press, so every button in every wallpaper was dead from startup --
+    // and it looked exactly like a button nobody had bound.
+    let engine = FakeEngineFacade::default();
+    engine.set_snapshot(vec![DisplaySnapshotEntry {
+        handle: Some(SceneHandle::new(11)),
+        accepts_pointer_input: true,
+        window_active: true,
+        assignment: Some(WallpaperAssignment::Direct(
+            SceneTemplate::builder("/workshop/content/431960/100/project.json")
+                .build()
+                .unwrap(),
+        )),
+        ..display_snapshot(7)
+    }]);
+    let bridge = BridgeBuilder::new(engine.clone())
+        .with_state(crate::actor::state::BridgeActorState::default())
+        .build()
+        .unwrap();
+    bridge
+        .inject_scene_wallpaper_config_for_test("100", "Scene")
+        .await;
+    bridge
+        .set_display_config_enabled("100".into(), "7".into(), true)
+        .await
+        .unwrap();
+    bridge.apply_wallpaper_options("100".into()).await.unwrap();
+    bridge
+        .set_media_integration_enabled("100".into(), true)
+        .await
+        .unwrap();
+    assert_eq!(bridge.system_media_consent_handles().await.unwrap(), vec![11]);
+
+    assert!(
+        engine.report_user_shortcut(SceneHandle::new(11), "nextsongbutton", "media:next"),
+        "the bridge never installed its sink, so nothing could report a press"
+    );
+    let event = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        bridge.next_user_shortcut(),
+    )
+    .await
+    .expect("a reported press has to come back out rather than hang")
+    .expect("the channel closed instead of delivering the press");
+    assert_eq!(event.property, "nextsongbutton");
+    assert_eq!(event.value, "media:next");
 }
 
 #[tokio::test]

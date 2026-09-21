@@ -403,6 +403,12 @@ fn wait_for_paused_calls(engine: &FakeEngineFacade, expected: &[bool]) {
 struct FailingPlaybackEngine;
 
 impl EngineFacade for FailingPlaybackEngine {
+    fn set_user_shortcut_callback(
+        &self,
+        _callback: Option<wallpaper_core::UserShortcutObserverCallback>,
+    ) {
+    }
+
     fn update_media(&self, _handle: SceneHandle, _enabled: bool, _state: wallpaper_core::media::MediaPollResult) -> BoxFuture<'static, Result<(), EngineError>> {
         async move { Ok(()) }.boxed()
     }
@@ -603,6 +609,12 @@ enum ShutdownEvent {
 }
 
 impl EngineFacade for ShutdownEngine {
+    fn set_user_shortcut_callback(
+        &self,
+        _callback: Option<wallpaper_core::UserShortcutObserverCallback>,
+    ) {
+    }
+
     fn update_media(&self, handle: SceneHandle, enabled: bool, state: wallpaper_core::media::MediaPollResult) -> BoxFuture<'static, Result<(), EngineError>> {
         self.fake.update_media(handle, enabled, state)
     }

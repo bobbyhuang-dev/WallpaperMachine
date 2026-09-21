@@ -15,6 +15,64 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — Release build after the revert and the doc updates
+
+python3 scripts/build.py --configuration Release, following the full gate.
+
+- Confirmed in the delivered binary: the bound transport value and the shortcut option label are present, and the reverted video-picker title is gone
+- Owning docs updated: media-integration.md no longer says transport is unimplemented, build.md records why the deployment pin is kept out of cargo, renderer.md lists the three new probe knobs. Link check clean apart from two pre-existing breaks in docs/archive/implementation-progress.md (f94ab32, not this work)
+- Delivered: `build/Build/Products/Release/MacWallpaperEngine.app` — quit and reopen the app to pick it up
+
+## 2026-09-21 — Corrected: two sound claims were wrong, and the video picker promised what cannot work
+
+Three things in the entries below do not survive checking. The sound volume was never dropped -- _GetJsonValue reads a node's `value` when it is an object (WPJson.cpp:47-50), so 0.3 parsed fine; what was actually wrong is narrower, and the volume now follows the user's live property instead of the number scene.json shipped with. The negative check cited was a compile failure on the old header, which only shows a field exists.
+
+- Replaced with `ASoundFollowsTheSliderValueTheUserActuallyHas`, which parses through WPSoundParser and reads the registered stream: reverting only the resolution in Parse (header kept) fails it with "the sound kept the number scene.json shipped with instead of the user\s slider"
+- The video-picker change is reverted. This scene binds `"usertextures": ["backgroundimage"]` — a plain property name — and ApplySystemUserTextures substitutes only `$mediaThumbnail`/`$mediaPreviousThumbnail`, so a chosen path never reaches the material. There is also no VFS mount for user-chosen files, so an absolute path could not load even if it did
+- Widening the file filter alone ships a picker that accepts a video and changes nothing, which is a promise the app cannot keep. The real work is property-named texture substitution plus a user-asset mount with the path and permission rules that boundary needs, and video into a texture slot
+- `scripts/test.py` 526 passed; `cargo test --release` core 213 / bridge 317; `scene_schema_tests` 76 passed plus the two known pointer timeouts
+
+## 2026-09-21 — Release build carrying the transport, sound and video-picker fixes
+
+python3 scripts/build.py --configuration Release, after the full gate.
+
+- Confirmed in the delivered binary: the bound transport value, the picker title for a video-accepting project, and the shortcut option label are all present, and the bundled WebUI matches WebUI/ file for file
+- Delivered: `build/Build/Products/Release/MacWallpaperEngine.app` — quit and reopen the app to pick it up
+
+## 2026-09-21 — The missing background video was a picker that only ever offered images
+
+This wallpaper's Custom Background is a scenetexture property, and its manifest declares general.supportsvideo -- Wallpaper Engine's way of saying a video is as acceptable there as an image. Nothing in the app read that flag, and the picker set allowedContentTypes to .image, so the video the official example uses could not be selected at all. The scene has no missing video layer; the file simply never got in.
+
+- supportsvideo now reaches the texture property metadata and the bridge descriptor, and the picker offers video and retitles itself only for a project that declares it
+- `a_manifest_that_supports_video_says_so_on_its_texture_pickers` — a declaring manifest marks its scenetexture accordingly, and the existing scenetexture test pins the default false
+- `scripts/test.py` — 526 passed, 0 failed, 11 skipped of 537; `cargo test --release -p wallpaper-bridge --lib` 318 passed
+- Unverified: no desktop run, so whether the renderer then plays a selected video through that slot was not observed here
+
+## 2026-09-21 — The button-click handler does not throw; its volume slider was the thing that did nothing
+
+The reported throw from thisScene.getLayer('button_press').play() does not reproduce: registered as a layer script and driven with a cursor-down, the handler runs with zero script errors. play() on a layer that is not a sound layer sets a local flag rather than raising, so nothing there can throw.
+
+- What is really broken on this wallpaper: both of its sound layers bind volume to the `buttonsvolume` slider as {"user": …, "value": …}, and the parser read only numbers -- so the binding was dropped, the sounds kept the author default, and moving that slider changed nothing
+- `ASoundVolumeBoundToASliderFollowsTheUsersChoice` and `APlainSoundVolumeIsStillANumber` — the bound form keeps both the value and the property it follows, the plain form still parses as a number
+- `PressingAButtonWhoseSoundExistsPlaysIt` — the wallpaper\s own handler, run for real, reports no script error
+- `scene_schema_tests` 76 passed plus the two known pointer timeouts; `scenescript_media_event_smoke` 20 passed
+
+## 2026-09-21 — Release build carrying the whole shortcut chain
+
+python3 scripts/build.py --configuration Release, the first full renderer release build since the deployment-target fix -- which is what made it possible at all.
+
+- Confirmed the delivered app carries the change: the binary contains the bound-action value and the bridge call, the bundled WebUI matches WebUI/ file for file, and the bundled zh-Hans catalogue has the new option
+- Delivered: `build/Build/Products/Release/MacWallpaperEngine.app` — quit and reopen the app to pick it up
+
+## 2026-09-21 — A bound wallpaper button now reaches a real media player
+
+The Swift side takes presses off the bridge's long poll and carries them out through whichever provider is currently answering. The three combos default to no action, so the buttons stay inert until the user binds them in the wallpaper's own properties -- which is what Wallpaper Engine has them do, and what keeps a wallpaper from choosing on their behalf.
+
+- Transport is a capability of the provider seam: the adapter stream runs one short-lived `perl … send N` off the main actor, the AppleScript runner tells the player it is currently reading, and a provider that cannot control playback answers false rather than pretending
+- `SystemMediaTransportTests` (3) — the three actions reach the adapter as MRCommand 2, 4 and 5 from its own header; a refusing player is reported rather than assumed; the command follows the provider that is answering rather than a fixed one
+- Combo labels now go through `t()` in the panel, with the four actions in the zh-Hans catalogue. "No action" rather than "None" — that key already means deselect-all
+- `scripts/test.py` — 526 passed, 0 failed, 11 skipped of 537; `cargo test --release -p wallpaper-bridge --lib` 317 passed
+- Unverified: no desktop run. Whether a press moves a real player was not observed here, only that the command is handed to the adapter the state comes from
 ## 2026-09-21 — A wallpaper's shortcut press now reaches the host, gated on the user's media consent
 
 The engine pushes each request to an installed observer instead of holding it, because a request no host has taken is a press the user already stopped waiting for. WallpaperBridge::next_user_shortcut long-polls a bounded channel outside the actor, so waiting for a rare press stalls no other request and costs no idle wakeup, and it drops requests from wallpapers missing from system_media_scene_handles.
@@ -263,139 +321,6 @@ choice; they now pass `AppLanguageStore.english()` (`Tests/Unit/Support/`).
   `** BUILD SUCCEEDED **`; bundled `Contents/Resources/WebUI/` matches `WebUI/`.
   Delivered `build/Build/Products/Release/MacWallpaperEngine.app`; not launched.
   The rendered Chinese button was not screenshotted (no desktop run).
-
-## 2026-09-20 — In-app language picker, per-language panel catalogs, registry checks
-
-Simplified Chinese was already translated but only reachable through macOS's
-language settings. Settings → General now has **Language** (System (Auto),
-English, 简体中文); the choice switches the panel in place and mirrors into the
-app-domain `AppleLanguages` so native strings follow on the next launch. The
-WebUI catalog moved to `WebUI/locales/zh-Hans.js` behind a registry in
-`i18n.js`; `AppLanguage.supported` drives the picker and the served-file allow
-list. Adding a language is documented in `docs/localization.md`.
-
-- `python3 scripts/test.py` — 73 Python tests OK (catalog check now verifies
-  Swift/i18n/locales/xcstrings registries agree, native keys all translated, key
-  parity across catalogs); native 529 tests, 9 skipped, 0 failures. New:
-  `AppLanguageTests` (5), `testLanguageSettingSwitchesThePanelInPlaceAndOffersEveryShippedLanguage`.
-- `python3 scripts/build.py --swift-only --configuration Release` — succeeded;
-  bundled `WebUI/` byte-identical to source, `locales/zh-Hans.js` and
-  `zh-Hans.lproj` present. No renderer change, no desktop run; the picker's
-  visual layout is unchecked on screen.
-
-## 2026-09-20 — Verification log capped at ten entries; durable facts promoted
-
-Documentation only. The log had grown to 106 entries in six days (260 KB, 30% of
-`docs/`), and facts that were still true were only findable inside it. No source,
-build or desktop change.
-
-- Entries 11 and older moved verbatim into
-  `docs/testing/archive/verification-log-2026-09.md`; only relative link depth
-  changed. Checked byte-identical against `git show HEAD:…` before and after the
-  split, so no recorded result was altered or lost.
-- Promoted out of the log: the two `scene_schema_tests` pointer-case timeouts,
-  the stale `$TMPDIR/wallpaper-engine-video` cache failures, `tex_schema_tests`
-  not compiling (`lz4.h`; `PkgConfig::LZ4` is `PRIVATE` in `src/CMakeLists.txt`
-  and the test target never links it), the `clipping_mask` / Music Visualizer
-  shader-compile gaps, unimplemented `thisLayer.getParent()` and the unrendered
-  perspective 3D content → `docs/testing/renderer.md`; the codesign xattr
-  detritus failure and the first-configure cargo retry → `docs/build.md`.
-- Entry format and the ten-entry retention rule are now in `docs/conventions.md`,
-  `AGENTS.md` and `docs/testing/README.md`; the archive is indexed in
-  `docs/README.md`.
-- `python3 -m unittest discover -s scripts/tests -q` — 71 tests, OK. Relative
-  Markdown links across `AGENTS.md`, `README.md`, `CONTRIBUTING.md`,
-  `LICENSING.md` and all 24 `docs/**/*.md` resolve: 0 broken. No app build, no
-  renderer gate, no desktop run — nothing outside `docs/` and `AGENTS.md` changed.
-
-## 2026-09-20 — The cover was drawn at a composition layer's local coordinates
-
-Follow-up to the entry below, on the same wallpaper. With the texture binding
-fixed, the album art reached a draw but landed as a clipped blob against the
-left edge of the canvas while the square the user looks at stayed untextured.
-`WE_TEST_DUMP_PASSES` attributed both shapes: pass 11 (node 297 `Song Cover`,
-`textures=[$mediaThumbnail]`) filled its whole 1024×1024 target with the
-published cover, the blend and rounded-mask passes preserved it, and the screen
-composite put it at x ∈ [0, 312] — never at the layer's world x.
-
-- **`SceneNode::AppendChild` set the parent without dirtying the child.**
-  `UpdateTrans()` returns early on a clean node, so a node whose matrix had
-  already been computed while it was unparented kept that matrix for good. A
-  composition layer builds its camera and effect chain during parsing, before
-  `AttachLayerNode` wires the graph, so node 208
-  (`Livello di composizione regolabile`) reported `world=(0, 1085)` — its own
-  local translate — instead of `(2560, 1085)`, and its children `38` and `297`
-  inherited that origin. Every other layer in the scene was parented before
-  anything asked for its transform, which is why only this subtree moved.
-  `AppendChild` now calls `MarkTransDirty()` on the child, the same invariant
-  `SetTranslate` / `SetScale` / `SetRotation` / `SetAttachmentTransform`
-  already keep.
-- Measured on the real project with the user's display geometry
-  (`WE_TEST_CLICK_VIEWPORT=4112x2658@2.0:fill`, 40 frames at
-  `WE_TEST_FRAME_STEP=0.0166`): node 208 now reports `world=(2560, 1085)`, and
-  two runs differing only in artwork colour now differ **inside the cover
-  square** — a 20 px patch at frame fraction (0.50, 0.47) reads `(27, 0, 0)`
-  for `ff0000` and `(0, 27, 0)` for `00ff00`, with the artwork's bounding box
-  centred at (0.500, 0.497). The left-edge blob is gone. The user confirmed the
-  cover on the desktop afterwards.
-- **The cover was then dimmed to 12%, and that was ours too.** All four
-  `Song Cover` / `Song Cover SMALL` layers carry a constant
-  `"color": "0.11765 0.11765 0.11765"`, and `genericimage4.frag` line 93 is
-  `texSample2D(g_Texture0, v_TexCoord.xy) * g_Color4`, so the artwork drew at
-  ~12% — pure `ff0000` measured `(27, 0, 0)`, one multiply, not two. The
-  author's own recordings, linked from the wallpaper's description
-  (`i.imgur.com/KOEcClx.gif`, not the 256×256 iOS mock-up in `preview.gif`),
-  show that cover at full strength with white highlights. They are a montage —
-  85 frames, several tracks, the clock pinned at Apple's 9:41 — so not one
-  continuous capture, and the per-track blurred backgrounds in them do not
-  match the shipped scene, which tints from the palette instead: these are
-  recordings of an earlier build. What carries is that every state draws a
-  different cover matching its own title and artist at full strength, which is
-  engine output rather than hand-painted. Two further arguments point the same
-  way inside the shipped content: another scene paints a background layer
-  `0 0 0` behind a `scenetexture` binding, and this one exposes a separate
-  "Image Brightness" slider for dimming. That colour paints the `util/white`
-  placeholder the shared model material ships; once a runtime image is
-  substituted into the slot there is nothing left for it to describe.
-  `WPImageObject::FromJson` now drops it in
-  exactly that case, and only that case: a binding that names a project
-  property (`"usertextures":["bg"]`, `["backgroundimage"]`) substitutes nothing,
-  so those layers — one of which is authored `0 0 0` — keep their colour.
-  `IsSystemUserTexture` is now the single definition the substitution and this
-  rule share. Measured after: node 297 draws with `g_Color4=[1,1,1,1]` and the
-  square reads `(227, 0, 0)`, while node 38 — the same authored colour, no
-  runtime image — still draws its dark card at `g_Color4=[0.11765,…]`.
-  `SceneSchema.InstanceColourSurvivesUnlessARuntimeImageTakesTheSlot` pins both
-  directions.
-- `SceneSchema.AttachingAParentRefreshesAWorldTransformThatWasAlreadyComputed`
-  covers the fix at three levels: compute a child's transform, attach a parent,
-  and the world origin must follow, including for a subtree attached later. It
-  fails with the `MarkTransDirty()` call removed and passes with it.
-- The probe's node dump now records `world=`, `rendered=` and `override=` next
-  to the local transform, which is what separated "positioned wrong" from
-  "textured wrong" in one run.
-- `python3 scripts/test.py` — exit 0. Counts read back from
-  `Tests-20260920-150006-694596.xcresult` rather than the console tail:
-  `result: Passed`, 523 tests, 514 passed, 0 failed, 9 skipped, no
-  `testFailures`.
-- `python3 scripts/check_renderer.py` — exit 0, `adaptive-20260920-150236`: 10
-  generated cases `pixels_equal=true`, 0 diagnostics, 8 projects × 2 reload
-  cycles clean.
-- OWE suites, which neither gate builds: `mouse_input_test` 11,
-  `media_thumbnail_texture_smoke` 14, `scenescript_media_event_smoke` 16,
-  `scenescript_sound_layer_smoke` 8, `layer_texture_reference_test` 10,
-  `scene_mesh_tests` 16 — all passed. `scene_schema_tests` 72 passed with the
-  same two pre-existing pointer-capability timeouts recorded below.
-- `python3 scripts/build.py --configuration Release` — exit 0,
-  `** BUILD SUCCEEDED **`, twice: once for the re-parenting fix (binary
-  14:43:10) and again after the instance-colour fix (binary 15:05:28, newer
-  than every source edit in this entry). Delivered
-  `build/Build/Products/Release/MacWallpaperEngine.app`. The app was not
-  launched and no desktop state was changed.
-- Still open on this wallpaper: `engine.openUserShortcut` (transport buttons),
-  the `getLayer(…).play()` throw for its press sounds, the per-frame
-  `lookAt` TypeError in its debug overlay, and `engine.screenResolution` being
-  published as the cursor viewport's world extent rather than display pixels.
 
 ## 2026-09-20 — In-app language picker, per-language panel catalogs, registry checks
 

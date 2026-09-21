@@ -25,6 +25,87 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — Power regression: render scale was never wired, switch guard made hard, delivery
+
+- Archaeology settles it: git log -S 'CASE_CMD(SET_RENDER_SCALE)' returns nothing, while the enumerator arrives in 48b8df2 'feat(quality): internal render scale, quality settings, shared video decode'. The case never existed, so internal render scale never worked for scene wallpapers - this is never-wired, not a regression, and therefore cannot explain a power increase. It does explain why lowering internal quality never saved anything.
+- The UI said otherwise the whole time: activation.rs:526-528 sets render_scale_supported = true for any applied Scene, and snapshots.rs:729 reports effective_render_scale, so the control was enabled and showed 50%/75% as in force while the GPU kept rasterizing at 100%. The battery profile's quality.battery.render_scale went the same way.
+- Guard promoted from warning to build failure, narrowly: -Werror=switch on the wescene-renderer target only, which is the target that owns both looper handler switches. warn_opts does not reach that target, which is why the warning-level version proved nothing. Both handler switches now have fixed-width enums, no default, and an explicit CMD_NO case.
+- Verified by deleting the case again: 'error: enumeration value CMD_SET_RENDER_SCALE not handled in switch [-Werror,-Wswitch]', build exit 2.
+- That promotion surfaced a second, pre-existing gap the earlier log check had missed because the target was not being recompiled: owe_scene_wallpaper_video_path did not name SceneVideoPath::Nv12ConvertedPreparing and reached OWE_SCENE_VIDEO_PATH_NONE by falling through. NONE is documented as covering a path that has drawn no frame yet, so the case is written out explicitly with the same result - behaviour unchanged, Metal-only in any case.
+- Two panel races fixed rather than documented as tolerable, since docs/testing/README.md already forbids that trade: the first-run guide settles with panel.quiet() before its 50 ms measurement window, and the top-bar layout test waits for window.innerWidth to reach the new frame width instead of reading getBoundingClientRect mid-reflow. The README paragraph now teaches both techniques and the revert-to-confirm-ownership check instead of granting an exemption.
+- Gates green: scripts/check_renderer.py all binaries 0, pixels equal, 0 diagnostics; scripts/test.py 531 passed / 0 failed / 11 skipped.
+- Release built 16:51: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval, the shared-ownership ImageSlotsRef constructor and handle_SET_RENDER_SCALE. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
+
+## 2026-09-21 — Power regression: render scale dispatch restored, panel races fixed, gate green
+
+- RenderHandler's command switch had no CASE_CMD(SET_RENDER_SCALE), so every CMD_SET_RENDER_SCALE posted from setPropertyFloat(PROPERTY_RENDER_SCALE) fell into default:break. m_render_scale is written nowhere else, so it stayed 1.0 whatever the user chose, and rebuildRenderGraph seeded scene.render_scale from it. Internal quality 75%/50% and the battery profile's render scale were therefore complete no-ops for scene wallpapers - not a live-update bug, the value never arrived at all. owe_scene_wallpaper_set_render_scale is the only FFI entry, so no other path compensated.
+- Fixed as a class, not an instance: the case is restored, CMD gets a fixed int32_t underlying type so the looper's cast back is defined, and default: is replaced by an explicit CMD_NO case. With -Wall -Wextra already on, -Wswitch now names any command added and not dispatched. Verified by deleting the case again: 'enumeration value CMD_SET_RENDER_SCALE not handled in switch [-Wswitch]'.
+- Inert for the reporting user's configuration: render_scale is 1.0 and the battery profile is off, and VulkanRender::applyRenderScale early-returns when scene.render_scale already equals the clamped value (VulkanRender.cpp:1470-1472). Users with a non-default internal quality will see it take effect for the first time.
+- Why no existing test caught it: render_scale_test sets scene.render_scale directly and exercises ResolveScreenBoundRenderTargetSizes; VulkanRender has its own same-value early return. Both sit below the message dispatch, and no harness drives RenderHandler::onMessageReceived. The compiler check replaces the harness that does not exist.
+- Two panel tests were racing on wall clock, not on shared state. testFirstRunGuideCovers... latched a snapshot count, submitted a form and read the count 50ms later, counting any push already in flight; it settles with panel.quiet() first now. testTopBarKeepsTheRepositoryLink... measured getBoundingClientRect immediately after setFrameSize, reading the pre-reflow layout (744 vs 760, one whole reflow); it now waits for window.innerWidth to reach the new width.
+- The first of those was wrongly attributed to load at first. A control gate with only the SceneWallpaper dispatch hunk reverted still failed the same assertion, which exonerated the change and identified the test. An 11-failure gate earlier was separately explained by load average 165 and a 174s run versus the usual 30s.
+- Gate now green and stable: scripts/test.py 531 passed / 0 failed / 11 skipped, three consecutive runs (39s, 28s, 28s). check_renderer.py green after the C++ change: all binaries 0, pixels equal, 0 diagnostics.
+- Release rebuilt 16:26: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval, the shared-ownership ImageSlotsRef constructor and handle_SET_RENDER_SCALE. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
+
+## 2026-09-21 — Power regression: advisory round 5 closeout
+
+- Only actionable item this round: SceneMediaSink.shutdown told the relay to stop consuming twice, once through setConsuming(false) and once directly. The second call relied on the relay's remove-guard to be harmless; dropped.
+- Re-verified as already converged in earlier rounds, not changed again: the cover test compares raw Read() bytes with no NormalizeColorBytes (Pass/Target outputs are always RGBA8); deliveryEpoch is separate from generation and advances only when consuming flips, so an unrelated reconcile cannot retire wanted deliveries; the captured epoch is re-checked after the applyArtwork await; the over-specified combined test was already split into one chain-ordering test and one pause-retirement test; docs/features/media-integration.md already carries both durable contracts.
+- Stability: SceneMediaSinkTests run six consecutive times, 6 passed each time. Neither new test contains a pause-then-resume sequence, so the replay nondeterminism that made the earlier combined test flaky does not arise.
+- Renderer sources unchanged since the round-four gate, so check_renderer.py was not re-run; that run remains current evidence (all binaries 0, pixels equal, 0 diagnostics).
+- Gate: scripts/test.py 531 passed / 0 failed / 11 skipped.
+- Release rebuilt 15:33: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor, the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
+
+## 2026-09-21 — Power regression: advisory round 4 - legal readback, ordered deliveries, delivery epoch
+
+- Cover lifetime test made legal Vulkan: cached images carry TRANSFER_DST|SAMPLED only (TextureCache.cpp:857-862), so ReadbackImageSample's transition to TRANSFER_SRC was invalid usage MoltenVK happened to tolerate. The test now binds each slot into an ordinary PlaybackGPU pass, draws, and reads the render target, which is readback-capable.
+- That path is a cleaner detector than the previous one: with ImageSlotsRef reverted to borrowing, the test no longer crashes but fails with the previous slot drawing {0,0,0,0} instead of its cover, at previous_first=true, covers 1 and 2. With shared ownership both refresh orders draw the exact published bytes across three covers.
+- SceneMediaSink deliveries are now chained and epoch-bound. Chaining fixes ordering: a slow cover must not be overtaken by the one that replaced it, because the engine shows whatever arrives last. The epoch moves only on effective-demand transitions and is checked at task entry and again after the artwork await, so a delivery retired by a pause stops there; a boolean could not, since a resume sets it true again.
+- Two Swift tests replace the earlier over-specified one, after the real behaviour showed [1,1,1,2] (the extra 1s are legitimate resume replays, not a defect): testASlowCoverIsNotOvertakenByTheOneThatReplacedIt and testADeliveryRetiredByAPauseDoesNotReportItselfWhenItReturns. Removing the chain fails the first ('a later cover overtook the one still being applied: [2]'); removing the post-await epoch check fails the second ('a delivery retired by a pause still reported itself').
+- Test helper poll() now takes a label, so a timeout names the condition instead of reporting an anonymous 2s failure.
+- Gates: scripts/test.py 531 passed / 0 failed / 11 skipped; scripts/check_renderer.py all binaries 0, pixels equal, 0 diagnostics, including the reworked PlaybackGPU cover test.
+- Release rebuilt 14:45: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
+
+## 2026-09-21 — Power regression: advisory round 3 - web delivery, listener identity, pixel-level lifetime proof
+
+- Regression I introduced and reverted: gating WebWallpaperMediaRelay.emit on consumer membership silenced every visible web wallpaper. WebWallpaperHost registers one listener under mediaListenerKey (WebWallpaperHost.swift:105) but counts consumers per page (ObjectIdentifier(page), line 436), so a listener key is never a consumer key. emit is unconditional again; the decision not to work moved into SceneMediaSink, which knows its own effective demand.
+- SceneMediaSink now records consuming from each applied reconcile and checks it both before enqueuing a delivery and again inside the task, so an event queued before a pause does no artwork copy, JSON encode or bridge call after it. shutdown clears it with the generation.
+- Listener identity fixed in both places: SceneMediaSink.listenerKey and WebWallpaperHost.mediaListenerKey were ObjectIdentifier of a temporary that died immediately, so the address could be reused by another listener in the shared relay. Both hold a strong token and derive the key from it.
+- New Swift test testEveryListenerIsFedEvenThoughListenerKeysAreNeverConsumerKeys builds the real WebWallpaperHost on a shared relay and proves a non-consumer listener still receives events; it fails with the consumer filter restored (verified) and passes without it.
+- Cover lifetime test strengthened per review: CollectCompletedUploads is nonblocking, so it now drains with WaitForPendingUploads first and then reads actual RGBA back off the GPU through TextureCache::ReadbackImageSample for both slots, across three covers and both refresh orders.
+- That readback is a real use-after-free detector, no sanitizer needed: with ImageSlotsRef reverted to borrowing (image_owner not bound to the cached ImageSlots) the test process dies during readback; with shared ownership it passes with exact pixels in both orders.
+- Corrected an earlier claim in that test: whether the outgoing image object survives is order-dependent and is no longer asserted. When the current slot refreshes first, nothing references the old image and it is correctly released while the previous slot takes an equivalent upload. What holds in both orders is what the two slots show.
+- Found, reported, NOT changed: RenderHandler::onMessageReceived has no CASE_CMD(SET_RENDER_SCALE) (SceneWallpaper.cpp:488-506), so CMD_SET_RENDER_SCALE posted at line 1877 never reaches handle_SET_RENDER_SCALE and m_render_scale keeps its 1.0 default. Pre-existing (git diff touches no CASE_CMD line). This corrects the earlier report: P1 item 5 is not 'already a no-op in Vulkan' but unreachable in the scene path. Enabling it changes rendering for anyone with a non-default internal quality and needs visual acceptance, so it is left for the user's call.
+- Gates: scripts/test.py 529 passed / 0 failed / 11 skipped; scripts/check_renderer.py all binaries 0, pixels equal, 0 diagnostics; cargo test -p wallpaper-bridge 319 passed.
+- Release rebuilt 14:17: build/Build/Products/Release/MacWallpaperEngine.app plus Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor, the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
+
+## 2026-09-21 — Power regression follow-up: texture lifetime, request handover, media gating completeness
+
+- Blocker fixed before delivery: with the cover no longer rebuilding the graph, TextureCache::ReplaceTex could free an image a second binding was still sampling. A cover change aliases $mediaPreviousThumbnail onto the outgoing Image, so both names share one Image::key; whichever binding refreshed second retired that key, and the first never refreshed again because its own key was unchanged. m_tex_map and m_retired_runtime_textures now hold shared_ptr<ImageSlots> and ImageSlotsRef carries image_owner, so retiring drops the name and the image goes with its last holder.
+- New device-backed test PlaybackGPU.AnAliasedCoverOutlivesTheNameItSharesBeingReplaced drives three successive covers in both binding-refresh orders and asserts the outgoing image is not released while the previous slot holds it, that the two slots stay distinct and non-null, and that the image dies with its last holder. Contract test, not a sanitiser repro: it does not compile against the old borrow-only model.
+- Trailing-request fix corrected: the earlier retry-when-idle still lost an update across Continuous to Idle, because the tick was suppressed while the clock was still running and the scene only idled after that draw ended. FrameTimer now keeps m_frame_requested until a draw consumes it and re-arms from FrameEnd; the retry poll is gone.
+- Two new timer tests drive the real asynchronous draw path (a worker thread holding FrameBegin/FrameEnd), not m_frame_busy_count: AnEventThatArrivesDuringADrawIsStillDrawn at 20 FPS and ARequestSuppressedByAContinuousDrawSurvivesGoingIdle at 30 FPS. Both fail with the re-arm disabled and pass with it; timer_tests now 27/27.
+- Media gating completed: GetSceneMediaWallpapers and UpdateSceneMedia answer from the same effective-consumer predicate as the fan-out instead of playback_paused alone. New bridge test one_suspended_display_stops_only_its_own_scene_on_every_entry_point proves a two-display setup keeps feeding display 8 while display 7 is suspended, on handles, legacy list, events and artwork.
+- SceneMediaSink.reconcile is generation-bound so a slow earlier answer cannot re-open the provider a later one closed, and WebWallpaperMediaRelay.emit delivers only to current consumers so a paused scene does no artwork copy, JSON encode or bridge call while a visible Web wallpaper keeps the shared provider alive. Both new Swift tests fail with the guards removed (verified with scripts/test.py --only SceneMediaSinkTests) and pass with them.
+- Identical cover is now a true no-op: SYSTEM_MEDIA_ARTWORK is excluded from the blanket per-command requestFrame, and its handler requests a frame only when PublishSystemMediaArtwork reports the pixels moved.
+- upstream/provenance.json updated for this round (recorded 2026-09-21); renderer and sceneEngine notes prepended, revisions, licences and prior notes preserved.
+- Gates after all fixes: scripts/test.py 528 passed / 0 failed / 11 skipped; scripts/check_renderer.py all binaries 0, 10 pixel cases equal, 0 diagnostics, timer_tests 27/27, playback_gpu_test including the new lifetime test; cargo test -p wallpaper-bridge 319 passed.
+- Release rebuilt: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex (13:54). Both binaries contain SetMinInterval and the shared-ownership ImageSlotsRef constructor; the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
+
+## 2026-09-21 — Power regression: frame ceiling, media consumers, cover updates
+
+- HEAD 06ac2ca3 + dirty tree (13 tracked files); runtime read from config.toml and Logs/20260921-113428: scene wallpaper 3799253558, VulkanRender (scene_renderer=compatibility), render_scale 1.0, output 4112x2658, scene_optimization on, scene_on_demand off, content_pacing on, media_integration on.
+- P0 ThreadTimer: the FPS ceiling now bounds every wake path (request, appointment, expired appointment), not just the cadence; FrameTimer publishes it via SetMinInterval and re-arms a tick dropped by an in-flight draw.
+- Reproduced pre-fix by temporarily restoring the old idle branch: 102 frames from ~150 requests in 300ms at a 10 FPS ceiling, and a trailing update lost behind an in-flight draw. Post-fix both bounded/delivered.
+- P0 media: bridge media_scene_handles() now subtracts global pause, power suspend, presentation suspend and per-display suspend; consent moved to a separate media_consent_handles()/GetSystemMediaConsentHandles so a wallpaper button press is judged on permission, not presentation. AppDelegate reconciles the sink when a suspend commits (those paths publish no snapshot).
+- P0 artwork: applySystemMediaArtworkPayload publishes pixels and requests a frame instead of rebuildRenderGraph(); PublishSystemMediaArtwork returns false for a byte-identical cover. SET_SCENE now always builds its own graph.
+- P1 (actual backend) VulkanRender::planStaticSkips: dropped the per-frame std::vector allocation (writes into m_static_skip) and skips the sampling/signature walk when no target is pinned, since Plan can then only answer 'execute every pass'.
+- Excluded by source/runtime, not changed: MetalRender encoder merging and its 192MiB pin budget (scene_renderer=compatibility, Metal not running); VulkanRender::applyRenderScale already no-ops on an unchanged scale (VulkanRender.cpp:1472), so the ApplyRenderScale rebuild is Metal-only.
+- Counter wiring checked: Vulkan records OWE_RC_RENDER_SUBMISSIONS and OWE_RC_GPU_COMPLETIONS (VulkanRender.cpp:859/879/934/940); Metal records only OWE_RC_PRESENT_REQUESTS (MetalRender.mm:4226), so those two read 0 on Metal because they are unwired, not because the GPU is idle. Not added: no claim this round depends on them.
+- Tests: check_renderer.py all green (timer_tests 26/26 incl. 2 new, static_subgraph_cache_test, render_scale_test, playback_gpu_test, 10 pixel cases equal, 0 diagnostics); cargo test -p wallpaper-bridge 318 passed incl. new paused/suspended consumer test; media_thumbnail_texture_smoke 15 passed incl. new identical-cover test; scripts/test.py 526 passed / 0 failed / 11 skipped (first run hit a known-flaky ControlPanelShellTests power-probe timing assert, passed alone and on rerun).
+- Offscreen probe on the user's own wallpaper 3799253558: 249 passes (247 executed + 2 reused), 7 cacheable targets, 1 pinned - so the no-pin early-out does not fire for this scene, while the removed per-cover rebuild was re-preparing all 249 passes.
+- Release build OK: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries contain SetMinInterval and the app exports system_media_consent_handles. Not run: app launch, wallpaper change, screenshots, audio capture, power measurement - no watt or percentage claim.
+
 ## 2026-09-21 — Installed page filters with Discover's sidebar boxes
 
 - Change: LibraryMetricsService reads Workshop-style tags from project.json (genre tags, contentrating, Approved, Audio responsive, Customizable); snapshot wallpapers carry them as tags.
@@ -55,61 +136,3 @@ Two open questions closed by measurement. The sound: parsed through WPSoundParse
 - Still not isolated: which pass first writes the tail. Visibility gating, blend factors and the alpha write mask are identical between backends, and clamping LOD moves the mean onto Vulkan without moving the tail
 - `scene_schema_tests` 77 passed plus the two known pointer timeouts
 
-## 2026-09-21 — Release build after the revert and the doc updates
-
-python3 scripts/build.py --configuration Release, following the full gate.
-
-- Confirmed in the delivered binary: the bound transport value and the shortcut option label are present, and the reverted video-picker title is gone
-- Owning docs updated: media-integration.md no longer says transport is unimplemented, build.md records why the deployment pin is kept out of cargo, renderer.md lists the three new probe knobs. Link check clean apart from two pre-existing breaks in docs/archive/implementation-progress.md (f94ab32, not this work)
-- Delivered: `build/Build/Products/Release/MacWallpaperEngine.app` — quit and reopen the app to pick it up
-
-## 2026-09-21 — Corrected: two sound claims were wrong, and the video picker promised what cannot work
-
-Three things in the entries below do not survive checking. The sound volume was never dropped -- _GetJsonValue reads a node's `value` when it is an object (WPJson.cpp:47-50), so 0.3 parsed fine; what was actually wrong is narrower, and the volume now follows the user's live property instead of the number scene.json shipped with. The negative check cited was a compile failure on the old header, which only shows a field exists.
-
-- Replaced with `ASoundFollowsTheSliderValueTheUserActuallyHas`, which parses through WPSoundParser and reads the registered stream: reverting only the resolution in Parse (header kept) fails it with "the sound kept the number scene.json shipped with instead of the user\s slider"
-- The video-picker change is reverted. This scene binds `"usertextures": ["backgroundimage"]` — a plain property name — and ApplySystemUserTextures substitutes only `$mediaThumbnail`/`$mediaPreviousThumbnail`, so a chosen path never reaches the material. There is also no VFS mount for user-chosen files, so an absolute path could not load even if it did
-- Widening the file filter alone ships a picker that accepts a video and changes nothing, which is a promise the app cannot keep. The real work is property-named texture substitution plus a user-asset mount with the path and permission rules that boundary needs, and video into a texture slot
-- `scripts/test.py` 526 passed; `cargo test --release` core 213 / bridge 317; `scene_schema_tests` 76 passed plus the two known pointer timeouts
-
-## 2026-09-21 — Release build carrying the transport, sound and video-picker fixes
-
-python3 scripts/build.py --configuration Release, after the full gate.
-
-- Confirmed in the delivered binary: the bound transport value, the picker title for a video-accepting project, and the shortcut option label are all present, and the bundled WebUI matches WebUI/ file for file
-- Delivered: `build/Build/Products/Release/MacWallpaperEngine.app` — quit and reopen the app to pick it up
-
-## 2026-09-21 — The missing background video was a picker that only ever offered images
-
-This wallpaper's Custom Background is a scenetexture property, and its manifest declares general.supportsvideo -- Wallpaper Engine's way of saying a video is as acceptable there as an image. Nothing in the app read that flag, and the picker set allowedContentTypes to .image, so the video the official example uses could not be selected at all. The scene has no missing video layer; the file simply never got in.
-
-- supportsvideo now reaches the texture property metadata and the bridge descriptor, and the picker offers video and retitles itself only for a project that declares it
-- `a_manifest_that_supports_video_says_so_on_its_texture_pickers` — a declaring manifest marks its scenetexture accordingly, and the existing scenetexture test pins the default false
-- `scripts/test.py` — 526 passed, 0 failed, 11 skipped of 537; `cargo test --release -p wallpaper-bridge --lib` 318 passed
-- Unverified: no desktop run, so whether the renderer then plays a selected video through that slot was not observed here
-
-## 2026-09-21 — The button-click handler does not throw; its volume slider was the thing that did nothing
-
-The reported throw from thisScene.getLayer('button_press').play() does not reproduce: registered as a layer script and driven with a cursor-down, the handler runs with zero script errors. play() on a layer that is not a sound layer sets a local flag rather than raising, so nothing there can throw.
-
-- What is really broken on this wallpaper: both of its sound layers bind volume to the `buttonsvolume` slider as {"user": …, "value": …}, and the parser read only numbers -- so the binding was dropped, the sounds kept the author default, and moving that slider changed nothing
-- `ASoundVolumeBoundToASliderFollowsTheUsersChoice` and `APlainSoundVolumeIsStillANumber` — the bound form keeps both the value and the property it follows, the plain form still parses as a number
-- `PressingAButtonWhoseSoundExistsPlaysIt` — the wallpaper\s own handler, run for real, reports no script error
-- `scene_schema_tests` 76 passed plus the two known pointer timeouts; `scenescript_media_event_smoke` 20 passed
-
-## 2026-09-21 — Release build carrying the whole shortcut chain
-
-python3 scripts/build.py --configuration Release, the first full renderer release build since the deployment-target fix -- which is what made it possible at all.
-
-- Confirmed the delivered app carries the change: the binary contains the bound-action value and the bridge call, the bundled WebUI matches WebUI/ file for file, and the bundled zh-Hans catalogue has the new option
-- Delivered: `build/Build/Products/Release/MacWallpaperEngine.app` — quit and reopen the app to pick it up
-
-## 2026-09-21 — A bound wallpaper button now reaches a real media player
-
-The Swift side takes presses off the bridge's long poll and carries them out through whichever provider is currently answering. The three combos default to no action, so the buttons stay inert until the user binds them in the wallpaper's own properties -- which is what Wallpaper Engine has them do, and what keeps a wallpaper from choosing on their behalf.
-
-- Transport is a capability of the provider seam: the adapter stream runs one short-lived `perl … send N` off the main actor, the AppleScript runner tells the player it is currently reading, and a provider that cannot control playback answers false rather than pretending
-- `SystemMediaTransportTests` (3) — the three actions reach the adapter as MRCommand 2, 4 and 5 from its own header; a refusing player is reported rather than assumed; the command follows the provider that is answering rather than a fixed one
-- Combo labels now go through `t()` in the panel, with the four actions in the zh-Hans catalogue. "No action" rather than "None" — that key already means deselect-all
-- `scripts/test.py` — 526 passed, 0 failed, 11 skipped of 537; `cargo test --release -p wallpaper-bridge --lib` 317 passed
-- Unverified: no desktop run. Whether a press moves a real player was not observed here, only that the command is handed to the adapter the state comes from

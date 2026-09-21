@@ -121,6 +121,25 @@ the first-run welcome's `welcomeSeen` flag, sidebar choices, favorites — and
 silently changes what the app does at the next launch. Pass the test's own
 suite everywhere; `PanelFixture` does.
 
+The same rule covers a second shape: a test that measures a *wall-clock window*
+rather than shared state. It is still a race, it can lose alone as well as in
+the gate, and widening the sleep only moves the threshold. Two in
+`ControlPanelShellTests` were fixed rather than tolerated, and both fixes are
+the pattern to copy. One latched a snapshot count, submitted a form and read
+the count 50 ms later, so a push already in flight when the count was latched
+was indistinguishable from one the submit caused; it drains with
+`panel.quiet()` before the window. The other read `getBoundingClientRect`
+straight after `setFrameSize`, catching the layout before the page had
+reflowed; it waits for `window.innerWidth` to reach the new width. Measure
+"what did this action cause" from a settled state, and wait for a state the
+page can report rather than for a duration.
+
+Before blaming your own change for a timing-shaped gate failure, confirm
+ownership: revert the change and run the gate again. A failure that survives
+the revert is not yours, and that check is what separated a renderer dispatch
+fix from an unrelated panel race here. Check the load average too — a gate
+taking three to five times its usual wall clock is measuring contention.
+
 ## Verification tiers
 
 The full gate compiles the Debug app and test bundle and then runs ~530 native

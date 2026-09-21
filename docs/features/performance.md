@@ -87,6 +87,15 @@ renderer, this row reports the saved preference: the renderer publishes no query
 for it. The engine applies a change to running scenes in place, so nothing
 restarts and no wallpaper reloads.
 
+Reuse needs a target that is both cacheable and holding a pinned allocation,
+because the render-target pool may otherwise hand that image to another key.
+Pinning is bounded by a memory budget, so a graph whose targets do not fit at
+the current output size ends up with nothing pinned. In that case the per-frame
+sampling and signature walk that decide what to reuse are skipped outright:
+their only reachable answer is "draw everything", and paying to reach it every
+frame was pure overhead. The budget itself is unchanged; a target that cannot
+be pinned still redraws.
+
 ### Update only when the scene changes
 
 Off by default, because stopping a wallpaper's clock changes what the user sees
@@ -125,6 +134,24 @@ visibility changes all wake the scene, as does a text layout finishing on its
 own thread; a wallpaper the user paused is never woken by any of them. Writing
 a caption the layer already has is not a change and wakes nothing, which is what
 keeps a script that returns the same string from defeating the whole feature.
+
+Waking is not a licence to draw. The configured frame rate is a ceiling on
+every path into a frame, not only on the periodic one: a request, a one-shot
+appointment and an appointment already past all wait until one frame period
+after the last frame, so a burst of pointer samples coalesces into one frame
+per period instead of one frame each. After a quiet stretch longer than that
+period the first event draws immediately, which is the case that matters for
+responsiveness. Content pacing can make the *cadence* longer than the ceiling
+and an event may cut that wait short — but only as far as the ceiling.
+
+A request is never discarded to enforce any of that. It stays outstanding until
+a draw actually consumes it, so a tick dropped because a draw was still in
+flight loses the tick and not the update. The end of that draw re-arms the
+clock, which is the only moment that can see both facts: the scene decides
+whether it still needs the clock *after* the draw ends, so a request the
+running clock left outstanding would otherwise have no later tick to notice it.
+Nothing polls to find out — there is one wake at that edge, not a retry per
+frame period.
 
 Both renderers implement this. The status line below reports what each scene is
 actually doing, so a backend that could not idle a particular scene is visible

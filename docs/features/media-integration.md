@@ -20,6 +20,21 @@ every desktop consumer that has the setting on. Web wallpapers attach through
 `WebWallpaperHost`; scene wallpapers attach through `SceneMediaSink`. Neither
 constructs a second player subscription.
 
+Listening and consuming are separate votes, counted in separate key spaces.
+`WebWallpaperHost` registers one listener for all of its pages and then counts
+consumers per page, so a listener key is never itself a consumer key: the relay
+hands every event to every listener, and a listener with nothing to feed drops
+it. `SceneMediaSink` does exactly that while its scenes are paused or
+suspended, so no cover is copied, no JSON encoded and no bridge call made for a
+surface nobody can see. Its deliveries are also chained rather than raced: the
+engine shows whatever arrives last, so a cover the engine is slow with must not
+be overtaken by the one that replaced it. A delivery already inside the engine
+when the scene pauses cannot be taken back, but everything after that await is
+retired — decided by a counter that only moves forward on demand changes, since
+a flag would read "consuming" again the moment the scene resumed. Each listener
+holds a strong token and derives its key from it, because an `ObjectIdentifier`
+taken from a temporary is an address the next allocation may reuse.
+
 The primary provider is `AdapterSystemMediaProvider`. It runs the pinned
 BSD-3-Clause `upstream/mediaremote-adapter` stream through `/usr/bin/perl`.
 Xcode builds and embeds `MediaRemoteAdapter.framework` without linking it into
@@ -47,14 +62,27 @@ and a failed helper stops without an automatic restart loop. Toggle integration
 off and on to retry. A playing timeline is interpolated from the reported
 position, timestamp and playback rate, bounded by duration.
 
-Consent is the only thing that starts a source.
-`WallpaperBridge.systemMediaSceneHandles()` names the applied desktop Scenes
-that have the setting on, and the host starts and stops its provider from that
-answer plus web consumers, so a machine where every wallpaper has it off never
-loads the adapter, never sends an Apple Event and is never asked for Automation
-permission. A scene the host has not fed yet — a replacement wallpaper, a newly
-lit display, a rebuild — is replayed the current state instead of waiting for
-the track to change.
+Consent is the only thing that starts a source, and presenting is the only
+thing that keeps it running. `WallpaperBridge.systemMediaSceneHandles()` names
+the applied desktop Scenes that have the setting on **and** are actually
+presenting; the host starts and stops its provider from that answer plus web
+consumers, so a machine where every wallpaper has it off never loads the
+adapter, never sends an Apple Event and is never asked for Automation
+permission. Pausing playback, a battery or power-policy suspend, a global
+presentation suspend and a single occluded display each remove their scenes
+from that answer, which releases the adapter process, its timeline ticker and
+every fan-out once nothing visible is left — a web wallpaper that is still on
+screen keeps its own vote. The last state is kept, not queued: resuming makes
+those handles new again and replays the current state once.
+
+`systemMediaConsentHandles()` is the separate question of what the user
+permitted, and it does not shrink when playback stops. An incoming
+`engine.openUserShortcut` is judged against that, because a button press must
+be refused for want of permission, never for want of presentation.
+
+A scene the host has not fed yet — a replacement wallpaper, a newly lit
+display, a rebuild — is replayed the current state instead of waiting for the
+track to change.
 
 The lock-screen extension does not load the provider or adapter. Lock-screen
 scenes force the setting off after apply, even if the stored desktop config has
@@ -72,6 +100,19 @@ dropped. `MediaPlaybackEvent.PLAYBACK_PLAYING` / `PAUSED` / `STOPPED` are
 uploaded as RGBA before `mediaThumbnailChanged` so `$mediaThumbnail` is valid
 when the script reads it.
 
+A new cover is pixels, not a new scene. `PublishSystemMediaArtwork` replaces
+the image behind `$mediaThumbnail` and moves the outgoing one to
+`$mediaPreviousThumbnail`; each renderer notices the version move and swaps the
+texture on its next frame — Vulkan from the pass's per-frame update, Metal from
+`refreshRuntimeImages`. The render graph is not rebuilt for it, so a track
+change no longer idles the GPU, destroys every pipeline, drops every uploaded
+texture and reopens every video. A cover is also the one command excluded from
+the blanket "any command may have changed the frame" wake, because it is the
+one that routinely carries no change: publishing a cover byte-identical to the
+one already showing does nothing at all, not even ask for a frame, which is
+what makes the replays above free and stops a wallpaper cross-fading a cover
+into itself.
+
 Two cover slots exist. `$mediaThumbnail` is the current cover;
 `$mediaPreviousThumbnail` is the one it replaced, which is what a wallpaper
 cross-fades from. Both are 1×1 transparent before any track, so a layer that
@@ -79,6 +120,14 @@ binds either always has an image. The previous slot is an alias of the image
 the current slot used to hold, not a second copy. Clearing artwork clears both
 textures. Repeated artwork does not rebuild the scene graph, and a recreated
 renderer receives the current snapshot again.
+
+Because the previous slot is an alias, both names resolve to one cached
+texture until the next change. A binding therefore shares ownership of the
+image it samples rather than borrowing a handle from the cache: replacing
+either name retires that name, and the image itself is released only when the
+last binding using it lets go. Without that, whichever of the two bindings
+refreshed second would free the image the first had just bound to, and the
+first would never refresh again — its own key had not changed.
 
 A wallpaper's own transport buttons call `engine.openUserShortcut` with the
 name of one of its `usershortcut` properties. The engine resolves that property

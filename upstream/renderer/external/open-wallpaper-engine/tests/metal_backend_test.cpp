@@ -5,7 +5,6 @@
 /// decisions that must be right before a device is ever touched. The one test
 /// that needs a Metal device says so and skips visibly when there is none.
 
-#include "Runtime/RuntimeImageSource.hpp"
 #include "MetalRender/MetalBlend.hpp"
 #include "MetalRender/MetalCapability.hpp"
 #include "MetalRender/MetalProjection.hpp"
@@ -371,28 +370,6 @@ TEST(MetalCapability, AcceptsAMinimalTwoDimensionalImageScene)
     EXPECT_EQ(selection.backend, SceneBackend::NativeMetal) << selection.fallback_reason;
     EXPECT_TRUE(selection.fallback_reason.empty());
     EXPECT_FALSE(selection.fell_back());
-}
-
-TEST(MetalCapability, ARuntimeRepublishedImageSendsTheWholeSceneBack)
-{
-    // The album cover is not parsed once and kept: the runtime hands the scene
-    // new pixels whenever the track changes. This backend uploads an image when
-    // it prepares and never asks again, so it draws the empty placeholder the
-    // source starts with -- no cover, and everything derived from it drawn from
-    // nothing. Accepting such a scene and leaving that out is worse than not
-    // taking it, so the whole scene goes back with a reason that says why.
-    ImageScene fixture;
-    ASSERT_EQ(EvaluateMetalSupport(fixture.scene).backend, SceneBackend::NativeMetal);
-
-    fixture.scene.imageParser =
-        std::make_unique<RuntimeImageSource>(std::move(fixture.scene.imageParser));
-    auto& texture = fixture.scene.textures["$mediaThumbnail"];
-    texture.isVideo = false;
-
-    const auto selection = EvaluateMetalSupport(fixture.scene);
-    EXPECT_EQ(selection.backend, SceneBackend::LegacyVulkan);
-    EXPECT_NE(selection.fallback_reason.find("album cover"), std::string::npos)
-        << selection.fallback_reason;
 }
 
 TEST(MetalCapability, AnUnusedPerspectiveCameraDoesNotRejectTheScene)

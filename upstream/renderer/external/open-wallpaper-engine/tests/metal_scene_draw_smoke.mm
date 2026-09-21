@@ -3467,7 +3467,15 @@ void InjectSystemMediaForMetal(Scene& scene) {
         unsigned width = 0, height = 0, rgb = 0;
         if (std::sscanf(artwork, "%ux%u:%x", &width, &height, &rgb) == 3 && width >= 1 &&
             width <= 4096 && height >= 1 && height <= 4096) {
-            if (auto* images = dynamic_cast<RuntimeImageSource*>(scene.imageParser.get())) {
+            auto* images = dynamic_cast<RuntimeImageSource*>(scene.imageParser.get());
+            // Said out loud rather than skipped quietly: a run that could not
+            // publish the cover renders the same flat grey as a backend that
+            // dropped it, and reading that as a backend defect is a mistake
+            // this harness has already caused once.
+            std::cout << "[ MEDIA    ] cover published: "
+                      << (images != nullptr ? "yes" : "NO -- no runtime image source")
+                      << std::endl;
+            if (images != nullptr) {
                 std::vector<uint8_t> rgba(std::size_t(width) * height * 4);
                 for (std::size_t i = 0; i < rgba.size(); i += 4) {
                     rgba[i + 0] = uint8_t((rgb >> 16) & 0xFF);
@@ -3568,6 +3576,7 @@ TEST_F(MetalSceneDraw, LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBack
                                     source->ReadAllStr(), loaded.vfs, loaded.sound);
         ASSERT_NE(loaded.scene, nullptr);
 
+        InjectSystemMediaForMetal(*loaded.scene);
         const auto selection = SelectSceneBackend(*loaded.scene);
         if (selection.backend != SceneBackend::NativeMetal) {
             std::cout << "[ LOCAL    ] " << paths.scene_id << ": Compatibility -- "

@@ -549,6 +549,19 @@ int main() {
                       << d.output << " image=" << d.vk_output.handle << " clear=" << d.clear_on_first_use << '\n';
                 for (std::size_t t = 0; t < d.textures.size(); ++t) {
                     trace << "  " << t << ": " << d.textures[t];
+                    // What `g_TextureNResolution` would be given. The updater
+                    // writes it only for a bound name it finds among the
+                    // scene's render targets and skips silently otherwise, and
+                    // a blur divides its step by that value.
+                    if (!d.textures[t].empty()) {
+                        const auto found = scene->renderTargets.find(d.textures[t]);
+                        if (found == scene->renderTargets.end()) {
+                            trace << " resolution=MISSING";
+                        } else {
+                            trace << " resolution=" << found->second.width << 'x'
+                                  << found->second.height;
+                        }
+                    }
                     if (!d.vk_textures[t].slots.empty()) trace << " image=" << d.vk_textures[t].getActive().handle;
                     if (d.sprites_map.contains(t)) {
                         const auto& f = d.sprites_map.at(t).GetCurFrame();

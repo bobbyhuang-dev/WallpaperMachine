@@ -25,6 +25,17 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — Corrected: Native Metal never dropped the album cover, and my fix took the clouds away
+
+Reported as the clouds suddenly disappearing. They did, and I caused it: the album-cover rejection I added earlier forced this wallpaper onto Compatibility, which is the backend that flattens them.
+
+- The finding it rested on was wrong. InjectSystemMediaForMetal was defined but never called -- an edit dropped the call site -- so every Metal render was made with no cover and no thumbnail colours, and the flat grey that produced was read as the backend dropping them
+- With the call restored: Native Metal reports the runtime image source, publishes the cover, and its background keeps the clouds -- stddev 13.5 against Compatibility 6.7 on the same events
+- The rejection and its test are withdrawn. The Metal harness now prints whether it could publish the cover, because a run that could not looks exactly like a backend that dropped it
+- The real remaining defect is the other way round: Compatibility flattens the cloud layer. Contrast falls from 17.0 at the bokeh output to 3.8 after the blur effect. Ruled out with measurements: combo delivery (both variants compiled, one with VERTICAL=1), target allocation (1280x540), the wallpaper parameters (scale "1 1"), scene optimisation (A/B identical), varying locations (SPIR-V decoded, vertex outputs 0-12 match fragment inputs 0-12), and the bound resolution (1280x540 on both blur passes, traced in passes.txt)
+- scripts/test.py 535 passed / 0 failed / 11 skipped of 546; metal_backend_test 35; metal_scene_draw_smoke 33; check_renderer.py 10 cases pixels_equal=True
+- Release rebuilt
+
 ## 2026-09-21 — Native Metal never saw the album cover, and the wallpaper has no cover background
 
 Reported as the background not looking like the official example. Two separate things, established by rendering both backends against the same injected now-playing state.
@@ -126,12 +137,3 @@ Reported: the transport buttons still have no effect, and the progress bar canno
 - The first of those was wrongly attributed to load at first. A control gate with only the SceneWallpaper dispatch hunk reverted still failed the same assertion, which exonerated the change and identified the test. An 11-failure gate earlier was separately explained by load average 165 and a 174s run versus the usual 30s.
 - Gate now green and stable: scripts/test.py 531 passed / 0 failed / 11 skipped, three consecutive runs (39s, 28s, 28s). check_renderer.py green after the C++ change: all binaries 0, pixels equal, 0 diagnostics.
 - Release rebuilt 16:26: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval, the shared-ownership ImageSlotsRef constructor and handle_SET_RENDER_SCALE. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
-
-## 2026-09-21 — Power regression: advisory round 5 closeout
-
-- Only actionable item this round: SceneMediaSink.shutdown told the relay to stop consuming twice, once through setConsuming(false) and once directly. The second call relied on the relay's remove-guard to be harmless; dropped.
-- Re-verified as already converged in earlier rounds, not changed again: the cover test compares raw Read() bytes with no NormalizeColorBytes (Pass/Target outputs are always RGBA8); deliveryEpoch is separate from generation and advances only when consuming flips, so an unrelated reconcile cannot retire wanted deliveries; the captured epoch is re-checked after the applyArtwork await; the over-specified combined test was already split into one chain-ordering test and one pause-retirement test; docs/features/media-integration.md already carries both durable contracts.
-- Stability: SceneMediaSinkTests run six consecutive times, 6 passed each time. Neither new test contains a pause-then-resume sequence, so the replay nondeterminism that made the earlier combined test flaky does not arise.
-- Renderer sources unchanged since the round-four gate, so check_renderer.py was not re-run; that run remains current evidence (all binaries 0, pixels equal, 0 diagnostics).
-- Gate: scripts/test.py 531 passed / 0 failed / 11 skipped.
-- Release rebuilt 15:33: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor, the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.

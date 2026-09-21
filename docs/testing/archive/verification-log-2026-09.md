@@ -15,6 +15,15 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — Power regression: advisory round 5 closeout
+
+- Only actionable item this round: SceneMediaSink.shutdown told the relay to stop consuming twice, once through setConsuming(false) and once directly. The second call relied on the relay's remove-guard to be harmless; dropped.
+- Re-verified as already converged in earlier rounds, not changed again: the cover test compares raw Read() bytes with no NormalizeColorBytes (Pass/Target outputs are always RGBA8); deliveryEpoch is separate from generation and advances only when consuming flips, so an unrelated reconcile cannot retire wanted deliveries; the captured epoch is re-checked after the applyArtwork await; the over-specified combined test was already split into one chain-ordering test and one pause-retirement test; docs/features/media-integration.md already carries both durable contracts.
+- Stability: SceneMediaSinkTests run six consecutive times, 6 passed each time. Neither new test contains a pause-then-resume sequence, so the replay nondeterminism that made the earlier combined test flaky does not arise.
+- Renderer sources unchanged since the round-four gate, so check_renderer.py was not re-run; that run remains current evidence (all binaries 0, pixels equal, 0 diagnostics).
+- Gate: scripts/test.py 531 passed / 0 failed / 11 skipped.
+- Release rebuilt 15:33: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval and the shared-ownership ImageSlotsRef constructor, the app exports system_media_consent_handles. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
+
 ## 2026-09-21 — Power regression: advisory round 4 - legal readback, ordered deliveries, delivery epoch
 
 - Cover lifetime test made legal Vulkan: cached images carry TRANSFER_DST|SAMPLED only (TextureCache.cpp:857-862), so ReadbackImageSample's transition to TRANSFER_SRC was invalid usage MoltenVK happened to tolerate. The test now binds each slot into an ordinary PlaybackGPU pass, draws, and reads the render target, which is readback-capable.

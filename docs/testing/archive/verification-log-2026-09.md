@@ -15,6 +15,16 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — The bound shortcut never reached the scene engine
+
+The button pressed and released correctly after the capture fix, but the player still did not skip. The default bound in the last change only existed on the panel side.
+
+- The scene engine parses project.json itself, where all three usershortcut values are empty. The bridge sent only explicit property_overrides, and the user has none, so openUserShortcut resolved to an empty value and the press was correctly dropped
+- ProjectProperty now records default_is_host_supplied, set exactly where an unbound usershortcut is given the action its name states. Scene activation sends those defaults with the overrides, user overrides applied on top
+- New an_unbound_transport_shortcut_reaches_the_scene_engine asserts the scene receives {"nextsongbutton":"media:next","playpausebutton":"media:playpause"} with no user overrides, that an unguessable name stays out of it, and that choosing no action still sends the empty string
+- scripts/test.py 534 passed / 0 failed / 11 skipped of 545; wallpaper-bridge 321 passed
+- Release rebuilt
+
 ## 2026-09-21 — The stuck transport button: a press made it too small to catch its own release
 
 Reported with a screenshot: the next button sits flattened to a dash and the player never skips. Rendering the wallpaper offscreen showed all three buttons drawing correctly, so the cause was runtime state, not content.
@@ -27,7 +37,6 @@ Reported with a screenshot: the next button sits flattened to a dash and the pla
 - Offscreen render of the wallpaper with media events confirms all three transport buttons draw correctly, so nothing was wrong with the asset, model, material or scripts
 - scripts/test.py 534 passed / 0 failed / 11 skipped of 545; scene_schema_tests 80 passed with the two pre-existing pointer-commit timeouts; check_renderer.py 10 cases pixels_equal=True
 - Release rebuilt after the fix
-
 ## 2026-09-21 — Why the transport buttons did nothing, and what the progress bar actually is
 
 Reported: the transport buttons still have no effect, and the progress bar cannot be dragged. Both were investigated against the installed wallpaper rather than assumed.

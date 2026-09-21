@@ -613,6 +613,16 @@ void SceneRuntimeContext::SetCursorInput(float x, float y) {
         Eigen::Vector3f(m_cursor_viewport.origin.x() + x * m_cursor_viewport.size.x(),
                         m_cursor_viewport.origin.y() + (1.0f - y) * m_cursor_viewport.size.y(),
                         0.0f);
+    // Published for the parts of the scene that are not scripts. A particle
+    // system's mouse-linked control point needs the same scene coordinate, and
+    // deriving it a second time from the canvas is how it ended up ignoring
+    // the crop.
+    if (m_scene != nullptr) {
+        m_scene->pointerScenePosition = std::array {
+            m_host_context->cursor_world_position.x(),
+            m_host_context->cursor_world_position.y(),
+        };
+    }
 }
 
 void SceneRuntimeContext::SetCursorEnter(bool entered) {

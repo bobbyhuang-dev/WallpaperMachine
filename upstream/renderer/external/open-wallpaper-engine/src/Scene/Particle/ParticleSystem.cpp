@@ -146,10 +146,19 @@ void ParticleSubSystem::UpdateMouseControlpoints() {
                      [](const auto& cp) { return cp.link_mouse; })) {
         return;
     }
-    const auto            pointer = m_sys.scene.pointerPosition;
+    // The presentation's own answer when there is one. Stretching the
+    // window-normalized pointer across the whole canvas is only right when the
+    // window shows the whole canvas: a cropped wallpaper agrees at the centre
+    // and is wrong by half the cropped-away span at either edge.
+    const auto& scene_pointer = m_sys.scene.pointerScenePosition;
+    const auto  pointer       = m_sys.scene.pointerPosition;
     const Eigen::Vector3d mouse_world {
-        static_cast<double>(pointer[0]) * static_cast<double>(m_sys.scene.ortho[0]),
-        (1.0 - static_cast<double>(pointer[1])) * static_cast<double>(m_sys.scene.ortho[1]),
+        scene_pointer.has_value()
+            ? static_cast<double>((*scene_pointer)[0])
+            : static_cast<double>(pointer[0]) * static_cast<double>(m_sys.scene.ortho[0]),
+        scene_pointer.has_value()
+            ? static_cast<double>((*scene_pointer)[1])
+            : (1.0 - static_cast<double>(pointer[1])) * static_cast<double>(m_sys.scene.ortho[1]),
         0.0,
     };
     Eigen::Vector3d mouse_local = mouse_world;

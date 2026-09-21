@@ -25,6 +25,17 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — The mouse trail tracked the canvas, not the window
+
+A particle system's mouse-linked control point derived its own scene coordinate as `pointerPosition * ortho` while the scripts used the presentation's cursor viewport. Reported as a trail that tracks in the middle of the screen and slides away toward the sides, on more than one wallpaper. `SetCursorInput` now publishes its mapped point to `Scene::pointerScenePosition` and the control point reads it.
+
+- `offscreen_scene_probe` WE_TEST_CLICK_VIEWPORT=4112x2658@2.0:fill on 3605722997 — the window shows canvas x [166.3, 2394.2] of 2560, so the old product was wrong by 165.8 scene units (~306 physical px, 7.4% of width) at either edge and exact at the centre. Under :fit the same display letterboxes to y [-107.1, 1547.7]
+- `particle_mouse_controlpoint_test` — exit 0, 39 tests; new `MouseControlpointFollowsTheCroppedPresentation` fails on the pre-fix branch with x=200 vs 160 and x=0 vs 40 while its centre assertion passes, which is the reported symptom as numbers
+- `mouse_input_test` — exit 0, 11 tests; the viewport mapping the fix consumes is unchanged
+- `python3 scripts/check_renderer.py --project 3605722997` — every binary 0, 10 generated cases pixel-equal with 0 diagnostics, local project exit 0 and pixels_equal=True, reload cycles 0. `particle_mouse_controlpoint_test` added to the gate so the new case actually runs
+- `python3 scripts/test.py` — exit 0; 535 passed, 11 skipped of 546
+- `python3 scripts/build.py --configuration Release` — exit 0 in 64s; ParticleSystem.cpp edited 23:27:58, its object 23:40:21, libwallpaper_bridge.a 23:40:50, app binary 23:41:21
+- Not covered: nothing exercises SceneWallpaper's message loop offscreen, so the host half — polling the pointer, publishing the viewport — is still only unit-covered. On-screen trail behaviour unverified until the user reopens the app
 ## 2026-09-21 — Renamed the project from MacWallpaperEngine to WallpaperMachine
 
 The rename was half applied and was rebased onto the nineteen renderer/media commits already on origin/main, so the incoming work had to be carried onto the new name as well.
@@ -131,14 +142,4 @@ Presses still did nothing after the value fix. Instrumenting each hop and readin
 - Verified the last link directly against the machine before changing anything: the bundled adapter toggled Spotify False -> True -> False, so send was never the problem
 - New testAPressReachesThePlayer: three presses in, two commands out, and a binding this host cannot carry out never reaches the player
 - scripts/test.py 535 passed / 0 failed / 11 skipped of 546; SceneMediaSinkTests 7 passed
-- Release rebuilt
-
-## 2026-09-21 — The bound shortcut never reached the scene engine
-
-The button pressed and released correctly after the capture fix, but the player still did not skip. The default bound in the last change only existed on the panel side.
-
-- The scene engine parses project.json itself, where all three usershortcut values are empty. The bridge sent only explicit property_overrides, and the user has none, so openUserShortcut resolved to an empty value and the press was correctly dropped
-- ProjectProperty now records default_is_host_supplied, set exactly where an unbound usershortcut is given the action its name states. Scene activation sends those defaults with the overrides, user overrides applied on top
-- New an_unbound_transport_shortcut_reaches_the_scene_engine asserts the scene receives {"nextsongbutton":"media:next","playpausebutton":"media:playpause"} with no user overrides, that an unguessable name stays out of it, and that choosing no action still sends the empty string
-- scripts/test.py 534 passed / 0 failed / 11 skipped of 545; wallpaper-bridge 321 passed
 - Release rebuilt

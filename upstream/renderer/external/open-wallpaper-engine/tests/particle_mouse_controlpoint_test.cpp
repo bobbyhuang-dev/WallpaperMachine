@@ -523,6 +523,70 @@ TEST(ParticleMouseControlpoint, MouseControlpointUpdatesEmitterOrigin) {
     EXPECT_DOUBLE_EQ(controlpoints[0].offset.z(), 3.0);
 }
 
+// A wallpaper is cropped onto a display whose aspect is not its canvas's, so
+// the window shows only part of the canvas. Stretching the window-normalized
+// pointer across the whole canvas agrees with the cursor at the centre of the
+// window and is wrong by half the cropped-away span at either edge -- a mouse
+// trail that tracks in the middle of the screen and slides away toward the
+// sides.
+TEST(ParticleMouseControlpoint, MouseControlpointFollowsTheCroppedPresentation) {
+    Scene scene;
+    scene.ortho[0]  = 200;
+    scene.ortho[1]  = 100;
+    scene.frameTime = 1.0;
+
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {
+        .canvas_width  = 200,
+        .canvas_height = 100,
+    });
+    ASSERT_NE(runtime, nullptr);
+    runtime->AttachScene(&scene);
+    // 40 canvas units cropped off each side: the window shows x in [40, 160].
+    runtime->SetCursorViewport(CursorViewport {
+        .origin         = Eigen::Vector2f(40.0f, 0.0f),
+        .size           = Eigen::Vector2f(120.0f, 100.0f),
+        .content_origin = Eigen::Vector2f(0.0f, 0.0f),
+        .content_size   = Eigen::Vector2f(200.0f, 100.0f),
+    });
+
+    auto              mesh = std::make_shared<SceneMesh>(MeshUpdate::PerFrame);
+    ParticleSystem    system(scene);
+    ParticleSubSystem subsystem(system,
+                                mesh,
+                                8,
+                                1.0,
+                                1,
+                                1.0,
+                                ParticleSubSystem::SpawnType::STATIC,
+                                [](const Particle&, const ParticleRawGenSpec&) {
+                                });
+    auto controlpoints          = subsystem.Controlpoints();
+    controlpoints[0].link_mouse = true;
+
+    // Dead centre: the crop is symmetric, so this is the one place the canvas
+    // product happens to be right. A fix that moved this would be moving every
+    // mouse-linked wallpaper that is not cropped at all.
+    scene.pointerPosition = { 0.5f, 0.5f };
+    runtime->SetCursorInput(0.5f, 0.5f);
+    subsystem.UpdateMouseControlpoints();
+    EXPECT_DOUBLE_EQ(controlpoints[0].offset.x(), 100.0);
+    EXPECT_DOUBLE_EQ(controlpoints[0].offset.y(), 50.0);
+
+    // Right edge of the window. The canvas product says 200; the window's
+    // right edge is canvas x = 160, which is where the cursor actually is.
+    scene.pointerPosition = { 1.0f, 0.5f };
+    runtime->SetCursorInput(1.0f, 0.5f);
+    subsystem.UpdateMouseControlpoints();
+    EXPECT_DOUBLE_EQ(controlpoints[0].offset.x(), 160.0);
+    EXPECT_DOUBLE_EQ(controlpoints[0].offset.y(), 50.0);
+
+    scene.pointerPosition = { 0.0f, 0.5f };
+    runtime->SetCursorInput(0.0f, 0.5f);
+    subsystem.UpdateMouseControlpoints();
+    EXPECT_DOUBLE_EQ(controlpoints[0].offset.x(), 40.0);
+    EXPECT_DOUBLE_EQ(controlpoints[0].offset.y(), 50.0);
+}
+
 TEST(ParticleMouseControlpoint, MouseControlpointUsesOwnerNodeLocalSpace) {
     Scene scene;
     scene.ortho[0]        = 200;

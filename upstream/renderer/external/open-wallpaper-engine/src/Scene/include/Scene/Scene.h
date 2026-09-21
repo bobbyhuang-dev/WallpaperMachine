@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -97,7 +98,18 @@ public:
     /// video, which is what lets the frame clock follow the video's own rate
     /// instead of the display's. Authored scenes never set it.
     bool                 single_video_source { false };
+    /// Window-normalized pointer: 0..1 across the presented window, y down.
     std::array<float, 2> pointerPosition { 0.5f, 0.5f };
+    /// The same pointer in scene coordinates, written by
+    /// `SceneRuntimeContext::SetCursorInput` from the presentation's cursor
+    /// viewport. Unset until a host publishes cursor input.
+    ///
+    /// `pointerPosition * ortho` is not a substitute. A wallpaper is cropped
+    /// or letterboxed onto a display whose aspect is not the canvas's, so the
+    /// window shows only part of the canvas; that product agrees with the
+    /// cursor at the centre of the window and drifts further from it toward
+    /// every edge.
+    std::optional<std::array<float, 2>> pointerScenePosition;
 
     SceneMesh default_effect_mesh;
 

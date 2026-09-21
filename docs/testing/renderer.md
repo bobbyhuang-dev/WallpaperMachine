@@ -171,6 +171,7 @@ executable directly from the renderer check build directory.
 | Puppet animation layer control | `ScriptRuntimeCompat.PuppetAnimationLayer*` in `script_runtime_compat_test`: `getAnimationLayer(name).play()` restarts a finished single-shot layer on every copy of the shared state; a `visible` bound to a user property toggles the layer. |
 | Cursor coverage masks | `ScriptRuntimeCompat.CursorHitTestRespectsCoverageMask` in `script_runtime_compat_test`: transparent texels of a cursor-scripted image layer do not hit. `offscreen_scene_probe` with `WE_TEST_CLICK_OFFSET` exercises real assets. |
 | Cursor hit testing under scaling | `MouseInput.CursorViewportMapsWindowOntoTheCroppedSceneRectangle`, `MouseInput.LayerHitTestingFollowsWhereTheWallpaperIsPresented`, `MouseInput.LetterboxBarsDoNotTriggerLayersThatCrossTheCanvasEdge` in `mouse_input_test`, and `ScriptRuntimeCompat.HoverScaleFollowsNormalizedDisplayInputOnACroppedWallpaper` (see below) |
+| Mouse-linked particle control points | `ParticleMouseControlpoint.MouseControlpointFollowsTheCroppedPresentation` in `particle_mouse_controlpoint_test`, which `scripts/check_renderer.py` runs. A mouse trail reads the same scene coordinate the scripts do, through `Scene::pointerScenePosition`; `pointerPosition * ortho` is right only at the centre of the window (see below). |
 | MDLS3 hierarchy/pivots | `MdlSchema.Mdls3SkinningPreservesAuthoredHierarchyAndPivotsAcrossMeshVersions` in `mdl_schema_tests`. Mesh format versions do not justify flattening an authored skeleton. |
 | Large-scene first-frame startup | `offscreen_scene_probe` cold/warm startup timings; staging-buffer growth must stay geometric (see below) |
 | JPEG/EXIF orientation | `tex_schema_tests`: all eight EXIF display transforms on asymmetric RGBA pixels, both TIFF byte orders, truncated JPEG/EXIF data, invalid IFD offsets |
@@ -210,6 +211,31 @@ executable directly from the renderer check build directory.
 | Who owns the first frame | `MetalSceneDraw.ADrawnFrameIsReportedAsPresentedAndLeavesTheFirstFrameFlagAlone`: a backend must report presentation through `drawFrame`'s `presented` out-parameter and leave `Scene::first_frame_ok` to the frame handler. A backend that sets the flag satisfies the handler's own check before the handler runs, the host is never told the wallpaper started, and the startup deadline tears down a wallpaper that is drawing correctly. |
 | Decoded frames carry real timestamps | `video_source_input_test` and `shared_video_session_test` against media the tests encode. A frame whose timestamp is always zero looks like playback for as long as frames keep arriving and then freezes, so a video regression here reads as "the picture stopped" rather than as a decode failure; the FFmpeg header/library check in `src/Video/FfmpegAbi.hpp` exists because the layout mismatch that produced it compiles cleanly. |
 | One clock per shared decoder | `SharedVideoSessionTest.AFrameStaysValidAfterTheDecoderMovesOn` and `.PausingOneSurfaceLeavesTheOtherPlaying`: exactly one elected consumer moves a shared session's clock, so a test that advances the non-driving consumer observes nothing. Make the advancing consumer the driver rather than loosening the election. |
+
+### Where the cursor is, in scene coordinates
+
+There is one answer and it belongs to the presentation.
+`SceneRuntimeContext::SetCursorInput` maps window-normalized input through the
+cursor viewport the renderer publishes — `origin + (x, 1 - y) * size` — and now
+also writes it to `Scene::pointerScenePosition` so consumers outside the script
+runtime read the same point instead of deriving their own.
+
+A particle system's mouse-linked control point derived its own, as
+`pointerPosition * ortho`. That is the canvas, not the window. A 2560x1440
+wallpaper filling a 4112x2658 display is cropped to the canvas range
+[166.3, 2394.2]; stretching the pointer over [0, 2560] instead agrees with the
+cursor exactly at the centre of the window and is wrong by 165.8 scene units —
+about 306 physical pixels, 7.4% of the width — at either edge. Reported as a
+mouse trail that tracks in the middle of the screen and slides away toward the
+sides, on every wallpaper with a trail, not one. Under `fit` the same error is
+vertical instead: that display letterboxes to [-107.1, 1547.7].
+
+The numbers above come from `offscreen_scene_probe` with
+`WE_TEST_CLICK_VIEWPORT=4112x2658@2.0:fill`, which prints the mapping the
+running wallpaper would use. Nothing exercises `SceneWallpaper`'s own message
+loop offscreen, so the host's half of the chain — polling the pointer and
+publishing the viewport — is still only covered by `mouse_input_test` at the
+unit level.
 
 ### Camera layers in 2D scenes
 

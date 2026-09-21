@@ -37,6 +37,12 @@ endif()
 
 set(warn_opts
     -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wno-unused-variable
+    # A command posted to a looper handler and missing from its switch compiles,
+    # links, runs and does nothing: `CMD_SET_RENDER_SCALE` reached no handler
+    # from the day it was added. The handler switches carry no `default`, so
+    # this promotes exactly that omission to a build failure without promoting
+    # unrelated warnings.
+    -Werror=switch
     CACHE INTERNAL "")
 
 include_directories(.)
@@ -102,6 +108,13 @@ add_library(
   Scene/SceneWallpaper.cpp)
 
 add_library(wescene::renderer ALIAS ${PROJECT_NAME})
+
+# This target owns the looper handlers. Their switches carry no `default`, so a
+# command that is posted and never dispatched — which is what happened to
+# `CMD_SET_RENDER_SCALE` from the day it was added — stops the build instead of
+# adding one more warning line nobody reads. Only this class is promoted; the
+# rest of `warn_opts` is deliberately not applied to this target.
+target_compile_options(${PROJECT_NAME} PRIVATE -Werror=switch)
 
 set(InteralLib
     wpAudio

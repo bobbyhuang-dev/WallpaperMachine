@@ -551,5 +551,38 @@ TEST(MediaThumbnailTextureSmoke, PreviousThumbnailKeepsTheCoverItReplaced) {
     EXPECT_EQ(source.Version("$mediaPreviousThumbnail"), source.Version("$mediaThumbnail") - 1);
 }
 
+/// Re-sending the cover that is already showing must change nothing.
+///
+/// Replays are routine: every new scene handle is handed the current state
+/// again. Treating that as a new cover retires the texture the GPU is
+/// sampling, uploads another, and moves the current cover into the previous
+/// slot — so a wallpaper would cross-fade a cover into itself, and would do it
+/// every time a display was added or a wallpaper switched.
+TEST(MediaThumbnailTextureSmoke, RepublishingTheSameCoverChangesNothing) {
+    RuntimeImageSource source(std::make_unique<NullImageParser>());
+
+    const std::vector<uint8_t> first { 0x11, 0x22, 0x33, 0xFF };
+    const std::vector<uint8_t> second { 0x44, 0x55, 0x66, 0xFF };
+
+    ASSERT_TRUE(PublishSystemMediaArtwork(source, 1, 1, first.data(), first.size()));
+    ASSERT_TRUE(PublishSystemMediaArtwork(source, 1, 1, second.data(), second.size()));
+    const auto current  = source.Parse("$mediaThumbnail");
+    const auto previous = source.Parse("$mediaPreviousThumbnail");
+    const auto version  = source.Version("$mediaThumbnail");
+
+    EXPECT_FALSE(PublishSystemMediaArtwork(source, 1, 1, second.data(), second.size()))
+        << "the cover already on screen was published again";
+    EXPECT_EQ(source.Parse("$mediaThumbnail"), current) << "an identical cover replaced the image";
+    EXPECT_EQ(source.Version("$mediaThumbnail"), version)
+        << "an identical cover moved the version a renderer watches for changes";
+    EXPECT_EQ(source.Parse("$mediaPreviousThumbnail"), previous)
+        << "an identical cover overwrote the cover a cross-fade fades from";
+
+    // A real change still lands, and still keeps the cover it replaced.
+    EXPECT_TRUE(PublishSystemMediaArtwork(source, 1, 1, first.data(), first.size()));
+    EXPECT_EQ(source.Parse("$mediaPreviousThumbnail"), current);
+    EXPECT_GT(source.Version("$mediaThumbnail"), version);
+}
+
 } // namespace
 } // namespace wallpaper

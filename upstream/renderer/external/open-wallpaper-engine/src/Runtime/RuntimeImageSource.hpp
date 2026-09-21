@@ -69,6 +69,34 @@ public:
         return iterator == m_versions.end() ? 0 : iterator->second;
     }
 
+    /// Whether `name` already holds exactly these pixels.
+    ///
+    /// Republishing an identical image is not free and not neutral: it retires
+    /// the texture the GPU is sampling, allocates and uploads another, and —
+    /// for a cover — moves the current image into `$mediaPreviousThumbnail`,
+    /// which is what a wallpaper cross-fades *from*, so a replay would fade a
+    /// cover into itself. Replays are normal: every new scene handle is sent
+    /// the current cover again. One comparison against bytes already in memory
+    /// is cheaper than any of that.
+    bool MatchesRgba(const std::string& name, uint32_t width, uint32_t height,
+                     const uint8_t* rgba, std::size_t rgba_len) const {
+        if (rgba == nullptr) return false;
+        std::lock_guard lock(m_mutex);
+        const auto iterator = m_runtime_images.find(name);
+        if (iterator == m_runtime_images.end() || iterator->second == nullptr) return false;
+        const auto& image = *iterator->second;
+        if (image.header.format != TextureFormat::RGBA8) return false;
+        if (image.header.width != static_cast<int32_t>(width) ||
+            image.header.height != static_cast<int32_t>(height)) {
+            return false;
+        }
+        if (image.slots.empty() || image.slots.front().mipmaps.empty()) return false;
+        const auto& mip = image.slots.front().mipmaps.front();
+        if (mip.data == nullptr || mip.size < 0) return false;
+        if (static_cast<std::size_t>(mip.size) != rgba_len) return false;
+        return std::memcmp(mip.data.get(), rgba, rgba_len) == 0;
+    }
+
     void SetRgbaImage(std::string name, uint32_t width, uint32_t height, const uint8_t* rgba,
                       std::size_t rgba_len) {
         if (name.empty() || width == 0 || height == 0 || rgba == nullptr) return;
@@ -162,16 +190,21 @@ private:
     std::atomic<uint64_t>                                   m_next_version { 0 };
 };
 
-/// Publishes one now-playing cover.
+/// Publishes one now-playing cover, and reports whether anything changed.
 ///
 /// The cover being replaced becomes `$mediaPreviousThumbnail`, which is what a
 /// wallpaper cross-fades from, so it has to be captured before the new pixels
 /// land. One definition, because the renderer and the offscreen probe must
 /// publish covers the same way.
-inline void PublishSystemMediaArtwork(RuntimeImageSource& source, uint32_t width, uint32_t height,
+///
+/// Returns false when the cover on screen is already exactly this one, so a
+/// caller can skip the work a change would have needed.
+inline bool PublishSystemMediaArtwork(RuntimeImageSource& source, uint32_t width, uint32_t height,
                                       const uint8_t* rgba, std::size_t rgba_len) {
+    if (source.MatchesRgba("$mediaThumbnail", width, height, rgba, rgba_len)) return false;
     source.AliasRuntimeImage("$mediaThumbnail", "$mediaPreviousThumbnail");
     source.SetRgbaImage("$mediaThumbnail", width, height, rgba, rgba_len);
+    return true;
 }
 
 } // namespace wallpaper

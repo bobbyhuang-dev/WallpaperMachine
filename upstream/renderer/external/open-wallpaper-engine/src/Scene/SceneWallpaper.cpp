@@ -340,7 +340,9 @@ class RenderHandler;
 
 class MainHandler : public looper::Handler {
 public:
-    enum class CMD
+    /// Fixed width for the same reason as the render handler's: the looper
+    /// carries the command as an `int32_t` and the cast back has to be defined.
+    enum class CMD : int32_t
     {
         CMD_LOAD_SCENE,
         CMD_APPLY_CONFIG,
@@ -374,7 +376,11 @@ public:
                 CASE_CMD(FIRST_FRAME);
                 CASE_CMD(POINTER_INPUT_CHANGED);
                 CASE_CMD(USER_SHORTCUT);
-            default: break;
+            case CMD::CMD_NO: break;
+                // No `default`, for the same reason the render handler has
+                // none: a command that is posted and never dispatched is
+                // silent, and the compiler is the only thing that reliably
+                // notices.
             }
         }
     }
@@ -430,7 +436,9 @@ using impl_MainHandler = MainHandler;
 
 class RenderHandler : public looper::Handler {
 public:
-    enum class CMD
+    /// Fixed width because commands cross the looper as an `int32_t`, so the
+    /// cast back has to be defined for every value that can arrive.
+    enum class CMD : int32_t
     {
         CMD_INIT_VULKAN,
         CMD_SET_SCENE,
@@ -502,7 +510,12 @@ public:
                 CASE_CMD(BEGIN_SURFACE_RECONFIGURE);
                 CASE_CMD(FINISH_SURFACE_RECONFIGURE);
                 CASE_CMD(POSTER_REQUEST);
-            default: break;
+                CASE_CMD(SET_RENDER_SCALE);
+            case CMD::CMD_NO: break;
+                // No `default`. Every command is named, so the compiler
+                // reports the next one that is added and not dispatched —
+                // which is how `SET_RENDER_SCALE` came to be posted, handled
+                // and silently dropped: the handler existed, the case did not.
             }
             // Every command except the draw itself is an event that may have
             // changed what the next frame should show, so an idle scene takes
@@ -514,7 +527,14 @@ public:
             // The request is dropped when the clock is stopped, so this cannot
             // resume a paused wallpaper, and it coalesces with any frame
             // already pending.
-            if (cmd != CMD::CMD_DRAW) requestFrame();
+            //
+            // A cover is the one exception, because it is the one command that
+            // routinely carries no change at all: every new scene handle is
+            // replayed the current cover, and a replay that wakes the scene
+            // would make the blanket rule cost a frame per display added, per
+            // wallpaper switched, per reconcile. Its handler requests a frame
+            // when — and only when — the pixels actually moved.
+            if (cmd != CMD::CMD_DRAW && cmd != CMD::CMD_SYSTEM_MEDIA_ARTWORK) requestFrame();
         }
     }
 
@@ -934,18 +954,37 @@ private:
         return true;
     }
 
+    /// Publishes a now-playing cover into the scene's runtime images.
+    ///
+    /// A cover is pixels behind a name both backends already re-read on their
+    /// own: Vulkan replaces the texture from the pass's per-frame update when
+    /// `Image::key` moves (`CustomShaderPass.cpp`), Metal from
+    /// `refreshRuntimeImages` when `Version()` moves. Rebuilding the render
+    /// graph here on top of that idled the device, destroyed every pipeline
+    /// and framebuffer, dropped every uploaded texture and reopened every
+    /// video — once per track change, and once more per replay — to change one
+    /// thumbnail. Both backends also mark a pass that samples a runtime image
+    /// dynamic, so the new pixels are never held back by the static cache.
+    ///
+    /// Returns false only when there is nowhere to publish to yet, which is
+    /// what makes the caller hold the payload until there is.
     bool applySystemMediaArtworkPayload(const SystemMediaArtworkPayload& artwork) {
         if (m_scene == nullptr || m_scene->imageParser == nullptr) return false;
 
         auto* runtime_images = dynamic_cast<RuntimeImageSource*>(m_scene->imageParser.get());
         if (runtime_images == nullptr) return false;
 
-        PublishSystemMediaArtwork(*runtime_images,
-                                  artwork.width,
-                                  artwork.height,
-                                  artwork.rgba.data(),
-                                  artwork.rgba.size());
-        return rebuildRenderGraph();
+        if (PublishSystemMediaArtwork(*runtime_images,
+                                      artwork.width,
+                                      artwork.height,
+                                      artwork.rgba.data(),
+                                      artwork.rgba.size())) {
+            // New pixels are a real state change, so an idle scene has to be
+            // told; the frame clock decides when, and the FPS ceiling bounds
+            // it. An unchanged cover asks for nothing.
+            requestFrame();
+        }
+        return true;
     }
     /// Records `json` as the latest event of its type, keeping the order the
     /// types first arrived so a replay reaches a script in the same sequence a
@@ -1287,12 +1326,17 @@ private:
                 installContentWake(*m_scene);
             }
             selectSceneBackend();
+            // A scene that just arrived has no graph at all — `m_rg` was reset
+            // above — so one is always built here. The pending cover is only
+            // pixels: publishing it first means the compile below already binds
+            // the right image, and it no longer decides whether the graph gets
+            // built, which is what it used to do by rebuilding as a side
+            // effect.
             if (m_pending_system_media_artwork.has_value() &&
                 applySystemMediaArtworkPayload(*m_pending_system_media_artwork)) {
                 m_pending_system_media_artwork.reset();
-            } else if (! m_render_blocked && ! rebuildRenderGraph()) {
-                return;
             }
+            if (! m_render_blocked && ! rebuildRenderGraph()) return;
         }
     }
     MHANDLER_CMD(SET_SPEED) {

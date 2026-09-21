@@ -28,6 +28,7 @@
 
 #include "Core/ArrayHelper.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cmath>
@@ -1391,6 +1392,27 @@ void VulkanRender::Impl::planStaticSkips(Scene& scene) {
         }
         return;
     }
+    // Reuse needs a target that is both cacheable and holding a pinned
+    // allocation: the pool may hand an unpinned image to another key, so
+    // `Plan` refuses to skip one. With nothing pinned — an uncacheable graph,
+    // or one whose targets did not fit the memory budget at this output size —
+    // the only answer Plan can give is "execute every pass", and sampling every
+    // pass and hashing every signature to arrive there is work with no reachable
+    // result. The budget still stands; this only stops paying to re-discover
+    // that it was exhausted, every frame.
+    if (m_static_pinned_bytes == 0) {
+        m_static_cache.InvalidateAll();
+        std::fill(m_static_skip.begin(), m_static_skip.end(), uint8_t { 0 });
+        for (auto* pass : m_passes) {
+            if (auto* custom = dynamic_cast<CustomShaderPass*>(pass)) custom->setFrameSkipped(false);
+        }
+        // Empty means "no pass was dropped", which is what executePreparedPasses
+        // reads as the full list; filling it with every pass would say the same
+        // thing and allocate to do it.
+        m_frame_passes.clear();
+        RecordSceneOptimizationFrame(static_cast<uint64_t>(m_passes.size()), 0);
+        return;
+    }
     if (m_static_samples.size() != m_passes.size())
         m_static_samples.assign(m_passes.size(), StaticPassSample {});
 
@@ -1404,17 +1426,19 @@ void VulkanRender::Impl::planStaticSkips(Scene& scene) {
         }
     }
 
-    std::vector<uint8_t> skip(m_passes.size(), uint8_t { 0 });
-    m_static_cache.Plan(m_static_samples, skip);
+    // Into the member the frame already owns. A fresh vector here was a heap
+    // allocation and free on every frame of every scene, to carry one byte per
+    // pass that is overwritten wholesale by `Plan` anyway.
+    m_static_cache.Plan(m_static_samples, m_static_skip);
     uint64_t skipped  = 0;
     uint64_t executed = 0;
     m_frame_passes.clear();
     m_frame_passes.reserve(m_passes.size());
     for (std::size_t i = 0; i < m_passes.size(); ++i) {
-        m_static_skip[i] = skip[i];
+        const bool skipped_here = m_static_skip[i] != 0;
         auto* custom = dynamic_cast<CustomShaderPass*>(m_passes[i]);
-        if (custom != nullptr) custom->setFrameSkipped(skip[i] != 0);
-        if (skip[i] != 0) {
+        if (custom != nullptr) custom->setFrameSkipped(skipped_here);
+        if (skipped_here) {
             ++skipped;
             // A custom pass stays in the list so batching still sees the same
             // neighbours; it reports itself invisible instead. A clear or copy

@@ -27,7 +27,11 @@ let dialogAccount = null;
 // same request stays quiet while a new one still opens the dialog.
 const dismissedAuth = new Set();
 let searchTimer;
-const installed = { text: '', kind: 'All types', favorites: false, active: false, sort: 'title', descending: false };
+// Installed keeps Discover's filter model (required tags, excluded tags) and applies it in
+// the page to each wallpaper's own tags: its manifest facts from the snapshot, its kind, and
+// the page's Favorite / Active facts. Nothing is excluded by default: the library is the
+// user's own, so every box starts ticked.
+const installed = { text: '', sort: 'title', descending: false, tags: [], excludedTags: [] };
 // Workshop sort keys mirror `WorkshopSort` raw values; Swift maps them to Steam's browse query.
 const workshopSorts = [['toprated', 'Highest rated'], ['trend-today', 'Most popular today'], ['trend', 'Trending this week'], ['trend-month', 'Most popular this month'], ['trend-year', 'Most popular this year'], ['totaluniquesubscribers', 'Most subscribed'], ['mostrecent', 'Newest'], ['textsearch', 'Relevance']];
 // Installed sort keys with the direction each one starts in: names read A→Z, while favorites,
@@ -43,14 +47,19 @@ let selecting = false; // Toolbar "Select" mode keeps every tile's check visible
 // Entries are `tag` or `[tag, label, off]`; `off` marks the boxes Wallpaper Engine leaves
 // unchecked by default. Application and Asset are never offered, so they are always excluded.
 const showOnlyTags = ['Approved', 'Audio responsive', 'Customizable'];
+// Installed leads with the two facts only a library has, then Discover's three.
+const installedShowOnlyTags = ['Favorite', 'Active', ...showOnlyTags];
+const showOnlyLabels = { Favorite: 'Favorites', Active: 'Active on target display' };
 // Approved keeps Wallpaper Engine's green trophy so the mark matches what users know from Workshop.
-const showOnlyIcons = { Approved: 'trophy', 'Audio responsive': 'audioLines', Customizable: 'slidersVertical' };
+const showOnlyIcons = { Approved: 'trophy', 'Audio responsive': 'audioLines', Customizable: 'slidersVertical', Favorite: 'heart', Active: 'play' };
 const hiddenExcludedTags = ['Application', 'Asset'];
 const resolutionSection = (key, title, prefix, sizes) => ({ key, title, quick: true, tags: [[`${prefix}Standard Definition`, prefix ? `${title} (standard)` : 'Standard definition'], ...sizes.map(size => [`${prefix}${size}`, size])] });
+// `discoverOnly` marks what Steam knows but a wallpaper's manifest does not carry (its
+// Workshop category and resolution), so Installed leaves those boxes out.
 const excludeGroups = [
-  { key: 'type', title: 'Type', sections: [{ key: 'type', tags: ['Scene', 'Video', 'Web'] }, { key: 'category', tags: ['Wallpaper', 'Preset'] }] },
+  { key: 'type', title: 'Type', sections: [{ key: 'type', tags: ['Scene', 'Video', 'Web'] }, { key: 'category', discoverOnly: true, tags: ['Wallpaper', 'Preset'] }] },
   { key: 'rating', title: 'Age rating', sections: [{ key: 'rating', tags: [['Everyone', 'Everyone (G)'], ['Questionable', 'Questionable (PG-13)', true], ['Mature', 'Mature (R-18)', true]] }] },
-  { key: 'resolution', title: 'Resolution', sections: [
+  { key: 'resolution', title: 'Resolution', discoverOnly: true, sections: [
     resolutionSection('widescreen', 'Widescreen', '', ['1280 x 720', '1366 x 768', '1920 x 1080', '2560 x 1440', '3840 x 2160']),
     resolutionSection('ultrawide', 'Ultrawide', 'Ultrawide ', ['2560 x 1080', '3440 x 1440']),
     resolutionSection('dual', 'Dual monitor', 'Dual ', ['3840 x 1080', '5120 x 1440', '7680 x 2160']),
@@ -64,7 +73,12 @@ const tagEntry = (entry) => Array.isArray(entry) ? { tag: entry[0], label: entry
 const excludeSections = excludeGroups.flatMap(group => group.sections);
 const excludeEntries = excludeSections.flatMap(section => section.tags.map(tagEntry));
 const defaultExcludedTags = [...hiddenExcludedTags, ...excludeEntries.filter(entry => entry.off).map(entry => entry.tag)];
+const installedGroups = excludeGroups.filter(group => !group.discoverOnly).map(group => ({ ...group, sections: group.sections.filter(section => !section.discoverOnly) }));
+const genreTags = excludeGroups.find(group => group.key === 'genre').sections[0].tags.map(tagEntry).filter(entry => entry.tag !== 'Unspecified').map(entry => entry.tag.toLowerCase());
 const uniqueTags = (values) => [...new Set(values)];
+// The page's filter draft and its defaults: Discover's are Wallpaper Engine's, Installed's are empty.
+const filterDraft = (discover) => discover ? workshopDraft : installed;
+const filterDefaults = (discover) => discover ? defaultExcludedTags : [];
 const actionKey = (action, args = {}) => `${action}:${args.id ?? ''}:${args.displayID ?? ''}:${args.propertyID ?? args.key ?? ''}`;
 const busy = (action, args = {}) => pending.has(actionKey(action, args));
 const disabled = (value) => value ? ' disabled' : '';
@@ -201,10 +215,12 @@ function render() {
   renderActivity(); renderPopover(); renderDialog(); welcome.render(state); surfaceAuthRequests();
 }
 const filtersCollapsed = () => Boolean(state?.filtersCollapsed?.[state.page]);
-const installedFilterCount = () => Number(installed.kind !== 'All types') + Number(installed.favorites) + Number(installed.active);
-// Active Workshop filters: every required tag plus every box that differs from Wallpaper
-// Engine's defaults, so the count reads zero right after Clear.
-const workshopFilterCount = () => workshopDraft.tags.length + defaultExcludedTags.filter(tag => !workshopDraft.excludedTags.includes(tag)).length + workshopDraft.excludedTags.filter(tag => !defaultExcludedTags.includes(tag)).length;
+// Active filters on a page: every required tag plus every box that differs from the page's
+// defaults, so the count reads zero right after Clear.
+function filterCount(discover) {
+  const draft = filterDraft(discover), defaults = filterDefaults(discover);
+  return draft.tags.length + defaults.filter(tag => !draft.excludedTags.includes(tag)).length + draft.excludedTags.filter(tag => !defaults.includes(tag)).length;
+}
 const filterCountPill = (count) => count ? `<span class="filter-count" title="${escapeHTML(t('{count} active', { count }))}">${count}</span>` : '';
 // The one control that opens and closes the sidebar: a filled button so it reads as the
 // place to go, a funnel so it reads as filtering, and the active count riding along. It
@@ -216,30 +232,50 @@ function filterButton(count) {
 function renderToolbar(discover) {
   const search = discover ? workshopDraft.text : installed.text;
   const sortLabel = t(installedSorts.find(([key]) => key === installed.sort)?.[1] || 'Name');
-  morph($('browser-toolbar'), `${filterButton(discover ? workshopFilterCount() : installedFilterCount())}<form class="search-form" data-form="search" ${keyAttr(discover ? 'workshop-search' : 'installed-search')}>${icon('search')}<label class="sr-only" for="wallpaper-search">${escapeHTML(discover ? t('Search Steam Workshop') : t('Search installed wallpapers'))}</label><input id="wallpaper-search" type="search" autocomplete="off" placeholder="${escapeHTML(discover ? t('Search Workshop') : t('Search wallpapers'))}" value="${escapeHTML(search)}" data-input="search">${discover ? `<button type="submit" title="${escapeHTML(t('Search Workshop'))}">${escapeHTML(t('Search'))}</button>` : ''}</form><label class="sr-only" for="browser-sort">${escapeHTML(t('Sort wallpapers'))}</label><select id="browser-sort" data-change="sort">${selectOptions((discover ? workshopSorts : installedSorts).map(([key, label]) => [key, t(label)]), discover ? workshopDraft.sort : installed.sort)}</select>${discover ? `${button('', 'refreshWorkshop', {}, { icon: 'refresh', title: t('Refresh Workshop'), disabled: state.workshop.loading })}` : `${button('', 'toggleSortDirection', {}, { icon: installed.descending ? 'sortDescending' : 'sortAscending', title: installed.descending ? t('{sort}, descending. Click to sort ascending', { sort: sortLabel }) : t('{sort}, ascending. Click to sort descending', { sort: sortLabel }), className: 'icon-button sort-direction' })}${button(selecting ? t('Done') : t('Select'), 'toggleSelecting', {}, { icon: selecting ? 'close' : 'check', title: selecting ? t('Leave selection mode') : t('Select wallpapers to move to Trash'), className: selecting ? 'selecting' : '' })}${button('', 'refresh', {}, { icon: 'refresh', title: t('Refresh library'), disabled: state.libraryLoading })}${button(t('Import'), 'openImport', {}, { icon: 'plus', disabled: state.import?.busy })}`}`);
+  morph($('browser-toolbar'), `${filterButton(filterCount(discover))}<form class="search-form" data-form="search" ${keyAttr(discover ? 'workshop-search' : 'installed-search')}>${icon('search')}<label class="sr-only" for="wallpaper-search">${escapeHTML(discover ? t('Search Steam Workshop') : t('Search installed wallpapers'))}</label><input id="wallpaper-search" type="search" autocomplete="off" placeholder="${escapeHTML(discover ? t('Search Workshop') : t('Search wallpapers'))}" value="${escapeHTML(search)}" data-input="search">${discover ? `<button type="submit" title="${escapeHTML(t('Search Workshop'))}">${escapeHTML(t('Search'))}</button>` : ''}</form><label class="sr-only" for="browser-sort">${escapeHTML(t('Sort wallpapers'))}</label><select id="browser-sort" data-change="sort">${selectOptions((discover ? workshopSorts : installedSorts).map(([key, label]) => [key, t(label)]), discover ? workshopDraft.sort : installed.sort)}</select>${discover ? `${button('', 'refreshWorkshop', {}, { icon: 'refresh', title: t('Refresh Workshop'), disabled: state.workshop.loading })}` : `${button('', 'toggleSortDirection', {}, { icon: installed.descending ? 'sortDescending' : 'sortAscending', title: installed.descending ? t('{sort}, descending. Click to sort ascending', { sort: sortLabel }) : t('{sort}, ascending. Click to sort descending', { sort: sortLabel }), className: 'icon-button sort-direction' })}${button(selecting ? t('Done') : t('Select'), 'toggleSelecting', {}, { icon: selecting ? 'close' : 'check', title: selecting ? t('Leave selection mode') : t('Select wallpapers to move to Trash'), className: selecting ? 'selecting' : '' })}${button('', 'refresh', {}, { icon: 'refresh', title: t('Refresh library'), disabled: state.libraryLoading })}${button(t('Import'), 'openImport', {}, { icon: 'plus', disabled: state.import?.busy })}`}`);
 }
 const filterGroup = (key, title, body, open) => `<details class="filter-group"${open ? ' open' : ''} ${keyAttr(key)}><summary>${escapeHTML(t(title))}${icon('chevronRight', 13)}</summary><div class="filter-options">${body}</div></details>`;
 const filterHeading = (count, clearAction) => `<div class="filter-heading"><h3>${escapeHTML(t('Filters'))}${filterCountPill(count)}</h3>${button(t('Clear'), clearAction, {}, { className: 'link', disabled: !count })}</div>`;
+// One sidebar for both pages: Discover's boxes go to Steam as `requiredtags[]` /
+// `excludedtags[]`; Installed's apply the same rules to the library in the page.
 function renderFilters(discover) {
-  if (!discover) {
-    morph($('filter-sidebar'), `${filterHeading(installedFilterCount(), 'clearInstalled')}${filterGroup('installed-kind', 'Type', `<label class="sr-only" for="installed-kind">${escapeHTML(t('Wallpaper type'))}</label><select id="installed-kind" data-change="installedKind">${selectOptions(['All types', 'Scene', 'Video', 'Web', 'Unknown'].map(kind => [kind, t(kind)]), installed.kind)}</select>`, true)}${filterGroup('installed-show', 'Show', `<label class="check-label" ${keyAttr('favorites')}><input type="checkbox" data-change="installedFavorites"${checked(installed.favorites)}><span>${escapeHTML(t('Favorites only'))}</span></label><label class="check-label" ${keyAttr('active')}><input type="checkbox" data-change="installedActive"${checked(installed.active)}><span>${escapeHTML(t('Active on target display'))}</span></label>`, true)}`);
-    return;
-  }
+  const draft = filterDraft(discover);
+  const showOnly = discover ? showOnlyTags : installedShowOnlyTags;
   // Tags travel to Steam in English; only their labels are translated.
-  const required = (tag, label = tag) => `<label class="check-label" ${keyAttr(tag)}><input type="checkbox" data-change="workshopTag" value="${escapeHTML(tag)}"${checked(workshopDraft.tags.includes(tag))}>${showOnlyIcons[tag] ? `<span class="check-icon${tag === 'Approved' ? ' approved' : ''}">${icon(showOnlyIcons[tag], 14)}</span>` : ''}<span>${escapeHTML(t(label))}</span></label>`;
-  const other = workshopDraft.tags.filter(tag => !showOnlyTags.includes(tag));
+  const required = (tag) => `<label class="check-label" ${keyAttr(tag)}><input type="checkbox" data-change="filterTag" value="${escapeHTML(tag)}"${checked(draft.tags.includes(tag))}>${showOnlyIcons[tag] ? `<span class="check-icon${tag === 'Approved' ? ' approved' : ''}">${icon(showOnlyIcons[tag], 14)}</span>` : ''}<span>${escapeHTML(t(showOnlyLabels[tag] || tag))}</span></label>`;
+  const other = draft.tags.filter(tag => !showOnly.includes(tag));
   const section = ({ key, title, quick, tags: entries }) => {
     const values = entries.map(tagEntry);
-    const onCount = values.filter(({ tag }) => !workshopDraft.excludedTags.includes(tag)).length;
+    const onCount = values.filter(({ tag }) => !draft.excludedTags.includes(tag)).length;
     const head = title || quick ? `<div class="filter-section-head">${title ? `<h4>${escapeHTML(t(title))}</h4>` : ''}${quick ? `<span class="filter-quick">${button(t('All'), 'includeSection', { section: key }, { className: 'link', disabled: onCount === values.length })}${button(t('None'), 'excludeSection', { section: key }, { className: 'link', disabled: onCount === 0 })}</span>` : ''}</div>` : '';
-    return `<div class="filter-section" ${keyAttr(key)}>${head}${values.map(({ tag, label }) => `<label class="check-label" ${keyAttr(tag)}><input type="checkbox" data-change="workshopExclude" value="${escapeHTML(tag)}"${checked(!workshopDraft.excludedTags.includes(tag))}><span>${escapeHTML(t(label))}</span></label>`).join('')}</div>`;
+    return `<div class="filter-section" ${keyAttr(key)}>${head}${values.map(({ tag, label }) => `<label class="check-label" ${keyAttr(tag)}><input type="checkbox" data-change="filterExclude" value="${escapeHTML(tag)}"${checked(!draft.excludedTags.includes(tag))}><span>${escapeHTML(t(label))}</span></label>`).join('')}</div>`;
   };
-  morph($('filter-sidebar'), `${filterHeading(workshopFilterCount(), 'clearWorkshop')}${filterGroup('show-only', 'Show only', `${showOnlyTags.map(tag => required(tag)).join('')}${other.length ? `<div class="filter-section" ${keyAttr('other')}><div class="filter-section-head"><h4>${escapeHTML(t('Other selected tags'))}</h4></div>${other.map(tag => required(tag)).join('')}</div>` : ''}`, true)}${excludeGroups.map(group => filterGroup(group.key, group.title, group.sections.map(section).join(''), true)).join('')}`);
+  morph($('filter-sidebar'), `${filterHeading(filterCount(discover), discover ? 'clearWorkshop' : 'clearInstalled')}${filterGroup('show-only', 'Show only', `${showOnly.map(tag => required(tag)).join('')}${other.length ? `<div class="filter-section" ${keyAttr('other')}><div class="filter-section-head"><h4>${escapeHTML(t('Other selected tags'))}</h4></div>${other.map(tag => required(tag)).join('')}</div>` : ''}`, true)}${(discover ? excludeGroups : installedGroups).map(group => filterGroup(group.key, group.title, group.sections.map(section).join(''), true)).join('')}`);
 }
-function setExcluded(tags, excluded) {
-  const set = new Set(workshopDraft.excludedTags);
+function setExcluded(draft, tags, excluded) {
+  const set = new Set(draft.excludedTags);
   for (const tag of tags) if (excluded) set.add(tag); else set.delete(tag);
-  workshopDraft.excludedTags = [...set];
+  draft.excludedTags = [...set];
+}
+// Ticking a box on the current page: Discover asks Steam again, Installed re-filters in place.
+function applyFilterChange() {
+  render();
+  return state.page === 'discover' ? searchWorkshop() : Promise.resolve();
+}
+// Everything an installed wallpaper can be filtered on, lower-cased for matching: the
+// manifest's tags from the snapshot, the kind as Steam's type tag, the page's own Favorite
+// and Active facts, and `Unspecified` when no genre was tagged, as Steam would list it.
+function installedTags(item, target) {
+  const tags = [item.kind, ...(item.tags || [])].map(tag => String(tag).toLowerCase());
+  if (item.approved) tags.push('approved');
+  if (state.favorites.includes(item.id)) tags.push('favorite');
+  if (target?.wallpaperID === item.id) tags.push('active');
+  if (!tags.some(tag => genreTags.includes(tag))) tags.push('unspecified');
+  return new Set(tags);
+}
+function matchesInstalledFilters(item, target) {
+  const tags = installedTags(item, target);
+  return installed.tags.every(tag => tags.has(tag.toLowerCase())) && !installed.excludedTags.some(tag => tags.has(tag.toLowerCase()));
 }
 // Installed sorts in the page: a primary key in the chosen direction, names breaking ties.
 // Wallpapers whose size or date has not been measured yet sort last either way.
@@ -262,7 +298,7 @@ function compareInstalled(a, b) {
 }
 function visibleWallpapers() {
   const target = (state.displays || []).find(display => display.id === state.targetDisplayID);
-  return (state.wallpapers || []).filter(item => (!installed.text || `${item.title} ${item.tags.join(' ')}`.toLocaleLowerCase().includes(installed.text.toLocaleLowerCase())) && (installed.kind === 'All types' || item.kind === installed.kind) && (!installed.favorites || state.favorites.includes(item.id)) && (!installed.active || target?.wallpaperID === item.id)).sort(compareInstalled);
+  return (state.wallpapers || []).filter(item => (!installed.text || `${item.title} ${(item.tags || []).join(' ')}`.toLocaleLowerCase().includes(installed.text.toLocaleLowerCase())) && matchesInstalledFilters(item, target)).sort(compareInstalled);
 }
 function renderGrid(discover) {
   const workshop = state.workshop;
@@ -797,7 +833,7 @@ async function handleAction(action, data, element) {
     case 'changeAccount': await send('changeDownloadAccount', { id }); openDialog(id, element); return;
     case 'removeDownloadRequest': if (dialogTarget === id) closeDialog(); await send(action, { id }); return;
     case 'clearInstalledSearch': installed.text = ''; // falls through to reset filters
-    case 'clearInstalled': Object.assign(installed, { kind: 'All types', favorites: false, active: false }); render(); return;
+    case 'clearInstalled': installed.tags = []; installed.excludedTags = []; render(); return;
     case 'toggleSelect': toggleSelection(id); return;
     case 'toggleSelecting': selecting = !selecting; if (!selecting) { selection.clear(); selectionAnchor = null; } render(); return;
     case 'selectAllVisible': for (const item of visibleWallpapers()) selection.add(item.id); selectionAnchor ??= [...selection][0] ?? null; renderGrid(false); return;
@@ -805,7 +841,7 @@ async function handleAction(action, data, element) {
     case 'deleteSelected': if (selection.size) await send('deleteMany', { ids: [...selection] }); return;
     case 'clearWorkshopSearch': workshopDraft.text = ''; // falls through to reset filters
     case 'clearWorkshop': workshopDraft.tags = []; workshopDraft.excludedTags = [...defaultExcludedTags]; render(); await searchWorkshop(); return;
-    case 'includeSection': case 'excludeSection': setExcluded(excludeSections.find(section => section.key === data.section)?.tags.map(entry => tagEntry(entry).tag) || [], action === 'excludeSection'); render(); await searchWorkshop(); return;
+    case 'includeSection': case 'excludeSection': setExcluded(filterDraft(state.page === 'discover'), excludeSections.find(section => section.key === data.section)?.tags.map(entry => tagEntry(entry).tag) || [], action === 'excludeSection'); await applyFilterChange(); return;
     case 'showInstalled': await send('navigate', { page: 'installed' }); await send('select', { id }); return;
     case 'clearProperty': await send('property', { id, propertyID: data.propertyId, value: '' }); return;
     case 'restoreProperty': drafts.delete(draftKey(id, data.propertyId)); await send(action, { id, propertyID: data.propertyId }); return;
@@ -889,11 +925,8 @@ document.addEventListener('change', event => {
     if (change === 'displayConfig') args.displayID = element.dataset.displayId;
     run(send(change, args));
   } else if (change === 'sort') { if (state.page === 'discover') { workshopDraft.sort = value; run(searchWorkshop()); } else { installed.sort = value; installed.descending = installedSorts.find(([key]) => key === value)?.[2] ?? false; render(); } }
-  else if (change === 'installedKind') { installed.kind = value; render(); }
-  else if (change === 'installedFavorites') { installed.favorites = value; render(); }
-  else if (change === 'installedActive') { installed.active = value; render(); }
-  else if (change === 'workshopTag') { workshopDraft.tags = element.checked ? uniqueTags([...workshopDraft.tags, element.value]) : workshopDraft.tags.filter(tag => tag !== element.value); render(); run(searchWorkshop()); }
-  else if (change === 'workshopExclude') { setExcluded([element.value], !element.checked); render(); run(searchWorkshop()); }
+  else if (change === 'filterTag') { const draft = filterDraft(state.page === 'discover'); draft.tags = element.checked ? uniqueTags([...draft.tags, element.value]) : draft.tags.filter(tag => tag !== element.value); run(applyFilterChange()); }
+  else if (change === 'filterExclude') { setExcluded(filterDraft(state.page === 'discover'), [element.value], !element.checked); run(applyFilterChange()); }
   else if (change === 'rememberSession' && dialogAccount) { dialogAccount.rememberSession = value; renderDialog(); }
 });
 document.addEventListener('submit', event => {

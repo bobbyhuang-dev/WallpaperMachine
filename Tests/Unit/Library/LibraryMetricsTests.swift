@@ -90,6 +90,32 @@ final class LibraryMetricsTests: XCTestCase {
         XCTAssertEqual(metrics["broken"]?.size, 9, "…the folder's other files still count")
     }
 
+    /// Installed filters with Discover's boxes, so the manifest is read as Steam's tags:
+    /// genre tags, the content rating, approval, audio processing and user properties.
+    func testReadsWorkshopStyleTagsFromTheManifest() async throws {
+        let full = try wallpaper("full", bytes: [1])
+        let plain = try wallpaper("plain", bytes: [1])
+        let scheme = try wallpaper("scheme", bytes: [1])
+        try wallpaper("none", bytes: [1])
+        try Data(#"{"title":"A","approved":true,"contentrating":"Mature","tags":["Anime","approved"," Anime ","Girls",""],"general":{"supportsaudioprocessing":true,"properties":{"schemecolor":{},"speed":{}}}}"#.utf8)
+            .write(to: full.appendingPathComponent("project.json"))
+        try Data(#"{"title":"B","contentrating":"Everyone","tags":["Nature"],"general":{"supportsaudioprocessing":false}}"#.utf8)
+            .write(to: plain.appendingPathComponent("project.json"))
+        try Data(#"{"title":"C","general":{"properties":{"schemecolor":{}}}}"#.utf8)
+            .write(to: scheme.appendingPathComponent("project.json"))
+        let service = makeService()
+        let ids = ["full", "plain", "scheme", "none"]
+        _ = service.metrics(for: ids, revision: 0)
+        let metrics = try await reported(service, ids: ids, count: 1)
+        XCTAssertEqual(
+            metrics["full"]?.tags, ["Anime", "Girls", "Mature", "Approved", "Audio responsive", "Customizable"],
+            "Genre tags once each and trimmed, then rating, approval, audio processing and user properties")
+        XCTAssertEqual(metrics["plain"]?.tags, ["Nature", "Everyone"], "Nothing is implied that the manifest does not say")
+        XCTAssertEqual(metrics["scheme"]?.tags, [], "The stock scheme colour alone is not a customizable wallpaper")
+        XCTAssertEqual(metrics["none"]?.tags, [], "No manifest, no tags; the folder still measures")
+        XCTAssertEqual(metrics["none"]?.size, 1)
+    }
+
     func testReloadRemeasuresOnlyFoldersWhoseContentsMoved() async throws {
         let one = try wallpaper("one", bytes: [10])
         try wallpaper("two", bytes: [20])

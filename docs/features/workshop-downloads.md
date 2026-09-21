@@ -31,7 +31,9 @@ layout cannot flap. Steam's public browse page clamps every query to
 (the snapshot's `reachable` count) and the page jump clamps to that. The
 filter sidebar on the left (opened and closed with the toolbar's **Filter**
 button, see [control-panel](control-panel.md#filtering)) mirrors Wallpaper
-Engine's own sidebar, tag for tag and default for default:
+Engine's own sidebar, tag for tag and default for default (Installed reuses the
+same boxes against the library, see
+[control-panel](control-panel.md#filtering)):
 
 | Group | Boxes | Default |
 | --- | --- | --- |

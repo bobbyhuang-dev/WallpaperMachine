@@ -508,7 +508,11 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
   /// and relayed with their animation at `mwe-ui://animated/<id>`.
   var thumbnails: [String: URL] = [:]
   let thumbnailCache: WorkshopThumbnailCache
-  private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+  /// In-flight loads by scheme task identity. WebKit frees a stopped task, and a new one can
+  /// land on the same address, so each entry carries a unique ticket: a finished job may only
+  /// act when the entry for its key still belongs to it.
+  private var tasks: [ObjectIdentifier: (ticket: UInt64, job: Task<Void, Never>)] = [:]
+  private var nextTicket: UInt64 = 0
   private static let files: Set<String> = [
     "index.html", "panel.js", "panel.css", "settings.js", "settings.css", "welcome.js",
     "welcome.css", "theme.js", "icons.js", "i18n.js",
@@ -536,7 +540,10 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
       task.didFailWithError(URLError(.fileDoesNotExist))
       return
     }
-    tasks[key] = Task { @MainActor in
+    nextTicket += 1
+    let ticket = nextTicket
+    let job = Task { @MainActor [weak self] in
+      guard let self else { return }
       do {
         let data: Data
         var headers = [
@@ -561,7 +568,7 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
           headers["Content-Type"] = WorkshopThumbnailCache.mimeType(of: data)
           headers["Cache-Control"] = "max-age=86400"
         }
-        guard tasks.removeValue(forKey: key) != nil, !Task.isCancelled else { return }
+        guard finish(key, ticket: ticket) else { return }
         headers["Content-Length"] = String(data.count)
         let response = HTTPURLResponse(
           url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!
@@ -569,10 +576,19 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
         task.didReceive(data)
         task.didFinish()
       } catch {
-        guard tasks.removeValue(forKey: key) != nil, !Task.isCancelled else { return }
+        guard finish(key, ticket: ticket) else { return }
         task.didFailWithError(error)
       }
     }
+    tasks.updateValue((ticket, job), forKey: key)?.job.cancel()
+  }
+
+  /// Releases the entry for a completed job. Returns false when WebKit already stopped the
+  /// task or the key now belongs to a newer task, in which case the task must not be touched.
+  private func finish(_ key: ObjectIdentifier, ticket: UInt64) -> Bool {
+    guard !Task.isCancelled, tasks[key]?.ticket == ticket else { return false }
+    tasks.removeValue(forKey: key)
+    return true
   }
 
   private static func mimeType(for file: URL) -> String {
@@ -600,7 +616,7 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
   }
 
   func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {
-    tasks.removeValue(forKey: ObjectIdentifier(task))?.cancel()
+    tasks.removeValue(forKey: ObjectIdentifier(task))?.job.cancel()
   }
 
   func resourceURL(_ url: URL) -> URL? {

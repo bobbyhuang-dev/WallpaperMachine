@@ -25,6 +25,16 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — Installed page filters with Discover's sidebar boxes
+
+- Change: LibraryMetricsService reads Workshop-style tags from project.json (genre tags, contentrating, Approved, Audio responsive, Customizable); snapshot wallpapers carry them as tags.
+- Change: WebUI Installed sidebar now renders Discover's groups (Show only + Favorites/Active, Type, Age rating, Tags; Resolution and Wallpaper/Preset are Discover-only) and filters the library in the page with the same required/excluded rules; every box starts ticked.
+- Removed: Installed type menu, 'Favorites only' / 'Active on target display' checkboxes; unused zh-Hans keys dropped.
+- python3 scripts/test.py --only LibraryMetricsTests --only ControlPanelLibraryTests: 10 passed (new testReadsWorkshopStyleTagsFromTheManifest, testInstalledFiltersTheLibraryWithDiscoverBoxesWithoutWindow).
+- python3 scripts/test.py (full gate, before rebase onto origin/main): 525 passed, 0 failed, 11 skipped (opt-in media/network layers).
+- Docs: control-panel.md Filtering + layout table, workshop-downloads.md cross-reference.
+- Not done: no Release build; sidebar not viewed on the desktop (offscreen WebKit tests only).
+
 ## 2026-09-21 — The cloud divergence starts at the bokeh downsample, and Compatibility is the deviant one
 
 Giving the Vulkan probe the same target dump the Metal harness has makes the two comparable target by target. Walking the chain, everything upstream agrees and the first disagreement is sharp.
@@ -103,13 +113,3 @@ The Swift side takes presses off the bridge's long poll and carries them out thr
 - Combo labels now go through `t()` in the panel, with the four actions in the zh-Hans catalogue. "No action" rather than "None" — that key already means deselect-all
 - `scripts/test.py` — 526 passed, 0 failed, 11 skipped of 537; `cargo test --release -p wallpaper-bridge --lib` 317 passed
 - Unverified: no desktop run. Whether a press moves a real player was not observed here, only that the command is handed to the adapter the state comes from
-
-## 2026-09-21 — A wallpaper's shortcut press now reaches the host, gated on the user's media consent
-
-The engine pushes each request to an installed observer instead of holding it, because a request no host has taken is a press the user already stopped waiting for. WallpaperBridge::next_user_shortcut long-polls a bounded channel outside the actor, so waiting for a rare press stalls no other request and costs no idle wakeup, and it drops requests from wallpapers missing from system_media_scene_handles.
-
-- `usershortcut` parses as Combo carrying the actions this host can carry out -- none, play/pause, next, previous -- rather than a new property kind, so the panel needs no new control and validation and effective-value come from the paths that already exist
-- `user_shortcut_offers_the_actions_this_host_can_carry_out` — asserts the kind and the four option values; deleting just the usershortcut arm in the manifest parser fails it with "a shortcut the user cannot bind is a button that does nothing"
-- Also corrected: `cargo_environment()` derives the pin from the popped value instead of repeating the literal
-- Measured across the release archives: the C++ engine is `minos 26.0` on all 39 objects, and nothing anywhere exceeds the app minimum
-- `cargo test --release -p wallpaper-core --lib` 213 passed; `-p wallpaper-bridge --lib` 317 passed

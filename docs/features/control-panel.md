@@ -37,7 +37,7 @@ fit together and how to add a language: [Localization](../localization.md).
 | Top tabs | **Discover**, **Installed**, **Settings** |
 | Top bar | Sits in the window's title-bar strip beside the traffic lights: tabs on the left, product name, version and a GitHub button (opens the repository in the default browser) centered, target-display picker and a downloads button (only while there is download activity) on the right. The side groups never shrink below their content, so a long display name nudges the brand off-center rather than under the controls; in windows up to 840px wide the name and version hide and only the GitHub button stays. The renderer's own repository is linked from Settings → About. Its background drags the window and follows the system double-click action |
 | Browser column | Filter button, search field, sort menu, tile grid, result summary, Workshop pagination with an editable page number. On Discover a page is one Steam page of 30 square tiles (at most 1,000 pages); the grid shows as many columns as fit, never fewer than three, and scrolls the rest |
-| Left sidebar | Workshop filters (Discover only), mirroring Wallpaper Engine's sidebar: Show only, Type, Age rating, Resolution and Tags tick boxes. Fixed width; the sidebar button in its heading collapses it to a narrow labelled rail that expands it again when clicked, and that choice is remembered across launches |
+| Left sidebar | Filters on both library pages, mirroring Wallpaper Engine's sidebar: Show only, Type, Age rating, Resolution and Tags tick boxes on Discover; the same boxes minus Resolution (plus Favorites and Active in Show only) on Installed, applied to the library in the page. Fixed width; the toolbar's Filter button opens and closes it, and that choice is remembered per page across launches |
 | Inspector | Preview, title, kind, creator, tags, actions, and the selected wallpaper's options and properties. Its width is a function of the window width alone and cannot be dragged: 260px at the 760px minimum, `15vw + 146px` in between (290px at 960px, 386px at 1600px) and 420px from about 1830px on, the same on Discover and Installed. Nothing is stored, so a given window size always yields the same layout. Inside, the panel adapts to its own width: past 360px the insets widen and a display's scale factor and frame rate share a row |
 | Activity bar | Pause/resume playback, import status, download progress |
 
@@ -239,8 +239,19 @@ has no collapse control and no rail. Each page remembers its own choice natively
 not persistent) and restores it on the next launch. Closing never changes the
 search or the filters.
 
-- Installed: the sidebar narrows the collection by wallpaper type, favorites
-  only, and active-on-target; **Clear** resets it. Filtering never activates a
+- Installed: the sidebar carries Discover's boxes and rules (see below), applied
+  in the page to each wallpaper: **Show only** starts with Favorites and Active
+  on target display, then Approved, Audio responsive and Customizable; **Type**
+  (Scene, Video, Web) reads the wallpaper's kind; **Age rating** and **Tags**
+  read its `project.json`, which `LibraryMetricsService` turns into Steam's tags
+  (`tags` in the snapshot: the manifest's genre tags, `contentrating`, `Approved`,
+  `Audio responsive` for `general.supportsaudioprocessing` and `Customizable` for
+  user properties beyond `schemecolor`); a wallpaper without a genre counts as
+  Unspecified. A manifest carries no resolution or Workshop category, so those
+  boxes are Discover-only. Every box starts ticked (a library hides nothing by
+  default), a ticked Show only box requires its tag and an unticked box hides
+  every wallpaper carrying that tag, case-insensitively; **Clear** resets the
+  sidebar. Search matches titles and tags. Filtering never activates a
   wallpaper. The toolbar's sort menu offers Name, Type, Favorites, File size and
   Date added, with a direction button beside it. Choosing a key starts in the
   direction people ask for it (names A→Z; favorites, largest and newest first)

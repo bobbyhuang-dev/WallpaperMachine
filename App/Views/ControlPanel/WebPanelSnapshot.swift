@@ -184,8 +184,10 @@ extension WebPanelController {
       return [
         "id": entry.id, "title": entry.title, "kind": Self.kind(entry.kind), "preview": preview,
         "active": store.isWallpaperActive(id: entry.id, displayId: navigation.targetDisplayID),
-        "supported": entry.supported, "tags": [],
-        // Folder size, date added and staff approval arrive once measured; null sorts last on the page.
+        "supported": entry.supported,
+        // Folder size, date added, staff approval and the manifest's Workshop-style tags
+        // arrive once measured; null sorts last on the page.
+        "tags": metrics[entry.id]?.tags ?? [],
         "approved": metrics[entry.id]?.approved ?? false,
         "size": metrics[entry.id]?.size as Any? ?? null,
         "addedAt": metrics[entry.id]?.addedAt.map { $0.timeIntervalSince1970 * 1000 } as Any? ?? null,

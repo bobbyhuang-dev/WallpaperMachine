@@ -1,8 +1,9 @@
 import Foundation
 
 /// Per-wallpaper facts the renderer's library snapshot does not carry: how much a
-/// wallpaper's folder weighs, when it entered the library, and whether Wallpaper
-/// Engine staff approved it. Installed sorts on the first two and marks the third.
+/// wallpaper's folder weighs, when it entered the library, whether Wallpaper Engine
+/// staff approved it, and the Workshop-style tags its manifest implies. Installed sorts
+/// on the first two, marks the third and filters on the last.
 ///
 /// All come from the file system. Summing a folder is a directory walk, and the panel
 /// builds a snapshot many times a second, so nothing is measured on the snapshot path:
@@ -23,6 +24,12 @@ final class LibraryMetricsService {
     /// Whether `project.json` carries Wallpaper Engine's staff approval (`approved: true`
     /// or the `Approved` tag).
     var approved = false
+    /// Workshop-style tags read from `project.json`, so Installed filters with the same
+    /// boxes as Discover: the manifest's genre `tags`, its `contentrating` (Everyone,
+    /// Questionable or Mature), `Approved` for staff approval, `Audio responsive` when the
+    /// wallpaper declares audio processing and `Customizable` when it ships user properties
+    /// beyond the stock scheme colour. Resolution is not in a manifest, so it never appears.
+    var tags: [String] = []
     /// The folder's content modification date when it was measured.
     var stamp: Date?
   }
@@ -143,21 +150,49 @@ final class LibraryMetricsService {
         size += Int64(attributes.fileSize ?? 0)
       }
     }
+    let manifest = manifest(at: folder.appendingPathComponent("project.json"))
     return Metrics(
       size: size, addedAt: values.addedToDirectoryDate ?? values.creationDate,
-      approved: approved(manifest: folder.appendingPathComponent("project.json")),
-      stamp: values.contentModificationDate)
+      approved: manifest.approved, tags: manifest.tags, stamp: values.contentModificationDate)
+  }
+
+  /// The manifest's Steam-facing facts. A missing, oversized or unreadable manifest is
+  /// simply not approved and carries no tags.
+  nonisolated static func manifest(at url: URL) -> (approved: Bool, tags: [String]) {
+    guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size < 16_000_000,
+      let data = try? Data(contentsOf: url),
+      let project = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return (false, []) }
+    let approved = approved(project: project)
+    return (approved, tags(project: project, approved: approved))
   }
 
   /// Wallpaper Engine writes `"approved": true` into the manifest of a staff-approved
   /// Workshop wallpaper and Steam lists the same wallpapers under the `Approved` tag;
-  /// either counts. A missing, oversized or unreadable manifest is simply not approved.
-  nonisolated static func approved(manifest: URL) -> Bool {
-    guard let size = try? manifest.resourceValues(forKeys: [.fileSizeKey]).fileSize, size < 16_000_000,
-      let data = try? Data(contentsOf: manifest),
-      let project = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    else { return false }
+  /// either counts.
+  nonisolated static func approved(project: [String: Any]) -> Bool {
     if project["approved"] as? Bool == true { return true }
     return (project["tags"] as? [String])?.contains { $0.caseInsensitiveCompare("Approved") == .orderedSame } ?? false
+  }
+
+  /// Steam's tags as far as a manifest can tell: genre tags as written (minus any
+  /// `Approved`, which staff approval covers), the content rating, and the three
+  /// "Show only" facts Discover offers. Each tag appears once, in that order.
+  nonisolated static func tags(project: [String: Any], approved: Bool) -> [String] {
+    var tags: [String] = []
+    var seen: Set<String> = []
+    func add(_ tag: String) {
+      let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty, seen.insert(trimmed.lowercased()).inserted else { return }
+      tags.append(trimmed)
+    }
+    for tag in project["tags"] as? [String] ?? [] where tag.caseInsensitiveCompare("Approved") != .orderedSame { add(tag) }
+    if let rating = project["contentrating"] as? String { add(rating) }
+    if approved { add("Approved") }
+    let general = project["general"] as? [String: Any] ?? [:]
+    if general["supportsaudioprocessing"] as? Bool == true { add("Audio responsive") }
+    let properties = general["properties"] as? [String: Any] ?? [:]
+    if properties.keys.contains(where: { $0.lowercased() != "schemecolor" }) { add("Customizable") }
+    return tags
   }
 }

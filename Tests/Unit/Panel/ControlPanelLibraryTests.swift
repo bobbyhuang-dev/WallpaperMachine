@@ -157,6 +157,14 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
       installed?["sortOptions"] as? [String], ["Name", "Type", "Favorites", "File size", "Date added"],
       "Installed keeps its sort menu, with the new keys")
     XCTAssertEqual(installed?["direction"] as? Bool, true, "…and a direction switch beside it")
+    XCTAssertEqual(
+      installed?["boxes"] as? Int, 5 + 3 + 3 + 25,
+      "Installed has Discover's boxes: Show only (plus Favorites and Active), Type, Age rating and Tags; no Resolution or category, which a manifest cannot tell")
+    XCTAssertEqual(
+      installed?["unchecked"] as? [String], ["Favorite", "Active", "Approved", "Audio responsive", "Customizable"],
+      "Only the Show only boxes start unticked: a library hides nothing by default")
+    XCTAssertEqual(installed?["selects"] as? Int, 0, "No type menu on Installed either")
+    XCTAssertNil(installed?["filterCount"] as? String)
     XCTAssertEqual(before?["direction"] as? Bool, false, "Discover's Steam sorts have no direction")
     XCTAssertEqual(before?["sortValue"] as? String, "trend-year", "Discover opens on this year's most popular")
     XCTAssertEqual(
@@ -261,6 +269,70 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
       XCTAssertEqual(order?["title"] as? [String], ["alpha", "Beta", "Delta", "Gamma"], "Choosing a key resets to its natural direction")
       XCTAssertEqual(order?["titleFlipped"] as? [String], ["Gamma", "Delta", "Beta", "alpha"])
       XCTAssertEqual(order?["direction"] as? String, "Name, descending. Click to sort ascending")
+    }
+  }
+
+  /// Installed's sidebar filters the library with Discover's rules: a ticked Show only box
+  /// requires its tag (Favorites and Active on top of Steam's three), an unticked box
+  /// excludes wallpapers carrying that tag, the type boxes read the wallpaper's kind, a
+  /// wallpaper without a genre counts as Unspecified, and Clear puts every box back.
+  func testInstalledFiltersTheLibraryWithDiscoverBoxesWithoutWindow() async throws {
+    try await withPanel { panel in
+      panel.show()
+      try await panel.waitJS("powerProbe.received.length >= 1")
+      let result = try await panel.js("""
+        const base = window.powerProbe.received.at(-1);
+        const wallpaper = (id, kind, tags, approved = false) => ({ id, title: id, kind, tags, approved, preview: null, active: false, supported: true, size: 1, addedAt: 1 });
+        const wallpapers = [
+          wallpaper('anime', 'Scene', ['anime', 'Everyone', 'Audio responsive'], true),
+          wallpaper('nature', 'Video', ['Nature', 'Mature']),
+          wallpaper('plain', 'Web', ['Everyone', 'Customizable']),
+          wallpaper('bare', 'Unknown', []),
+        ];
+        const display = Object.assign({}, base.displays[0], { wallpaperID: 'nature' });
+        window.wallpaperUI.receive(Object.assign({}, base, { page: 'installed', wallpapers, favorites: ['plain'], displays: [display], targetDisplayID: display.id }));
+        const sidebar = document.getElementById('filter-sidebar');
+        const titles = () => [...document.querySelectorAll('.tile-title')].map(node => node.textContent);
+        const box = value => sidebar.querySelector(`input[value="${value}"]`);
+        const tick = (value, on) => { const input = box(value); input.checked = on; input.dispatchEvent(new Event('change', { bubbles: true })); };
+        const count = () => document.querySelector('.browser-toolbar .filter-count')?.textContent ?? null;
+        const result = { all: titles(), groups: [...sidebar.querySelectorAll('.filter-group summary')].map(node => node.textContent.trim()) };
+        tick('Favorite', true); result.favorites = titles(); result.favoritesCount = count();
+        tick('Favorite', false); tick('Active', true); result.active = titles();
+        tick('Active', false); tick('Approved', true); result.approved = titles();
+        tick('Approved', false); tick('Audio responsive', true); result.audio = titles();
+        tick('Audio responsive', false); tick('Customizable', true); result.customizable = titles();
+        tick('Customizable', false); tick('Anime', false); result.noAnime = titles();
+        tick('Unspecified', false); result.noUnspecified = titles(); result.noneCount = count();
+        document.querySelector('.filter-heading [data-action="clearInstalled"]').click();
+        result.cleared = titles(); result.clearedCount = count();
+        tick('Mature', false); result.noMature = titles();
+        tick('Video', false); tick('Web', false); result.noVideoWeb = titles();
+        sidebar.querySelector('.filter-section[data-key="genre"] [data-action="excludeSection"]').click();
+        result.noGenre = titles();
+        document.querySelector('.filter-heading [data-action="clearInstalled"]').click();
+        document.getElementById('wallpaper-search').value = 'nat';
+        document.getElementById('wallpaper-search').dispatchEvent(new Event('input', { bubbles: true }));
+        result.searched = titles();
+        return result;
+        """) as? [String: Any]
+      XCTAssertEqual(result?["all"] as? [String], ["anime", "bare", "nature", "plain"], "Nothing is hidden by default")
+      XCTAssertEqual(result?["groups"] as? [String], ["Show only", "Type", "Age rating", "Tags"], "Discover's groups minus Resolution")
+      XCTAssertEqual(result?["favorites"] as? [String], ["plain"], "Favorites is a Show only box")
+      XCTAssertEqual(result?["favoritesCount"] as? String, "1")
+      XCTAssertEqual(result?["active"] as? [String], ["nature"], "So is Active on target display")
+      XCTAssertEqual(result?["approved"] as? [String], ["anime"], "Approved reads the snapshot's approval")
+      XCTAssertEqual(result?["audio"] as? [String], ["anime"], "Audio responsive and Customizable read the manifest tags")
+      XCTAssertEqual(result?["customizable"] as? [String], ["plain"])
+      XCTAssertEqual(result?["noAnime"] as? [String], ["bare", "nature", "plain"], "Unticking a tag hides wallpapers carrying it, whatever its case")
+      XCTAssertEqual(result?["noUnspecified"] as? [String], ["nature"], "A wallpaper without a genre is Unspecified")
+      XCTAssertEqual(result?["noneCount"] as? String, "2", "Each unticked box counts as one active filter")
+      XCTAssertEqual(result?["cleared"] as? [String], ["anime", "bare", "nature", "plain"], "Clear ticks every box again")
+      XCTAssertNil(result?["clearedCount"] as? String)
+      XCTAssertEqual(result?["noMature"] as? [String], ["anime", "bare", "plain"], "Age rating reads the manifest's content rating")
+      XCTAssertEqual(result?["noVideoWeb"] as? [String], ["anime", "bare"], "Type boxes read the kind; a kind Steam has no box for stays")
+      XCTAssertEqual(result?["noGenre"] as? [String], [], "None on Tags hides every wallpaper, Unspecified included")
+      XCTAssertEqual(result?["searched"] as? [String], ["nature"], "Search still narrows by title and tags")
     }
   }
 

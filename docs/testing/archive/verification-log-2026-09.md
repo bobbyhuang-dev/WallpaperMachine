@@ -15,6 +15,16 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — A wallpaper's shortcut press now reaches the host, gated on the user's media consent
+
+The engine pushes each request to an installed observer instead of holding it, because a request no host has taken is a press the user already stopped waiting for. WallpaperBridge::next_user_shortcut long-polls a bounded channel outside the actor, so waiting for a rare press stalls no other request and costs no idle wakeup, and it drops requests from wallpapers missing from system_media_scene_handles.
+
+- `usershortcut` parses as Combo carrying the actions this host can carry out -- none, play/pause, next, previous -- rather than a new property kind, so the panel needs no new control and validation and effective-value come from the paths that already exist
+- `user_shortcut_offers_the_actions_this_host_can_carry_out` — asserts the kind and the four option values; deleting just the usershortcut arm in the manifest parser fails it with "a shortcut the user cannot bind is a button that does nothing"
+- Also corrected: `cargo_environment()` derives the pin from the popped value instead of repeating the literal
+- Measured across the release archives: the C++ engine is `minos 26.0` on all 39 objects, and nothing anywhere exceeds the app minimum
+- `cargo test --release -p wallpaper-core --lib` 213 passed; `-p wallpaper-bridge --lib` 317 passed
+
 ## 2026-09-21 — Corrected: the deployment target had to move, not disappear
 
 The fix below dropped MACOSX_DEPLOYMENT_TARGET from cargo's environment outright. That variable is also what cmake-rs turns into CMAKE_OSX_DEPLOYMENT_TARGET for the C++ engine, so dropping it silently rebuilt the engine against the SDK default instead of the app's minimum. The 55 s build that looked like a success had reused C++ objects from an earlier run built with the pin.

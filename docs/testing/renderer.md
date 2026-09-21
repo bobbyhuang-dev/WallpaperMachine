@@ -160,6 +160,7 @@ executable directly from the renderer check build directory.
 | Area | Coverage |
 | --- | --- |
 | Camera zoom | `scene_schema_tests --gtest_filter='SceneSchema.*CameraZoom*'`. Scene `general.zoom` may contain an authored scalar animation, not just a fixed camera scale. |
+| Camera layers in 2D scenes | `SceneSchema.CameraObjectKeepsAnOrthographicSceneOnItsCanvas` next to `SceneSchema.DefaultCameraObjectBecomesActivePerspective` in `scene_schema_tests`. A scene with `orthogonalprojection` is projected by that canvas; a `camera` layer in one must not become the active perspective camera (see below). |
 | Callback-only property scripts | `*CallbackOnly*` in `scene_schema_tests` and `script_runtime_compat_test` |
 | Property-script feedback / hover easing | `ScriptRuntimeCompat.HoverScaleInterpolatesAcrossFramesAndReversesWithoutSnapping` and `ScriptRuntimeCompat.PropertyFeedbackResumesFromExplicitUserValueChanges` in `script_runtime_compat_test` |
 | Script-driven layer visibility | `SceneSchema.HiddenByDefaultVisibilityScriptDrivesVisibilityAndOrigin` in `scene_schema_tests`. The authored `visible.value` is the script's initial value, never a permission to run it (see below). |
@@ -209,6 +210,36 @@ executable directly from the renderer check build directory.
 | Who owns the first frame | `MetalSceneDraw.ADrawnFrameIsReportedAsPresentedAndLeavesTheFirstFrameFlagAlone`: a backend must report presentation through `drawFrame`'s `presented` out-parameter and leave `Scene::first_frame_ok` to the frame handler. A backend that sets the flag satisfies the handler's own check before the handler runs, the host is never told the wallpaper started, and the startup deadline tears down a wallpaper that is drawing correctly. |
 | Decoded frames carry real timestamps | `video_source_input_test` and `shared_video_session_test` against media the tests encode. A frame whose timestamp is always zero looks like playback for as long as frames keep arriving and then freezes, so a video regression here reads as "the picture stopped" rather than as a decode failure; the FFmpeg header/library check in `src/Video/FfmpegAbi.hpp` exists because the layout mismatch that produced it compiles cleanly. |
 | One clock per shared decoder | `SharedVideoSessionTest.AFrameStaysValidAfterTheDecoderMovesOn` and `.PausingOneSurfaceLeavesTheOtherPlaying`: exactly one elected consumer moves a shared session's clock, so a test that advances the non-driving consumer observes nothing. Make the advancing consumer the driver rather than loosening the election. |
+
+### Camera layers in 2D scenes
+
+`orthogonalprojection` decides what a scene is. When it is present the scene is
+projected by that canvas: `ParseCamera` makes `cameras["global"]` the active
+orthographic camera at the canvas centre, and every 2D layer's card size,
+`origin` and `alignment` is authored in that space. When it is null the scene is
+projected by a camera, and a `camera` layer is the shot that camera plays.
+
+`ParseCameraObj` used to apply the second reading to both. A visible layer with
+`"camera": "default"` attached its node to `global_perspective`, forced that
+camera's FOV to the layer's own and made it active — so a 2D wallpaper was
+suddenly viewed through a perspective camera standing wherever the shot was
+authored. The usual authored pose is a few hundred units off the canvas plane at
+fov 50, which frames a few hundred units of a canvas thousands of units wide:
+one magnified sliver of a corner, `general.clearcolor` everywhere else. Layers
+with an effect chain render through their own effect camera and were unaffected,
+which is why the symptom reads as "most of the wallpaper is missing" rather than
+as a camera bug. Workshop 3605722997 and 3292361861 are both scenes of that
+shape; their shot layers even disagree about whether the origin is a canvas
+coordinate or an offset from its centre, which is the other reason not to honour
+it.
+
+So in an orthographic scene the shot layer is parsed, registered and bound like
+any other node — scripts can still read and move it — but it does not touch
+`scene.cameras` or `scene.activeCamera`. Panning and zooming a 2D scene from a
+shot layer is not implemented; the canvas the wallpaper was authored against is
+what gets projected. Scenes with `orthogonalprojection: null` keep the old
+behaviour exactly, which is what `SceneSchema.DefaultCameraObjectBecomesActivePerspective`
+holds down next to the new test.
 
 ### Property bindings and alignment anchors
 

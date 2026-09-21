@@ -1391,6 +1391,60 @@ TEST(SceneSchema, DefaultCameraObjectBecomesActivePerspective) {
     EXPECT_EQ(planet->Camera(), "global_perspective");
 }
 
+// A 2D wallpaper's layers are authored against `orthogonalprojection`, so the
+// canvas has to stay what gets projected even when the scene also carries a
+// camera layer. Letting the layer take over reframes the scene through a
+// perspective camera sitting at the authored shot pose -- a few hundred units
+// off the canvas plane at fov 50 -- which leaves a magnified sliver of one
+// corner where the wallpaper should be.
+TEST(SceneSchema, CameraObjectKeepsAnOrthographicSceneOnItsCanvas) {
+    fs::VFS vfs;
+    MountSceneFiles(vfs);
+    audio::SoundManager sound_manager;
+    WPSceneParser       parser;
+    auto parsed = parser.Parse("ortho-camera-layer",
+                               R"({
+      "camera": {"center":[0,0,-1], "eye":[0,0,0], "up":[0,1,0]},
+      "general": {
+        "ambientcolor":[0.2,0.2,0.2], "skylightcolor":[0.3,0.3,0.3],
+        "clearcolor":[0,0,0], "cameraparallax":false,
+        "cameraparallaxamount":0, "cameraparallaxdelay":0,
+        "cameraparallaxmouseinfluence":0,
+        "orthogonalprojection":{"width":640,"height":360}
+      },
+      "objects": [
+        {"id":9,"name":"shot","camera":"default","origin":[0,0,500],
+         "angles":[0,0,0],"fov":50},
+        {"id":310,"name":"canvas image","image":"image.json",
+         "alignment":"bottomleft","scale":[1,1,1],"angles":[0,0,0],"visible":true}
+      ]
+    })",
+                               vfs,
+                               sound_manager);
+    ASSERT_NE(parsed, nullptr);
+    ASSERT_NE(parsed->activeCamera, nullptr);
+    EXPECT_FALSE(parsed->activeCamera->IsPerspective());
+
+    const Eigen::Matrix4d projection = parsed->activeCamera->GetViewProjectionMatrix();
+    const auto            to_ndc     = [&projection](double x, double y) {
+        const Eigen::Vector4d clip = projection * Eigen::Vector4d(x, y, 0.0, 1.0);
+        return Eigen::Vector2d(clip.x() / clip.w(), clip.y() / clip.w());
+    };
+    const auto centre = to_ndc(320.0, 180.0);
+    EXPECT_NEAR(centre.x(), 0.0, 1e-6);
+    EXPECT_NEAR(centre.y(), 0.0, 1e-6);
+    const auto lower_left = to_ndc(0.0, 0.0);
+    EXPECT_NEAR(lower_left.x(), -1.0, 1e-6);
+    EXPECT_NEAR(lower_left.y(), -1.0, 1e-6);
+    const auto upper_right = to_ndc(640.0, 360.0);
+    EXPECT_NEAR(upper_right.x(), 1.0, 1e-6);
+    EXPECT_NEAR(upper_right.y(), 1.0, 1e-6);
+
+    // The shot is still a layer the scene can read and move, it just does not
+    // own the projection.
+    EXPECT_NE(FindRootChildByName(*parsed, "shot"), nullptr);
+}
+
 TEST(SceneSchema, ParserKeepsSceneLightsAndUpdatesViewUniforms) {
     auto files = std::map<std::string, std::string> {};
     AddLeafModelSceneFiles(files);

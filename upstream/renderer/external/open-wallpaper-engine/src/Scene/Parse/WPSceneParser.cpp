@@ -271,6 +271,10 @@ struct ParseContext {
     std::shared_ptr<SceneNode> global_camera_node;
     std::shared_ptr<SceneNode> global_perspective_camera_node;
     bool                       uses_models { false };
+    // `orthogonalprojection` present and not null. The scene is then projected
+    // by that canvas, which is the space every 2D layer's geometry, origin and
+    // alignment is authored in.
+    bool                       is_ortho { true };
 };
 
 using WPObjectVar =
@@ -2923,6 +2927,7 @@ void InitContext(ParseContext& context, fs::VFS& vfs, wpscene::WPScene& sc) {
     }
     context.ortho_w = scene.ortho[0];
     context.ortho_h = scene.ortho[1];
+    context.is_ortho = sc.general.isOrtho;
 
     {
         auto& gb              = context.global_base_uniforms;
@@ -4147,41 +4152,52 @@ void ParseCameraObj(ParseContext& context, wpscene::WPCameraObject& obj) {
     node->SetVisible(obj.visible);
     node->ID() = obj.id;
 
-    // Official scenes name the playing camera "default". That is this
-    // scene's perspective camera, not a second unused one. scene.camera
-    // eye/center is the editor preview pose and is often pointed at empty
-    // space; the object origin/angles are what the wallpaper actually uses.
-    std::string cam_name = obj.camera;
-    if (cam_name.empty() || cam_name == "default") {
-        cam_name = "global_perspective";
-    }
-    auto existing = context.scene->cameras.find(cam_name);
-    if (existing != context.scene->cameras.end() && existing->second != nullptr) {
-        if (existing->second->IsPerspective() && obj.fov > 0.0f) {
-            existing->second->SetFov(obj.fov);
-            existing->second->LockFov(true);
+    // A camera layer is a shot for a scene that is projected by a camera. An
+    // orthographic scene is projected by its authored `orthogonalprojection`
+    // instead, and every 2D layer's geometry, origin and alignment is written
+    // against that canvas. Letting the layer take over reframes the whole
+    // scene through a perspective camera placed at the layer origin, which for
+    // the usual authored pose -- a few hundred units in front of the canvas,
+    // fov 50 -- leaves a magnified sliver of one corner and nothing else. The
+    // layer stays a node scripts can read and move; it just does not replace
+    // the projection the canvas defines.
+    if (! context.is_ortho) {
+        // Official scenes name the playing camera "default". That is this
+        // scene's perspective camera, not a second unused one. scene.camera
+        // eye/center is the editor preview pose and is often pointed at empty
+        // space; the object origin/angles are what the wallpaper actually uses.
+        std::string cam_name = obj.camera;
+        if (cam_name.empty() || cam_name == "default") {
+            cam_name = "global_perspective";
         }
-        existing->second->AttatchNode(node);
-        if (cam_name == "global_perspective") {
-            context.global_perspective_camera_node = node;
-            if (obj.visible) {
-                context.scene->activeCamera = existing->second.get();
+        auto existing = context.scene->cameras.find(cam_name);
+        if (existing != context.scene->cameras.end() && existing->second != nullptr) {
+            if (existing->second->IsPerspective() && obj.fov > 0.0f) {
+                existing->second->SetFov(obj.fov);
+                existing->second->LockFov(true);
             }
-        } else if (cam_name == "global") {
-            context.global_camera_node = node;
-        }
-    } else if (context.scene->cameras.count("global_perspective") != 0) {
-        const auto& source = context.scene->cameras.at("global_perspective");
-        auto camera = std::make_shared<SceneCamera>(
-            static_cast<float>(source->Aspect()),
-            static_cast<float>(source->NearClip()),
-            static_cast<float>(source->FarClip()),
-            ResolvePerspectiveFov({}, obj.fov));
-        camera->LockFov(true);
-        camera->AttatchNode(node);
-        context.scene->cameras[cam_name] = camera;
-        if (obj.visible && camera->IsPerspective()) {
-            context.scene->activeCamera = camera.get();
+            existing->second->AttatchNode(node);
+            if (cam_name == "global_perspective") {
+                context.global_perspective_camera_node = node;
+                if (obj.visible) {
+                    context.scene->activeCamera = existing->second.get();
+                }
+            } else if (cam_name == "global") {
+                context.global_camera_node = node;
+            }
+        } else if (context.scene->cameras.count("global_perspective") != 0) {
+            const auto& source = context.scene->cameras.at("global_perspective");
+            auto camera = std::make_shared<SceneCamera>(
+                static_cast<float>(source->Aspect()),
+                static_cast<float>(source->NearClip()),
+                static_cast<float>(source->FarClip()),
+                ResolvePerspectiveFov({}, obj.fov));
+            camera->LockFov(true);
+            camera->AttatchNode(node);
+            context.scene->cameras[cam_name] = camera;
+            if (obj.visible && camera->IsPerspective()) {
+                context.scene->activeCamera = camera.get();
+            }
         }
     }
 

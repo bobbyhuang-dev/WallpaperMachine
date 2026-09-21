@@ -146,6 +146,15 @@ only: the user's choice is stored as an override and always wins, including
 choosing no action, and dispatch still carries the **value**, never the name,
 so rebinding a button really rebinds it.
 
+A button's release is delivered to whatever took its press, wherever the cursor
+has since gone, rather than being hit-tested again on the way up. These buttons
+scale themselves down while held -- this one to a tenth of its size -- and
+restore themselves from `cursorUp`, so re-testing the layer loses the release
+for exactly the buttons that need it: the press moves them out from under the
+cursor, and they stay shrunk for good. Anything that did not take the press
+still has to be under the cursor to hear a release, and a scene-wide script
+with no layer of its own still hears one from anywhere.
+
 `WallpaperBridge.next_user_shortcut` long-polls for those presses and drops any
 from a wallpaper the user has not consented to media integration for. The app
 carries the bound action out through whichever media provider is currently

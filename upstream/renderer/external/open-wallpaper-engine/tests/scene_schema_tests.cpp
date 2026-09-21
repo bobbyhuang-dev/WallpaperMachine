@@ -4605,3 +4605,166 @@ export function getDuration() {
         R"({"type":"mediaTimelineChanged","position":300.0,"duration":300.0})");
     EXPECT_NEAR(runtime->NodeTranslate("Solid").x(), -17.0F, 0.5F);
 }
+
+
+TEST(SceneSchema, APressedTransportButtonComesBackWhenItIsReleased) {
+    // The reported symptom is a transport button stuck flattened after one
+    // press. This wallpaper's own scale script shrinks a held button to the
+    // `hoScale` its scene ships -- a tenth of its size -- and only restores it
+    // from `cursorUp`. Drive that script directly: the press must shrink it and
+    // the release must bring it back, because a release that never arrives
+    // leaves the button in exactly the state that was reported.
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    ASSERT_NE(runtime, nullptr);
+
+    std::map<std::string, DynamicValueUniquePtr> script_properties;
+    script_properties["hoScale"] = std::make_unique<DynamicValue>(0.1F);
+    script_properties["speed"]   = std::make_unique<DynamicValue>(25.0F);
+    script_properties["whY"]     = std::make_unique<DynamicValue>(0.0F);
+
+    ScriptedDynamicValue scale(*runtime, R"JS('use strict';
+
+import * as WEMath from 'WEMath';
+
+export var scriptProperties = createScriptProperties()
+.addSlider({
+		name: 'whY',
+		label: 'Scale',
+		value: 0.0,
+		min: -0.25,
+		max: 0.25,
+		integer: false
+	})
+	.addSlider({
+		name: 'hoScale',
+		label: 'Hover over scale multiplier',
+		value: 0.9,
+		min: 0.1,
+		max: 2,
+		integer: false
+	})
+	.addSlider({
+		name: 'speed',
+		label: 'Scale change speed',
+		value: 100,
+		min: 1,
+		max: 100,
+		integer: false
+	})
+	.finish();
+
+let initScale, newScale, hover = false, propertyCheck = true, speed;
+
+export function update(value) {
+	if (hover) 
+	{
+		value = new Vec3((WEMath.mix(value.x, newScale.x, speed) + scriptProperties.whY), (WEMath.mix(value.y, newScale.y, speed) + scriptProperties.whY), (WEMath.mix(value.z, newScale.z, speed) + scriptProperties.whY));
+	}
+	else
+	{
+		value = new Vec3((WEMath.mix(value.x, initScale.x, speed) + scriptProperties.whY), (WEMath.mix(value.y, initScale.y, speed) + scriptProperties.whY), (WEMath.mix(value.z, initScale.z, speed) + scriptProperties.whY));
+	}
+	return value;
+}
+
+export function init(value) {
+	initScale = value;
+	return value;
+}
+
+export function cursorDown(event) {
+	hover = true;
+}
+
+export function cursorUp(event) {
+	hover = false;
+}
+
+export function applyUserProperties(changedUserProperties) {
+	if (scriptProperties.hoScale != undefined && propertyCheck)
+	{
+		newScale = new Vec3(initScale.multiply(scriptProperties.hoScale));
+		speed = scriptProperties.speed/100;
+		propertyCheck = false;
+	}
+	
+}
+)JS", "avanti",
+                               std::move(script_properties),
+                               DynamicValue(Eigen::Vector3f(1.0F, 1.0F, 1.0F)));
+    const ScriptHostContext host {};
+
+    scale.reevaluate();
+    EXPECT_NEAR(scale.getVec3().y(), 1.0F, 0.01F) << "the button was not its own size at rest";
+
+    scale.DispatchCursorDown(host);
+    for (int frame = 0; frame < 40; ++frame) scale.reevaluate();
+    const float pressed = scale.getVec3().y();
+    EXPECT_LT(pressed, 0.5F) << "the press did not shrink the button, so nothing is being tested";
+    EXPECT_GT(pressed, 0.0F);
+
+    scale.DispatchCursorUp(host);
+    for (int frame = 0; frame < 40; ++frame) scale.reevaluate();
+    EXPECT_NEAR(scale.getVec3().y(), 1.0F, 0.01F)
+        << "the button stayed shrunk after release, which is the reported stuck button";
+}
+
+TEST(SceneSchema, AButtonThatShrinksWhileHeldStillGetsItsRelease) {
+    // These transport buttons scale to a tenth of their size while held and
+    // restore themselves from `cursorUp`. Deciding who hears a release by
+    // hit-testing at release time loses it for exactly those buttons: the
+    // press makes them too small to still be under the cursor, so the release
+    // goes nowhere and they stay shrunk for good. The release belongs to
+    // whoever took the press.
+    fs::VFS vfs;
+    MountSceneFiles(vfs);
+    audio::SoundManager sound;
+    WPSceneParser       parser;
+    const std::string   scale_script = R"JS('use strict';
+let held = false;
+export function update(value) { return held ? new Vec3(0.1, 0.1, 1.0) : new Vec3(1.0, 1.0, 1.0); }
+export function cursorDown(event) { held = true; }
+export function cursorUp(event) { held = false; }
+)JS";
+    const nlohmann::json source = {
+        {"camera", {{"center", {0, 0, 0}}, {"eye", {0, 0, 1}}, {"up", {0, 1, 0}}}},
+        {"general", {{"ambientcolor", {0, 0, 0}}, {"skylightcolor", {0, 0, 0}},
+                     {"clearcolor", {0, 0, 0}}, {"cameraparallax", false},
+                     {"orthogonalprojection", {{"width", 400}, {"height", 300}}}}},
+        {"objects", nlohmann::json::array({
+            {{"id", 1}, {"name", "avanti"}, {"image", "image.json"},
+             {"origin", {200, 150, 0}}, {"size", {80, 80}},
+             {"scale", {{"script", scale_script}, {"value", "1.00000 1.00000 1.00000"}}}}
+        })}
+    };
+    ProjectProperties properties;
+    auto scene = parser.Parse(SceneParseRequest {
+        .scene_id = "held-button", .project_properties = &properties,
+    }, source.dump(), vfs, sound);
+    ASSERT_NE(scene, nullptr);
+    ASSERT_NE(scene->runtime, nullptr);
+    auto& runtime = *scene->runtime;
+    runtime.Tick(0.01);
+
+    // Inside the button at full size (160..240), outside it at a tenth
+    // (196..204), which is the whole point.
+    runtime.SetCursorInput(230.0F / 400.0F, 150.0F / 300.0F);
+    runtime.SetCursorEnter(true);
+    runtime.Tick(0.01);
+    ASSERT_NEAR(runtime.NodeScale("avanti").x(), 1.0F, 0.01F);
+
+    runtime.SetCursorButtons(1u, 1u, 0u);
+    runtime.DispatchCursorFrameEvents(true);
+    runtime.SetCursorButtons(1u, 0u, 0u);
+    runtime.Tick(0.01);
+    ASSERT_NEAR(runtime.NodeScale("avanti").x(), 0.1F, 0.01F)
+        << "the press did not shrink the button, so the trap is not being sprung";
+
+    runtime.SetCursorButtons(0u, 0u, 1u);
+    runtime.DispatchCursorFrameEvents(true);
+    runtime.SetCursorButtons(0u, 0u, 0u);
+    runtime.Tick(0.01);
+    EXPECT_NEAR(runtime.NodeScale("avanti").x(), 1.0F, 0.01F)
+        << "the button shrank out from under the cursor and never heard its own release";
+    EXPECT_EQ(runtime.scriptErrorCount(), 0u);
+}

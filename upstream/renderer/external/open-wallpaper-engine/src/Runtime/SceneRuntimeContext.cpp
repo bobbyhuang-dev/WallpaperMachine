@@ -923,6 +923,16 @@ void SceneRuntimeContext::RollbackNodeRegistration(
     for (std::size_t index = previous->scripted_values_size; index < m_scripted_values.size();
          ++index) {
         m_scripted_value_cursor_inside.erase(m_scripted_values[index]);
+        // A press held across this teardown has nothing left to release onto,
+        // and the pointer is about to dangle.
+        for (auto& [mask, held] : m_scripted_value_cursor_held) {
+            std::erase(held, m_scripted_values[index]);
+        }
+    }
+    for (auto& [mask, held] : m_scene_script_cursor_held) {
+        std::erase_if(held, [&](std::size_t index) {
+            return index >= m_scene_scripts.size();
+        });
     }
     m_scripted_values.resize(previous->scripted_values_size);
     m_owned_values.resize(previous->owned_values_size);
@@ -2269,36 +2279,62 @@ bool SceneRuntimeContext::DispatchCursorFrameEvents(bool cursor_was_in_window) {
         const uint32_t mask = 1u << static_cast<uint32_t>(button);
         if (cursor_in_window && (m_host_context->mouse_buttons_pressed & mask) != 0) {
             m_host_context->cursor_button = button;
+            auto& held_values  = m_scripted_value_cursor_held[mask];
+            auto& held_scripts = m_scene_script_cursor_held[mask];
+            held_values.clear();
+            held_scripts.clear();
             for (auto* value : m_scripted_values) {
                 if (value == nullptr || (value->CursorHandlerMask() & press_mask) == 0 ||
                     ! CursorHitsScriptLayer(*value)) continue;
                 value->DispatchCursorDown(*m_host_context);
                 value->DispatchCursorClick(*m_host_context);
+                held_values.push_back(value);
             }
-            for (auto& script : m_scene_scripts) {
+            for (std::size_t index = 0; index < m_scene_scripts.size(); ++index) {
+                auto& script = m_scene_scripts[index];
                 if (script.script == nullptr || ! CursorHitsScriptLayer(*script.script)) continue;
                 script.script->DispatchCursorDown(*m_host_context);
                 script.script->DispatchCursorClick(*m_host_context);
+                held_scripts.push_back(index);
             }
         }
         if ((m_host_context->mouse_buttons_released & mask) != 0) {
             m_host_context->cursor_button = button;
+            // The release belongs to whoever took the press, wherever the
+            // cursor is now. Re-testing the layer here loses it for anything
+            // that moved or shrank while held, and a script that only clears
+            // its pressed state on the way up never gets to.
+            auto  held_values  = std::move(m_scripted_value_cursor_held[mask]);
+            auto  held_scripts = std::move(m_scene_script_cursor_held[mask]);
+            m_scripted_value_cursor_held.erase(mask);
+            m_scene_script_cursor_held.erase(mask);
+            const auto took_press = [](const auto& held, const auto& item) {
+                return std::find(held.begin(), held.end(), item) != held.end();
+            };
             for (auto* value : m_scripted_values) {
                 if (value == nullptr ||
                     (value->CursorHandlerMask() & static_cast<uint8_t>(ScriptCursorEvent::Up)) == 0) continue;
-                if (cursor_in_window) {
-                    if (! CursorHitsScriptLayer(*value)) continue;
-                } else if (! value->LayerName().empty()) {
-                    continue;
+                if (! took_press(held_values, value)) {
+                    // Nothing was pressed here, so the old rule decides: a
+                    // layer has to be under the cursor, and a scene-wide
+                    // script hears the release from anywhere.
+                    if (cursor_in_window) {
+                        if (! CursorHitsScriptLayer(*value)) continue;
+                    } else if (! value->LayerName().empty()) {
+                        continue;
+                    }
                 }
                 value->DispatchCursorUp(*m_host_context);
             }
-            for (auto& script : m_scene_scripts) {
+            for (std::size_t index = 0; index < m_scene_scripts.size(); ++index) {
+                auto& script = m_scene_scripts[index];
                 if (script.script == nullptr) continue;
-                if (cursor_in_window) {
-                    if (! CursorHitsScriptLayer(*script.script)) continue;
-                } else if (! script.script->LayerName().empty()) {
-                    continue;
+                if (! took_press(held_scripts, index)) {
+                    if (cursor_in_window) {
+                        if (! CursorHitsScriptLayer(*script.script)) continue;
+                    } else if (! script.script->LayerName().empty()) {
+                        continue;
+                    }
                 }
                 script.script->DispatchCursorUp(*m_host_context);
             }

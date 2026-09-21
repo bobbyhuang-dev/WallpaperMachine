@@ -464,6 +464,12 @@ private:
     std::unordered_map<std::string, std::weak_ptr<WPSoundStream>>  m_sound_layers;
     std::vector<ScriptedDynamicValue*>                             m_scripted_values;
     std::unordered_map<ScriptedDynamicValue*, bool>                m_scripted_value_cursor_inside;
+    // Who took each button's press, so its release reaches them wherever the
+    // cursor has since gone. A button that shrinks while held -- these
+    // transport buttons scale to a tenth of their size -- would otherwise be
+    // too small to catch its own release and would stay held forever.
+    std::unordered_map<uint32_t, std::vector<ScriptedDynamicValue*>> m_scripted_value_cursor_held;
+    std::unordered_map<uint32_t, std::vector<std::size_t>>           m_scene_script_cursor_held;
     std::vector<SceneScriptBinding>                                m_scene_scripts;
     std::vector<std::string>                                       m_script_errors;
     mutable std::mutex                                             m_text_worker_mutex;

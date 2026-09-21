@@ -25,6 +25,19 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — The stuck transport button: a press made it too small to catch its own release
+
+Reported with a screenshot: the next button sits flattened to a dash and the player never skips. Rendering the wallpaper offscreen showed all three buttons drawing correctly, so the cause was runtime state, not content.
+
+- The scene sets this button scale scripts hoScale to 0.1, so a held button shrinks to a tenth. It only restores itself from cursorUp
+- SceneRuntimeContext::DispatchCursorFrameEvents decided who hears a release by hit-testing at release time. The press shrank the button out from under the cursor, the hit test failed, cursorUp was skipped, and hover stayed latched -- the button can never come back
+- Fixed by capturing the press: a release now goes to whichever scripted values and scene scripts took that button down, wherever the cursor has since gone. Anything that did not take the press keeps the old rule
+- New AButtonThatShrinksWhileHeldStillGetsItsRelease reproduces it end to end through the parser and cursor dispatch: fails without the fix (button stuck at 0.1), passes with it
+- Also added APressedTransportButtonComesBackWhenItIsReleased, driving the wallpaper own scale script with the scene real hoScale of 0.1 and speed of 25
+- Offscreen render of the wallpaper with media events confirms all three transport buttons draw correctly, so nothing was wrong with the asset, model, material or scripts
+- scripts/test.py 534 passed / 0 failed / 11 skipped of 545; scene_schema_tests 80 passed with the two pre-existing pointer-commit timeouts; check_renderer.py 10 cases pixels_equal=True
+- Release rebuilt after the fix
+
 ## 2026-09-21 — Why the transport buttons did nothing, and what the progress bar actually is
 
 Reported: the transport buttons still have no effect, and the progress bar cannot be dragged. Both were investigated against the installed wallpaper rather than assumed.
@@ -125,13 +138,3 @@ Reported: the transport buttons still have no effect, and the progress bar canno
 - Tests: check_renderer.py all green (timer_tests 26/26 incl. 2 new, static_subgraph_cache_test, render_scale_test, playback_gpu_test, 10 pixel cases equal, 0 diagnostics); cargo test -p wallpaper-bridge 318 passed incl. new paused/suspended consumer test; media_thumbnail_texture_smoke 15 passed incl. new identical-cover test; scripts/test.py 526 passed / 0 failed / 11 skipped (first run hit a known-flaky ControlPanelShellTests power-probe timing assert, passed alone and on rerun).
 - Offscreen probe on the user's own wallpaper 3799253558: 249 passes (247 executed + 2 reused), 7 cacheable targets, 1 pinned - so the no-pin early-out does not fire for this scene, while the removed per-cover rebuild was re-preparing all 249 passes.
 - Release build OK: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries contain SetMinInterval and the app exports system_media_consent_handles. Not run: app launch, wallpaper change, screenshots, audio capture, power measurement - no watt or percentage claim.
-
-## 2026-09-21 — Installed page filters with Discover's sidebar boxes
-
-- Change: LibraryMetricsService reads Workshop-style tags from project.json (genre tags, contentrating, Approved, Audio responsive, Customizable); snapshot wallpapers carry them as tags.
-- Change: WebUI Installed sidebar now renders Discover's groups (Show only + Favorites/Active, Type, Age rating, Tags; Resolution and Wallpaper/Preset are Discover-only) and filters the library in the page with the same required/excluded rules; every box starts ticked.
-- Removed: Installed type menu, 'Favorites only' / 'Active on target display' checkboxes; unused zh-Hans keys dropped.
-- python3 scripts/test.py --only LibraryMetricsTests --only ControlPanelLibraryTests: 10 passed (new testReadsWorkshopStyleTagsFromTheManifest, testInstalledFiltersTheLibraryWithDiscoverBoxesWithoutWindow).
-- python3 scripts/test.py (full gate, before rebase onto origin/main): 525 passed, 0 failed, 11 skipped (opt-in media/network layers).
-- Docs: control-panel.md Filtering + layout table, workshop-downloads.md cross-reference.
-- Not done: no Release build; sidebar not viewed on the desktop (offscreen WebKit tests only).

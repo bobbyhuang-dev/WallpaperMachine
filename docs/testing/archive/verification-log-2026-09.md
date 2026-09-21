@@ -15,6 +15,16 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — Installed page filters with Discover's sidebar boxes
+
+- Change: LibraryMetricsService reads Workshop-style tags from project.json (genre tags, contentrating, Approved, Audio responsive, Customizable); snapshot wallpapers carry them as tags.
+- Change: WebUI Installed sidebar now renders Discover's groups (Show only + Favorites/Active, Type, Age rating, Tags; Resolution and Wallpaper/Preset are Discover-only) and filters the library in the page with the same required/excluded rules; every box starts ticked.
+- Removed: Installed type menu, 'Favorites only' / 'Active on target display' checkboxes; unused zh-Hans keys dropped.
+- python3 scripts/test.py --only LibraryMetricsTests --only ControlPanelLibraryTests: 10 passed (new testReadsWorkshopStyleTagsFromTheManifest, testInstalledFiltersTheLibraryWithDiscoverBoxesWithoutWindow).
+- python3 scripts/test.py (full gate, before rebase onto origin/main): 525 passed, 0 failed, 11 skipped (opt-in media/network layers).
+- Docs: control-panel.md Filtering + layout table, workshop-downloads.md cross-reference.
+- Not done: no Release build; sidebar not viewed on the desktop (offscreen WebKit tests only).
+
 ## 2026-09-21 — The cloud divergence starts at the bokeh downsample, and Compatibility is the deviant one
 
 Giving the Vulkan probe the same target dump the Metal harness has makes the two comparable target by target. Walking the chain, everything upstream agrees and the first disagreement is sharp.

@@ -15,6 +15,17 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — Power regression: render scale dispatch restored, panel races fixed, gate green
+
+- RenderHandler's command switch had no CASE_CMD(SET_RENDER_SCALE), so every CMD_SET_RENDER_SCALE posted from setPropertyFloat(PROPERTY_RENDER_SCALE) fell into default:break. m_render_scale is written nowhere else, so it stayed 1.0 whatever the user chose, and rebuildRenderGraph seeded scene.render_scale from it. Internal quality 75%/50% and the battery profile's render scale were therefore complete no-ops for scene wallpapers - not a live-update bug, the value never arrived at all. owe_scene_wallpaper_set_render_scale is the only FFI entry, so no other path compensated.
+- Fixed as a class, not an instance: the case is restored, CMD gets a fixed int32_t underlying type so the looper's cast back is defined, and default: is replaced by an explicit CMD_NO case. With -Wall -Wextra already on, -Wswitch now names any command added and not dispatched. Verified by deleting the case again: 'enumeration value CMD_SET_RENDER_SCALE not handled in switch [-Wswitch]'.
+- Inert for the reporting user's configuration: render_scale is 1.0 and the battery profile is off, and VulkanRender::applyRenderScale early-returns when scene.render_scale already equals the clamped value (VulkanRender.cpp:1470-1472). Users with a non-default internal quality will see it take effect for the first time.
+- Why no existing test caught it: render_scale_test sets scene.render_scale directly and exercises ResolveScreenBoundRenderTargetSizes; VulkanRender has its own same-value early return. Both sit below the message dispatch, and no harness drives RenderHandler::onMessageReceived. The compiler check replaces the harness that does not exist.
+- Two panel tests were racing on wall clock, not on shared state. testFirstRunGuideCovers... latched a snapshot count, submitted a form and read the count 50ms later, counting any push already in flight; it settles with panel.quiet() first now. testTopBarKeepsTheRepositoryLink... measured getBoundingClientRect immediately after setFrameSize, reading the pre-reflow layout (744 vs 760, one whole reflow); it now waits for window.innerWidth to reach the new width.
+- The first of those was wrongly attributed to load at first. A control gate with only the SceneWallpaper dispatch hunk reverted still failed the same assertion, which exonerated the change and identified the test. An 11-failure gate earlier was separately explained by load average 165 and a 174s run versus the usual 30s.
+- Gate now green and stable: scripts/test.py 531 passed / 0 failed / 11 skipped, three consecutive runs (39s, 28s, 28s). check_renderer.py green after the C++ change: all binaries 0, pixels equal, 0 diagnostics.
+- Release rebuilt 16:26: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval, the shared-ownership ImageSlotsRef constructor and handle_SET_RENDER_SCALE. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
+
 ## 2026-09-21 — Power regression: advisory round 5 closeout
 
 - Only actionable item this round: SceneMediaSink.shutdown told the relay to stop consuming twice, once through setConsuming(false) and once directly. The second call relied on the relay's remove-guard to be harmless; dropped.

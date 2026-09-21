@@ -269,6 +269,61 @@ struct SceneRasterExtents {
     VkExtent2D raster {};
 };
 
+/// Re-bakes `g_TextureNResolution` for every material slot that samples a
+/// screen-bound render target.
+///
+/// Those constants are folded in while the scene is parsed, when a target that
+/// follows the screen still has placeholder dimensions because the output size
+/// is not known yet. Nothing refreshes them afterwards, so a shader that
+/// divides by the resolution -- a separable blur steps by
+/// `1 / g_Texture0Resolution.zw` -- was dividing by two. Every one of its taps
+/// landed outside the texture and clamped to the edge, which turns a gentle
+/// blur into a flat wash and is why an effect chain's background lost its
+/// shape entirely.
+inline void RefreshScreenBoundTextureResolutions(Scene& scene) {
+    const auto refresh = [&scene](SceneNode* node) {
+        if (node == nullptr || node->Mesh() == nullptr) return;
+        auto* mesh = node->Mesh();
+        for (uint32_t slot = 0; slot < mesh->MaterialSlots().size(); ++slot) {
+            auto* material = mesh->MaterialForSlot(slot);
+            if (material == nullptr) continue;
+            for (std::size_t index = 0; index < material->textures.size(); ++index) {
+                if (index >= wallpaper::WE_GLTEX_RESOLUTION_NAMES.size()) break;
+                const auto& texture = material->textures[index];
+                if (texture.empty()) continue;
+                // The material keeps the authored name; the scene keys targets
+                // by the resolved one.
+                const auto* target =
+                    scene.FindRenderTarget(scene.ResolveRenderTargetName(texture));
+                if (target == nullptr) continue;
+                if (! (target->bind.enable && target->bind.screen)) continue;
+                const std::array<i32, 4> resolution { target->width, target->height,
+                                                      target->width, target->height };
+                material->customShader.constValues[std::string(
+                    wallpaper::WE_GLTEX_RESOLUTION_NAMES[index])] = array_cast<float>(resolution);
+            }
+        }
+    };
+    const auto walk = [&refresh](auto&& self, SceneNode* node) -> void {
+        if (node == nullptr) return;
+        refresh(node);
+        for (const auto& child : node->GetChildren()) self(self, child.get());
+    };
+    walk(walk, scene.sceneGraph.get());
+    // An effect chain's nodes are not children of the layer they belong to, so
+    // a plain graph walk misses exactly the passes this matters most for.
+    for (auto& [name, camera] : scene.cameras) {
+        (void)name;
+        if (camera == nullptr || ! camera->HasImgEffect()) continue;
+        auto& layer = *camera->GetImgEffect();
+        for (std::size_t i = 0; i < layer.EffectCount(); ++i) {
+            const auto& effect = layer.GetEffect(i);
+            if (effect == nullptr) continue;
+            for (const auto& effect_node : effect->nodes) refresh(effect_node.sceneNode.get());
+        }
+    }
+}
+
 inline SceneRasterExtents ResolveScreenBoundRenderTargetSizes(Scene&            scene,
                                                               const VkExtent2D& fallback_extent) {
     const auto source_extent = ResolveSceneSourceExtent(scene, fallback_extent);
@@ -309,6 +364,7 @@ inline SceneRasterExtents ResolveScreenBoundRenderTargetSizes(Scene&            
             ResolveScreenBoundRenderTargetSize(target, raster_extent);
         }
     }
+    RefreshScreenBoundTextureResolutions(scene);
     return { source_extent, raster_extent };
 }
 

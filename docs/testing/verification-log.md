@@ -25,6 +25,19 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-21 — The flat background: a blur was dividing its step by a 2x2 placeholder
+
+Compatibility flattened this wallpaper's cloud layer. Traced by dumping every pass and reading the constants each one was given.
+
+- A target that follows the screen is registered with placeholder dimensions while the scene parses, because the output size is not known yet. g_TextureNResolution is folded into the material at that same moment, and nothing refreshed it afterwards
+- blur_gaussian steps by 1/g_Texture0Resolution.zw, so it divided by two: its 13 taps spanned six times the whole texture, every one clamped to the edge, and the output was the edge colour everywhere
+- Fixed by re-baking those constants in ResolveScreenBoundRenderTargetSizes, after the real size is known. Effect-chain nodes hang off the camera rather than the scene graph, so they are walked separately -- they are exactly the passes this matters for
+- Result on the reported wallpaper: the cloud layer comes back, final-frame contrast 15.0 -> 30.8, matching what Native Metal already drew
+- New RenderScale.AScreenBoundTargetsResolutionReachesTheMaterialThatSamplesIt: fails without the fix (2 where 480 and 270 are expected), passes with it. It asserts all four components, since the existing resolution test only ever checked the first two and a blur divides by the last two
+- Two false starts recorded so they are not repeated: passes.txt lists parse-time constants rather than live uniform values, and a pass dump is the whole pooled allocation rather than the target
+- scripts/test.py 535 passed / 0 failed / 11 skipped of 546; check_renderer.py 10 cases pixels_equal=True; render_scale_test 9; metal_backend_test 35; metal_scene_draw_smoke 33; scene_schema_tests 80 with the two pre-existing pointer timeouts. rendergraph_smoke segfaults with and without this change -- pre-existing
+- Release rebuilt
+
 ## 2026-09-21 — Corrected: Native Metal never dropped the album cover, and my fix took the clouds away
 
 Reported as the clouds suddenly disappearing. They did, and I caused it: the album-cover rejection I added earlier forced this wallpaper onto Compatibility, which is the backend that flattens them.
@@ -126,14 +139,3 @@ Reported: the transport buttons still have no effect, and the progress bar canno
 - Two panel races fixed rather than documented as tolerable, since docs/testing/README.md already forbids that trade: the first-run guide settles with panel.quiet() before its 50 ms measurement window, and the top-bar layout test waits for window.innerWidth to reach the new frame width instead of reading getBoundingClientRect mid-reflow. The README paragraph now teaches both techniques and the revert-to-confirm-ownership check instead of granting an exemption.
 - Gates green: scripts/check_renderer.py all binaries 0, pixels equal, 0 diagnostics; scripts/test.py 531 passed / 0 failed / 11 skipped.
 - Release built 16:51: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval, the shared-ownership ImageSlotsRef constructor and handle_SET_RENDER_SCALE. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.
-
-## 2026-09-21 — Power regression: render scale dispatch restored, panel races fixed, gate green
-
-- RenderHandler's command switch had no CASE_CMD(SET_RENDER_SCALE), so every CMD_SET_RENDER_SCALE posted from setPropertyFloat(PROPERTY_RENDER_SCALE) fell into default:break. m_render_scale is written nowhere else, so it stayed 1.0 whatever the user chose, and rebuildRenderGraph seeded scene.render_scale from it. Internal quality 75%/50% and the battery profile's render scale were therefore complete no-ops for scene wallpapers - not a live-update bug, the value never arrived at all. owe_scene_wallpaper_set_render_scale is the only FFI entry, so no other path compensated.
-- Fixed as a class, not an instance: the case is restored, CMD gets a fixed int32_t underlying type so the looper's cast back is defined, and default: is replaced by an explicit CMD_NO case. With -Wall -Wextra already on, -Wswitch now names any command added and not dispatched. Verified by deleting the case again: 'enumeration value CMD_SET_RENDER_SCALE not handled in switch [-Wswitch]'.
-- Inert for the reporting user's configuration: render_scale is 1.0 and the battery profile is off, and VulkanRender::applyRenderScale early-returns when scene.render_scale already equals the clamped value (VulkanRender.cpp:1470-1472). Users with a non-default internal quality will see it take effect for the first time.
-- Why no existing test caught it: render_scale_test sets scene.render_scale directly and exercises ResolveScreenBoundRenderTargetSizes; VulkanRender has its own same-value early return. Both sit below the message dispatch, and no harness drives RenderHandler::onMessageReceived. The compiler check replaces the harness that does not exist.
-- Two panel tests were racing on wall clock, not on shared state. testFirstRunGuideCovers... latched a snapshot count, submitted a form and read the count 50ms later, counting any push already in flight; it settles with panel.quiet() first now. testTopBarKeepsTheRepositoryLink... measured getBoundingClientRect immediately after setFrameSize, reading the pre-reflow layout (744 vs 760, one whole reflow); it now waits for window.innerWidth to reach the new width.
-- The first of those was wrongly attributed to load at first. A control gate with only the SceneWallpaper dispatch hunk reverted still failed the same assertion, which exonerated the change and identified the test. An 11-failure gate earlier was separately explained by load average 165 and a 174s run versus the usual 30s.
-- Gate now green and stable: scripts/test.py 531 passed / 0 failed / 11 skipped, three consecutive runs (39s, 28s, 28s). check_renderer.py green after the C++ change: all binaries 0, pixels equal, 0 diagnostics.
-- Release rebuilt 16:26: build/Build/Products/Release/MacWallpaperEngine.app with Contents/Extensions/MacWallpaperExtension.appex; both binaries carry SetMinInterval, the shared-ownership ImageSlotsRef constructor and handle_SET_RENDER_SCALE. Not run: launch, wallpaper change, screenshots, audio capture, power measurement.

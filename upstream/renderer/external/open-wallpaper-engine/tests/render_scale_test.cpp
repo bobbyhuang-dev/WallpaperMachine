@@ -164,5 +164,47 @@ TEST(RenderScale, ASceneWithNoLatchedCanvasStillResolvesAgainstItsOwnSize) {
     EXPECT_EQ(extents.raster.width, 800u);
 }
 
+TEST(RenderScale, AScreenBoundTargetsResolutionReachesTheMaterialThatSamplesIt) {
+    // A target that follows the screen is registered with placeholder
+    // dimensions, because the output size is not known while the scene is
+    // parsed. `g_TextureNResolution` is folded into the material at that same
+    // moment, so without a refresh a shader is handed 2x2 -- and a separable
+    // blur, which steps by `1 / g_Texture0Resolution.zw`, then puts every one
+    // of its taps outside the texture and returns a flat wash instead of a
+    // blur.
+    Scene scene;
+    InstallAuthoredTargets(scene, 1920, 1080);
+    scene.renderTargets["_rt_QuarterCompoBuffer1"] = SceneRenderTarget {
+        .width  = 2,
+        .height = 2,
+        .bind   = { .enable = true, .screen = true, .scale = 0.25 },
+    };
+
+    auto node = std::make_shared<SceneNode>();
+    auto mesh = std::make_shared<SceneMesh>();
+    SceneMaterial material;
+    material.textures = { "_rt_QuarterCompoBuffer1" };
+    material.customShader.constValues["g_Texture0Resolution"] =
+        std::array<float, 4> { 2.0F, 2.0F, 2.0F, 2.0F };
+    mesh->AddMaterial(std::move(material));
+    node->AddMesh(mesh);
+    scene.sceneGraph = std::make_shared<SceneNode>();
+    scene.sceneGraph->AppendChild(node);
+
+    ResolveScreenBoundRenderTargetSizes(scene, kOutput);
+
+    const auto* slot = node->Mesh()->MaterialForSlot(0);
+    ASSERT_NE(slot, nullptr);
+    const auto found = slot->customShader.constValues.find("g_Texture0Resolution");
+    ASSERT_NE(found, slot->customShader.constValues.end());
+    ASSERT_EQ(found->second.size(), 4u);
+    // All four: a blur divides by `.zw`, which a test that only checked the
+    // first two would have let stay at the placeholder.
+    EXPECT_FLOAT_EQ(found->second[0], 480.0F);
+    EXPECT_FLOAT_EQ(found->second[1], 270.0F);
+    EXPECT_FLOAT_EQ(found->second[2], 480.0F);
+    EXPECT_FLOAT_EQ(found->second[3], 270.0F);
+}
+
 } // namespace
 } // namespace wallpaper::vulkan

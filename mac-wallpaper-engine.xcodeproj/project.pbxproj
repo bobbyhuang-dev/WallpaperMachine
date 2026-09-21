@@ -177,7 +177,6 @@
 		F99ECE11C524A4A9E23C2017 /* DesktopWallpaperLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = B76A4580F15C00009A2AC91D /* DesktopWallpaperLedger.swift */; };
 		FAC9DA4EA8CE9F0332A86142 /* LockScreenWallpaperService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFBAC5BD7DA0DFF8B0FA9517 /* LockScreenWallpaperService.swift */; };
 		FCD2912B6D6AAD5B7D4D3EE5 /* StarterWallpaper in Resources */ = {isa = PBXBuildFile; fileRef = 2D0CA98D435DC6994EB2CB8D /* StarterWallpaper */; };
-		FDD74B13B82688507F6C8991 /* SceneMediaCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 414CBEE33FE7D1B75394AAC9 /* SceneMediaCoordinator.swift */; };
 		FF92445CA0E20628CBC32BC0 /* LockScreenWallpaperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F01E6B41B3519880D671A3D5 /* LockScreenWallpaperTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -290,7 +289,6 @@
 		3DCCD6E7F2F4F254A92D4244 /* DownloaderTestCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloaderTestCase.swift; sourceTree = "<group>"; };
 		3E78F9F2F292CDF8F8BABD52 /* get.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = get.m; sourceTree = "<group>"; };
 		401F595D966CBFA8C3C1A68F /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
-		414CBEE33FE7D1B75394AAC9 /* SceneMediaCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneMediaCoordinator.swift; sourceTree = "<group>"; };
 		4224FA218E345DB0216847F6 /* AppleScriptMediaProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleScriptMediaProvider.swift; sourceTree = "<group>"; };
 		46DF3D490547AFAAD723B227 /* LockScreenWallpaperSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LockScreenWallpaperSelection.swift; sourceTree = "<group>"; };
 		4A2AD49A7D3225F2CDBC6540 /* WebWallpaperMouseForwarder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebWallpaperMouseForwarder.swift; sourceTree = "<group>"; };
@@ -490,7 +488,6 @@
 				38534F0057B725AD6971E9DC /* FallbackSystemMediaProvider.swift */,
 				0D61DA49E35A4174E168BC9A /* MediaArtwork.swift */,
 				E71C21E36C82AD4C92076C2E /* MediaRemoteMediaProvider.swift */,
-				414CBEE33FE7D1B75394AAC9 /* SceneMediaCoordinator.swift */,
 				810D74ACE9185C8F22FDD530 /* SceneMediaSink.swift */,
 				A53A99369C158464964C04A4 /* SystemMediaEventCodec.swift */,
 				FFA7B669FF10F9DA446E189B /* SystemMediaProvider.swift */,
@@ -1262,7 +1259,6 @@
 				D1B54A6D7453C6032C788D5B /* NativeVideoWallpaperWindow.swift in Sources */,
 				143C02A5F5A167AE5123E512 /* RuntimeCounters.swift in Sources */,
 				102042D7D27C3BA0B13E90C5 /* RuntimeDiagnosticsSession.swift in Sources */,
-				FDD74B13B82688507F6C8991 /* SceneMediaCoordinator.swift in Sources */,
 				7401D011ECB150A84A1D303C /* SceneMediaSink.swift in Sources */,
 				91DFDDF042C0E09FB71AD64E /* SteamCMDRuntime.swift in Sources */,
 				4D011B5F95447B8FB9DBD553 /* SteamCMDSetupStore.swift in Sources */,

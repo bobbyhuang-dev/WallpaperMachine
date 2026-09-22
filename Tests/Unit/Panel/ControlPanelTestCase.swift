@@ -113,11 +113,8 @@ final class PanelUpdateClient: AppUpdateClient, @unchecked Sendable {
   var fetchCalls = 0
   var downloadCalls = 0
 
-  func fetchLatestRelease() async throws -> GitHubRelease {
+  func fetchLatestRelease() async throws -> GitHubRelease? {
     fetchCalls += 1
-    guard let release else {
-      throw AppUpdateIssue(code: .configuration, detail: "missing release")
-    }
     return release
   }
 
@@ -248,6 +245,18 @@ final class PanelFixture {
     try await waitUntil(timeout: 15) { self.controller.isReady && !self.workshop.steamCMDSetup.isBusy }
     try await quiet()
     try await installRecorder()
+  }
+
+  func finishWelcome() async throws {
+    _ = try await js("""
+      const welcome = document.getElementById('welcome');
+      if (!welcome.hidden) {
+        welcome.querySelector('[data-action="go"][data-step="4"]').click();
+        welcome.querySelector('[data-action="finish"]').click();
+      }
+      """)
+    try await waitJS("document.getElementById('welcome').hidden")
+    try await quiet()
   }
 
   func installRecorder() async throws {

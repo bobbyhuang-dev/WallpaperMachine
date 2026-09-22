@@ -130,6 +130,13 @@ Steam actually sends — and it closes by itself once Steam is satisfied.
 **Not now** closes the dialog without removing the request; that exact request
 stays quiet until Steam asks for something else, and the tile's shield or
 **Continue setup** in the inspector or Downloads reopens it.
+The dialog keeps its heading and close action reachable while long content
+scrolls. New stages/prompts move focus only when the previous control is no
+longer usable; progress updates do not interrupt typing or another focused
+action. Rejected dialog actions appear inside the dialog as well as in the
+panel's error state, without losing the account or request. Closing/reopening
+starts a new local error session, so an earlier asynchronous rejection cannot
+appear in it; closing does not dismiss the panel's global error.
 
 ### Download state on the tile
 
@@ -178,6 +185,10 @@ SteamCMD is Valve's command-line download tool. Installing it does not sign you
 in. A download can guide you through installing it or locating an existing macOS
 runtime; setup also remains available in **Settings -> Library & Steam**.
 Pending download requests continue once their prerequisites are met.
+In the download dialog, installation always shows progress while busy; an
+unknown total is indeterminate rather than 0%. Installation failure retains its
+details and offers **Try again**, unless the retained copy needs explicit
+approval first.
 
 Signature, dependency and Rosetta checks remain required. Because official
 signed SteamCMD is a command-line tool, one-click **Install SteamCMD** does not
@@ -256,14 +267,15 @@ owns Wallpaper Engine.
 - When Steam accepts the sign-in the dialog does not vanish: it switches to a
   "Signed in" card with the running job's status and progress (or notes that
   shared resources download first), offers **Done** and **Show downloads**, and
-  closes by itself a few seconds later. The transfer is already running on the
+  closes by itself six seconds later. The transfer is already running on the
   tile and in the activity bar throughout.
 - Closing the popover or the sign-in dialog does not cancel work. Removing a
   waiting request prevents it from starting. Cancelling a running transfer
   lets the next queued job start after session cleanup. Quitting stops active
   and queued work.
-- Failed and cancelled jobs stay visible with their recovery action; completed
-  jobs collapse behind **Show completed** and can be cleared.
+- Failed and cancelled jobs stay visible with a primary **Try again** action;
+  when SteamCMD is not ready it stays disabled beside the setup explanation.
+  Completed jobs collapse behind **Show completed** and can be cleared.
 
 ## Shared scene resources
 

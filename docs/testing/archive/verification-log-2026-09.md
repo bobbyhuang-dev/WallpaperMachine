@@ -15,6 +15,54 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-22 — Bound and cancel shared property image loads
+
+- PropertyImageCache now tracks per-URL consumers, limits active transfers to four across hosts, cancels abandoned queued/active loads, and retains retiring slots until worker completion. Generation identity prevents stale completions affecting a replacement load.
+- python3 scripts/test.py --only PropertyImageCacheTests --only WebPanelAssetsTests — exit 0 after correcting an initializer shadowing error and continuation type inference; 8 passed, 0 failed, 0 skipped.
+- Delayed URLProtocol regressions exercise cancellation with an incomplete response, transport stop, same-URL retry, a 12-request/two-host burst capped at four transfers, queued cancellation without network work, and reuse of all four slots. Fixture sessions never reach the network.
+- python3 scripts/test.py — exit 0; Python suites passed; native 544 passed, 0 failed, 11 opt-in tests skipped.
+- Updated control-panel cache lifecycle documentation. No temporary smoke files created; shared test evidence retained. No Release build, desktop interaction, renderer run, or live-network test.
+
+## 2026-09-22 — Settings full gate and branding test review
+
+- Inspected the reported website-icon failure against current generated output: the 256px Day raster contains an opaque black centered frame spanning 61–194 on both central axes. Unmodified current branding suite passed all five tests; the earlier missing-frame result was not reproduced on the current tree.
+- Revised scripts/tests/test_brand.py to assert a visible opaque frame, opposing margin symmetry and colored opaque interior rather than pinning artwork to a 61px inset. Branding generator and production artwork were not changed.
+- Throwaway mutation check: centered artwork at another scale passed; shifted, missing and solid-black artwork each failed the revised test. Temporary outputs removed.
+- python3 scripts/test.py passed: 104 Python tests; 542 native passed, 0 failed, 11 skipped of 553. This supersedes the earlier settings verification blockers.
+- Skipped: nine opt-in NativeVideoPlayerMediaTests and two live-network WorkshopTests. Offscreen panel navigation and settings regression passed in the full gate.
+- Settings layout/interactions retain the headless evidence recorded in prior entries. Desktop visual inspection, screenshots, real Steam/audio operations and live wallpapers were not exercised. No Release build or app restart.
+
+## 2026-09-22 — Wallpaper Engine style property inspector
+
+- Focused native gate: WebPanelPropertyLabelTests, PropertyImageCacheTests and WebPanelAssetsTests — exit 0; 8 passed, 0 failed, 0 skipped.
+- python3 scripts/test.py — exit 0; Python suites passed; native 542 passed, 0 failed, 11 skipped (9 opt-in media/device cases, 2 live Steam cases).
+- Isolated native image-loader smoke fetched all six author artwork files from the selected local wallpaper: four GIFs (7, 9, 26 and 60 frames) and two PNGs; all decoded successfully.
+- Headless Chromium loaded all 14 authored image placements using those fetched bytes; exercised checkbox labels, keyboard slider changes, combo selection, reset, author links, Apply and Revert against an isolated bridge recorder.
+- DOM geometry at window widths 760, 960, 1280 and 1830: no property overflow or label/control overlap; edit footer remained visible and stationary during scrolling. Light/dark theme and keyboard reset visibility checked.
+- Impeccable detector over panel.css, panel.js and property-label.js — exit 0, no findings.
+- No desktop interaction or screenshots; live WKWebView visual appearance and animation smoothness were not visually verified. No renderer/corpus run or Release rebuild.
+- Removed the owned smoke runner and downloaded private artwork; preserved other sessions' artifacts after clean.py --dry-run listed 1.65 GB of shared evidence.
+
+## 2026-09-22 — Settings verification after panel dependency integration
+
+- The concurrently added WebUI/property-label.js is now present. Added its exact filename to WebPanelAssets.files; no routing policy or origin checks changed. Removed one duplicate Chinese translation introduced during concurrent catalog edits.
+- python3 scripts/test.py --only ControlPanelShellTests: current-source offscreen WebKit run passed 11 tests, 0 failed, 0 skipped, including settings keyboard navigation, scroll reset, focus and disclosure preservation.
+- python3 scripts/test.py: latest full-gate attempt stops in scripts/tests/test_brand.py::BrandTests.test_website_icon_centers_the_display_frame (Day icon must have a black display frame). Branding implementation and tests are outside the Settings change and were left untouched. Full gate is not passing; no native results are claimed for that attempt.
+- Settings headless geometry and interaction coverage is recorded in the preceding settings entry: all seven categories, English/Chinese, light/dark, minimum/wide windows, long content and renderer-unavailable state. Final isolated settings check passed 42 layout cases after navigation alignment fix.
+- Documentation updated in control-panel.md and performance.md. Owned smoke tabs and local server closed; no temporary source files created.
+- No desktop screenshots, live wallpaper changes, real Steam/audio integration, Release build, or app restart. Running app retains the old behavior.
+
+## 2026-09-22 — Website icons synchronized with centered native variants
+
+- python3 scripts/brand.py --skip-app --website ../WallpaperMachineWebiste — exit 0; updated brand images, all three SVG/PNG appearances, favicons, touch icons and manifest without rewriting app resources.
+- New rendered website regression failed against the old charcoal artwork; final python3 -m unittest discover -s scripts/tests -p test_brand.py passed all 5 tests.
+- Headless Chromium decoded all three PNG/SVG variants and browser icons. At 256 px, all six variant renders have equal 61/61 px display-frame margins on both axes and transparent corners; canvas contact sheet visually inspected.
+- Browser pixel checks also confirmed equal frame margins for 16/32 px favicons, SVG favicon, 180 px touch icon and 192/512 px manifest icons.
+- Website variant PNGs match WebUI/app-icons/{minimal,day,night}.png byte-for-byte; default app-icon.png matches Day.
+- python3 scripts/test.py — exit 0; Python checks passed; native 539 passed, 0 failed, 11 skipped of 550.
+- Impeccable detector on the website asset directory returned no findings. Website contains assets only, no pages or separate product photos.
+- No Release rebuild, desktop capture, app launch/restart or appearance change. Native app resources intentionally unchanged.
+
 ## 2026-09-22 — Settings organization and usability
 
 - Refined Settings category navigation, semantic groups, control spacing, expandable technical details, clickable switch labels, and Chinese localization. No renderer or native setting semantics changed.

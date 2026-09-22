@@ -2,13 +2,13 @@ import CryptoKit
 import Foundation
 
 protocol AppUpdateClient: Sendable {
-    func fetchLatestRelease() async throws -> GitHubRelease
+    func fetchLatestRelease() async throws -> GitHubRelease?
     func download(_ asset: GitHubReleaseAsset, to destination: URL,
                   progress: @escaping @Sendable (Int64, Int64, Int64) -> Void) async throws
 }
 
 struct DisabledAppUpdateClient: AppUpdateClient {
-    func fetchLatestRelease() async throws -> GitHubRelease {
+    func fetchLatestRelease() async throws -> GitHubRelease? {
         throw AppUpdateIssue(code: .configuration, detail: String(localized: "The GitHub Release update metadata is unavailable."))
     }
 
@@ -28,6 +28,10 @@ struct GitHubReleaseClient: AppUpdateClient {
         self.latestURL = latestURL
     }
 
+    private struct RepositoryIdentity: Decodable {
+        let id: Int
+    }
+
     static func makeSession(configuration: URLSessionConfiguration = .ephemeral) -> URLSession {
         let configuration = configuration.copy() as! URLSessionConfiguration
         configuration.httpCookieStorage = nil
@@ -40,28 +44,42 @@ struct GitHubReleaseClient: AppUpdateClient {
         return URLSession(configuration: configuration)
     }
 
-    func fetchLatestRelease() async throws -> GitHubRelease {
+    func fetchLatestRelease() async throws -> GitHubRelease? {
         var request = URLRequest(url: latestURL)
         request.setValue("WallpaperMachine", forHTTPHeaderField: "User-Agent")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        let data: Data
-        let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw AppUpdateIssue(code: .network, detail: String(localized: "GitHub did not return a successful update response."))
+            }
+            if http.statusCode == 404 {
+                // GitHub also returns 404 for inaccessible repositories. Only a
+                // reachable repository can turn a missing latest release into an empty result.
+                request.url = latestURL.deletingLastPathComponent().deletingLastPathComponent()
+                let (repositoryData, repositoryResponse) = try await session.data(for: request)
+                guard let repositoryHTTP = repositoryResponse as? HTTPURLResponse else {
+                    throw AppUpdateIssue(code: .network, detail: String(localized: "GitHub did not return a successful update response."))
+                }
+                guard (200..<300).contains(repositoryHTTP.statusCode) else {
+                    throw AppUpdateIssue(code: repositoryHTTP.statusCode == 404 ? .configuration : .network,
+                                         detail: String(localized: "GitHub did not return a successful update response."))
+                }
+                guard let repository = try? JSONDecoder().decode(RepositoryIdentity.self, from: repositoryData), repository.id > 0 else {
+                    throw AppUpdateIssue(code: .configuration, detail: String(localized: "The GitHub Release update metadata is unavailable."))
+                }
+                return nil
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                throw AppUpdateIssue(code: .network, detail: String(localized: "GitHub did not return a successful update response."))
+            }
+            return try GitHubReleaseParser.decode(data)
+        } catch let issue as AppUpdateIssue {
+            throw issue
         } catch {
             throw AppUpdateIssue(code: AppUpdateErrorClassifier.classify(error), detail: error.localizedDescription)
         }
-        guard let http = response as? HTTPURLResponse else {
-            throw AppUpdateIssue(code: .network, detail: String(localized: "GitHub did not return a successful update response."))
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            if http.statusCode == 404 {
-                throw AppUpdateIssue(code: .configuration, detail: String(localized: "The GitHub Release update metadata is unavailable."))
-            }
-            throw AppUpdateIssue(code: .network, detail: String(localized: "GitHub did not return a successful update response."))
-        }
-        return try GitHubReleaseParser.decode(data)
     }
 
     func download(_ asset: GitHubReleaseAsset, to destination: URL,

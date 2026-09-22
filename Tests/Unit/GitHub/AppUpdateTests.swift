@@ -153,12 +153,58 @@ final class AppUpdateTests: XCTestCase {
         let current = Fixture()
         current.client.release = current.release(version: "1.0.0")
         await expect(current.store.checkForUpdates(), equals: .upToDate(currentVersion: "1.0.0"))
+        current.client.release = current.release(version: "0.9.0")
+        await expect(current.store.checkForUpdates(), equals: .upToDate(currentVersion: "1.0.0"))
 
         let notes = Fixture()
         notes.client.release = notes.release(version: "1.2.0", assets: [])
         await expect(notes.store.checkForUpdates(), equals: .manual(currentVersion: "1.0.0", availableVersion: "1.2.0"))
         await expect(notes.store.downloadUpdate(), equals: .error(currentVersion: "1.0.0", operation: .download, code: .configuration, availableVersion: nil))
         XCTAssertEqual(notes.client.downloadCalls, 0)
+    }
+
+    func testMissingLatestReleaseIsNormalAndDoesNotKeepAnOldUpdate() async {
+        let http = UpdateHTTPFixture()
+        let store = AppUpdateStore(currentVersion: "1.0.0", client: http.client)
+        http.respond(latest: .init(status: 200, body: Self.releaseJSON(
+            tag: "v1.1.0", body: "### Fixed\n\n- A fixture update",
+            assets: [("WallpaperMachine-1.1.0-arm64.zip", "https://github.com/o/r/update.zip", 100, nil)])))
+        await expect(store.checkForUpdates(), equals: .available(currentVersion: "1.0.0", availableVersion: "1.1.0"))
+        XCTAssertNotNil(store.releaseNotes)
+
+        http.respond(latest: .init(status: 404, body: Data()))
+        let empty = await store.checkForUpdates()
+        let snapshot = WebPanelController.update(empty)
+        XCTAssertEqual(snapshot["status"] as? String, "noRelease")
+        XCTAssertEqual(snapshot["action"] as? String, "checkForUpdates")
+        XCTAssertEqual(snapshot["showsReleases"] as? Bool, false)
+        XCTAssertNil(empty.availableVersion)
+        XCTAssertNil(store.releaseNotes)
+        XCTAssertFalse(empty.isBusy)
+
+        http.respond(latest: .init(status: 200, body: Self.releaseJSON(tag: "v1.2.0")))
+        await expect(store.checkForUpdates(), equals: .manual(currentVersion: "1.0.0", availableVersion: "1.2.0"))
+    }
+
+    func testMissingRepositoryIsNotReportedAsNoUpdate() async {
+        let http = UpdateHTTPFixture()
+        http.respond(latest: .init(status: 404, body: Data()), repository: .init(status: 404, body: Data()))
+        let store = AppUpdateStore(currentVersion: "1.0.0", client: http.client)
+        await expect(store.checkForUpdates(), equals: .error(currentVersion: "1.0.0", operation: .check, code: .configuration, availableVersion: nil))
+    }
+
+    func testRepositoryLookupFailureRemainsANetworkError() async {
+        let http = UpdateHTTPFixture()
+        http.respond(latest: .init(status: 404, body: Data()), repository: .init(status: 0, body: Data(), error: .timedOut))
+        let store = AppUpdateStore(currentVersion: "1.0.0", client: http.client)
+        await expect(store.checkForUpdates(), equals: .error(currentVersion: "1.0.0", operation: .check, code: .network, availableVersion: nil))
+    }
+
+    func testMalformedRepositoryMetadataIsNotReportedAsNoUpdate() async {
+        let http = UpdateHTTPFixture()
+        http.respond(latest: .init(status: 404, body: Data()), repository: .init(status: 200, body: Data(#"{"message":"unexpected response"}"#.utf8)))
+        let store = AppUpdateStore(currentVersion: "1.0.0", client: http.client)
+        await expect(store.checkForUpdates(), equals: .error(currentVersion: "1.0.0", operation: .check, code: .configuration, availableVersion: nil))
     }
 
     func testConcurrentChecksShareOneRequestAndHideDownloadPaths() async {
@@ -313,13 +359,10 @@ private final class FakeAppUpdateClient: AppUpdateClient, @unchecked Sendable {
     var fetchCalls = 0
     var downloadCalls = 0
 
-    func fetchLatestRelease() async throws -> GitHubRelease {
+    func fetchLatestRelease() async throws -> GitHubRelease? {
         fetchCalls += 1
         if let fetchGate { await fetchGate.wait() }
         if let fetchError { throw fetchError }
-        guard let release else {
-            throw AppUpdateIssue(code: .configuration, detail: "missing release")
-        }
         return release
     }
 
@@ -392,6 +435,67 @@ private final class Gate: @unchecked Sendable {
         lock.unlock()
         waiters.forEach { $0.resume() }
     }
+}
+
+private final class UpdateHTTPFixture {
+    let host = "update-\(UUID().uuidString).invalid"
+    let session: URLSession
+    let client: GitHubReleaseClient
+
+    init() {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UpdateHTTPProtocol.self]
+        session = GitHubReleaseClient.makeSession(configuration: configuration)
+        client = GitHubReleaseClient(session: session, latestURL: URL(string: "https://\(host)/repos/fixture/app/releases/latest")!)
+    }
+
+    func respond(latest: UpdateHTTPProtocol.Response,
+                 repository: UpdateHTTPProtocol.Response = .init(status: 200, body: Data(#"{"id":1}"#.utf8))) {
+        UpdateHTTPProtocol.register(host, latest: latest, repository: repository)
+    }
+
+    deinit {
+        session.invalidateAndCancel()
+        UpdateHTTPProtocol.remove(host)
+    }
+}
+
+private final class UpdateHTTPProtocol: URLProtocol, @unchecked Sendable {
+    struct Response: Sendable {
+        let status: Int
+        let body: Data
+        var error: URLError.Code? = nil
+    }
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var responses: [String: (latest: Response, repository: Response)] = [:]
+    static func register(_ host: String, latest: Response, repository: Response) {
+        lock.withLock { responses[host] = (latest, repository) }
+    }
+    static func remove(_ host: String) { _ = lock.withLock { responses.removeValue(forKey: host) } }
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let url = request.url,
+              let entry = Self.lock.withLock({ Self.responses[url.host ?? ""] }) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.resourceUnavailable))
+            return
+        }
+        let response: Response
+        if url.path == "/repos/fixture/app/releases/latest" { response = entry.latest }
+        else if url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == "repos/fixture/app" { response = entry.repository }
+        else {
+            client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
+            return
+        }
+        if let error = response.error {
+            client?.urlProtocol(self, didFailWithError: URLError(error))
+            return
+        }
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: response.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: response.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }
 
 private extension AppUpdateTests {

@@ -10,8 +10,72 @@ import XCTest
 /// State push while hidden, page-scoped pushes, option fetches and display-title resolution.
 @MainActor
 final class ControlPanelSyncTests: ControlPanelTestCase {
+  func testGlobalPlaybackUsesAllDisplayAssignmentsAndGlobalPauseState() async throws {
+    try await withPanel { panel in
+      try await panel.finishWelcome()
+      panel.configureDisplays()
+      panel.navigation.targetDisplayID = "primary"
+      panel.store.monitorInformationSnapshot.rows.removeAll { $0.displayId == "primary" }
+      panel.store.librarySnapshot.wallpapers = [
+        BridgeWallpaperEntry(
+          id: "second", title: "Secondary display wallpaper", kind: .video, supported: true,
+          active: false, selected: false, previewPath: nil)
+      ]
+      panel.store.appSnapshot = BridgeAppSnapshot(
+        playbackState: .playing, selectedWallpaperId: nil, activeWallpaperIds: ["second"], errors: [])
+      panel.store.snapshotRevision &+= 1
+      panel.show()
+      try await panel.waitJS("powerProbe.received.at(-1)?.displays[1]?.wallpaperID === 'second'")
+      try await panel.expectJS("return powerProbe.received.at(-1).wallpapers.some(item => item.active)", equals: false)
+      try await panel.expectJS("return powerProbe.received.at(-1).displays[0].wallpaperID === null", equals: true)
+      let running = try await panel.js("""
+        const button = document.querySelector('#activity-bar [data-action="playback"]');
+        button.focus();
+        return {disabled: button.disabled, focused: document.activeElement === button,
+                name: button.getAttribute('aria-label'), status: document.querySelector('.activity-left .activity-copy').textContent};
+        """) as? [String: Any]
+      XCTAssertEqual(running?["disabled"] as? Bool, false, "A non-target display still needs the global playback control")
+      XCTAssertEqual(running?["focused"] as? Bool, true)
+      let runningName = try XCTUnwrap(running?["name"] as? String)
+      let runningStatus = try XCTUnwrap(running?["status"] as? String)
+
+      panel.store.appSnapshot.playbackState = .paused
+      try await panel.waitJS("powerProbe.received.at(-1)?.paused === true")
+      let paused = try await panel.js("""
+        const button = document.querySelector('#activity-bar [data-action="playback"]');
+        return {disabled: button.disabled, name: button.getAttribute('aria-label'),
+                status: document.querySelector('.activity-left .activity-copy').textContent};
+        """) as? [String: Any]
+      XCTAssertEqual(paused?["disabled"] as? Bool, false, "Paused playback must remain resumable on the secondary display")
+      let pausedName = try XCTUnwrap(paused?["name"] as? String)
+      let pausedStatus = try XCTUnwrap(paused?["status"] as? String)
+      XCTAssertNotEqual(pausedName, runningName)
+      XCTAssertNotEqual(pausedStatus, runningStatus)
+
+      panel.store.appSnapshot.playbackState = .playing
+      try await panel.waitJS("powerProbe.received.at(-1)?.paused === false")
+      try await panel.expectJS("return document.querySelector('#activity-bar [data-action=\"playback\"]').getAttribute('aria-label')", equals: runningName)
+      try await panel.expectJS("return document.querySelector('.activity-left .activity-copy').textContent", equals: runningStatus)
+
+      panel.store.monitorInformationSnapshot.rows.removeAll()
+      panel.store.appSnapshot.activeWallpaperIds = []
+      panel.store.snapshotRevision &+= 1
+      try await panel.waitJS("powerProbe.received.at(-1)?.displays.every(display => display.wallpaperID === null)")
+      try await panel.expectJS("return document.querySelector('#activity-bar [data-action=\"playback\"]').disabled", equals: true)
+      let idleValue = try await panel.js("return document.querySelector('.activity-left .activity-copy').textContent")
+      let idleStatus = try XCTUnwrap(idleValue as? String)
+      XCTAssertNotEqual(idleStatus, runningStatus, "No assignments must not report playback as running")
+      XCTAssertNotEqual(idleStatus, pausedStatus)
+      panel.store.appSnapshot.playbackState = .paused
+      try await panel.waitJS("powerProbe.received.at(-1)?.paused === true")
+      try await panel.expectJS("return document.querySelector('#activity-bar [data-action=\"playback\"]').disabled", equals: true)
+      try await panel.expectJS("return document.querySelector('.activity-left .activity-copy').textContent", equals: idleStatus)
+    }
+  }
+
   func testHiddenPanelCoalescesChangesAndStillRepliesToCommands() async throws {
     try await withPanel { panel in
+      try await panel.finishWelcome()
       for index in 0..<4 {
         panel.store.librarySnapshot.wallpapers = [
           BridgeWallpaperEntry(
@@ -45,6 +109,7 @@ final class ControlPanelSyncTests: ControlPanelTestCase {
 
   func testHiddenPanelContinuesSetupAndObservesNestedDownloadChanges() async throws {
     try await withPanel { panel in
+      try await panel.finishWelcome()
       _ = try await panel.js("powerProbe.hold = true")
       panel.show()
       try await panel.waitJS("powerProbe.pending.length === 1")
@@ -79,6 +144,7 @@ final class ControlPanelSyncTests: ControlPanelTestCase {
 
   func testPanelPushWaitsForReceiveAndKeepsOnlyLatestPendingState() async throws {
     try await withPanel { panel in
+      try await panel.finishWelcome()
       _ = try await panel.js("powerProbe.hold = true")
       panel.show()
       try await panel.waitJS("powerProbe.pending.length === 1")
@@ -103,6 +169,7 @@ final class ControlPanelSyncTests: ControlPanelTestCase {
 
   func testOldPageCompletionCannotReleaseNewPagesInFlightPush() async throws {
     try await withPanel { panel in
+      try await panel.finishWelcome()
       _ = try await panel.js("powerProbe.hold = true")
       panel.show()
       try await panel.waitJS("powerProbe.pending.length === 1")
@@ -116,6 +183,7 @@ final class ControlPanelSyncTests: ControlPanelTestCase {
       _ = try await panel.js("powerProbe.hold = true")
       panel.show()
       try await panel.waitJS("powerProbe.pending.length === 1")
+      XCTAssertNil(oldPage.window, "Every panel behavior check must remain offscreen")
       _ = try await oldPage.callAsyncJavaScript(
         "powerProbe.pending.shift()()", arguments: [:], in: nil, contentWorld: .page)
       panel.workshop.searchText = "New page latest"
@@ -132,6 +200,7 @@ final class ControlPanelSyncTests: ControlPanelTestCase {
 
   func testFailedPagePushWaitsForAnExternalChangeBeforeRetrying() async throws {
     try await withPanel { panel in
+      try await panel.finishWelcome()
       _ = try await panel.js("""
         const receive = wallpaperUI.receive;
         window.failedPushes = 0;
@@ -151,6 +220,7 @@ final class ControlPanelSyncTests: ControlPanelTestCase {
   func testSupplementalOptionsAreOnlyFetchedForVisibleSettings() async throws {
     try await withPanel { panel in
       panel.configureDisplays()
+      try await panel.finishWelcome()
       panel.show()
       try await panel.waitJS("powerProbe.received.length > 0")
       XCTAssertTrue(panel.bridge.optionRequests.isEmpty)
@@ -170,6 +240,7 @@ final class ControlPanelSyncTests: ControlPanelTestCase {
   func testDisplayTitlesUseTheSystemNameEverywhereTheRendererLabelAppears() async throws {
     let names = DisplayTitleResolver(names: { ["primary": "Built-in Retina Display"] })
     try await withPanel(displayTitles: names) { panel in
+      try await panel.finishWelcome()
       panel.configureDisplays()
       panel.store.settingsSnapshot.displays[1].mirrorTargets = ["primary"]
       panel.store.settingsSnapshot.displays[0].title = "Vendor 1552 - Model 41055 (primary - Primary)"
@@ -193,6 +264,7 @@ final class ControlPanelSyncTests: ControlPanelTestCase {
 
   func testOptionsFailureFallsBackWithoutLoopingAndRetriesOnReentry() async throws {
     try await withPanel { panel in
+      try await panel.finishWelcome()
       panel.configureDisplays()
       panel.bridge.failedOptionIDs = ["second"]
       panel.navigation.selection = .settings
@@ -212,6 +284,7 @@ final class ControlPanelSyncTests: ControlPanelTestCase {
 
   func testCancelledOptionsCannotOverwriteNewRevisionOrRemovedDisplay() async throws {
     try await withPanel { panel in
+      try await panel.finishWelcome()
       panel.configureDisplays()
       let oldOptions = try XCTUnwrap(panel.bridge.options["second"])
       panel.bridge.holdOptions = true

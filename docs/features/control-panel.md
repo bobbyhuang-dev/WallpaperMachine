@@ -39,16 +39,35 @@ fit together and how to add a language: [Localization](../localization.md).
 | Top bar | Sits in the window's title-bar strip beside the traffic lights: tabs on the left, product name, version and a GitHub button (opens the repository in the default browser) centered, target-display picker and a downloads button (only while there is download activity) on the right. The side groups never shrink below their content, so a long display name nudges the brand off-center rather than under the controls; in windows up to 840px wide the name and version hide and only the GitHub button stays. The renderer's own repository is linked from Settings → About. Its background drags the window and follows the system double-click action |
 | Browser column | Filter button, search field, sort menu, tile grid, result summary, Workshop pagination with an editable page number. On Discover a page is one Steam page of 30 square tiles (at most 1,000 pages); the grid shows as many columns as fit, never fewer than three, and scrolls the rest |
 | Left sidebar | Filters on both library pages, mirroring Wallpaper Engine's sidebar: Show only, Type, Age rating, Resolution and Tags tick boxes on Discover; the same boxes minus Resolution (plus Favorites and Active in Show only) on Installed, applied to the library in the page. Fixed width; the toolbar's Filter button opens and closes it, and that choice is remembered per page across launches |
-| Inspector | Preview, title, kind, creator, tags, actions, and the selected wallpaper's options and properties. Its width is a function of the window width alone and cannot be dragged: 260px at the 760px minimum, `15vw + 146px` in between (290px at 960px, 386px at 1600px) and 420px from about 1830px on, the same on Discover and Installed. Nothing is stored, so a given window size always yields the same layout. Inside, the panel adapts to its own width: past 360px the insets widen and a display's scale factor and frame rate share a row |
-| Activity bar | Pause/resume playback, import status, download progress |
+| Inspector | Preview, title, kind, creator, actions, tags, and the selected wallpaper's options and properties. Its width is a function of the window width alone and cannot be dragged: 260px at the 760px minimum, `15vw + 146px` in between (290px at 960px, 386px at 1600px) and 420px from about 1830px on, the same on Discover and Installed. Nothing is stored, so a given window size always yields the same layout. Inside, the panel adapts to its own width: past 360px the insets widen and a display's scale factor and frame rate share a row |
+| Activity bar | Global pause/resume, import activity and unseen results, download progress (not a playback timeline). Playback remains available when any display has an assignment, even if the target display is empty; with no assignments it is disabled and reports **No wallpaper playing**. Long summaries truncate visually but keep their full accessible names |
 
-Wallpapers appear as square, image-first tiles with a transparent title overlay
-(Discover tiles may deviate from square by up to 15% so a page's rows fill the
-grid; see [Workshop downloads](workshop-downloads.md#discover)).
+The visual direction combines Wallpaper Engine's image-first gallery, filtering
+and right-hand property workflow with macOS-oriented window chrome and controls;
+it does not reproduce Windows window decorations or the Windows button skin.
+The [official Windows walkthrough](https://help.wallpaperengine.io/en/mobile/pairing.html)
+is the composition reference; the [macOS design guidance](https://developer.apple.com/design/human-interface-guidelines/designing-for-macos)
+informs the restrained system typography, comfortable density and familiar
+keyboard/pointer behavior. Navigation uses quiet, rounded selected controls in
+the unified title bar. Filled accent color is reserved for primary actions,
+selection and status, rather than making Filter compete with Apply or Download.
+Light/dark mode, surface tone and custom accent preferences continue to apply.
+The inspector preview is capped at 220px, or 180px in windows up to 640px tall,
+leaving more room for the title, actions and properties without changing the
+inspector's own width.
+Selection uses an outer accent ring with a surface-coloured gap so blue artwork
+does not hide it. At the narrowest browser width captions remain 12px on one
+line and hide the type sublabel; narrow filter sidebars omit decorative glyphs
+rather than shrinking the checkbox labels.
+
+Wallpapers appear as square, image-first tiles with a transparent title overlay.
 Discover tiles show cached still thumbnails first and then, for tiles on
 screen, play Steam's animated preview beneath the still, which only fades out
 while the animation is bright (see
 [Workshop downloads](workshop-downloads.md#tile-thumbnails)).
+The whole tile, including its controls and marks, enlarges by 8% over 220ms on
+hover or visible keyboard focus. Selection alone does not enlarge it. Reduced
+Motion keeps the tile size fixed and retains border/shadow feedback.
 Both tabs fill the grid with as many columns as the browser column can hold at a
 preferred tile size that shrinks with the column, and never fewer than three,
 so a narrower window shows smaller tiles and more of them rather than fewer,
@@ -58,18 +77,28 @@ on small displays): `ControlPanelWindow` owns that floor and `AppDelegate`
 enforces it in `windowWillResize`, because the SwiftUI hosting controller
 resets `contentMinSize` once it attaches.
 Arrow keys, `Home` and `End` move focus across the grid; `Escape` closes an open
-filter disclosure or popover.
+popover or leaves selection mode.
+
+The sort menu and its actions wrap as one group after Filter and search. At a
+narrow browser width Installed's Import becomes a named icon button; Select/Done
+keeps its text. Routine controls use a 32px minimum, compact actions 28px, while
+the welcome guide's primary buttons remain 36px. Errors keep their original
+details and Dismiss; Reconnect is offered only before the first snapshot or
+when the native bridge is unavailable, not for an ordinary operation failure.
 
 ## First run
 
 The first time the panel opens, a guide covers the whole window, top bar
 included (`WebUI/welcome.js` + `welcome.css`; `#welcome` is fixed-position
-over the app, pure black or white by the resolved appearance, and its top strip
-stands in for the title bar: draggable and clear of the traffic lights). It is
+over the app and inherits its light/dark surfaces; its top strip stands in for
+the title bar, draggable and clear of the traffic lights). It is
 a page, not a modal dialog; the download dialog can still open over it for an
-unrelated job. A five-step indicator at the top names the pages and jumps
-between them; every page has **Back**, and the pages that decide something have
-**Skip**:
+unrelated job. Background app regions are inert while the guide is open; closing
+it restores their prior availability. The body scrolls independently of the
+footer, which stays reachable at the 760×560 minimum. All five step buttons keep
+accessible names even when their visible labels are hidden. They allow free
+jumping except while language, appearance or preferences are being committed;
+later pages have **Back**, and decision pages have **Skip**:
 
 1. **Language & appearance.** Radio tiles for the language (**System (Auto)**
    plus every shipped language under its own name) and the appearance mode
@@ -77,6 +106,9 @@ between them; every page has **Back**, and the pages that decide something have
    choice applies at once through the `languageSetting` / `themeSetting`
    actions, so the page repaints in the chosen language and theme. **Skip**
    puts back whatever was in force when the guide opened and moves on.
+   Each radio group has one Tab stop; arrow keys, Home and End choose an enabled
+   option. A completed language/theme write restores lost radio focus without
+   taking focus back from another control.
 2. **Steam.** Explains in plain words that browsing is free and that downloading
    needs a Steam account that owns Wallpaper Engine, with **Create a Steam
    account** (`store.steampowered.com/join/`) and **Buy Wallpaper Engine** (the
@@ -85,17 +117,21 @@ between them; every page has **Back**, and the pages that decide something have
    signed in on this Mac** (on by default). **Sign in** sends only the account
    name and the remember choice (`steamSignIn`); the password is held in the
    page until Steam's own password prompt arrives on the sign-in job and is then
-   submitted through `downloadInput` exactly once, so it is never part of a
-   snapshot, an action payload or the DOM markup. Without SteamCMD the button
+   submitted through `downloadInput` exactly once. It is never part of a snapshot,
+   the login-start payload or DOM markup. Showing the password does not make a
+   subsequent snapshot erase it. Without SteamCMD the button
    reads **Install SteamCMD and sign in** and the page installs it first
    (`setupInstall`, with the Gatekeeper approval and locate-a-copy paths when
    they apply). Steam Guard (mobile approval, authenticator or emailed code)
    is shown with the same guides as the download dialog; **Cancel** stops the
    session. Success shows **Signed in as …** with **Use a different account**
    (`logOutSteam`); a saved sign-in from an earlier run shows the same state
-   straight away. **Skip for now** (or **Skip and cancel sign-in** while one
-   runs) leaves Steam for the first download to ask about. See [Steam sign-in](workshop-downloads.md#steam-sign-in)
-   for the sign-in-only session itself.
+   straight away. **Skip for now** (or **Skip and cancel sign-in** while a job or
+   setup request is pending) leaves Steam for the first download to ask about.
+   New prompts hand focus to their input when the previous control disappears;
+   ordinary progress does not interrupt typing. A Steam Guard request arriving
+   on another page marks the Steam step with a shield without changing pages.
+   See [Steam sign-in](workshop-downloads.md#steam-sign-in) for the session itself.
 3. **Preferences.** Launch at login, Pause on battery, Reduced quality on
    battery and Keep windows in place when clicking the wallpaper, as switches
    with one-line explanations. They are drafts: **Continue** commits only the
@@ -103,14 +139,18 @@ between them; every page has **Back**, and the pages that decide something have
    login is disabled with its reason while the app is outside Applications;
    when renderer settings are unavailable the page says so and disables the
    switches.
+   During a preference commit, Back, step navigation, Skip and Continue are all
+   disabled so the guide cannot leave a partially submitted operation.
 4. **Tips.** Five short usage tips (Discover, download then apply, one
    wallpaper per display, import, pause) and the open-source pointer with
    **Open on GitHub** and **Report an issue** (`state.repositoryURL` and its
    `/issues` page).
-5. **Start.** A recap of what the guide set (language, appearance, Steam) and
-   the two ways in: **Browse the Workshop** opens Discover, **Import
-   wallpapers** opens the import popover on Installed; **Start using the app**
-   simply closes it.
+5. **Start.** A recap of language, appearance and the actual Steam sign-in state.
+   Pending jobs/setup requests offer **Finish sign-in**. Unsaved preference
+   drafts add a fourth cell with their count and **Review**, which returns to
+   Preferences without discarding them. Closing does not auto-save the drafts.
+   **Browse the Workshop** opens Discover, **Import wallpapers** opens the
+   import popover on Installed, and **Start using the app** simply closes it.
 
 Leaving the guide by any of the closing actions is stored natively
 (`WebPanelController.welcomeSeenKey`, sent as the `welcomeSeen` action and
@@ -142,6 +182,16 @@ a download.
   **Check for Updates** reads the latest
   GitHub Release, and download / restart-install happen only after confirmation.
   The application menu item **Check for Updates…** opens this section.
+
+Settings use lightly bounded, keyed groups on the window's secondary surface,
+with dividers between related rows rather than a separate card for every control.
+Rows wrap within their available content width. Live backend, quality, power and
+installation readouts use foreground text beneath muted captions, separate from
+the saved preference controls. Unknown, preparing
+and fallback results remain distinct. Explicit lock-screen unavailability
+disables its switch; language and appearance remain usable if renderer settings
+are unavailable. Snapshot updates preserve active drafts, selection, disclosures
+and scrolling. About's update actions precede expanded release notes.
 
 ## Thumbnail corner marks
 
@@ -175,11 +225,10 @@ screen. Activation is explicit.
   applies it once it is in the library); see
   [Workshop downloads](workshop-downloads.md#one-decision-per-download).
 - Apply is unavailable when the target display is disabled, is mirroring another
-  display, or when the wallpaper kind cannot be rendered (Web, Application,
-  Unknown).
+  display, or when the wallpaper kind cannot be rendered (Application or Unknown).
 
 The inspector follows Wallpaper Engine's centered hierarchy: square preview,
-title, creator (Discover), facts (type, size, subscribers), and pill tags. For
+title, creator (Discover), facts (type, size, subscribers), utility actions and tags. For
 installed wallpapers, the circular play button overlapping the preview is
 **Apply wallpaper** (or **Reapply wallpaper**); its accessible name and tooltip
 identify the action. **Download** remains a full-width action on Discover.
@@ -237,14 +286,18 @@ are unchanged, so nothing persisted or sent over the bridge moves.
 
 Both library pages share one filter sidebar on the left of the grid (the
 inspector keeps the right). Its only switch is the toolbar's **Filter** button:
-the first control in the toolbar, filled in the accent colour with a funnel
-glyph, the label "Filter" and, when filters are active, their count in a pill.
-Open, the button reads as pressed (`aria-expanded`) beside the sidebar; closed,
+the first control in the toolbar, with a funnel glyph, the label "Filter" and,
+when filters are active, their count in a pill. Open, it uses a soft accent
+surface and reads as pressed (`aria-expanded`) beside the sidebar; closed,
 the sidebar leaves the layout and the grid takes its column. The sidebar itself
 has no collapse control and no rail. Each page remembers its own choice natively
 (`filters` action, `filtersCollapsed` in the snapshot; the panel's web storage is
 not persistent) and restores it on the next launch. Closing never changes the
 search or the filters.
+Collapsed groups retain their state and show their own active count: Show only
+counts selected tags, and exclude groups count visible boxes that differ from
+that page's defaults. Clear restores those defaults; hidden/unknown tags are not
+claimed to be represented by the sum of visible group counts.
 
 - Installed: the sidebar carries Discover's boxes and rules (see below), applied
   in the page to each wallpaper: **Show only** starts with Favorites and Active
@@ -272,6 +325,12 @@ search or the filters.
   [workshop-downloads](workshop-downloads.md)); sort opens on Most popular this
   year and offers Highest rated, Most popular today, Trending this week, Most
   popular this month, Most popular this year, Most subscribed, Newest or Relevance.
+
+An empty result offers recovery for the actual restriction: **Clear search**,
+**Clear filters** (plus **Show filters** when hidden), or **Clear search and
+filters**. A Workshop response with no restrictions offers Refresh instead of
+an ineffective Clear. First loading, Workshop failure/Retry and an empty local
+library keep their own states; a refresh can leave existing results visible.
 
 ## Properties
 
@@ -324,6 +383,9 @@ pending until committed:
 - **Revert** discards pending changes.
 
 Unsubmitted text stays with its wallpaper when navigating between pages.
+A dirty or unsubmitted control shows a localized **Modified** flag outside its
+author-provided label. Reset clears the flag once the property is clean; the
+fixed Apply changes / Revert footer retains its existing meaning.
 
 A `scenetexture` property's image picker fills the material slot that names it,
 so a wallpaper built around "choose your own picture" shows the picture. The
@@ -354,6 +416,21 @@ steps) for Steam Guard stages; account and password prompts are just the
 labelled field. Once Steam accepts the sign-in, it confirms that the download
 is running before it closes; see
 [workshop downloads](workshop-downloads.md#the-download-queue).
+
+Busy imports show indeterminate progress. If an import finishes while its
+popover is closed, a result button stays in the activity bar until viewed and
+closed (or another popover is opened). Counts and each failure stay available
+inside Import. A popover opened from the activity bar keeps that anchor while
+open, and retains the displayed report across snapshots that omit it. This
+unread indicator lasts only for the page session; an old report in the first
+snapshot is not announced as a new result.
+
+Popovers use the actual space above or below their trigger, up to 560px, instead
+of a fixed fraction of the window height. Sign-in dialogs leave a 20px vertical
+window margin and keep the 640px height ceiling, with scrolling for longer
+content. Their default action follows the alternatives at the trailing edge in
+both the visible layout and DOM/Tab order. Already-installed shared resources
+offer re-download as a secondary action rather than another recommended primary.
 
 ## Verification
 

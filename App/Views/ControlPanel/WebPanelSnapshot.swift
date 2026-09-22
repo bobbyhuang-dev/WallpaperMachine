@@ -455,6 +455,9 @@ extension WebPanelController {
     case .checking:
       status = "checking"
       statusText = String(localized: "Checking for updates...")
+    case .noRelease:
+      status = "noRelease"
+      statusText = String(localized: "No published update is available yet. You can keep using this version.")
     case .upToDate:
       status = "upToDate"
       statusText = String(localized: "Up to date")
@@ -502,7 +505,7 @@ extension WebPanelController {
       action = "checkForUpdates"
       actionLabel = String(localized: "Retry")
       showsAction = true
-    case .upToDate:
+    case .upToDate, .noRelease:
       action = "checkForUpdates"
       actionLabel = String(localized: "Check Again")
       showsAction = true

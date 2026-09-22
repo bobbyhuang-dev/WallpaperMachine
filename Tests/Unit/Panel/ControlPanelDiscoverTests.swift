@@ -37,6 +37,11 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
     }
     XCTAssertTrue(controller.isReady)
     guard controller.isReady else { return }
+    XCTAssertNil(web.window)
+    _ = try await web.callAsyncJavaScript("""
+      document.querySelector('#welcome [data-action="go"][data-step="4"]').click();
+      document.querySelector('#welcome [data-action="finish"]').click();
+      """, arguments: [:], in: nil, contentWorld: .page)
     let result =
       try await web.callAsyncJavaScript(
         """
@@ -104,6 +109,11 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
     }
     XCTAssertTrue(controller.isReady)
     guard controller.isReady else { return }
+    XCTAssertNil(web.window)
+    _ = try await web.callAsyncJavaScript("""
+      document.querySelector('#welcome [data-action="go"][data-step="4"]').click();
+      document.querySelector('#welcome [data-action="finish"]').click();
+      """, arguments: [:], in: nil, contentWorld: .page)
     let result =
       try await web.callAsyncJavaScript(
         """
@@ -167,6 +177,11 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
     }
     XCTAssertTrue(controller.isReady)
     guard controller.isReady else { return }
+    XCTAssertNil(web.window)
+    _ = try await web.callAsyncJavaScript("""
+      document.querySelector('#welcome [data-action="go"][data-step="4"]').click();
+      document.querySelector('#welcome [data-action="finish"]').click();
+      """, arguments: [:], in: nil, contentWorld: .page)
     let setup = """
       const original = window.webkit.messageHandlers.native.postMessage.bind(window.webkit.messageHandlers.native);
       window.__sent = [];
@@ -260,6 +275,11 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
     }
     XCTAssertTrue(controller.isReady)
     guard controller.isReady else { return }
+    XCTAssertNil(web.window)
+    _ = try await web.callAsyncJavaScript("""
+      document.querySelector('#welcome [data-action="go"][data-step="4"]').click();
+      document.querySelector('#welcome [data-action="finish"]').click();
+      """, arguments: [:], in: nil, contentWorld: .page)
     let base =
       try await web.callAsyncJavaScript(
         "return await window.webkit.messageHandlers.native.postMessage({action:'ready'})",

@@ -48,6 +48,7 @@ export function createWelcome(helpers) {
   const pending = new Set();
   let error = '';
   let lastStepRendered = -1;
+  let lastSteamFocusKey = null;
 
   const signInJob = () => (state?.downloads || []).find(item => item.id === SIGN_IN_ID) || null;
   const signInRequest = () => (state?.downloadRequests || []).find(item => item.id === SIGN_IN_ID) || null;
@@ -60,6 +61,7 @@ export function createWelcome(helpers) {
   const languageOptions = () => [['system', t('System (Auto)'), t('Follows the macOS language')], ...((state?.language?.options || []).map(option => [option.id, option.name, '']))];
   const themeMode = () => state?.theme?.mode || window.__appTheme?.mode || 'system';
   const languageValue = () => state?.language?.preference || 'system';
+  const navigationBusy = () => pending.has('language') || pending.has('theme') || pending.has('preferences');
 
   function isOpen() { return open; }
   function openGuide() {
@@ -68,6 +70,7 @@ export function createWelcome(helpers) {
     step = 0;
     error = '';
     lastStepRendered = -1;
+    lastSteamFocusKey = null;
     prefs.clear();
     signIn.secret = null;
     signIn.reveal = false;
@@ -88,6 +91,7 @@ export function createWelcome(helpers) {
     if (state?.welcomeSeen === false) run(send('welcomeSeen'));
   }
   function go(next) {
+    if (navigationBusy()) return;
     step = Math.max(0, Math.min(STEPS.length - 1, next));
     error = '';
     render(state);
@@ -114,16 +118,34 @@ export function createWelcome(helpers) {
   function render(next) {
     state = next ?? state;
     container.hidden = !open;
+    helpers.setBackgroundInert(open);
     if (!open || !state) return;
     if (!initial) initial = { mode: themeMode(), language: languageValue() };
     driveSignIn();
+    const focused = document.activeElement;
+    const previousTitle = container.querySelector('#welcome-title');
+    const job = signInJob();
+    const request = signInRequest();
+    const done = signedIn();
+    const steamFocusKey = JSON.stringify([request?.stage, job?.pending, job?.queued, job?.prompt, job?.challenge, done, job?.error, job?.cancelled, error]);
     morph(container, shell());
     if (lastStepRendered !== step) {
       lastStepRendered = step;
       const target = container.querySelector('.welcome-page input:not([disabled]):not([type="checkbox"])') || container.querySelector('#welcome-title');
       target?.focus({ preventScroll: false });
       container.querySelector('.welcome-body')?.scrollTo(0, 0);
+    } else if (step === 1 && steamFocusKey !== lastSteamFocusKey) {
+      const focusLost = !focused?.isConnected || focused.disabled || focused === document.body || focused === previousTitle;
+      const atRest = document.activeElement === document.body || document.activeElement === container.querySelector('#welcome-title');
+      if (focusLost && atRest) {
+        const target = job?.pending && !job.queued && job.prompt ? container.querySelector('#welcome-response')
+          : (job?.error || error) && container.querySelector('[data-form="signIn"]') ? container.querySelector('#welcome-password')
+            : done ? container.querySelector('.welcome-footer .welcome-continue')
+              : request || job?.pending ? container.querySelector('#welcome-title') : null;
+        target?.focus({ preventScroll: false });
+      }
     }
+    lastSteamFocusKey = steamFocusKey;
   }
 
   // Steam's password prompt is answered with the held secret exactly once; anything else
@@ -140,29 +162,35 @@ export function createWelcome(helpers) {
 
   function shell() {
     const done = signedIn();
-    const progress = STEPS.map(([key, label], index) => `<li data-key="progress-${key}"><button type="button" data-action="go" data-step="${index}" class="welcome-step${index === step ? ' current' : index < step ? ' done' : ''}"${index === step ? ' aria-current="step"' : ''}><span class="welcome-step-dot" aria-hidden="true">${index < step ? icon('check', 11) : ''}</span><span class="welcome-step-label">${e(t(label))}</span></button></li>`).join('');
+    const job = signInJob();
+    const needsAttention = job?.pending && !job.queued && (job.prompt || job.challenge) && !busy('downloadInput', { id: job.id }) && !(job.securePrompt && signIn.secret);
+    const progress = STEPS.map(([key, label], index) => {
+      const attention = index === 1 && step !== 1 && needsAttention;
+      const name = attention ? t('{summary} · needs attention', { summary: t(label) }) : t(label);
+      return `<li data-key="progress-${key}"><button type="button" data-action="go" data-step="${index}" class="welcome-step${index === step ? ' current' : index < step ? ' done' : ''}${attention ? ' attention' : ''}" aria-label="${e(name)}" title="${e(name)}"${index === step ? ' aria-current="step"' : ''}${navigationBusy() ? ' disabled' : ''}><span class="welcome-step-dot" aria-hidden="true">${attention ? icon('shield', 11) : index < step ? icon('check', 11) : ''}</span><span class="welcome-step-label">${e(t(label))}</span></button></li>`;
+    }).join('');
     const pages = [pageLanguage, pageSteam, pagePreferences, pageTips, pageStart];
     return `<div class="welcome-bar" data-key="bar"><ol class="welcome-progress" aria-label="${e(t('Setup progress'))}">${progress}</ol></div><div class="welcome-body" data-key="body"><section class="welcome-page" data-key="page-${step}" data-step="${STEPS[step][0]}" aria-labelledby="welcome-title">${pages[step](done)}</section></div><div class="welcome-footer" data-key="footer"><div class="welcome-footer-row">${footer(done)}</div></div>`;
   }
 
   function footer(done) {
-    const back = step > 0 ? button(t('Back'), 'back', {}, { icon: 'chevronLeft', className: 'quiet' }) : '<span></span>';
+    const back = step > 0 ? button(t('Back'), 'back', {}, { icon: 'chevronLeft', className: 'quiet', disabled: navigationBusy() }) : '<span></span>';
     const next = (label, action, extra = {}) => button(label, action, {}, { icon: 'arrowRight', className: 'primary welcome-continue', ...extra });
     switch (step) {
-      case 0: return `${back}<span class="welcome-footer-actions">${button(t('Skip'), 'skipLanguage', {}, { className: 'quiet' })}${next(t('Continue'), 'continue', { disabled: pending.size > 0 })}</span>`;
+      case 0: return `${back}<span class="welcome-footer-actions">${button(t('Skip'), 'skipLanguage', {}, { className: 'quiet', disabled: pending.size > 0 })}${next(t('Continue'), 'continue', { disabled: pending.size > 0 })}</span>`;
       case 1: {
         const job = signInJob();
-        const running = Boolean(job?.pending);
+        const running = Boolean(job?.pending || signInRequest());
         return `${back}<span class="welcome-footer-actions">${done ? next(t('Continue'), 'continue') : button(running ? t('Skip and cancel sign-in') : t('Skip for now'), 'skipSteam', {}, { className: 'quiet' })}</span>`;
       }
-      case 2: return `${back}<span class="welcome-footer-actions">${button(t('Skip'), 'skipPreferences', {}, { className: 'quiet' })}${next(t('Continue'), 'savePreferences', { disabled: pending.has('preferences') })}</span>`;
+      case 2: return `${back}<span class="welcome-footer-actions">${button(t('Skip'), 'skipPreferences', {}, { className: 'quiet', disabled: pending.has('preferences') })}${next(t('Continue'), 'savePreferences', { disabled: pending.has('preferences') })}</span>`;
       case 3: return `${back}<span class="welcome-footer-actions">${next(t('Continue'), 'continue')}</span>`;
       default: return `${back}<span class="welcome-footer-actions">${button(t('Start using the app'), 'finish', {}, { icon: 'check', className: 'primary welcome-continue' })}</span>`;
     }
   }
 
   const head = (title, lead) => `<header class="welcome-head"><h1 id="welcome-title" tabindex="-1">${e(title)}</h1>${lead ? `<p class="welcome-lead">${e(lead)}</p>` : ''}</header>`;
-  const option = (action, value, checked, body, off) => `<button type="button" role="radio" aria-checked="${checked}" data-action="${action}" data-value="${e(value)}" class="welcome-option" data-key="${action}-${e(value)}"${off ? ' disabled' : ''}>${body}<span class="welcome-option-check" aria-hidden="true">${icon('check', 13)}</span></button>`;
+  const option = (action, value, checked, body, off) => `<button type="button" role="radio" aria-checked="${checked}" tabindex="${checked ? '0' : '-1'}" data-action="${action}" data-value="${e(value)}" class="welcome-option" data-key="${action}-${e(value)}"${off ? ' disabled' : ''}>${body}<span class="welcome-option-check" aria-hidden="true">${icon('check', 13)}</span></button>`;
 
   function pageLanguage() {
     const languageBusy = pending.has('language');
@@ -267,18 +295,29 @@ export function createWelcome(helpers) {
   function pageStart(done) {
     const language = languageOptions().find(([id]) => id === languageValue());
     const mode = { system: 'System (Auto)', light: 'Light', dark: 'Dark' }[themeMode()] || 'System (Auto)';
-    const recap = `<dl class="welcome-recap"><div><dt>${e(t('Language'))}</dt><dd>${e(language ? language[1] : t('System (Auto)'))}</dd></div><div><dt>${e(t('Appearance'))}</dt><dd>${e(t(mode))}</dd></div><div><dt>${e(t('Steam'))}</dt><dd>${e(done ? t('Signed in as {account}', { account: done }) : t('Not signed in. You’ll be asked at your first download.'))}</dd></div></dl>`;
+    const job = signInJob();
+    const request = signInRequest();
+    const waiting = !done && (job?.pending || request);
+    const steam = done ? t('Signed in as {account}', { account: done }) : job?.pending ? job.status || t('Waiting for Steam') : request ? request.stage === 'setup' ? state.setup?.status || helpers.stageHint('setup') : helpers.stageHint(request.stage) : t('Not signed in. You’ll be asked at your first download.');
+    const unsaved = [...prefs].filter(([key, value]) => Boolean(state.settings?.[key]) !== value).length;
+    const recap = `<dl class="welcome-recap"><div><dt>${e(t('Language'))}</dt><dd>${e(language ? language[1] : t('System (Auto)'))}</dd></div><div><dt>${e(t('Appearance'))}</dt><dd>${e(t(mode))}</dd></div><div><dt>${e(t('Steam'))}</dt><dd>${e(steam)}</dd>${waiting ? button(t('Finish sign-in'), 'go', { step: 1 }, { className: 'link' }) : ''}</div>${unsaved ? `<div><dt>${e(t('Preferences'))}</dt><dd>${e(t(unsaved === 1 ? '{count} change not saved' : '{count} changes not saved', { count: unsaved }))}</dd>${button(t('Review'), 'go', { step: 2 }, { className: 'link' })}</div>` : ''}</dl>`;
     return `${head(t('Setup complete'), t('Your desktop won’t change until you apply a wallpaper.'))}${recap}<div class="welcome-start"><button type="button" class="welcome-start-option" data-action="browse"><span class="dialog-guide-icon">${icon('search', 18)}</span><span class="welcome-pref-body"><span class="welcome-pref-title">${e(t('Browse the Workshop'))}</span><span class="welcome-pref-note">${e(t('Find wallpapers from Steam in Discover.'))}</span></span>${icon('chevronRight', 16)}</button><button type="button" class="welcome-start-option" data-action="import"><span class="dialog-guide-icon">${icon('plus', 18)}</span><span class="welcome-pref-body"><span class="welcome-pref-title">${e(t('Import wallpapers'))}</span><span class="welcome-pref-note">${e(t('Bring in wallpaper folders or files you already have.'))}</span></span>${icon('chevronRight', 16)}</button></div><p class="welcome-note">${e(t('You can open this guide again from Settings → Library & Steam.'))}</p>`;
   }
 
   // Actions
   async function chooseLanguage(value) {
     if (value === languageValue()) return;
+    const focused = document.activeElement;
+    const restoreFocus = focused?.matches('.welcome-option[data-action="language"]');
     await perform('language', 'languageSetting', { value: String(value) });
+    if (restoreFocus && focused.isConnected && !focused.disabled && document.activeElement === document.body) focused.focus({ preventScroll: true });
   }
   async function chooseTheme(value) {
     if (value === themeMode()) return;
+    const focused = document.activeElement;
+    const restoreFocus = focused?.matches('.welcome-option[data-action="theme"]');
     await perform('theme', 'themeSetting', { key: 'mode', value: String(value) });
+    if (restoreFocus && focused.isConnected && !focused.disabled && document.activeElement === document.body) focused.focus({ preventScroll: true });
   }
   async function skipLanguage() {
     if (initial) {
@@ -400,11 +439,11 @@ export function createWelcome(helpers) {
   });
   container.addEventListener('keydown', event => {
     const control = event.target.closest('.welcome-option');
-    if (!control || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+    if (!control || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
     const options = [...control.parentElement.querySelectorAll('.welcome-option:not([disabled])')];
     const index = options.indexOf(control);
-    const next = options[(index + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1) + options.length) % options.length];
+    const next = options[event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : (index + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1) + options.length) % options.length];
     next?.focus();
     next?.click();
   });

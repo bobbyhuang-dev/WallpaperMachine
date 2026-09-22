@@ -131,6 +131,10 @@ final class AppUpdateStore {
             guard let current = SemanticVersion(currentVersion) else {
                 return fail(.check, AppUpdateIssue(code: .configuration, detail: String(localized: "The GitHub Release update metadata is unavailable.")))
             }
+            guard let release else {
+                state = .noRelease(currentVersion: currentVersion)
+                return state
+            }
             releaseNotes = ReleaseNotes(version: release.version.display, body: release.notes)
             if release.version <= current {
                 state = .upToDate(currentVersion: currentVersion)

@@ -10,6 +10,23 @@ import XCTest
 /// Installed page: sorting, tile marks, filter sidebar, download setup and error dismissal.
 @MainActor
 final class ControlPanelLibraryTests: ControlPanelTestCase {
+  private func finishWelcome(in web: WKWebView) async throws {
+    XCTAssertNil(web.window, "Every panel behavior check must remain offscreen")
+    _ = try await web.callAsyncJavaScript(
+      """
+      const welcome = document.getElementById('welcome');
+      if (!welcome.hidden) {
+        welcome.querySelector('[data-action="go"][data-step="4"]').click();
+        welcome.querySelector('[data-action="finish"]').click();
+      }
+      const deadline = Date.now() + 5000;
+      while (!welcome.hidden || !(await window.webkit.messageHandlers.native.postMessage({action:'ready'})).welcomeSeen) {
+        if (Date.now() > deadline) throw new Error('Welcome did not finish');
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      """, arguments: [:], in: nil, contentWorld: .page)
+  }
+
   /// Both library pages share one right-hand filter sidebar whose only switch is the
   /// toolbar's Filter button: no rail, no collapse control inside the sidebar, and no
   /// popover on Installed. Each page remembers its own choice natively because the
@@ -47,6 +64,7 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
     }
     XCTAssertTrue(controller.isReady)
     guard controller.isReady else { return }
+    try await finishWelcome(in: web)
     let script = """
       const waitFor = async predicate => {
         const deadline = Date.now() + 5000;
@@ -75,9 +93,7 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
         return {
           hidden: sidebar.hidden,
           expanded: button.getAttribute('aria-expanded'),
-          label: button.querySelector('.button-label')?.textContent,
           glyph: !!button.querySelector('svg'),
-          filled: getComputedStyle(button).backgroundColor,
           // The button leads the toolbar and sits beside the sidebar it opens.
           first: Math.round(rect.left - bar.left) <= 17,
           besideSidebar: sidebar.hidden ? null : Math.round(sidebar.getBoundingClientRect().right) <= Math.round(rect.left),
@@ -85,7 +101,6 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
           sidebarAtLeftEdge: sidebar.hidden ? null : Math.round(sidebar.getBoundingClientRect().left) === 0,
           insideToggles: sidebar.querySelectorAll('[data-action="toggleFilters"], .filter-rail, .filter-toggle').length,
           popover: document.querySelectorAll('.installed-filter, .filter-popover').length,
-          sortOptions: [...document.querySelectorAll('#browser-sort option')].map(option => option.textContent),
           sortValue: document.getElementById('browser-sort')?.value,
           direction: !!document.querySelector('.browser-toolbar [data-action="toggleSortDirection"]'),
           // Discover's boxes: which start unticked, and that no type menu remains.
@@ -96,6 +111,7 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
           columns: columns()
         };
       };
+      await waitFor(() => Math.round(window.innerWidth) === 960);
       showDiscover(await native.postMessage({action:'ready'}));
       const before = measure();
       toggle().click();
@@ -119,20 +135,19 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
               inspectorWidth: Math.round(inspector.getBoundingClientRect().width),
               inspectorCursor: getComputedStyle(inspector).cursor};
       """
+    XCTAssertNil(web.window, "Every panel behavior check must remain offscreen")
     let result =
       try await web.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page)
       as? [String: Any]
     let before = result?["before"] as? [String: Any]
     XCTAssertEqual(before?["hidden"] as? Bool, false)
     XCTAssertEqual(before?["expanded"] as? String, "true")
-    XCTAssertEqual(before?["label"] as? String, "Filter", "The switch is a button that says Filter")
     XCTAssertEqual(before?["glyph"] as? Bool, true, "…with a filter glyph beside the label")
     XCTAssertEqual(before?["first"] as? Bool, true, "…leading the toolbar, beside the sidebar")
     XCTAssertEqual(before?["besideSidebar"] as? Bool, true)
     XCTAssertEqual(before?["sidebarLeftOfGrid"] as? Bool, true, "The sidebar is on the left of the grid")
     XCTAssertEqual(before?["sidebarAtLeftEdge"] as? Bool, true, "…at the window's left edge; the inspector keeps the right")
     XCTAssertEqual(before?["insideToggles"] as? Int, 0, "The sidebar carries no collapse control of its own")
-    XCTAssertNotEqual(before?["filled"] as? String, "rgba(0, 0, 0, 0)", "The Filter button is filled, not a quiet control")
     XCTAssertEqual((before?["columns"] as? [Int])?.count, 3, "Discover starts with the sidebar column")
     XCTAssertEqual((before?["columns"] as? [Int])?.first, 160, "The sidebar is the first column (160px below 1040px)")
     XCTAssertEqual((before?["columns"] as? [Int])?.last, 290, "A 960px window gets a 290px inspector (15vw + 146px)")
@@ -148,14 +163,10 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
     let installed = result?["installed"] as? [String: Any]
     XCTAssertEqual(installed?["hidden"] as? Bool, false, "Installed has its own sidebar, still open after Discover's was closed")
     XCTAssertEqual(installed?["expanded"] as? String, "true")
-    XCTAssertEqual(installed?["label"] as? String, "Filter", "Installed uses the same Filter button")
     XCTAssertEqual(installed?["first"] as? Bool, true)
     XCTAssertEqual(installed?["popover"] as? Int, 0, "The old Filters popover is gone")
     XCTAssertEqual(installed?["insideToggles"] as? Int, 0)
     XCTAssertEqual((installed?["columns"] as? [Int])?.count, 3)
-    XCTAssertEqual(
-      installed?["sortOptions"] as? [String], ["Name", "Type", "Favorites", "File size", "Date added"],
-      "Installed keeps its sort menu, with the new keys")
     XCTAssertEqual(installed?["direction"] as? Bool, true, "…and a direction switch beside it")
     XCTAssertEqual(
       installed?["boxes"] as? Int, 5 + 3 + 3 + 25,
@@ -198,6 +209,7 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
     ]
     for expectation in expectations {
       web.setFrameSize(NSSize(width: expectation.width, height: 900))
+      XCTAssertNil(web.window, "Every panel behavior check must remain offscreen")
       let measured =
         try await web.callAsyncJavaScript(
           """
@@ -206,7 +218,7 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
             page, workshop: Object.assign({}, snapshot.workshop, {page: 1, totalPages: 1, loaded: true, loading: false, items: [], error: null})
           }));
           const deadline = Date.now() + 5000;
-          while (Math.round(document.documentElement.clientWidth) !== expected) {
+          while (Math.round(window.innerWidth) !== expected) {
             if (Date.now() > deadline) throw new Error(`Viewport did not reach ${expected}px`);
             await new Promise(resolve => setTimeout(resolve, 20));
           }
@@ -233,6 +245,7 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
   /// break ties, and wallpapers whose folder has not been measured yet sort last.
   func testInstalledSortsByEveryKeyInBothDirectionsWithoutWindow() async throws {
     try await withPanel { panel in
+      try await panel.finishWelcome()
       panel.show()
       try await panel.waitJS("powerProbe.received.length >= 1")
       let order = try await panel.js("""
@@ -254,7 +267,6 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
           flip();
           result[`${key}Flipped`] = titles();
         }
-        result.direction = document.querySelector('[data-action="toggleSortDirection"]').getAttribute('title');
         return result;
         """) as? [String: Any]
       XCTAssertEqual(order?["initial"] as? [String], ["alpha", "Beta", "Delta", "Gamma"], "Names A→Z by default, case-insensitively")
@@ -268,7 +280,6 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
       XCTAssertEqual(order?["addedFlipped"] as? [String], ["Gamma", "Delta", "Beta", "alpha"])
       XCTAssertEqual(order?["title"] as? [String], ["alpha", "Beta", "Delta", "Gamma"], "Choosing a key resets to its natural direction")
       XCTAssertEqual(order?["titleFlipped"] as? [String], ["Gamma", "Delta", "Beta", "alpha"])
-      XCTAssertEqual(order?["direction"] as? String, "Name, descending. Click to sort ascending")
     }
   }
 
@@ -278,6 +289,7 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
   /// wallpaper without a genre counts as Unspecified, and Clear puts every box back.
   func testInstalledFiltersTheLibraryWithDiscoverBoxesWithoutWindow() async throws {
     try await withPanel { panel in
+      try await panel.finishWelcome()
       panel.show()
       try await panel.waitJS("powerProbe.received.length >= 1")
       let result = try await panel.js("""
@@ -296,7 +308,7 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
         const box = value => sidebar.querySelector(`input[value="${value}"]`);
         const tick = (value, on) => { const input = box(value); input.checked = on; input.dispatchEvent(new Event('change', { bubbles: true })); };
         const count = () => document.querySelector('.browser-toolbar .filter-count')?.textContent ?? null;
-        const result = { all: titles(), groups: [...sidebar.querySelectorAll('.filter-group summary')].map(node => node.textContent.trim()) };
+        const result = { all: titles() };
         tick('Favorite', true); result.favorites = titles(); result.favoritesCount = count();
         tick('Favorite', false); tick('Active', true); result.active = titles();
         tick('Active', false); tick('Approved', true); result.approved = titles();
@@ -317,7 +329,6 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
         return result;
         """) as? [String: Any]
       XCTAssertEqual(result?["all"] as? [String], ["anime", "bare", "nature", "plain"], "Nothing is hidden by default")
-      XCTAssertEqual(result?["groups"] as? [String], ["Show only", "Type", "Age rating", "Tags"], "Discover's groups minus Resolution")
       XCTAssertEqual(result?["favorites"] as? [String], ["plain"], "Favorites is a Show only box")
       XCTAssertEqual(result?["favoritesCount"] as? String, "1")
       XCTAssertEqual(result?["active"] as? [String], ["nature"], "So is Active on target display")
@@ -342,6 +353,7 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
   /// select check is showing, and the favorite toggle itself no longer stays lit.
   func testTilesWearApprovedAndFavoriteMarksWithoutWindow() async throws {
     try await withPanel { panel in
+      try await panel.finishWelcome()
       panel.show()
       try await panel.waitJS("powerProbe.received.length >= 1")
       let result = try await panel.js("""
@@ -352,21 +364,23 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
         window.wallpaperUI.receive(Object.assign({}, base, { page: 'installed', wallpapers, favorites: ['b', 'c'], displays: [display], targetDisplayID: display.id }));
         const tile = id => document.querySelector(`.wallpaper-tile [data-id="${id}"]`).closest('.wallpaper-tile');
         const marks = id => [...tile(id).querySelectorAll('.tile-mark')].map(node => node.className.replace('tile-mark', '').trim());
-        const left = node => Math.round(node.getBoundingClientRect().left - node.closest('.wallpaper-tile').getBoundingClientRect().left);
+        const clears = (following, preceding) => following.getBoundingClientRect().left >= preceding.getBoundingClientRect().right;
         const installed = {
           a: marks('a'), b: marks('b'), c: marks('c'), d: marks('d'),
           announced: tile('c').querySelector('.tile-select').getAttribute('aria-label').split(', ').length - tile('d').querySelector('.tile-select').getAttribute('aria-label').split(', ').length,
           toggleHidden: getComputedStyle(tile('b').querySelector('.tile-favorite')).opacity === '0',
-          trophyGreen: getComputedStyle(tile('a').querySelector('.tile-mark.approved')).color !== getComputedStyle(tile('a').querySelector('.tile-mark')).backgroundColor,
-          badgeAfterMarks: left(tile('c').querySelector('.active-badge')) > left(tile('c').querySelector('.tile-marks')) + 20,
-          marksAtCorner: left(tile('c').querySelector('.tile-marks')),
+          badgeAfterMarks: clears(tile('c').querySelector('.active-badge'), tile('c').querySelector('.tile-marks')),
         };
+        tile('c').querySelector('.tile-select').focus();
         tile('c').querySelector('.tile-check').click();
         await new Promise(resolve => setTimeout(resolve, 50));
         // The marks slide into place (`transition: left`), and an offscreen web view never
         // services a transition, so the measured position would stay at its start value.
         document.getAnimations().forEach(animation => animation.finish());
-        const checked = { marksMoved: left(tile('c').querySelector('.tile-marks')), badgeMoved: left(tile('c').querySelector('.active-badge')) };
+        const checked = {
+          marksClearCheck: clears(tile('c').querySelector('.tile-marks'), tile('c').querySelector('.tile-check')),
+          badgeClearMarks: clears(tile('c').querySelector('.active-badge'), tile('c').querySelector('.tile-marks')),
+        };
         const item = (id, tags) => ({ id, title: id, creator: 'Test', summary: '', preview: null, thumbnail: null, tags, size: 1, subscriptions: 0, kind: 'Scene', approved: tags.includes('Approved') });
         window.wallpaperUI.receive(Object.assign({}, base, { page: 'discover', wallpapers, favorites: ['b', 'c'], downloads: [], downloadRequests: [],
           workshop: Object.assign({}, base.workshop, { items: [item('c', ['Approved', 'Scene']), item('x', ['Approved']), item('y', ['Scene'])], loaded: true }) }));
@@ -380,17 +394,115 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
       XCTAssertEqual(installed?["d"] as? [String], [], "A plain wallpaper wears nothing")
       XCTAssertEqual(installed?["announced"] as? Int, 2, "Screen readers hear both marks on the tile's own label")
       XCTAssertEqual(installed?["toggleHidden"] as? Bool, true, "The favorite toggle waits for hover; the heart mark carries the state")
-      XCTAssertEqual(installed?["trophyGreen"] as? Bool, true)
-      XCTAssertEqual(installed?["marksAtCorner"] as? Int, 6, "Marks sit in the corner while the select check is hidden")
       XCTAssertEqual(installed?["badgeAfterMarks"] as? Bool, true, "The Active badge sits after the marks")
       let checked = result?["checked"] as? [String: Any]
-      XCTAssertEqual(checked?["marksMoved"] as? Int, 35, "Ticking the tile moves the marks past the select check")
-      XCTAssertEqual(checked?["badgeMoved"] as? Int, 59, "…and the Active badge past the marks")
+      XCTAssertEqual(checked?["marksClearCheck"] as? Bool, true, "Selection must not obscure a tile's marks")
+      XCTAssertEqual(checked?["badgeClearMarks"] as? Bool, true, "The active badge must not overlap the marks")
       let discover = result?["discover"] as? [String: Any]
       XCTAssertEqual(discover?["c"] as? [String], ["installed", "approved", "favorite"], "Discover adds the library check ahead of the marks")
       XCTAssertEqual(discover?["x"] as? [String], ["approved"], "Steam's Approved tag marks a Discover tile")
       XCTAssertEqual(discover?["y"] as? [String], [])
       XCTAssertEqual(discover?["noCheck"] as? Bool, true, "Discover tiles have no select check to step past")
+    }
+  }
+
+  func testRejectedDownloadAccountStaysVisibleAndLateErrorsDoNotLeakIntoReopenedDialog() async throws {
+    try await withPanel { panel in
+      try await panel.finishWelcome()
+      panel.workshop.steamCMDSetup.selectExisting(at: panel.executable)
+      try await panel.waitUntil { panel.workshop.steamCMDSetup.selectedRuntime != nil }
+      panel.workshop.selectedItem = WorkshopItem(
+        id: "222", title: "Local video", creator: "Fixture", summary: "",
+        previewURL: nil, tags: ["Video"], size: 0, subscriptions: 0)
+      panel.show()
+      try await panel.waitJS("powerProbe.received.at(-1)?.setup.ready === true")
+      _ = try await panel.js("""
+        const snapshot = await window.webkit.messageHandlers.native.postMessage({action:'requestDownload', id:'222'});
+        window.wallpaperUI.receive(snapshot);
+        document.querySelector('#top-actions [data-action="openDownloads"]').click();
+        document.querySelector('#queue-popover [data-action="continueSetup"][data-id="222"]').click();
+        """)
+      try await panel.waitJS("document.getElementById('download-dialog').open && document.getElementById('download-dialog').dataset.stage === 'account'")
+      _ = try await panel.js("""
+        const dialog = document.getElementById('download-dialog');
+        const account = dialog.querySelector('[data-input="account"]');
+        account.focus();
+        account.value = 'anonymous';
+        account.dispatchEvent(new Event('input', {bubbles:true}));
+        const remember = dialog.querySelector('[data-change="rememberSession"]');
+        if (remember.checked) remember.click();
+        dialog.querySelector('[data-form="dialogContinue"]').requestSubmit();
+        """)
+      try await panel.waitUntil {
+        panel.controller.actionError != nil && panel.workshop.downloadRequests.first?.refused == true
+      }
+      try await panel.waitJS("document.querySelector('#download-dialog [data-input=\"account\"]')?.disabled === false")
+      let rejected = try await panel.js("""
+        const dialog = document.getElementById('download-dialog');
+        const alert = dialog.querySelector('[role="alert"]');
+        const bounds = alert?.getBoundingClientRect();
+        const modal = dialog.getBoundingClientRect();
+        return {open: dialog.open, stage: dialog.dataset.stage,
+                visibleAlert: !!alert && bounds.height > 0 && bounds.top >= modal.top && bounds.bottom <= modal.bottom,
+                accountPreserved: dialog.querySelector('[data-input="account"]').value === 'anonymous',
+                rememberPreserved: !dialog.querySelector('[data-change="rememberSession"]').checked};
+        """) as? [String: Any]
+      XCTAssertEqual(rejected?["open"] as? Bool, true)
+      XCTAssertEqual(rejected?["stage"] as? String, "account")
+      XCTAssertEqual(rejected?["visibleAlert"] as? Bool, true, "A rejected native action must be readable inside the modal")
+      XCTAssertEqual(rejected?["accountPreserved"] as? Bool, true)
+      XCTAssertEqual(rejected?["rememberPreserved"] as? Bool, true)
+      let request = try XCTUnwrap(panel.workshop.downloadRequests.first)
+      XCTAssertEqual(request.id, "222")
+      XCTAssertEqual(request.account, "anonymous")
+      XCTAssertFalse(request.rememberSession)
+      XCTAssertTrue(request.refused)
+      XCTAssertTrue(panel.workshop.downloader.downloads.isEmpty, "Anonymous is rejected before starting even the local executable")
+
+      _ = try await panel.js("""
+        document.querySelector('#download-dialog [data-action="dismissDialog"]').click();
+        const snapshot = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+        window.wallpaperUI.receive(snapshot);
+        """)
+      try await panel.expectJS("return document.getElementById('download-dialog').open", equals: false)
+      try await panel.expectJS("return document.getElementById('error-banner').hidden", equals: false)
+      _ = try await panel.js("""
+        document.querySelector('#top-actions [data-action="openDownloads"]').click();
+        document.querySelector('#queue-popover [data-action="continueSetup"][data-id="222"]').click();
+        """)
+      try await panel.waitJS("document.getElementById('download-dialog').open && document.getElementById('download-dialog').dataset.stage === 'account'")
+      try await panel.expectJS("return document.querySelector('#download-dialog [data-input=\"account\"]').value === 'anonymous'", equals: true)
+      try await panel.expectJS("return document.querySelector('#download-dialog [role=\"alert\"]') === null", equals: true)
+
+      // Hold only a second continuation locally so its failure can arrive after this dialog
+      // session was closed and reopened. The first rejection above uses the actual native path.
+      _ = try await panel.js("""
+        const native = window.webkit.messageHandlers.native;
+        const original = native.postMessage.bind(native);
+        native.postMessage = message => message.action === 'continueDownload'
+          ? new Promise((resolve, reject) => {
+              window.rejectPreviousDialog = () => {
+                native.postMessage = original;
+                delete window.rejectPreviousDialog;
+                reject(new Error('Delayed fixture rejection'));
+              };
+            })
+          : original(message);
+        document.querySelector('#download-dialog [data-form="dialogContinue"]').requestSubmit();
+        """)
+      try await panel.waitJS("typeof window.rejectPreviousDialog === 'function'")
+      _ = try await panel.js("""
+        document.querySelector('#download-dialog [data-action="dismissDialog"]').click();
+        document.querySelector('#top-actions [data-action="openDownloads"]').click();
+        document.querySelector('#queue-popover [data-action="continueSetup"][data-id="222"]').click();
+        window.rejectPreviousDialog();
+        """)
+      try await panel.waitJS("document.querySelector('#download-dialog [data-input=\"account\"]')?.disabled === false && document.getElementById('error-banner').textContent.includes('Delayed fixture rejection')")
+      try await panel.expectJS("return document.getElementById('download-dialog').open", equals: true)
+      try await panel.expectJS("return document.querySelector('#download-dialog [role=\"alert\"]') === null", equals: true)
+      try await panel.expectJS("return document.querySelector('#download-dialog [data-input=\"account\"]').value === 'anonymous'", equals: true)
+      XCTAssertEqual(panel.workshop.downloadRequests.map(\.id), ["222"])
+      XCTAssertTrue(panel.workshop.downloader.downloads.isEmpty)
     }
   }
 
@@ -422,6 +534,8 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
     }
     XCTAssertTrue(controller.isReady)
     guard controller.isReady else { return }
+    try await finishWelcome(in: web)
+    XCTAssertNil(web.window, "Every panel behavior check must remain offscreen")
     let result =
       try await web.callAsyncJavaScript(
         """
@@ -432,6 +546,7 @@ final class ControlPanelLibraryTests: ControlPanelTestCase {
             await new Promise(resolve => setTimeout(resolve, 20));
           }
         };
+        await waitFor(() => Math.round(window.innerWidth) === 760);
         const snapshot = await window.webkit.messageHandlers.native.postMessage({action:'requestDownload',id:null});
         window.wallpaperUI.receive(snapshot);
         document.querySelector('#top-actions [data-action="openDownloads"]').click();

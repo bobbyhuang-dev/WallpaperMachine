@@ -25,11 +25,71 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-22 — Safe integration of remote UI and property-label changes
+
+- Push of local commit 2dd31b0 was rejected because origin/main advanced from 80f191b to 30e2ac7. Fetched the remote and rebased without force-pushing or dropping the upstream commit.
+- Merged upstream PropertyImageCache, inert rich-label rendering and allowlisted image routes, independent inspector scrolling/fixed footer, settings navigation/disclosures and branding work with local macOS-oriented styling, accessible Modified flags, recovery/focus fixes and noRelease updater handling.
+- Pre-integration full gate on the local change: python3 scripts/test.py: 141 Python passed; 557 native passed, 0 failed, 11 skipped. That result predates the fetched upstream changes; integration coverage below is scoped to affected domains.
+- Integrated native regression run: python3 scripts/test.py --only AppUpdateTests --only ControlPanelShellTests --only ControlPanelLibraryTests --only ControlPanelDiscoverTests --only ControlPanelSyncTests --only ControlPanelWindowSizingTests --only PropertyImageCacheTests --only WebPanelAssetsTests --only WebPanelPerformanceSettingsTests --only WebPanelSceneSettingsTests --only WebPanelAssetPropertiesTests --only WebPanelPropertyLabelTests --only WebPanelDeliveryStatusTests: 106 passed, 0 failed, 0 skipped.
+- Incoming script changes/catalog integration: python3 scripts/tests/test_brand.py and python3 scripts/tests/test_panel_localization.py: 5 passed each.
+- After final merged-label wrapping and popup-menu spacing adjustments: python3 scripts/test.py --only ControlPanelShellTests --only WebPanelPropertyLabelTests --only AppUpdateTests: 44 passed, 0 failed, 0 skipped.
+- Isolated source UI: 760x560 and 960x640 retained three columns, one activation control, safe author presentation without author controls/scripts, separate localized Modified flags, non-overlapping fixed editor footer, Advanced disclosure and no-release Check Again. Final 760px menu padding is 26px; Modified wraps without splitting Movement.
+- Verification histories from both branches preserved, exact duplicates removed and ten active entries retained. Only existing recorded sections were reconciled; this record is appended through log_verification.py. The unrelated untracked power-regression document is retained outside this commit.
+- No live GitHub update probe, author-image CDN traffic, real Steam, desktop control, app restart or Release build. Integration preview tab/service released; current desktop presentation and power remain unverified.
+
 ## 2026-09-22 — Integrated settings and inspector commit with remote main
 
 - Rebased the approved UI, branding and property image changes onto origin/main, preserving remote release-note UI and authored property compatibility changes. Resolved the settings CSS overlap by retaining readable disclosure text and the release-note rules; preserved both verification histories.
 - python3 scripts/test.py passed on the integrated tree: 142 Python tests; 550 native passed, 0 failed, 11 opt-in skipped of 561.
 - No new renderer changes authored during integration. No Release rebuild, installation, app launch, restart, screenshots or desktop changes as part of commit and push. The earlier built app predates this remote integration.
+
+## 2026-09-22 — Normal no-release update feedback before commit
+
+- Fixed missing latest-release handling: fetchLatestRelease returns an optional result; a GitHub latest-release 404 is normal only after the repository endpoint returns successful valid metadata. Inaccessible repositories, failed lookups and malformed metadata remain failures.
+- State/presentation: noRelease uses neutral localized feedback and Check Again without manual-install recovery. Existing equal/older latest releases remain upToDate. No normal absence is represented as an update error, and no transport/configuration error is relabeled as upToDate.
+- Regression baseline: python3 scripts/test.py --only AppUpdateTests: 22 passed, 2 failed of 24, reproducing the missing-release error state and incorrect classification of the repository-lookup failure.
+- Targeted after fix: python3 scripts/test.py --only AppUpdateTests --only ControlPanelShellTests: 41 passed, 0 failed, 0 skipped. Real URLSession requests use per-fixture URLProtocol responses; no GitHub connection. About is exercised through offscreen WKWebView, including checking again after an empty result.
+- Final gate once: python3 scripts/test.py: 141 Python tests passed; 557 native passed, 0 failed, 11 skipped of 568. No desktop UI, network or media opt-ins enabled.
+- Isolated source-UI smoke: English and Simplified Chinese no-release, up-to-date and network-error states rendered with real WebUI modules; actual Check Again click and accessibility snapshot verified. Normal states show only Check Again; failures retain Retry and Open GitHub Releases.
+- SourceKit reported no references/definitions for known updater symbols despite a ready server; reported to tool QA, used scoped source discovery, migrated every conformer and relied on the full compiler/test gate.
+- Cleanup/limits: updater preview tab and task-owned localhost service released; temporary message fixture removed. Native action/payload shapes, download validation and install confirmation unchanged. No Release rebuild for this fix; the previously delivered app still contains the earlier updater behavior.
+
+## 2026-09-22 — Release rebuilt with macOS and Wallpaper Engine UI blend
+
+- Requested delivery build; production changes are WebUI presentation with existing renderer/bindings. Confirmed cached libwallpaper_bridge.a and all generated Swift/FFI binding files exist.
+- Prebuild gate: python3 scripts/test.py: 141 Python tests passed; 553 native passed, 0 failed, 11 skipped. No --ui, network or media opt-ins enabled.
+- Build: python3 scripts/build.py --swift-only --configuration Release: exit 0. Delivered build/Build/Products/Release/WallpaperMachine.app, version 0.5.0 (16).
+- Bundle verification: diff -rq WebUI build/Build/Products/Release/WallpaperMachine.app/Contents/Resources/WebUI: exit 0; all 14 current source files, including any untracked files, match the bundle byte-for-byte.
+- WebUI identity: SHA-256 of the sorted relative-path/file-digest manifest is 60d34fccb1a33e37a35c3572070c686fd8bfef383cd8b52c5de2a2e9420d6696; no mismatches. Identity was computed from actual filesystem contents, not only Git revision/diff.
+- Signing: codesign --verify --deep --strict build/Build/Products/Release/WallpaperMachine.app: exit 0.
+- No packaging/install step and no application launch, quit or restart performed. User must quit the running copy and reopen the delivered app to load the changes.
+- Limits: this proves the Release build and bundled source identity, not actual desktop presentation, live Steam, wallpaper rendering or power consumption.
+
+## 2026-09-22 — Wallpaper Engine workflow with macOS visual treatment
+
+- Direction: Wallpaper Engine image-first gallery/filter/inspector structure with macOS-oriented system typography, neutral selected navigation, restrained accent use, grouped settings and setup-assistant surfaces. Not a Windows window/control skin.
+- Implementation: existing panel/settings/welcome CSS updated; presentation-only JS adjusts anchor-aware popover sizing, real DOM order for trailing default dialog actions, and secondary styling for already-installed resource re-download. Native action names, payloads, persistence, theme contrast algorithm and existing state/security fixes unchanged.
+- Initial targeted iteration: python3 scripts/test.py --only ControlPanelShellTests --only ControlPanelLibraryTests --only ControlPanelDiscoverTests --only ControlPanelSyncTests: 40 passed, 0 failed, 0 skipped.
+- Final gate after corrections, once: python3 scripts/test.py: 141 Python tests passed; 553 native passed, 0 failed, 11 skipped (2 live Workshop network and 9 NativeVideoPlayerMedia opt-ins). No --ui, network or media opt-in enabled.
+- Isolated visual pass: 152 captures across eight viewport/language/theme configurations; 760x560, 960x640, 1440x900 en-light/zh-dark plus 960 zh-light/en-dark. One consolidated correction batch and 56 confirmation captures; two independent reviewers scored their five library/settings and three flow findings resolved.
+- Observed: settings menu indicators and left-aligned category labels, artwork-independent selection ring, single-line 12px captions at narrow widths, complete import failure feedback, visible trailing Submit and matching DOM/Tab order. Three square columns and no horizontal overflow retained at 760px.
+- Real browser input: hover reached scale 1.08, reduced motion stayed 1; arrow-key tile navigation and keyboard icon focus ring worked; selection did not apply; welcome radio navigation/inert background remained intact. Enter still routed downloadInput and cleared the synthetic response; rejected actions remained visible in the dialog.
+- Popover stress: with a multiline business-error banner shifting the Import trigger, the anchor-derived popover stayed inside the viewport. No fixed trigger-height assumption or periodic measurement/timer added.
+- Cleanup: owning control-panel documentation and local link targets updated; temporary preview fixture removed. Task-owned headless reference/preview tabs and localhost service released. Synthetic screenshot evidence remains disposable; no shared artifact purge.
+- Limits: offscreen WKWebView behavior and isolated Chromium source-UI visuals only. No desktop control, real Steam login, wallpaper changes, permission approval or app restart. Real desktop presentation and power remain unverified. No Release build; the running app does not automatically acquire these source changes.
+
+## 2026-09-22 — Control panel UI and UX refinement
+
+- Implementation: completed the five approved WebUI steps; existing native actions, snapshot fields, defaults, window minimum and design identity retained. No frontend dependencies or production resource files added.
+- Baseline: offscreen WebKit reproduced settings overflow, lock availability, welcome focus and revealed-password loss; isolated Chromium reproduced secondary-only playback and unrelated Reconnect. The native anonymous-account regression reproduced missing modal feedback.
+- Targeted: python3 scripts/test.py --only ControlPanelShellTests --only ControlPanelLibraryTests --only ControlPanelDiscoverTests --only ControlPanelSyncTests --only WebPanelPerformanceSettingsTests --only WebPanelSceneSettingsTests --only WebPanelAssetPropertiesTests --only WebPanelPropertyLabelTests: 66 passed, 0 failed, 0 skipped.
+- Full gate, once after integration: python3 scripts/test.py: 141 Python tests passed; 553 native passed, 0 failed, 11 skipped (2 live Workshop network and 9 NativeVideoPlayerMedia opt-ins). No --ui, network or media opt-in enabled.
+- Isolated visual evidence: 13 viewport/language/theme configurations, 582 first-round captures including supplemental welcome states; consolidated fixes followed by 78 confirmation captures. Sizes 760x560, 960x640, 1440x900; English/Chinese, light/dark, warm/cool, black/white accent and reduced motion.
+- Runtime: real browser pointer and keyboard exercised hover, adjacent selection, Tab/Shift-Tab, radio arrows/Home/End, focus isolation, pending navigation, prompt handoff, empty recovery, property Reset and retained import results. Narrow dialog Submit/Cancel and queue retry remain reachable by keyboard/scroll; six-second sign-in handoff observed at 6023ms.
+- Motion: captured 105 Chromium screencast frames and encoded a short hover GIF; observed scale interpolation 1 to 1.08 and back, reduced-motion scale 1. The standard WebM encoder was unavailable because host ffmpeg could not load libvpx.11.dylib; no tools were installed or patched.
+- Documentation: updated control-panel, workshop-downloads and native coverage owners; local link targets checked. Published changelog remains release-generated. Removed task-owned preview scripts/raw frames; retained disposable synthetic screenshots and review evidence. clean.py --dry-run also included shared artifacts, so no blanket purge was performed.
+- Isolation: task-owned Chromium tab and localhost preview service released. No application launch/restart, desktop control, real Steam login, wallpaper changes or system permission approval. No Release build; the running app still has the old behavior.
+- Limits: Chromium source WebUI visual/runtime evidence and offscreen WKWebView behavior only. Actual desktop WKWebView presentation, system dialogs, real Steam, wallpaper presentation and power consumption remain unverified.
 
 ## 2026-09-22 — Release build for Perfect Wallpaper compatibility repair
 
@@ -71,51 +131,3 @@ Reworked the release system end to end. scripts/release_notes.py writes the GitH
 - diff -qr WebUI build/Build/Products/Release/WallpaperMachine.app/Contents/Resources/WebUI passed with no differences: all bundled WebUI files match current source, including the improved Settings page.
 - codesign --verify --deep --strict build/Build/Products/Release/WallpaperMachine.app passed.
 - Delivered build/Build/Products/Release/WallpaperMachine.app. Did not launch, quit, install or restart the app; user must quit and reopen this built app. Desktop visuals and live wallpaper behavior were not checked.
-
-## 2026-09-22 — Bound and cancel shared property image loads
-
-- PropertyImageCache now tracks per-URL consumers, limits active transfers to four across hosts, cancels abandoned queued/active loads, and retains retiring slots until worker completion. Generation identity prevents stale completions affecting a replacement load.
-- python3 scripts/test.py --only PropertyImageCacheTests --only WebPanelAssetsTests — exit 0 after correcting an initializer shadowing error and continuation type inference; 8 passed, 0 failed, 0 skipped.
-- Delayed URLProtocol regressions exercise cancellation with an incomplete response, transport stop, same-URL retry, a 12-request/two-host burst capped at four transfers, queued cancellation without network work, and reuse of all four slots. Fixture sessions never reach the network.
-- python3 scripts/test.py — exit 0; Python suites passed; native 544 passed, 0 failed, 11 opt-in tests skipped.
-- Updated control-panel cache lifecycle documentation. No temporary smoke files created; shared test evidence retained. No Release build, desktop interaction, renderer run, or live-network test.
-
-## 2026-09-22 — Settings full gate and branding test review
-
-- Inspected the reported website-icon failure against current generated output: the 256px Day raster contains an opaque black centered frame spanning 61–194 on both central axes. Unmodified current branding suite passed all five tests; the earlier missing-frame result was not reproduced on the current tree.
-- Revised scripts/tests/test_brand.py to assert a visible opaque frame, opposing margin symmetry and colored opaque interior rather than pinning artwork to a 61px inset. Branding generator and production artwork were not changed.
-- Throwaway mutation check: centered artwork at another scale passed; shifted, missing and solid-black artwork each failed the revised test. Temporary outputs removed.
-- python3 scripts/test.py passed: 104 Python tests; 542 native passed, 0 failed, 11 skipped of 553. This supersedes the earlier settings verification blockers.
-- Skipped: nine opt-in NativeVideoPlayerMediaTests and two live-network WorkshopTests. Offscreen panel navigation and settings regression passed in the full gate.
-- Settings layout/interactions retain the headless evidence recorded in prior entries. Desktop visual inspection, screenshots, real Steam/audio operations and live wallpapers were not exercised. No Release build or app restart.
-
-## 2026-09-22 — Wallpaper Engine style property inspector
-
-- Focused native gate: WebPanelPropertyLabelTests, PropertyImageCacheTests and WebPanelAssetsTests — exit 0; 8 passed, 0 failed, 0 skipped.
-- python3 scripts/test.py — exit 0; Python suites passed; native 542 passed, 0 failed, 11 skipped (9 opt-in media/device cases, 2 live Steam cases).
-- Isolated native image-loader smoke fetched all six author artwork files from the selected local wallpaper: four GIFs (7, 9, 26 and 60 frames) and two PNGs; all decoded successfully.
-- Headless Chromium loaded all 14 authored image placements using those fetched bytes; exercised checkbox labels, keyboard slider changes, combo selection, reset, author links, Apply and Revert against an isolated bridge recorder.
-- DOM geometry at window widths 760, 960, 1280 and 1830: no property overflow or label/control overlap; edit footer remained visible and stationary during scrolling. Light/dark theme and keyboard reset visibility checked.
-- Impeccable detector over panel.css, panel.js and property-label.js — exit 0, no findings.
-- No desktop interaction or screenshots; live WKWebView visual appearance and animation smoothness were not visually verified. No renderer/corpus run or Release rebuild.
-- Removed the owned smoke runner and downloaded private artwork; preserved other sessions' artifacts after clean.py --dry-run listed 1.65 GB of shared evidence.
-
-## 2026-09-22 — Settings verification after panel dependency integration
-
-- The concurrently added WebUI/property-label.js is now present. Added its exact filename to WebPanelAssets.files; no routing policy or origin checks changed. Removed one duplicate Chinese translation introduced during concurrent catalog edits.
-- python3 scripts/test.py --only ControlPanelShellTests: current-source offscreen WebKit run passed 11 tests, 0 failed, 0 skipped, including settings keyboard navigation, scroll reset, focus and disclosure preservation.
-- python3 scripts/test.py: latest full-gate attempt stops in scripts/tests/test_brand.py::BrandTests.test_website_icon_centers_the_display_frame (Day icon must have a black display frame). Branding implementation and tests are outside the Settings change and were left untouched. Full gate is not passing; no native results are claimed for that attempt.
-- Settings headless geometry and interaction coverage is recorded in the preceding settings entry: all seven categories, English/Chinese, light/dark, minimum/wide windows, long content and renderer-unavailable state. Final isolated settings check passed 42 layout cases after navigation alignment fix.
-- Documentation updated in control-panel.md and performance.md. Owned smoke tabs and local server closed; no temporary source files created.
-- No desktop screenshots, live wallpaper changes, real Steam/audio integration, Release build, or app restart. Running app retains the old behavior.
-
-## 2026-09-22 — Website icons synchronized with centered native variants
-
-- python3 scripts/brand.py --skip-app --website ../WallpaperMachineWebiste — exit 0; updated brand images, all three SVG/PNG appearances, favicons, touch icons and manifest without rewriting app resources.
-- New rendered website regression failed against the old charcoal artwork; final python3 -m unittest discover -s scripts/tests -p test_brand.py passed all 5 tests.
-- Headless Chromium decoded all three PNG/SVG variants and browser icons. At 256 px, all six variant renders have equal 61/61 px display-frame margins on both axes and transparent corners; canvas contact sheet visually inspected.
-- Browser pixel checks also confirmed equal frame margins for 16/32 px favicons, SVG favicon, 180 px touch icon and 192/512 px manifest icons.
-- Website variant PNGs match WebUI/app-icons/{minimal,day,night}.png byte-for-byte; default app-icon.png matches Day.
-- python3 scripts/test.py — exit 0; Python checks passed; native 539 passed, 0 failed, 11 skipped of 550.
-- Impeccable detector on the website asset directory returned no findings. Website contains assets only, no pages or separate product photos.
-- No Release rebuild, desktop capture, app launch/restart or appearance change. Native app resources intentionally unchanged.

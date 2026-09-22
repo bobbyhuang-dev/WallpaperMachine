@@ -63,9 +63,14 @@ Swift tests cover, without starting the app:
   published executable through the real PTY downloader and asserts imported
   manifest and media bytes. Fixtures do not prove that Valve's current
   distribution passes this Mac's policy.
-- **GitHub updates** — fixture JSON and a fake client: version comparison, asset
-  selection, host allowlisting, progress clamping, classified errors, install
-  retry/timeout. They never contact GitHub, download a real archive, or replace
+- **GitHub updates** — fixture JSON, a fake client and isolated URLSession
+  responses: version comparison, asset selection, host allowlisting, progress
+  clamping, classified errors and install retry/timeout. A missing latest release
+  is normal only after the repository is confirmed reachable; missing repositories,
+  failed lookups and malformed metadata remain errors. Rechecking clears stale
+  release notes/availability and can discover a later release. The offscreen About
+  flow also checks again from the no-release state before downloading a fixture
+  update. These tests never contact GitHub, download a real archive, or replace
   the running app.
 - **Panel** — the offscreen `WKWebView` suites share `ControlPanelTestCase`
   (`Tests/Unit/Panel/`) and split by page: `ControlPanelShellTests` (window,
@@ -104,6 +109,17 @@ Swift tests cover, without starting the app:
   download fixture that observes password-prompt/downloading transitions.
   Editor-state tests cover locale-specific scaling, invalid raw text, and
   independent wallpaper/field drafts.
+  Refinement regressions cover secondary-only global playback and the no-assignment
+  state; 760px settings containment with long native select options and reports;
+  active numeric/search drafts, caret, disclosure and scroll preservation;
+  theme changes without renderer settings and explicit lock-screen unavailability;
+  onboarding background focus isolation and Steam prompt focus transitions;
+  revealed-password retention without a value attribute or HTML echo, followed
+  by submit clearing through the fake Steam runtime; and real native rejection
+  of an anonymous download account with modal feedback, retained intent and
+  late-error isolation after reopening. Non-onboarding page scenarios finish the
+  visible welcome flow first. These checks remain windowless; they do not prove
+  desktop presentation or animation smoothness.
 - **Appearance** — preference recreation, rejection of invalid changes without
   overwriting saved values, recovery from a damaged saved accent, reset
   isolation, plus an offscreen appearance regression that commits the real

@@ -84,6 +84,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       controller.isReady,
       "Bundled ES modules must load under the custom scheme and reach the native reply bridge")
     guard controller.isReady else { return }
+    try await finishWelcome(in: web)
     let result =
       try await web.callAsyncJavaScript(
         """
@@ -107,6 +108,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
 
   func testSettingsKeyboardNavigationResetsScrollAndPreservesDisclosureState() async throws {
     try await withPanel { panel in
+      try await panel.finishWelcome()
       panel.web.setFrameSize(NSSize(width: 760, height: 560))
       try await panel.waitJS("window.innerWidth === 760")
       let result = try await panel.js("""
@@ -165,6 +167,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
     for language in ["en", "zh-Hans"] {
       let controller = WebPanelController(
         store: fixture.store, navigation: ControlPanelNavigation(), workshop: workshop,
+        defaults: defaults,
         appLanguage: AppLanguageStore(defaults: defaults, systemLanguages: [language]))
       let web = controller.makeWebView()
       defer { controller.stop() }
@@ -174,6 +177,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
         try await Task.sleep(for: .milliseconds(100))
       }
       guard controller.isReady else { return XCTFail("\(language): panel did not become ready") }
+      try await finishWelcome(in: web)
       rendered[language] =
         try await web.callAsyncJavaScript(
           """
@@ -249,6 +253,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       try await Task.sleep(for: .milliseconds(100))
     }
     guard controller.isReady else { return XCTFail("panel did not become ready") }
+    try await finishWelcome(in: web)
     let probe = """
       const bridge = window.webkit.messageHandlers.native;
       window.wallpaperUI.receive(await bridge.postMessage({action:'navigate',page:'settings'}));
@@ -380,7 +385,6 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
       defaults: defaults)
     let client = PanelUpdateClient()
-    client.release = PanelUpdateClient.release(version: "1.1.0", notes: PanelUpdateClient.notesBody)
     let installer = PanelUpdateInstaller()
     let updater = AppUpdateStore(
       currentVersion: "1.0.0", client: client, installer: installer,
@@ -402,7 +406,37 @@ final class ControlPanelShellTests: ControlPanelTestCase {
     }
     XCTAssertTrue(controller.isReady)
     guard controller.isReady else { return }
+    try await finishWelcome(in: web)
 
+    let noRelease = try await web.callAsyncJavaScript(
+      """
+      const waitFor = async predicate => {
+        const deadline = Date.now() + 5000;
+        while (!predicate()) {
+          if (Date.now() > deadline) throw new Error('No-release update check did not settle');
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+      };
+      window.wallpaperUI.receive(await window.webkit.messageHandlers.native.postMessage({action:'ready'}));
+      document.querySelector('.tabs [data-page="settings"]').click();
+      await waitFor(() => !document.getElementById('settings-content').hidden);
+      document.querySelector('[data-section="about"]').click();
+      const card = document.querySelector('[data-key="about-updates"]');
+      card.querySelector('[data-action="checkForUpdates"]').click();
+      await waitFor(() => card.getAttribute('aria-busy') === 'false'
+        && card.querySelector('[data-action="checkForUpdates"]')?.disabled === false);
+      const reply = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+      return {status:reply.update.status,
+        canCheckAgain:card.querySelector('[data-action="checkForUpdates"]').getClientRects().length > 0,
+        offersInstall:!!card.querySelector('[data-action="downloadUpdate"], [data-action="installUpdate"]'),
+        offersManualRecovery:!!card.querySelector('[data-action="openReleases"]')};
+      """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+    XCTAssertEqual(noRelease?["status"] as? String, "noRelease")
+    XCTAssertEqual(noRelease?["canCheckAgain"] as? Bool, true)
+    XCTAssertEqual(noRelease?["offersInstall"] as? Bool, false)
+    XCTAssertEqual(noRelease?["offersManualRecovery"] as? Bool, false)
+
+    client.release = PanelUpdateClient.release(version: "1.1.0", notes: PanelUpdateClient.notesBody)
     let byTab =
       try await web.callAsyncJavaScript(
         """
@@ -435,7 +469,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
         """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
     XCTAssertEqual(byTab?["status"] as? String, "ready")
     XCTAssertEqual(byTab?["action"] as? String, "installUpdate")
-    XCTAssertEqual(client.fetchCalls, 1)
+    XCTAssertEqual(client.fetchCalls, 2)
     XCTAssertEqual(client.downloadCalls, 1)
     XCTAssertEqual(installer.installCalls, 0)
     XCTAssertEqual(
@@ -495,6 +529,17 @@ final class ControlPanelShellTests: ControlPanelTestCase {
     }
     XCTAssertTrue(controller.isReady)
     guard controller.isReady else { return }
+    try await finishWelcome(in: web)
+    let resized = try await web.callAsyncJavaScript(
+      """
+      const deadline = Date.now() + 5000;
+      while (Math.round(window.innerWidth) !== 760) {
+        if (Date.now() > deadline) throw new Error('Panel resize did not settle');
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      return true;
+      """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+    XCTAssertEqual(resized, true)
 
     let interactions =
       try await web.callAsyncJavaScript(
@@ -613,6 +658,8 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       // The default window width; narrower panels hide the identity entirely.
       panel.web.setFrameSize(NSSize(width: 1240, height: 640))
       panel.show()
+      try await panel.finishWelcome()
+      try await panel.waitJS("Math.round(window.innerWidth) === 1240")
       try await panel.waitJS("document.querySelector('#app-identity [data-action=\"openExternal\"]') !== null")
       let link = try await panel.js("""
         const bar = document.querySelector('.topbar');
@@ -658,6 +705,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
   func testTopBarKeepsTheRepositoryLinkAndNeverOverlapsAtTheMinimumWindowWidth() async throws {
     try await withPanel { panel in
       panel.show()
+      try await panel.finishWelcome()
       try await panel.waitJS("document.querySelector('#app-identity [data-action=\"openExternal\"]') !== null")
       // From the minimum content width up to the default, with a download in flight so the queue button is present too.
       let widths: [Double] = [760, 840, 900, 1040, 1240]
@@ -810,8 +858,8 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       let job = try await panel.waitForSignIn()
       try await panel.waitUntil(timeout: 10) { !job.isPending }
       XCTAssertNil(job.errorMessage, "The sign-in-only session succeeds")
-      XCTAssertEqual(
-        try String(contentsOf: panel.root.appendingPathComponent("password"), encoding: .utf8), "hunter2-secret",
+      XCTAssertTrue(
+        try String(contentsOf: panel.root.appendingPathComponent("password"), encoding: .utf8) == "hunter2-secret",
         "The password typed into the guide answers Steam's own prompt")
       try await panel.waitJS("!!document.querySelector('#welcome .welcome-status.success')")
       let signedIn = try await panel.js("""
@@ -917,6 +965,246 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       XCTAssertEqual(replay?["closed"] as? Bool, true)
       XCTAssertEqual(replay?["snapshots"] as? Int, 0, "An already-seen guide closes without another round trip")
     }
+  }
+
+  func testNarrowSettingsKeepLongControlsAndReportsInsideTheViewport() async throws {
+    try await withPanel { panel in
+      try await panel.finishWelcome()
+      panel.web.setFrameSize(NSSize(width: 760, height: 560))
+      try await panel.waitJS("Math.round(window.innerWidth) === 760")
+      let result = try await panel.js("""
+        const base = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+        const long = 'External studio display with a detailed compatibility explanation '.repeat(8);
+        const settings = {...base.settings, videoBackend:'native_preferred', sceneRenderer:'native_metal_preferred',
+          videoBackends:[{displayId:'primary', displayName:long, wallpaperTitle:long, backend:'Compatibility', fallbackReason:long}],
+          sceneRenderers:[{displayId:'primary', display:long, wallpaperTitle:long, backend:'legacy_vulkan', fallbackReason:long}]};
+        const displays = [{...base.displays[0], id:'secondary', title:long, enabled:true, mode:'mirror',
+          mirrorTarget:'primary', mirrorTargets:[{id:'primary', title:long}]}];
+        window.wallpaperUI.receive({...base, page:'settings', settings, displays});
+        const failures = [];
+        for (const section of ['performance', 'displays']) {
+          document.querySelector(`[data-section="${section}"]`).click();
+          const page = document.getElementById(`settings-${section}`);
+          const scroll = document.querySelector('.settings-scroll');
+          for (const node of page.querySelectorAll('select, .settings-label, .settings-note, .settings-list')) {
+            if (!node.getClientRects().length) continue;
+            const rect = node.getBoundingClientRect();
+            if (rect.left < -1 || rect.right > window.innerWidth + 1)
+              failures.push(section + ':' + node.tagName);
+          }
+          if (scroll.scrollWidth > scroll.clientWidth + 1 || document.documentElement.scrollWidth > window.innerWidth + 1)
+            failures.push(section + ':horizontal-scroll');
+        }
+        return failures;
+        """) as? [String]
+      XCTAssertEqual(result, [], "Long selected options, labels and live reports must wrap within the minimum panel width")
+    }
+  }
+
+  func testSettingsSnapshotPreservesActiveDraftDisclosureAndScroll() async throws {
+    try await withPanel { panel in
+      try await panel.finishWelcome()
+      panel.web.setFrameSize(NSSize(width: 760, height: 560))
+      try await panel.waitJS("Math.round(window.innerWidth) === 760")
+      let result = try await panel.js("""
+        const base = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+        const state = {...base, page:'settings', settings:{...base.settings, batteryProfileEnabled:true, batteryTargetFps:30}};
+        window.wallpaperUI.receive(state);
+        document.querySelector('[data-section="performance"]').click();
+        const details = document.querySelector('[data-key="performance-context"]');
+        details.querySelector('summary').click();
+        const input = document.querySelector('[data-setting="batteryTargetFps"]');
+        input.focus();
+        input.value = '47';
+        input.dispatchEvent(new Event('input', {bubbles:true}));
+        const scroll = document.querySelector('.settings-scroll');
+        scroll.scrollTop = Math.min(120, scroll.scrollHeight - scroll.clientHeight);
+        const before = scroll.scrollTop;
+        window.wallpaperUI.receive({...state, settings:{...state.settings, batteryTargetFps:24, onBatteryPower:true}});
+        return {focused:document.activeElement === input, value:input.value,
+          disclosure:document.querySelector('[data-key="performance-context"]').open,
+          scrolled:before > 0, scrollKept:Math.abs(scroll.scrollTop - before) < 1};
+        """) as? [String: Any]
+      XCTAssertEqual(result?["focused"] as? Bool, true)
+      XCTAssertEqual(result?["value"] as? String, "47", "A live report must not replace the user's unsaved numeric input")
+      XCTAssertEqual(result?["disclosure"] as? Bool, true)
+      XCTAssertEqual(result?["scrolled"] as? Bool, true)
+      XCTAssertEqual(result?["scrollKept"] as? Bool, true)
+    }
+  }
+
+  func testSamePageSnapshotPreservesSearchDraftAndCaret() async throws {
+    try await withPanel { panel in
+      try await panel.finishWelcome()
+      let result = try await panel.js("""
+        const base = await window.webkit.messageHandlers.native.postMessage({action:'navigate', page:'installed'});
+        window.wallpaperUI.receive(base);
+        const input = document.getElementById('wallpaper-search');
+        input.focus();
+        input.value = 'unfinished search draft';
+        input.setSelectionRange(3, 11, 'backward');
+        input.dispatchEvent(new Event('input', {bubbles:true}));
+        window.wallpaperUI.receive({...base, paused:!base.paused});
+        const current = document.getElementById('wallpaper-search');
+        return {focused:document.activeElement === current, value:current.value,
+          start:current.selectionStart, end:current.selectionEnd, direction:current.selectionDirection};
+        """) as? [String: Any]
+      XCTAssertEqual(result?["focused"] as? Bool, true)
+      XCTAssertEqual(result?["value"] as? String, "unfinished search draft")
+      XCTAssertEqual(result?["start"] as? Int, 3)
+      XCTAssertEqual(result?["end"] as? Int, 11)
+      XCTAssertEqual(result?["direction"] as? String, "backward")
+    }
+  }
+
+  func testUnavailableRendererSettingsKeepAppearanceUsableButBlockUnavailableLockScreen() async throws {
+    try await withPanel { panel in
+      try await panel.finishWelcome()
+      try await panel.expectJS("""
+        const base = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+        window.wallpaperUI.receive({...base, page:'settings', settings:null});
+        document.querySelector('[data-section="appearance"]').click();
+        const mode = document.querySelector('[data-theme-setting="mode"]');
+        const enabled = !mode.disabled && mode.getClientRects().length > 0;
+        mode.value = 'dark';
+        mode.dispatchEvent(new Event('change', {bubbles:true}));
+        return enabled;
+        """, equals: true)
+      try await panel.waitUntil { panel.theme.preferences.mode == .dark }
+      try await panel.waitJS("document.documentElement.dataset.themeMode === 'dark'")
+      try await panel.expectJS("""
+        const base = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+        window.wallpaperUI.receive({...base, page:'settings', settings:{...base.settings,
+          lockScreenAvailable:false, lockScreenStatus:'Unavailable fixture', lockScreenEnabled:false, lockScreenBusy:false}});
+        document.querySelector('[data-section="general"]').click();
+        const toggle = document.querySelector('[data-setting="lockScreenEnabled"]');
+        const disabled = toggle.disabled;
+        if (!disabled) return false; // A failing baseline must not attempt to enable lock-screen integration.
+        toggle.click();
+        return disabled && !toggle.checked;
+        """, equals: true)
+    }
+  }
+
+  func testWelcomePreventsBackgroundFocusAndRestoresItAfterFinish() async throws {
+    try await withPanel { panel in
+      try await panel.waitJS("!document.getElementById('welcome').hidden")
+      try await panel.expectJS("""
+        const title = document.getElementById('welcome-title');
+        title.focus();
+        const background = document.querySelector('.tabs [data-page="settings"]');
+        background.focus();
+        return document.activeElement === title;
+        """, equals: true)
+      try await panel.finishWelcome()
+      try await panel.expectJS("""
+        const background = document.querySelector('.tabs [data-page="settings"]');
+        background.focus();
+        return document.activeElement === background;
+        """, equals: true)
+    }
+  }
+
+  func testWelcomeSteamPromptTransitionsPreserveTypingAndUserFocus() async throws {
+    try await withPanel { panel in
+      let result = try await panel.js("""
+        const base = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+        document.querySelector('#welcome [data-action="go"][data-step="1"]').click();
+        document.getElementById('welcome-password').focus();
+        const job = {id:'steam-sign-in', account:'fixture', pending:true, queued:false, authenticating:true,
+          status:'Connecting fixture', progress:null, prompt:null, challenge:null, securePrompt:false,
+          error:null, cancelled:false};
+        const receive = patch => window.wallpaperUI.receive({...base, downloads:[{...job, ...patch}], downloadRequests:[]});
+        receive({});
+        const waitingFocused = document.activeElement === document.getElementById('welcome-title');
+        receive({prompt:'Steam Guard code', challenge:'emailCode'});
+        const response = document.getElementById('welcome-response');
+        const promptFocused = document.activeElement === response && !response.disabled;
+        response.value = 'fixture-code';
+        response.setSelectionRange(2, 7);
+        receive({prompt:'Steam Guard code', challenge:'emailCode', progress:0.4, status:'Still waiting fixture'});
+        const typingKept = document.activeElement === response && response.value === 'fixture-code'
+          && response.selectionStart === 2 && response.selectionEnd === 7;
+        const cancel = document.querySelector('#welcome [data-action="cancelSignIn"]');
+        cancel.focus();
+        receive({prompt:'Steam Guard code', challenge:'emailCode', progress:0.7});
+        const actionFocusKept = document.activeElement === cancel;
+        response.focus();
+        receive({prompt:'New verification code', challenge:'emailCode'});
+        const replacement = document.getElementById('welcome-response');
+        return {waitingFocused, promptFocused, typingKept, actionFocusKept,
+          replacementFocused:document.activeElement === replacement && !replacement.disabled};
+        """) as? [String: Bool]
+      for key in ["waitingFocused", "promptFocused", "typingKept", "actionFocusKept", "replacementFocused"] {
+        XCTAssertEqual(result?[key], true, key)
+      }
+    }
+  }
+
+  func testWelcomeRevealedPasswordSurvivesSnapshotsWithoutHTMLEchoAndClearsOnSubmit() async throws {
+    try await withPanel { panel in
+      panel.show()
+      panel.workshop.steamCMDSetup.selectExisting(at: panel.executable)
+      try await panel.waitUntil(timeout: 5) { panel.workshop.steamCMDSetup.selectedRuntime != nil }
+      let result = try await panel.js("""
+        const base = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+        window.wallpaperUI.receive(base);
+        document.querySelector('#welcome [data-action="go"][data-step="1"]').click();
+        const region = document.getElementById('welcome');
+        const account = document.getElementById('welcome-account');
+        account.value = 'LocalTest';
+        account.dispatchEvent(new Event('input', {bubbles:true}));
+        const password = document.getElementById('welcome-password');
+        const secret = 'panel-only-synthetic-secret';
+        password.focus();
+        password.value = secret;
+        region.querySelector('[data-action="reveal"]').click();
+        const shown = password.type === 'text';
+        account.focus();
+        window.wallpaperUI.receive({...base, paused:!base.paused});
+        const shownKept = password.value === secret;
+        const noEchoShown = !password.hasAttribute('value') && !document.documentElement.innerHTML.includes(secret);
+        password.focus();
+        region.querySelector('[data-action="reveal"]').click();
+        const hidden = password.type === 'password';
+        account.focus();
+        window.wallpaperUI.receive(base);
+        const hiddenKept = password.value === secret;
+        const noEchoHidden = !password.hasAttribute('value') && !document.documentElement.innerHTML.includes(secret);
+        // Exercise explicit clearing independently even if preservation regresses.
+        password.value = secret;
+        region.querySelector('form[data-form="signIn"]').requestSubmit();
+        return {shown, shownKept, noEchoShown, hidden, hiddenKept, noEchoHidden, cleared:password.value === ''};
+        """) as? [String: Bool]
+      for key in ["shown", "shownKept", "noEchoShown", "hidden", "hiddenKept", "noEchoHidden", "cleared"] {
+        XCTAssertEqual(result?[key], true, key)
+      }
+      let job = try await panel.waitForSignIn()
+      try await panel.waitUntil(timeout: 10) { !job.isPending }
+      XCTAssertNil(job.errorMessage, "Only the isolated fake Steam runtime is used")
+    }
+  }
+
+  private func finishWelcome(in web: WKWebView) async throws {
+    XCTAssertNil(web.window, "Finishing onboarding must remain offscreen")
+    let finished = try await web.callAsyncJavaScript(
+      """
+      const region = document.getElementById('welcome');
+      if (!region.hidden) {
+        region.querySelector('[data-action="go"][data-step="4"]').click();
+        const finish = region.querySelector('[data-action="finish"]');
+        if (!finish || finish.disabled || !finish.getClientRects().length)
+          throw new Error('Welcome Finish is not available');
+        finish.click();
+      }
+      const deadline = Date.now() + 5000;
+      while (!region.hidden || !(await window.webkit.messageHandlers.native.postMessage({action:'ready'})).welcomeSeen) {
+        if (Date.now() > deadline) throw new Error('Welcome did not finish');
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      return region.hidden;
+      """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+    XCTAssertEqual(finished, true)
   }
 
 }

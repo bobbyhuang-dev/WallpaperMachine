@@ -17,14 +17,18 @@ const inFlight = new Map();
 let localError = '';
 let popover = null;
 let popoverTrigger = '';
+let importWasBusy = false;
+let importReportUnseen = false;
 let queueExpanded = false;
 let dialogTarget = null;
 let dialogTrigger = null;
+let dialogFocusKey = null;
 // Job whose finished sign-in the dialog is confirming, and the timer that then lets it close on its own.
 let dialogHandoff = null;
 let handoffTimer = 0;
 let workshopDraft = null;
 let dialogAccount = null;
+let dialogError = null;
 // Password / Steam Guard requests the user closed with "Not now": keyed by job and request so the
 // same request stays quiet while a new one still opens the dialog.
 const dismissedAuth = new Set();
@@ -137,7 +141,7 @@ function patch(node, fresh) {
     if (node.getAttribute(attribute.name) !== attribute.value) node.setAttribute(attribute.name, attribute.value);
   }
   // Secrets are never part of the markup, so a password field keeps what was typed across renders.
-  if (node.tagName === 'INPUT') { if (!focused) { if (node.name !== 'response' && node.type !== 'password' && node.value !== fresh.value) node.value = fresh.value; node.checked = fresh.checked; } return; }
+  if (node.tagName === 'INPUT') { if (!focused) { if (node.name !== 'password' && node.name !== 'response' && node.type !== 'password' && node.value !== fresh.value) node.value = fresh.value; node.checked = fresh.checked; } return; }
   if (node.tagName === 'TEXTAREA') { if (!focused && node.value !== fresh.value) node.value = fresh.value; return; }
   if (node.tagName === 'SELECT' && focused) return;
   reconcile(node, fresh);
@@ -166,8 +170,27 @@ async function send(action, args = {}) {
     localError = error?.message || String(error); renderError(); throw error;
   } finally { pending.delete(key); inFlight.delete(key); render(); }
 }
+async function sendDialog(action, args = {}) {
+  const account = dialogAccount;
+  dialogError = null;
+  try {
+    return await send(action, args);
+  } catch (error) {
+    if (account === dialogAccount && dialogTarget !== null) {
+      dialogError = { account, message: error?.message || String(error) };
+      renderDialog();
+    }
+    throw error;
+  }
+}
 function receive(snapshot) {
   if (!snapshot || typeof snapshot !== 'object') return;
+  if (snapshot.import?.busy) importReportUnseen = false;
+  else if (importWasBusy && snapshot.import?.report) importReportUnseen = popover !== 'import';
+  importWasBusy = Boolean(snapshot.import?.busy);
+  if (popover === 'import' && !snapshot.import?.busy && !snapshot.import?.report && state?.import?.report) {
+    snapshot = { ...snapshot, import: { ...snapshot.import, report: state.import.report } };
+  }
   state = snapshot;
   if (selection.size) { const ids = new Set((snapshot.wallpapers || []).map(item => item.id)); for (const id of selection) if (!ids.has(id)) selection.delete(id); }
   if (selectionAnchor && !selection.has(selectionAnchor)) selectionAnchor = null;
@@ -188,7 +211,7 @@ function renderError() {
   const error = localError || state?.error || state?.downloadError;
   if (!state && error) morph($('browser-empty'), `<h1>${escapeHTML(t('Native connection unavailable'))}</h1><p>${escapeHTML(t('Open this panel in WallpaperMachine. Use Reconnect above to try again.'))}</p>`);
   $('error-banner').hidden = !error;
-  if (error) morph($('error-banner'), `<p>${escapeHTML(error)}</p>${button(t('Reconnect'), 'ready', {}, { icon: 'refresh' })}${button('', 'dismissError', {}, { icon: 'close', title: t('Dismiss error'), className: 'quiet icon-button' })}`);
+  if (error) morph($('error-banner'), `<p>${escapeHTML(error)}</p>${!state || !window.webkit?.messageHandlers?.native ? button(t('Reconnect'), 'ready', {}, { icon: 'refresh' }) : ''}${button('', 'dismissError', {}, { icon: 'close', title: t('Dismiss error'), className: 'quiet icon-button' })}`);
 }
 function render() {
   renderError();
@@ -234,14 +257,16 @@ function filterButton(count) {
 function renderToolbar(discover) {
   const search = discover ? workshopDraft.text : installed.text;
   const sortLabel = t(installedSorts.find(([key]) => key === installed.sort)?.[1] || 'Name');
-  morph($('browser-toolbar'), `${filterButton(filterCount(discover))}<form class="search-form" data-form="search" ${keyAttr(discover ? 'workshop-search' : 'installed-search')}>${icon('search')}<label class="sr-only" for="wallpaper-search">${escapeHTML(discover ? t('Search Steam Workshop') : t('Search installed wallpapers'))}</label><input id="wallpaper-search" type="search" autocomplete="off" placeholder="${escapeHTML(discover ? t('Search Workshop') : t('Search wallpapers'))}" value="${escapeHTML(search)}" data-input="search">${discover ? `<button type="submit" title="${escapeHTML(t('Search Workshop'))}">${escapeHTML(t('Search'))}</button>` : ''}</form><label class="sr-only" for="browser-sort">${escapeHTML(t('Sort wallpapers'))}</label><select id="browser-sort" data-change="sort">${selectOptions((discover ? workshopSorts : installedSorts).map(([key, label]) => [key, t(label)]), discover ? workshopDraft.sort : installed.sort)}</select>${discover ? `${button('', 'refreshWorkshop', {}, { icon: 'refresh', title: t('Refresh Workshop'), disabled: state.workshop.loading })}` : `${button('', 'toggleSortDirection', {}, { icon: installed.descending ? 'sortDescending' : 'sortAscending', title: installed.descending ? t('{sort}, descending. Click to sort ascending', { sort: sortLabel }) : t('{sort}, ascending. Click to sort descending', { sort: sortLabel }), className: 'icon-button sort-direction' })}${button(selecting ? t('Done') : t('Select'), 'toggleSelecting', {}, { icon: selecting ? 'close' : 'check', title: selecting ? t('Leave selection mode') : t('Select wallpapers to move to Trash'), className: selecting ? 'selecting' : '' })}${button('', 'refresh', {}, { icon: 'refresh', title: t('Refresh library'), disabled: state.libraryLoading })}${button(t('Import'), 'openImport', {}, { icon: 'plus', disabled: state.import?.busy })}`}`);
+  morph($('browser-toolbar'), `${filterButton(filterCount(discover))}<form class="search-form" data-form="search" ${keyAttr(discover ? 'workshop-search' : 'installed-search')}>${icon('search')}<label class="sr-only" for="wallpaper-search">${escapeHTML(discover ? t('Search Steam Workshop') : t('Search installed wallpapers'))}</label><input id="wallpaper-search" type="search" autocomplete="off" placeholder="${escapeHTML(discover ? t('Search Workshop') : t('Search wallpapers'))}" value="${escapeHTML(search)}" data-input="search">${discover ? `<button type="submit" title="${escapeHTML(t('Search Workshop'))}">${escapeHTML(t('Search'))}</button>` : ''}</form><div class="toolbar-tools"><label class="sr-only" for="browser-sort">${escapeHTML(t('Sort wallpapers'))}</label><select id="browser-sort" data-change="sort">${selectOptions((discover ? workshopSorts : installedSorts).map(([key, label]) => [key, t(label)]), discover ? workshopDraft.sort : installed.sort)}</select>${discover ? `${button('', 'refreshWorkshop', {}, { icon: 'refresh', title: t('Refresh Workshop'), disabled: state.workshop.loading })}` : `${button('', 'toggleSortDirection', {}, { icon: installed.descending ? 'sortDescending' : 'sortAscending', title: installed.descending ? t('{sort}, descending. Click to sort ascending', { sort: sortLabel }) : t('{sort}, ascending. Click to sort descending', { sort: sortLabel }), className: 'icon-button sort-direction' })}${button(selecting ? t('Done') : t('Select'), 'toggleSelecting', {}, { icon: selecting ? 'close' : 'check', title: selecting ? t('Leave selection mode') : t('Select wallpapers to move to Trash'), className: selecting ? 'selecting' : '' })}${button('', 'refresh', {}, { icon: 'refresh', title: t('Refresh library'), disabled: state.libraryLoading })}${button(t('Import'), 'openImport', {}, { icon: 'plus', className: 'import-button', title: t('Import wallpapers'), disabled: state.import?.busy })}`}</div>`);
 }
-const filterGroup = (key, title, body, open) => `<details class="filter-group"${open ? ' open' : ''} ${keyAttr(key)}><summary>${escapeHTML(t(title))}${icon('chevronRight', 13)}</summary><div class="filter-options">${body}</div></details>`;
+const filterGroup = (key, title, body, open, count = 0) => `<details class="filter-group"${open ? ' open' : ''} ${keyAttr(key)}><summary><span class="filter-group-title">${escapeHTML(t(title))}${filterCountPill(count)}</span>${icon('chevronRight', 13)}</summary><div class="filter-options">${body}</div></details>`;
 const filterHeading = (count, clearAction) => `<div class="filter-heading"><h3>${escapeHTML(t('Filters'))}${filterCountPill(count)}</h3>${button(t('Clear'), clearAction, {}, { className: 'link', disabled: !count })}</div>`;
 // One sidebar for both pages: Discover's boxes go to Steam as `requiredtags[]` /
 // `excludedtags[]`; Installed's apply the same rules to the library in the page.
 function renderFilters(discover) {
   const draft = filterDraft(discover);
+  const defaults = filterDefaults(discover);
+  const groupCount = group => group.sections.flatMap(section => section.tags.map(tagEntry)).filter(({ tag }) => draft.excludedTags.includes(tag) !== defaults.includes(tag)).length;
   const showOnly = discover ? showOnlyTags : installedShowOnlyTags;
   // Tags travel to Steam in English; only their labels are translated.
   const required = (tag) => `<label class="check-label" ${keyAttr(tag)}><input type="checkbox" data-change="filterTag" value="${escapeHTML(tag)}"${checked(draft.tags.includes(tag))}>${showOnlyIcons[tag] ? `<span class="check-icon${tag === 'Approved' ? ' approved' : ''}">${icon(showOnlyIcons[tag], 14)}</span>` : ''}<span>${escapeHTML(t(showOnlyLabels[tag] || tag))}</span></label>`;
@@ -252,7 +277,7 @@ function renderFilters(discover) {
     const head = title || quick ? `<div class="filter-section-head">${title ? `<h4>${escapeHTML(t(title))}</h4>` : ''}${quick ? `<span class="filter-quick">${button(t('All'), 'includeSection', { section: key }, { className: 'link', disabled: onCount === values.length })}${button(t('None'), 'excludeSection', { section: key }, { className: 'link', disabled: onCount === 0 })}</span>` : ''}</div>` : '';
     return `<div class="filter-section" ${keyAttr(key)}>${head}${values.map(({ tag, label }) => `<label class="check-label" ${keyAttr(tag)}><input type="checkbox" data-change="filterExclude" value="${escapeHTML(tag)}"${checked(!draft.excludedTags.includes(tag))}><span>${escapeHTML(t(label))}</span></label>`).join('')}</div>`;
   };
-  morph($('filter-sidebar'), `${filterHeading(filterCount(discover), discover ? 'clearWorkshop' : 'clearInstalled')}${filterGroup('show-only', 'Show only', `${showOnly.map(tag => required(tag)).join('')}${other.length ? `<div class="filter-section" ${keyAttr('other')}><div class="filter-section-head"><h4>${escapeHTML(t('Other selected tags'))}</h4></div>${other.map(tag => required(tag)).join('')}</div>` : ''}`, true)}${(discover ? excludeGroups : installedGroups).map(group => filterGroup(group.key, group.title, group.sections.map(section).join(''), true)).join('')}`);
+  morph($('filter-sidebar'), `${filterHeading(filterCount(discover), discover ? 'clearWorkshop' : 'clearInstalled')}${filterGroup('show-only', 'Show only', `${showOnly.map(tag => required(tag)).join('')}${other.length ? `<div class="filter-section" ${keyAttr('other')}><div class="filter-section-head"><h4>${escapeHTML(t('Other selected tags'))}</h4></div>${other.map(tag => required(tag)).join('')}</div>` : ''}`, true, draft.tags.length)}${(discover ? excludeGroups : installedGroups).map(group => filterGroup(group.key, group.title, group.sections.map(section).join(''), true, groupCount(group))).join('')}`);
 }
 function setExcluded(draft, tags, excluded) {
   const set = new Set(draft.excludedTags);
@@ -302,6 +327,27 @@ function visibleWallpapers() {
   const target = (state.displays || []).find(display => display.id === state.targetDisplayID);
   return (state.wallpapers || []).filter(item => (!installed.text || `${item.title} ${(item.tags || []).join(' ')}`.toLocaleLowerCase().includes(installed.text.toLocaleLowerCase())) && matchesInstalledFilters(item, target)).sort(compareInstalled);
 }
+function emptyRecovery(discover) {
+  const draft = filterDraft(discover);
+  const count = filterCount(discover);
+  if (!discover && !state.wallpapers.length) return {
+    description: t('Import a wallpaper folder or find something on the Workshop.'),
+    actions: `${button(t('Import wallpapers'), 'openImport', {}, { icon: 'plus' })}${button(t('Browse Workshop'), 'navigate', { page: 'discover' }, { className: 'primary' })}`,
+  };
+  if (draft.text && count) return {
+    description: discover ? t('Try a different search or remove some filters. Every selected tag must match.') : t('Change your search or clear filters to see more wallpapers.'),
+    actions: button(t('Clear search and filters'), discover ? 'clearWorkshopSearch' : 'clearInstalledSearch'),
+  };
+  if (draft.text) return {
+    description: discover ? t('Try a different search or remove some filters. Every selected tag must match.') : t('No wallpaper title or tag contains “{text}”.', { text: draft.text }),
+    actions: button(t('Clear search'), discover ? 'clearWorkshopSearch' : 'clearInstalledSearch'),
+  };
+  if (count) return {
+    description: t(count === 1 ? 'The active filter hides every wallpaper.' : 'The {count} active filters hide every wallpaper.', { count }),
+    actions: button(t('Clear filters'), discover ? 'clearWorkshop' : 'clearInstalled') + (filtersCollapsed() ? button(t('Show filters'), 'toggleFilters') : ''),
+  };
+  return { description: t('The Workshop returned no results.'), actions: button(t('Refresh Workshop'), 'refreshWorkshop', {}, { icon: 'refresh' }) };
+}
 function renderGrid(discover) {
   const workshop = state.workshop;
   const items = discover ? workshop.items || [] : visibleWallpapers();
@@ -316,7 +362,10 @@ function renderGrid(discover) {
   morph($('wallpaper-grid'), items.map(item => `<article class="wallpaper-tile${selection.has(item.id) ? ' checked' : ''}${live.get(item.id)?.playing ? ' playing' : ''}" ${keyAttr(item.id)}><button type="button" class="tile-select" data-action="${discover ? 'workshopSelect' : 'select'}" data-id="${escapeHTML(item.id)}" aria-pressed="${item.id === selectedID}" aria-label="${escapeHTML(item.title)}, ${escapeHTML(t(item.kind))}${tileMarkNames(item, discover).map(name => `, ${escapeHTML(t(tileMarkGlyphs[name][1]))}`).join('')}${item.id === selectedID ? `, ${escapeHTML(t('selected'))}` : ''}"><span class="tile-placeholder">${icon('image', 28)}</span>${discover && ['loading', 'ready'].includes(live.get(item.id)?.status) ? `<img ${keyAttr(`live-${item.id}`)} class="tile-live" src="${escapeHTML(safeImage(item.animated))}" alt="" decoding="async" crossorigin="anonymous" referrerpolicy="no-referrer">` : ''}${safeImage(item.thumbnail || item.preview) ? `<img ${keyAttr(item.thumbnail || item.preview)} class="tile-still" src="${escapeHTML(safeImage(item.thumbnail || item.preview))}" alt=""${discover ? '' : ' loading="lazy"'} decoding="async"${safeImage(item.thumbnail || item.preview).startsWith('mwe-ui:') ? ' crossorigin="anonymous"' : ''} referrerpolicy="no-referrer">` : ''}<span class="tile-caption"><span class="tile-title">${escapeHTML(item.title)}</span><span class="tile-kind">${escapeHTML(t(item.kind))}</span></span></button>${tileMarksMarkup(item, discover)}${discover ? tileDownloadMarkup(item) : ''}${!discover ? `<button type="button" class="tile-check" data-action="toggleSelect" data-id="${escapeHTML(item.id)}" aria-pressed="${selection.has(item.id)}" aria-label="${escapeHTML(selection.has(item.id) ? t('Deselect: {title}', { title: item.title }) : t('Select: {title}', { title: item.title }))}">${icon('check', 14)}</button><button type="button" class="tile-favorite" data-action="favorite" data-id="${escapeHTML(item.id)}" aria-pressed="${state.favorites.includes(item.id)}" aria-label="${escapeHTML(state.favorites.includes(item.id) ? t('Remove favorite: {title}', { title: item.title }) : t('Add favorite: {title}', { title: item.title }))}"${disabled(busy('favorite', { id: item.id }))}>${icon('heart', 14)}</button>${target?.wallpaperID === item.id ? `<span class="active-badge">${escapeHTML(t('Active'))}</span>` : item.active ? `<span class="active-badge">${escapeHTML(t('Other display'))}</span>` : ''}` : ''}</article>`).join(''));
   const empty = $('browser-empty'); empty.hidden = items.length > 0;
   $('wallpaper-grid').hidden = !items.length;
-  if (!items.length) morph(empty, loading ? `<h1>${escapeHTML(discover ? t('Loading Workshop') : t('Loading wallpapers'))}</h1><p>${escapeHTML(discover ? t('Fetching wallpapers from Steam.') : t('Reading your wallpaper library.'))}</p>` : workshop.error && discover ? `<h1>${escapeHTML(t('Workshop unavailable'))}</h1><p>${escapeHTML(workshop.error)}</p>${button(t('Try again'), 'workshopRetry', {}, { icon: 'refresh' })}` : `<h1>${escapeHTML(discover ? t('No wallpapers found') : state.wallpapers.length ? t('No matching wallpapers') : t('Your wallpaper library is empty'))}</h1><p>${escapeHTML(discover ? t('Try a different search or remove some filters. Every selected tag must match.') : state.wallpapers.length ? t('Change your search or clear filters to see more wallpapers.') : t('Import a wallpaper folder or find something on the Workshop.'))}</p><div class="actions">${discover ? button(t('Clear search and filters'), 'clearWorkshopSearch') : state.wallpapers.length ? button(t('Clear search and filters'), 'clearInstalledSearch') : `${button(t('Import wallpapers'), 'openImport', {}, { icon: 'plus' })}${button(t('Browse Workshop'), 'navigate', { page: 'discover' }, { className: 'primary' })}`}</div>`);
+  if (!items.length) {
+    const recovery = emptyRecovery(discover);
+    morph(empty, loading ? `<h1>${escapeHTML(discover ? t('Loading Workshop') : t('Loading wallpapers'))}</h1><p>${escapeHTML(discover ? t('Fetching wallpapers from Steam.') : t('Reading your wallpaper library.'))}</p>` : workshop.error && discover ? `<h1>${escapeHTML(t('Workshop unavailable'))}</h1><p>${escapeHTML(workshop.error)}</p>${button(t('Try again'), 'workshopRetry', {}, { icon: 'refresh' })}` : `<h1>${escapeHTML(discover ? t('No wallpapers found') : state.wallpapers.length ? t('No matching wallpapers') : t('Your wallpaper library is empty'))}</h1><p>${escapeHTML(recovery.description)}</p><div class="actions">${recovery.actions}</div>`);
+  }
   // Steam's public browse page stops at 1,000 pages of 30, whatever the result count says;
   // a page is exactly one of Steam's, so the panel never offers more than that.
   const pages = Math.min(workshopMaxPages(), Math.max(1, Number(workshop.totalPages) || 1));
@@ -419,22 +468,22 @@ function renderInspector(discover) {
   const compatibility = { Scene: t('Scene renderer is experimental.'), Video: t('Playback depends on the video codec.'), Web: t('Runs in a built-in web view. Mouse input and audio response reach the page; keyboard input does not.'), Application: t('Application wallpapers cannot run on macOS.'), Unknown: t('This wallpaper type is not supported.') }[item.kind] || '';
   const meta = [t(item.kind), bytes(item.size), discover && Number.isFinite(item.subscriptions) ? t('{count} subscribers', { count: item.subscriptions.toLocaleString() }) : ''].filter(Boolean).map(escapeHTML).join('<span aria-hidden="true"> · </span>');
   const report = issueLink(item);
-  const secondary = `${discover ? button(t('View on Steam Workshop'), 'openExternal', { url: `https://steamcommunity.com/sharedfiles/filedetails/?id=${encodeURIComponent(item.id)}` }, { icon: 'external', className: 'wide' }) : isInstalled ? button(t('Show in Finder'), 'reveal', { id: item.id }, { icon: 'folder', className: 'wide' }) : ''}${!discover && isInstalled ? button('', 'favorite', { id: item.id }, { icon: 'heart', title: state.favorites.includes(item.id) ? t('Remove from favorites') : t('Add to favorites'), className: `icon-button${state.favorites.includes(item.id) ? ' favorite-selected' : ''}` }) : ''}${!discover && isInstalled ? button('', 'delete', { id: item.id }, { icon: 'trash', className: 'icon-button danger', title: t('Move wallpaper to Trash'), disabled: state.busy }) : ''}${report ? button('', 'openExternal', { url: report }, { icon: 'triangleAlert', className: 'icon-button', title: t('Report a problem on GitHub') }) : ''}`;
+  const secondary = `${discover ? button(t('View on Steam Workshop'), 'openExternal', { url: `https://steamcommunity.com/sharedfiles/filedetails/?id=${encodeURIComponent(item.id)}` }, { icon: 'external', className: 'wide', title: t('View on Steam Workshop') }) : isInstalled ? button(t('Show in Finder'), 'reveal', { id: item.id }, { icon: 'folder', className: 'wide', title: t('Show in Finder') }) : ''}${!discover && isInstalled ? button('', 'favorite', { id: item.id }, { icon: 'heart', title: state.favorites.includes(item.id) ? t('Remove from favorites') : t('Add to favorites'), className: `icon-button${state.favorites.includes(item.id) ? ' favorite-selected' : ''}` }) : ''}${!discover && isInstalled ? button('', 'delete', { id: item.id }, { icon: 'trash', className: 'icon-button danger', title: t('Move wallpaper to Trash'), disabled: state.busy }) : ''}${report ? button('', 'openExternal', { url: report }, { icon: 'triangleAlert', className: 'icon-button', title: t('Report a problem on GitHub') }) : ''}`;
   const showInLibrary = discover && isInstalled && !(download && !download.pending && !download.error) ? button(t('Show in library'), 'showInstalled', { id: item.id }, { icon: 'image', className: 'link' }) : '';
   const activateLabel = target?.wallpaperID === item.id ? t('Reapply wallpaper') : t('Apply wallpaper');
   const activation = isInstalled ? button('', 'activate', { id: item.id }, { icon: 'play', title: activateLabel, className: 'primary inspector-play', disabled: !canActivate || state.busy }) : '';
   morph($('inspector'), `<div class="inspector-layout" ${keyAttr(`inspector-${item.id}-${discover}`)}><div class="inspector-scroll"><div class="inspector-heading">
     <div class="inspector-artwork"><div class="inspector-preview">${preview(item.preview)}</div>${activation}</div>
     <h2>${escapeHTML(item.title)}</h2>${discover && item.creator ? `<p class="inspector-creator">${escapeHTML(item.creator)}</p>` : ''}
-    <p class="inspector-meta">${meta}</p>${tags(item.tags)}
-    <div class="actions inspector-actions">${!isInstalled ? downloadAction : ''}${secondary}</div>
+    <p class="inspector-meta">${meta}</p>
+    <div class="actions inspector-actions">${!isInstalled ? downloadAction : ''}${secondary}</div>${tags(item.tags)}
     ${!isInstalled && download?.pending && !download.queued ? `<progress class="inspector-progress" max="1"${Number.isFinite(download.progress) ? ` value="${clamp(download.progress)}"` : ''} aria-label="${escapeHTML(t('{title} download progress', { title: item.title }))}"></progress><p class="muted"><small>${escapeHTML(download.status)}${transfer(download, { includePercent: false }) ? ` · ${transfer(download, { includePercent: false })}` : ''}</small></p>` : ''}
     ${request ? `<p class="muted"><small>${escapeHTML(stageHint(request.stage))}</small></p>` : ''}
     ${!isInstalled && download?.error && !download.pending ? `<p class="notice error">${escapeHTML(download.error)}</p>` : ''}
     ${isInstalled && download && !download.pending && !download.error ? button(t('Show in library'), 'showInstalled', { id: item.id }, { icon: 'image', className: 'link' }) : ''}
     ${download || request ? button(t('Show in downloads'), 'openDownloads', {}, { className: 'link' }) : ''}
     ${compatibility ? `<p class="inspector-compatibility muted"><small>${escapeHTML(compatibility)}</small></p>` : ''}
-    ${item.kind === 'Scene' && !state.settings.sceneAssetsReady ? `<div class="notice warning">${escapeHTML(t('Shared scene resources are required before playback.'))}${button(t('Get shared resources'), 'requestAssets', {}, { className: 'link' })}</div>` : ''}${showInLibrary}
+    ${item.kind === 'Scene' && !state.settings.sceneAssetsReady ? `<div class="notice warning">${escapeHTML(t('Shared scene resources are required before playback.'))} ${button(t('Get shared resources'), 'requestAssets', {}, { className: 'link' })}</div>` : ''}${showInLibrary}
     </div>${discover ? (item.summary ? `<section class="inspector-section"><p>${escapeHTML(item.summary)}</p></section>` : '') : options ? renderOptions(options) : `<section class="inspector-section"><p class="muted">${escapeHTML(t('Loading wallpaper options…'))}</p></section>`}
     </div>${options ? renderInspectorSave(options) : ''}</div>`);
   for (const image of $('inspector').querySelectorAll('img[data-label-height]')) image.style.height = `${Number(image.dataset.labelHeight)}px`;
@@ -494,7 +543,7 @@ function renderInspectorSave(options) {
   const id = options.id;
   const lock = state.busy || busy('apply', { id }) || busy('revert', { id });
   const changed = options.dirty || [...drafts.keys()].some(key => key.startsWith(`${id}\u0000`));
-  return `<div class="inspector-save"><p role="status">${escapeHTML(changed ? t('You have unapplied changes.') : t('Audio, scaling mode and frame rate update immediately.'))}</p>${button(t('Apply changes'), 'apply', { id }, { className: 'primary', disabled: lock || !changed || !options.supported })}${button(t('Revert'), 'revert', { id }, { disabled: lock || !changed })}</div>`;
+  return `<div class="inspector-save"><p role="status">${escapeHTML(changed ? t('You have unapplied changes.') : t('Audio, scaling mode and frame rate update immediately.'))}</p>${button(t('Revert'), 'revert', { id }, { disabled: lock || !changed })}${button(t('Apply changes'), 'apply', { id }, { className: 'primary', disabled: lock || !changed || !options.supported })}</div>`;
 }
 // A `file` or `directory` property is a path the user picked, not a value typed into the
 // page: the field is read-only and carries the display name, never the staged path the
@@ -550,6 +599,7 @@ function renderProperty(id, property, lock) {
   const label = renderPropertyLabel(presentation);
   const fieldID = `property-${encodeURIComponent(id)}-${encodeURIComponent(property.id)}`;
   const value = drafts.has(draftKey(id, property.id)) ? drafts.get(draftKey(id, property.id)) : property.value;
+  const modified = property.dirty || drafts.has(draftKey(id, property.id));
   const unavailable = lock || property.enabled === false || busy('property', { id, propertyID: property.id });
   const attributes = `id="${escapeHTML(fieldID)}" aria-label="${escapeHTML(name)}" data-change="property" data-id="${escapeHTML(id)}" data-property-id="${escapeHTML(property.id)}"${disabled(unavailable)}`;
   let control;
@@ -565,9 +615,8 @@ function renderProperty(id, property, lock) {
     case 'text': { const extra = value && value !== property.label ? `<p>${escapeHTML(value)}</p>` : ''; return label || extra ? `<div ${keyAttr(property.id)} class="property-description property-label">${label}${extra}</div>` : ''; }
     default: return `<p ${keyAttr(property.id)} class="muted">${escapeHTML(t('{name}: unsupported property type.', { name }))}</p>`;
   }
-  const modified = property.dirty || drafts.has(draftKey(id, property.id));
   const restore = property.defaultValue !== undefined && property.defaultValue !== null ? button('', 'restoreProperty', { id, propertyID: property.id }, { icon: 'refresh', className: 'quiet icon-button property-reset', title: t('Restore default: {name}', { name }), disabled: unavailable }) : '';
-  return `<div ${keyAttr(property.id)} class="field property-row property-${escapeHTML(property.kind)}${modified ? ' modified' : ''}"><div class="field-title"><label class="property-label" for="${escapeHTML(fieldID)}">${label || escapeHTML(name)}</label>${modified ? `<span class="property-modified" title="${escapeHTML(t('Modified'))}" aria-label="${escapeHTML(t('Modified'))}"></span>` : ''}</div><div class="property-control">${control}</div>${restore}</div>`;
+  return `<div ${keyAttr(property.id)} class="field property-row property-${escapeHTML(property.kind)}${modified ? ' modified' : ''}"><div class="field-title"><label class="property-label" for="${escapeHTML(fieldID)}">${label || escapeHTML(name)}</label>${modified ? `<span class="field-flag">${escapeHTML(t('Modified'))}</span>` : ''}</div><div class="property-control">${control}</div>${restore}</div>`;
 }
 // Wallpaper Engine's built-in label tokens are UI vocabulary, not author prose.
 const enginePropertyLabels = {
@@ -651,9 +700,15 @@ function queueButton() {
 }
 function renderActivity() {
   const { summary, attention, active, progress } = queueState();
+  const hasWallpaper = (state.displays || []).some(display => Boolean(display.wallpaperID));
+  const downloadSummary = attention.length ? t('{summary} · needs attention', { summary }) : summary;
+  const report = state.import?.report;
+  const importResult = report ? t('{imported} imported · {skipped} skipped', { imported: Number(report.imported), skipped: Number(report.skipped) }) : t('Import wallpapers');
+  const importSummary = state.import?.busy ? state.import.status || t('Importing…') : report && (report.failures?.length || report.cancelled) ? t('{summary} · needs attention', { summary: importResult }) : importResult;
+  const showImport = state.import?.busy || (report && importReportUnseen) || (popover === 'import' && popoverTrigger.startsWith('#activity-bar '));
   const transferring = active.filter(item => !item.authenticating);
   const label = transferring.length === 1 ? t('{title} download progress', { title: transferring[0].title }) : t('{count} downloads progress', { count: transferring.length });
-  morph($('activity-bar'), `<div class="activity-left">${button('', 'playback', {}, { icon: state.paused ? 'play' : 'pause', title: state.paused ? t('Resume wallpaper playback') : t('Pause wallpaper playback'), className: 'quiet icon-button', disabled: state.busy || !(state.wallpapers || []).some(item => item.active) })}<span class="activity-copy">${escapeHTML(state.paused ? t('Playback paused') : t('Playback running'))}</span></div><div class="activity-right">${state.import?.busy ? button(state.import.status || t('Importing…'), 'openImport', {}, { icon: 'folder', className: 'quiet' }) : ''}${state.setup?.busy ? `<span class="activity-copy">${escapeHTML(t('Setting up SteamCMD…'))}</span>` : ''}${transferring.length ? `<progress class="activity-progress" max="1"${progress !== null ? ` value="${progress}"` : ''} aria-label="${escapeHTML(label)}"></progress>` : ''}${button(attention.length ? t('{summary} · needs attention', { summary }) : summary, 'openDownloads', {}, { icon: 'download', className: 'quiet' })}</div>`);
+  morph($('activity-bar'), `<div class="activity-left">${button('', 'playback', {}, { icon: !hasWallpaper || state.paused ? 'play' : 'pause', title: !hasWallpaper ? t('No wallpaper playing') : state.paused ? t('Resume wallpaper playback') : t('Pause wallpaper playback'), className: 'quiet icon-button', disabled: state.busy || !hasWallpaper })}<span class="activity-copy">${escapeHTML(!hasWallpaper ? t('No wallpaper playing') : state.paused ? t('Playback paused') : t('Playback running'))}</span></div><div class="activity-right">${showImport ? button(importSummary, 'openImport', {}, { icon: 'folder', className: 'quiet', title: importSummary }) : ''}${state.setup?.busy ? `<span class="activity-copy">${escapeHTML(t('Setting up SteamCMD…'))}</span>` : ''}${transferring.length ? `<progress class="activity-progress" max="1"${progress !== null ? ` value="${progress}"` : ''} aria-label="${escapeHTML(label)}"></progress>` : ''}${button(downloadSummary, 'openDownloads', {}, { icon: 'download', className: 'quiet', title: downloadSummary })}</div>`);
 }
 function previewThumb(url) {
   const source = safeImage(url);
@@ -692,21 +747,23 @@ function queueJobRow(item) {
   const running = item.pending && !item.queued;
   const needsAuth = running && Boolean(item.prompt || item.challenge);
   const review = !item.pending && needsReview(item);
-  return `<li class="queue-row${needsAuth || review ? ' attention' : ''}" ${keyAttr(`job-${item.id}`)}><span class="queue-thumb">${previewThumb(item.thumbnail || item.preview)}</span><div class="queue-body"><p class="queue-title">${escapeHTML(item.title)}</p><p class="queue-status">${escapeHTML(item.status)}${running && transfer(item) ? ` · ${transfer(item)}` : ''}</p>${running ? `<progress max="1"${percent === null ? '' : ` value="${clamp(item.progress)}"`} aria-label="${escapeHTML(t('{title} download progress', { title: item.title }))}"></progress>` : ''}${item.error ? `<p class="notice error">${escapeHTML(item.error)}</p>` : ''}${item.warning ? `<p class="notice warning">${escapeHTML(item.warning)}</p>` : ''}<div class="actions">${needsAuth ? button(t('Finish sign-in'), 'continueSetup', { id: item.id }, { icon: 'shield', className: 'primary' }) : ''}${item.pending ? button(item.queued ? t('Remove from queue') : t('Cancel'), 'downloadCancel', { id: item.id }, { className: 'quiet' }) : ''}${review ? button(t('Try again'), 'downloadRetry', { id: item.id }, { icon: 'refresh', disabled: !state.setup?.ready }) : ''}${installedItem ? `${button(t('Show in library'), 'showInstalled', { id: item.id }, { icon: 'image', className: 'link' })}${button(t('Show in Finder'), 'reveal', { id: item.id }, { icon: 'folder', className: 'link' })}` : ''}</div></div></li>`;
+  return `<li class="queue-row${needsAuth || review ? ' attention' : ''}" ${keyAttr(`job-${item.id}`)}><span class="queue-thumb">${previewThumb(item.thumbnail || item.preview)}</span><div class="queue-body"><p class="queue-title">${escapeHTML(item.title)}</p><p class="queue-status">${escapeHTML(item.status)}${running && transfer(item) ? ` · ${transfer(item)}` : ''}</p>${running ? `<progress max="1"${percent === null ? '' : ` value="${clamp(item.progress)}"`} aria-label="${escapeHTML(t('{title} download progress', { title: item.title }))}"></progress>` : ''}${item.error ? `<p class="notice error" role="alert">${escapeHTML(item.error)}</p>` : ''}${item.warning ? `<p class="notice warning">${escapeHTML(item.warning)}</p>` : ''}<div class="actions">${needsAuth ? button(t('Finish sign-in'), 'continueSetup', { id: item.id }, { icon: 'shield', className: 'primary' }) : ''}${item.pending ? button(item.queued ? t('Remove from queue') : t('Cancel'), 'downloadCancel', { id: item.id }, { className: 'quiet' }) : ''}${review ? button(t('Try again'), 'downloadRetry', { id: item.id }, { icon: 'refresh', className: 'primary', disabled: !state.setup?.ready }) : ''}${review && !state.setup?.ready ? `<span class="queue-status">${escapeHTML(stageHint('setup'))}</span>` : ''}${installedItem ? `${button(t('Show in library'), 'showInstalled', { id: item.id }, { icon: 'image', className: 'link' })}${button(t('Show in Finder'), 'reveal', { id: item.id }, { icon: 'folder', className: 'link' })}` : ''}</div></div></li>`;
 }
 function importMarkup() {
   const status = state.import || {};
   const report = status.report;
-  return `<div class="popover-heading"><h2 id="import-popover-title">${escapeHTML(t('Import wallpapers'))}</h2>${button('', 'closePopover', {}, { icon: 'close', title: t('Close import'), className: 'quiet icon-button' })}</div><div class="popover-body"><p class="muted">${escapeHTML(t('Choose wallpaper folders or files. Imports copy the source files into your library and leave the originals untouched.'))}</p><label class="field">${escapeHTML(t('If a wallpaper already exists'))}<select id="import-duplicates"${disabled(status.busy)}>${selectOptions([['skip', t('Skip duplicates')], ['keepBoth', t('Keep both copies')]], importDuplicates)}</select></label><div class="actions">${button(t('Choose wallpapers'), 'import', { duplicates: importDuplicates }, { icon: 'folder', className: 'primary', disabled: status.busy })}${status.busy ? button(t('Cancel import'), 'importCancel') : ''}</div>${status.status ? `<p class="muted" role="status">${escapeHTML(status.status)}</p>` : ''}${report ? `<div class="import-controls"><p>${escapeHTML(t('{imported} imported · {skipped} skipped', { imported: Number(report.imported), skipped: Number(report.skipped) }))}${report.cancelled ? escapeHTML(t(' · Cancelled')) : ''}</p>${(report.failures || []).map(failure => `<p class="notice error">${escapeHTML(failure)}</p>`).join('')}</div>` : ''}</div>`;
+  return `<div class="popover-heading"><h2 id="import-popover-title">${escapeHTML(t('Import wallpapers'))}</h2>${button('', 'closePopover', {}, { icon: 'close', title: t('Close import'), className: 'quiet icon-button' })}</div><div class="popover-body"><p class="muted">${escapeHTML(t('Choose wallpaper folders or files. Imports copy the source files into your library and leave the originals untouched.'))}</p><label class="field">${escapeHTML(t('If a wallpaper already exists'))}<select id="import-duplicates"${disabled(status.busy)}>${selectOptions([['skip', t('Skip duplicates')], ['keepBoth', t('Keep both copies')]], importDuplicates)}</select></label><div class="actions">${button(t('Choose wallpapers'), 'import', { duplicates: importDuplicates }, { icon: 'folder', className: 'primary', disabled: status.busy })}${status.busy ? button(t('Cancel import'), 'importCancel') : ''}</div>${status.busy ? `<progress aria-label="${escapeHTML(t('Importing…'))}"></progress>` : ''}${status.status ? `<p class="muted" role="status">${escapeHTML(status.status)}</p>` : ''}${report ? `<div class="import-controls" role="status"><p>${escapeHTML(t('{imported} imported · {skipped} skipped', { imported: Number(report.imported), skipped: Number(report.skipped) }))}${report.cancelled ? escapeHTML(t(' · Cancelled')) : ''}</p>${(report.failures || []).map(failure => `<p class="notice error">${escapeHTML(failure)}</p>`).join('')}</div>` : ''}</div>`;
 }
 function placePopover(node) {
   const trigger = popoverTrigger ? document.querySelector(popoverTrigger) : null;
   const rect = trigger?.getBoundingClientRect();
   if (!rect) return;
+  const below = rect.bottom + 6;
+  const available = Math.max(window.innerHeight - below - 8, rect.top - 14);
+  node.style.maxHeight = `${Math.floor(Math.max(0, Math.min(560, available)))}px`;
   const width = node.offsetWidth;
   const height = node.offsetHeight;
   node.style.left = `${Math.round(Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)))}px`;
-  const below = rect.bottom + 6;
   if (below + height <= window.innerHeight - 8) { node.style.top = `${Math.round(below)}px`; node.style.bottom = 'auto'; }
   else { node.style.top = 'auto'; node.style.bottom = `${Math.round(Math.max(8, window.innerHeight - rect.top + 6))}px`; }
 }
@@ -716,21 +773,30 @@ function triggerSelector(trigger) {
   const host = ['#top-actions', '#activity-bar', '#browser-toolbar', '#inspector', '#queue-popover'].find(id => trigger.closest(id));
   return `${host ? `${host} ` : ''}[data-action="${action}"]`;
 }
+function restorePanelFocus(selectors) {
+  if (welcome.isOpen()) { $('welcome-title')?.focus(); return; }
+  const target = selectors.filter(Boolean).map(selector => document.querySelector(selector)).find(node => node?.isConnected && !node.disabled && !node.closest('[inert]') && node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden');
+  target?.focus();
+}
 function openPopover(kind, trigger) {
   if (popover === kind) { closePopover(true); return; }
+  if (popover === 'import') closePopover(false);
   popover = kind;
   queueExpanded = false;
   popoverTrigger = triggerSelector(trigger) || popoverTrigger;
+  renderActivity();
   renderPopover();
   $(kind === 'downloads' ? 'queue-popover' : 'import-popover').focus();
 }
 function closePopover(restore) {
   if (!popover) return;
   const selector = popoverTrigger;
+  if (popover === 'import') importReportUnseen = false;
   popover = null;
   queueExpanded = false;
+  renderActivity();
   renderPopover();
-  if (restore && selector) document.querySelector(selector)?.focus();
+  if (restore) restorePanelFocus([selector, '#browser-toolbar .import-button', '.tabs [aria-current="page"]']);
 }
 function openDialog(id, trigger) {
   dialogTarget = id;
@@ -744,6 +810,7 @@ function seedAccount(id) {
   const request = requestByID(id);
   const job = jobByID(id);
   dialogAccount = { id, account: request?.account ?? job?.account ?? state?.account ?? state?.savedAccount ?? '', rememberSession: request?.rememberSession ?? Boolean(state?.rememberSession) };
+  dialogError = null;
 }
 function closeDialog() {
   const node = $('download-dialog');
@@ -752,13 +819,15 @@ function closeDialog() {
   dialogTarget = null;
   dialogTrigger = null;
   dialogAccount = null;
+  dialogError = null;
+  dialogFocusKey = null;
   dialogHandoff = null;
   clearTimeout(handoffTimer);
   if (node.open) node.close();
   morph(node, '');
   node.removeAttribute('data-stage');
   // Closing must not leave focus stranded on the body, and must not pull it away from wherever the user went.
-  if (selector && (!document.activeElement || document.activeElement === document.body)) (document.querySelector(selector) || document.querySelector('#top-actions [data-action="openDownloads"]'))?.focus();
+  if (!document.activeElement || document.activeElement === document.body) restorePanelFocus([selector, '#top-actions [data-action="openDownloads"]', '#activity-bar [data-action="openDownloads"]', '.tabs [aria-current="page"]']);
 }
 // The dialog only ever opens from an explicit request, so a later snapshot never reopens it.
 function renderDialog() {
@@ -778,27 +847,33 @@ function renderDialog() {
   if (dialogAccount?.id !== dialogTarget) seedAccount(dialogTarget);
   const stage = waiting ? waiting.stage : started ? 'started' : 'auth';
   const open = node.open;
+  const focused = document.activeElement;
+  const previousTitle = $('download-dialog-title');
+  const focusKey = JSON.stringify([dialogTarget, stage, auth?.prompt, auth?.challenge]);
   node.dataset.stage = stage;
   morph(node, dialogMarkup(stage, waiting || own || auth || started, auth || started));
-  if (!open) {
-    node.showModal();
-    (node.querySelector('.dialog-body input:not([disabled]), .dialog-body button.primary:not([disabled]), .dialog-body button:not([disabled])') || node).focus();
+  if (!open) node.showModal();
+  if (!open || dialogFocusKey !== focusKey) {
+    dialogFocusKey = focusKey;
+    if (!open || !focused?.isConnected || focused.disabled || !node.contains(focused) || focused === previousTitle) {
+      (node.querySelector('.dialog-body input:not([disabled])') || node.querySelector('.dialog-body .primary:not([disabled])') || $('download-dialog-title'))?.focus();
+    }
   }
 }
 function dialogMarkup(stage, subject, auth) {
   const body = stage === 'setup' ? setupStep() : stage === 'account' ? accountStep() : stage === 'resources' ? resourcesStep() : stage === 'started' ? startedStep(auth, subject) : authStep(auth);
   const title = stage === 'auth' ? auth.challenge ? t('Verify this Steam sign-in') : auth.prompt ? t('Sign in to Steam') : t('Connecting to Steam') : stage === 'started' ? t('Signed in to Steam') : stageTitle(stage);
   const subtitle = (stage === 'auth' || stage === 'started') && auth.id !== subject.id ? t('{auth} · needed for {subject}', { auth: auth.title, subject: subject.title }) : subject.title;
-  return `<div class="dialog-head"><span class="dialog-thumb">${previewThumb(stage === 'auth' ? auth.thumbnail || auth.preview || subject.thumbnail || subject.preview : subject.thumbnail || subject.preview)}</span><div class="dialog-heading"><h2 id="download-dialog-title">${escapeHTML(title)}</h2><p class="muted">${escapeHTML(subtitle)}</p></div>${button('', 'dismissDialog', {}, { icon: 'close', title: t('Close without removing this download'), className: 'quiet icon-button' })}</div><div class="dialog-body" data-stage="${stage}">${body}</div>`;
+  return `<div class="dialog-head"><span class="dialog-thumb">${previewThumb(stage === 'auth' ? auth.thumbnail || auth.preview || subject.thumbnail || subject.preview : subject.thumbnail || subject.preview)}</span><div class="dialog-heading"><h2 id="download-dialog-title" tabindex="-1">${escapeHTML(title)}</h2><p class="muted">${escapeHTML(subtitle)}</p></div>${button('', 'dismissDialog', {}, { icon: 'close', title: t('Close without removing this download'), className: 'quiet icon-button' })}</div><div class="dialog-body" data-stage="${stage}">${dialogError?.account === dialogAccount ? `<p class="notice error" role="alert" ${keyAttr('dialog-action-error')}>${escapeHTML(dialogError.message)}</p>` : ''}${body}</div>`;
 }
 function setupStep() {
   const setup = state.setup || {};
   const retained = setup.candidatePath ? setup.canApprove ? `<p class="notice">${escapeHTML(t('This downloaded copy needs your approval before it can run:'))}<br>${escapeHTML(setup.candidatePath)}</p>` : `<p class="notice warning">${escapeHTML(t('A downloaded copy is retained but not usable yet:'))}<br>${escapeHTML(setup.candidatePath)}</p>` : '';
-  return `<p>${escapeHTML(t('SteamCMD is Valve’s download tool. Install it here, or point to a copy you already have. Installing it does not sign you in.'))}</p><p class="dialog-status" role="status">${escapeHTML(setup.status || (setup.ready ? t('SteamCMD is ready.') : t('SteamCMD is not installed yet.')))}</p>${setup.busy && Number.isFinite(setup.progress) ? `<progress max="1" value="${clamp(setup.progress)}" aria-label="${escapeHTML(t('SteamCMD installation progress'))}"></progress>` : ''}${setup.error ? `<p class="notice error">${escapeHTML(setup.error)}</p>` : ''}${retained}<div class="dialog-actions">${setup.canApprove ? button(t('Allow this SteamCMD'), 'setupApprove', {}, { icon: 'shield', className: 'primary', disabled: setup.busy }) : button(t('Install SteamCMD'), 'setupInstall', {}, { icon: 'download', className: 'primary', disabled: setup.busy })}${button(t('Locate a copy'), 'setupLocate', {}, { icon: 'folder', disabled: setup.busy })}${setup.busy && setup.canCancel !== false ? button(t('Cancel setup'), 'setupCancel') : ''}${button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' })}</div>${setup.candidatePath ? `<div class="dialog-actions">${button(t('Show it in Finder'), 'setupRevealCandidate', {}, { icon: 'folder', className: 'link' })}${button(t('Discard it'), 'setupDiscardCandidate', {}, { className: 'link', disabled: setup.busy })}</div>` : ''}<p class="dialog-note">${escapeHTML(t('Approval applies only to the exact copy you allow. Gatekeeper and signature checks stay in force.'))}</p>`;
+  return `<p>${escapeHTML(t('SteamCMD is Valve’s download tool. Install it here, or point to a copy you already have. Installing it does not sign you in.'))}</p><p class="dialog-status" role="status">${escapeHTML(setup.status || (setup.ready ? t('SteamCMD is ready.') : t('SteamCMD is not installed yet.')))}</p>${setup.busy ? `<progress max="1"${Number.isFinite(setup.progress) ? ` value="${clamp(setup.progress)}"` : ''} aria-label="${escapeHTML(t('SteamCMD installation progress'))}"></progress>` : ''}${setup.error ? `<p class="notice error" role="alert">${escapeHTML(setup.error)}</p>` : ''}${retained}<div class="dialog-actions">${button(t('Locate a copy'), 'setupLocate', {}, { icon: 'folder', disabled: setup.busy })}${setup.busy && setup.canCancel !== false ? button(t('Cancel setup'), 'setupCancel') : ''}${button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' })}${setup.canApprove ? button(t('Allow this SteamCMD'), 'setupApprove', {}, { icon: 'shield', className: 'primary', disabled: setup.busy }) : button(setup.error ? t('Try again') : t('Install SteamCMD'), 'setupInstall', {}, { icon: setup.error ? 'refresh' : 'download', className: 'primary', disabled: setup.busy })}</div>${setup.candidatePath ? `<div class="dialog-actions">${button(t('Show it in Finder'), 'setupRevealCandidate', {}, { icon: 'folder', className: 'link' })}${button(t('Discard it'), 'setupDiscardCandidate', {}, { className: 'link', disabled: setup.busy })}</div>` : ''}<p class="dialog-note">${escapeHTML(t('Approval applies only to the exact copy you allow. Gatekeeper and signature checks stay in force.'))}</p>`;
 }
 function accountStep() {
   const working = busy('continueDownload', { id: dialogTarget });
-  return `<form class="dialog-form" data-form="dialogContinue" ${keyAttr('dialog-account')}><label class="field">${escapeHTML(t('Steam account name'))}<input data-input="account" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" value="${escapeHTML(dialogAccount.account)}"${disabled(working)}></label><label class="check-label"><input type="checkbox" data-change="rememberSession"${checked(dialogAccount.rememberSession)}${disabled(working)}>${escapeHTML(t('Keep me signed in on this Mac'))}</label>${state.savedAccount ? `<p class="dialog-note">${escapeHTML(t('Saved sign-in on this Mac: {account}', { account: state.savedAccount }))}${dialogAccount.account.trim().toLowerCase() === String(state.savedAccount).trim().toLowerCase() ? escapeHTML(t(' · will be reused')) : ''}</p>` : ''}<div class="dialog-actions"><button type="submit" class="primary"${disabled(working || !dialogAccount.account.trim())}>${icon('chevronRight')}<span class="button-label">${escapeHTML(t('Continue'))}</span></button>${button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' })}</div><p class="dialog-note">${escapeHTML(t('Your password and any Steam Guard code come next. This app never saves them.'))}</p></form>`;
+  return `<form class="dialog-form" data-form="dialogContinue" ${keyAttr('dialog-account')}><label class="field">${escapeHTML(t('Steam account name'))}<input data-input="account" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" value="${escapeHTML(dialogAccount.account)}"${disabled(working)}></label><label class="check-label"><input type="checkbox" data-change="rememberSession"${checked(dialogAccount.rememberSession)}${disabled(working)}>${escapeHTML(t('Keep me signed in on this Mac'))}</label>${state.savedAccount ? `<p class="dialog-note">${escapeHTML(t('Saved sign-in on this Mac: {account}', { account: state.savedAccount }))}${dialogAccount.account.trim().toLowerCase() === String(state.savedAccount).trim().toLowerCase() ? escapeHTML(t(' · will be reused')) : ''}</p>` : ''}<div class="dialog-actions">${button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' })}<button type="submit" class="primary"${disabled(working || !dialogAccount.account.trim())}>${icon('chevronRight')}<span class="button-label">${escapeHTML(t('Continue'))}</span></button></div><p class="dialog-note">${escapeHTML(t('Your password and any Steam Guard code come next. This app never saves them.'))}</p></form>`;
 }
 // The resources stage is a choice, so each path is one button carrying its own title and the one
 // fact that decides it, instead of a paragraph of caveats above a row of buttons.
@@ -806,7 +881,7 @@ const choiceButton = (action, args, glyph, title, note, off) => `<button type="b
 function resourcesStep() {
   const settings = state.settings || {};
   const lead = settings.sceneAssetsReady ? t('Shared resources are already installed. Downloading again replaces them.') : t('Scene wallpapers need shaders and materials from Wallpaper Engine. This is a one-time setup.');
-  return `<p${settings.sceneAssetsReady ? ' class="dialog-status" role="status"' : ''}>${escapeHTML(lead)}</p>${settings.sceneAssetsWarning ? `<p class="notice warning">${escapeHTML(settings.sceneAssetsWarning)}</p>` : ''}<div class="dialog-choices">${choiceButton('consentResources', { id: dialogTarget }, 'download', t('Download from Steam'), t('Needs a Steam account that owns Wallpaper Engine and several gigabytes free while downloading.'), busy('continueDownload', { id: dialogTarget }))}${choiceButton('locateAssets', {}, 'folder', t('Use an existing installation'), t('Already have Wallpaper Engine installed? Choose its folder instead of downloading.'), state.setup?.busy)}</div><div class="dialog-actions end">${button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' })}</div>`;
+  return `<p${settings.sceneAssetsReady ? ' class="dialog-status" role="status"' : ''}>${escapeHTML(lead)}</p>${settings.sceneAssetsWarning ? `<p class="notice warning">${escapeHTML(settings.sceneAssetsWarning)}</p>` : ''}<div class="dialog-choices">${choiceButton('consentResources', { id: dialogTarget }, 'download', t('Download from Steam'), t('Needs a Steam account that owns Wallpaper Engine and several gigabytes free while downloading.'), busy('continueDownload', { id: dialogTarget }))}${choiceButton('locateAssets', {}, 'folder', t('Use an existing installation'), t('Already have Wallpaper Engine installed? Choose its folder instead of downloading.'), state.setup?.busy)}</div><div class="dialog-actions">${button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' })}</div>`;
 }
 function authStep(job) {
   const working = busy('downloadInput', { id: job.id });
@@ -816,7 +891,7 @@ function authStep(job) {
   const identity = `<div class="dialog-identity"><p>${icon('userRound', 14)}<span>${t('Signing in as {account}', { account: `<span class="dialog-account">${escapeHTML(account || t('an unnamed account'))}</span>` })}</span></p>${button(t('Change account'), 'changeAccount', { id: job.id }, { className: 'link' })}</div>`;
   const connecting = guideMarkup({ icon: 'logIn', title: job.status, note: t('Contacting Steam. Password and Steam Guard prompts appear here.') }, `<progress aria-label="${escapeHTML(t('Connecting to Steam'))}"></progress>`);
   const help = guide?.phone ? button(t('Get the Steam mobile app'), 'openExternal', { url: 'https://store.steampowered.com/mobile' }, { icon: 'external', className: 'link' }) : guide?.mail ? button(t('Help with emailed codes'), 'openExternal', { url: 'https://help.steampowered.com/en/wizard/HelpWithSteamGuardCode' }, { icon: 'external', className: 'link' }) : '';
-  return `${identity}${waiting ? connecting : guide ? guideMarkup(guide) : ''}${job.error ? `<p class="notice error">${escapeHTML(job.error)}</p>` : ''}${job.warning ? `<p class="notice warning">${escapeHTML(job.warning)}</p>` : ''}${job.prompt ? `<form class="dialog-form" data-form="dialogAuth" data-id="${escapeHTML(job.id)}" ${keyAttr(`auth-${job.id}-${job.prompt}`)}><label class="field" for="dialog-response">${escapeHTML(t(job.prompt))}<input id="dialog-response" name="response" type="${job.securePrompt ? 'password' : 'text'}" autocomplete="off" spellcheck="false" autocapitalize="off" required${disabled(working)}></label><div class="dialog-actions"><button type="submit" class="primary"${disabled(working)}>${icon(job.securePrompt ? 'lock' : 'keyRound')}<span class="button-label">${escapeHTML(t('Submit'))}</span></button>${button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' })}</div></form>` : `<div class="dialog-actions">${button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' })}</div>`}<div class="dialog-actions">${button(t('Cancel this download'), 'downloadCancel', { id: job.id }, { className: 'quiet' })}${help}</div><p class="dialog-note">${escapeHTML(t('Only approve sign-ins you started yourself. Never share your password or recovery codes.'))}</p>`;
+  return `${identity}${waiting ? connecting : guide ? guideMarkup(guide) : ''}${job.error ? `<p class="notice error" role="alert">${escapeHTML(job.error)}</p>` : ''}${job.warning ? `<p class="notice warning">${escapeHTML(job.warning)}</p>` : ''}${job.prompt ? `<form class="dialog-form" data-form="dialogAuth" data-id="${escapeHTML(job.id)}" ${keyAttr(`auth-${job.id}-${job.prompt}`)}><label class="field" for="dialog-response">${escapeHTML(t(job.prompt))}<input id="dialog-response" name="response" type="${job.securePrompt ? 'password' : 'text'}" autocomplete="off" spellcheck="false" autocapitalize="off" required${disabled(working)}></label><div class="dialog-actions">${button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' })}<button type="submit" class="primary"${disabled(working)}>${icon(job.securePrompt ? 'lock' : 'keyRound')}<span class="button-label">${escapeHTML(t('Submit'))}</span></button></div></form>` : ''}<div class="dialog-actions">${!job.prompt ? button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' }) : ''}${button(t('Cancel this download'), 'downloadCancel', { id: job.id }, { className: 'quiet' })}${help}</div><p class="dialog-note">${escapeHTML(t('Only approve sign-ins you started yourself. Never share your password or recovery codes.'))}</p>`;
 }
 // Sign-in complete: the download is already running, so the dialog says so with live progress
 // instead of vanishing, then steps aside on its own.
@@ -826,7 +901,7 @@ function startedStep(job, subject) {
     ? { icon: 'check', title: t('Signed in to Steam'), note: t('Downloads will use this sign-in.') }
     : { icon: 'check', title: shared ? t('Signed in. Shared resources are downloading first') : t('Signed in. {title} is downloading', { title: subject.title }), note: shared ? t('{title} starts automatically once they are installed. You can keep using the app meanwhile.', { title: subject.title }) : t('You can keep using the app. Progress shows on the wallpaper and in the downloads list.') };
   const progress = Number.isFinite(job.progress) ? `<progress max="1" value="${clamp(job.progress)}" aria-label="${escapeHTML(t('Download progress'))}"></progress>` : `<progress aria-label="${escapeHTML(t('Download in progress'))}"></progress>`;
-  return `${guideMarkup(guide, `<p class="dialog-status" role="status">${escapeHTML(job.status)}</p>${progress}`)}<div class="dialog-actions">${button(t('Done'), 'dismissDialog', {}, { icon: 'check', className: 'primary' })}${button(t('Show downloads'), 'showDownloadsFromDialog', {}, { icon: 'download', className: 'quiet' })}</div>`;
+  return `${guideMarkup(guide, `<p class="dialog-status" role="status">${escapeHTML(job.status)}</p>${progress}`)}<div class="dialog-actions">${button(t('Show downloads'), 'showDownloadsFromDialog', {}, { icon: 'download', className: 'quiet' })}${button(t('Done'), 'dismissDialog', {}, { icon: 'check', className: 'primary' })}</div>`;
 }
 let importDuplicates = 'skip';
 async function searchWorkshop() { clearTimeout(searchTimer); await send('workshopSearch', { ...workshopDraft, tags: [...workshopDraft.tags], excludedTags: [...workshopDraft.excludedTags] }); }
@@ -861,9 +936,10 @@ function surfaceAuthRequests() {
 async function continueDownload(includeResources) {
   const id = dialogTarget;
   if (!id) return;
-  await send('continueDownload', { id, account: dialogAccount.account.trim(), rememberSession: dialogAccount.rememberSession, includeResources });
+  await sendDialog('continueDownload', { id, account: dialogAccount.account.trim(), rememberSession: dialogAccount.rememberSession, includeResources });
 }
 async function handleAction(action, data, element) {
+  const deliver = element?.closest('#download-dialog') ? sendDialog : send;
   const id = data.id;
   switch (action) {
     case 'dismissError':
@@ -871,7 +947,7 @@ async function handleAction(action, data, element) {
       if (state) { state.error = null; state.downloadError = null; }
       renderError();
       // The native side owns bridge errors, so a dismissal must reach it or the next snapshot restores it.
-      await send('dismissError');
+      await deliver('dismissError');
       return;
     case 'openDownloads': openPopover('downloads', element); return;
     case 'showDownloadsFromDialog': { const trigger = dialogTrigger; closeDialog(); openPopover('downloads', document.querySelector('#top-actions [data-action="openDownloads"]') || (trigger ? document.querySelector(trigger) : null)); return; }
@@ -884,38 +960,38 @@ async function handleAction(action, data, element) {
     case 'dismissDialog': closeDialog(); return;
     case 'consentResources': await continueDownload(true); return;
     // Native cancels this exact job and hands the same intent back at the account stage, so the dialog simply follows it.
-    case 'changeAccount': await send('changeDownloadAccount', { id }); openDialog(id, element); return;
-    case 'removeDownloadRequest': if (dialogTarget === id) closeDialog(); await send(action, { id }); return;
+    case 'changeAccount': await deliver('changeDownloadAccount', { id }); openDialog(id, element); return;
+    case 'removeDownloadRequest': if (dialogTarget === id) closeDialog(); await deliver(action, { id }); return;
     case 'clearInstalledSearch': installed.text = ''; // falls through to reset filters
     case 'clearInstalled': installed.tags = []; installed.excludedTags = []; render(); return;
     case 'toggleSelect': toggleSelection(id); return;
     case 'toggleSelecting': selecting = !selecting; if (!selecting) { selection.clear(); selectionAnchor = null; } render(); return;
     case 'selectAllVisible': for (const item of visibleWallpapers()) selection.add(item.id); selectionAnchor ??= [...selection][0] ?? null; renderGrid(false); return;
     case 'clearSelection': selection.clear(); selectionAnchor = null; renderGrid(false); return;
-    case 'deleteSelected': if (selection.size) await send('deleteMany', { ids: [...selection] }); return;
+    case 'deleteSelected': if (selection.size) await deliver('deleteMany', { ids: [...selection] }); return;
     case 'clearWorkshopSearch': workshopDraft.text = ''; // falls through to reset filters
     case 'clearWorkshop': workshopDraft.tags = []; workshopDraft.excludedTags = [...defaultExcludedTags]; render(); await searchWorkshop(); return;
     case 'includeSection': case 'excludeSection': setExcluded(filterDraft(state.page === 'discover'), excludeSections.find(section => section.key === data.section)?.tags.map(entry => tagEntry(entry).tag) || [], action === 'excludeSection'); await applyFilterChange(); return;
-    case 'showInstalled': await send('navigate', { page: 'installed' }); await send('select', { id }); return;
-    case 'clearProperty': await send('property', { id, propertyID: data.propertyId, value: '' }); return;
-    case 'restoreProperty': drafts.delete(draftKey(id, data.propertyId)); await send(action, { id, propertyID: data.propertyId }); return;
-    case 'revert': for (const key of drafts.keys()) if (key.startsWith(`${id}\u0000`)) drafts.delete(key); await send(action, { id }); return;
+    case 'showInstalled': await deliver('navigate', { page: 'installed' }); await deliver('select', { id }); return;
+    case 'clearProperty': await deliver('property', { id, propertyID: data.propertyId, value: '' }); return;
+    case 'restoreProperty': drafts.delete(draftKey(id, data.propertyId)); await deliver(action, { id, propertyID: data.propertyId }); return;
+    case 'revert': for (const key of drafts.keys()) if (key.startsWith(`${id}\u0000`)) drafts.delete(key); await deliver(action, { id }); return;
     case 'apply':
-      for (const [key, value] of [...drafts]) if (key.startsWith(`${id}\u0000`)) { await send('property', { id, propertyID: key.split('\u0000')[1], value }); if (drafts.get(key) === value) drafts.delete(key); }
-      await send(action, { id }); return;
-    case 'navigate': await send(action, { page: data.page }); return;
+      for (const [key, value] of [...drafts]) if (key.startsWith(`${id}\u0000`)) { await deliver('property', { id, propertyID: key.split('\u0000')[1], value }); if (drafts.get(key) === value) drafts.delete(key); }
+      await deliver(action, { id }); return;
+    case 'navigate': await deliver(action, { page: data.page }); return;
     case 'refreshWorkshop': await searchWorkshop(); return;
-    case 'toggleFilters': await send('filters', { page: state.page, collapsed: !filtersCollapsed() }); return;
+    case 'toggleFilters': await deliver('filters', { page: state.page, collapsed: !filtersCollapsed() }); return;
     case 'toggleSortDirection': installed.descending = !installed.descending; render(); return;
-    case 'workshopPage': await send(action, { page: Math.min(workshopMaxPages(), Math.max(1, Number(data.workshopPage) || 1)) }); $('wallpaper-grid').scrollTop = 0; return;
-    case 'openExternal': await send(action, { url: data.url }); return;
-    case 'import': await send(action, { duplicates: importDuplicates }); return;
+    case 'workshopPage': await deliver(action, { page: Math.min(workshopMaxPages(), Math.max(1, Number(data.workshopPage) || 1)) }); $('wallpaper-grid').scrollTop = 0; return;
+    case 'openExternal': await deliver(action, { url: data.url }); return;
+    case 'import': await deliver(action, { duplicates: importDuplicates }); return;
     default: {
       const args = {};
       if (id !== undefined) args.id = id;
       if (data.propertyId !== undefined) args.propertyID = data.propertyId;
       if (data.displayId !== undefined) args.displayID = data.displayId;
-      await send(action, args);
+      await deliver(action, args);
     }
   }
 }
@@ -1003,7 +1079,7 @@ document.addEventListener('submit', event => {
     if (!value) return;
     // The secret belongs to this job alone and never survives the submit.
     input.value = '';
-    run(send('downloadInput', { id: form.dataset.id, value }));
+    run(sendDialog('downloadInput', { id: form.dataset.id, value }));
   }
 });
 document.addEventListener('keydown', event => {
@@ -1032,7 +1108,7 @@ document.addEventListener('keydown', event => {
   }
 });
 $('download-dialog').addEventListener('cancel', event => { event.preventDefault(); closeDialog(); });
-$('download-dialog').addEventListener('close', () => { if (dialogTarget !== null) closeDialog(); });
+$('download-dialog').addEventListener('close', () => { if (dialogTarget !== null && !$('download-dialog').open) closeDialog(); });
 window.addEventListener('resize', () => { if (popover) renderPopover(); queueLivePreviews(); });
 // A Discover page is one Steam page of 30 tiles, at most 1,000 pages deep. Nothing here measures
 // the grid: CSS alone decides how many columns the tiles fill, and a page scrolls for the rest,
@@ -1120,11 +1196,19 @@ function sampleLivePreviews() {
   }
 }
 $('wallpaper-grid').addEventListener('scroll', () => { clearTimeout(liveScrollTimer); liveScrollTimer = setTimeout(queueLivePreviews, 120); }, { passive: true });
+const welcomeInert = new Set();
+function setWelcomeBackgroundInert(open) {
+  for (const node of $('app').children) {
+    if (node.tagName === 'DIALOG') continue;
+    if (open && !node.inert) { node.inert = true; welcomeInert.add(node); }
+    else if (!open && welcomeInert.delete(node)) node.inert = false;
+  }
+}
 // The first-run guide draws over the whole window, so it owns its own events and the panel's
 // document-level handlers stay out of it.
 const welcome = createWelcome({
-  container: $('welcome'), send, run, escapeHTML, icon, button, morph, busy, safeLink, signInGuide, guideMarkup,
-  closePopover, dragWindow: () => postTitleBarGesture('dragWindow'),
+  container: $('welcome'), send, run, escapeHTML, icon, button, morph, busy, safeLink, signInGuide, guideMarkup, stageHint,
+  closePopover, setBackgroundInert: setWelcomeBackgroundInert, dragWindow: () => postTitleBarGesture('dragWindow'),
   clearError: () => { localError = ''; if (state) { state.error = null; state.downloadError = null; } renderError(); run(send('dismissError')); },
   navigate: (page) => send('navigate', { page }),
   openImport: async () => { await send('navigate', { page: 'installed' }); openPopover('import', document.querySelector('#browser-toolbar [data-action="openImport"]')); },

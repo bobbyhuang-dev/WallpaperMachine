@@ -61,6 +61,11 @@ final class WebPanelPropertyLabelTests: XCTestCase {
     }
     XCTAssertTrue(context.controller.isReady)
     guard context.controller.isReady else { return }
+    XCTAssertNil(web.window)
+    _ = try await web.callAsyncJavaScript("""
+      document.querySelector('#welcome [data-action="go"][data-step="4"]').click();
+      document.querySelector('#welcome [data-action="finish"]').click();
+      """, arguments: [:], in: nil, contentWorld: .page)
     let ready =
       try await web.callAsyncJavaScript(
         "return await window.webkit.messageHandlers.native.postMessage({action:'ready'})",

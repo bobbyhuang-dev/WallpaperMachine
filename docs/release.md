@@ -241,6 +241,20 @@ section and starts the same check. The contract it relies on:
   from `<!-- release-notes-end -->` onwards is ignored. A body with nothing to
   say produces no card rather than an empty one.
 
+A completed check has two normal no-update outcomes: an existing latest release
+at or below the running version is **Up to date**; a repository without an
+eligible published release shows **No published update is available yet. You
+can keep using this version.** Both offer **Check Again**, not an error-style
+Retry or manual-install recovery. A fresh check clears any previous available
+release and its notes.
+
+GitHub also returns 404 for inaccessible repositories. When `/releases/latest`
+returns 404, the client checks the repository endpoint and requires a successful,
+valid repository response before treating the release as absent. Repository
+404s, failed requests and malformed responses stay errors; they are never
+reported as **Up to date**. These paths are covered with isolated URLSession
+fixtures, without contacting GitHub.
+
 With no matching asset the app falls back to opening GitHub Releases for a manual
 update. Renaming the archive, publishing a prerelease, or attaching a `.dmg`
 instead silently breaks automatic updates; `Tests/Unit/GitHub/AppUpdateTests.swift`

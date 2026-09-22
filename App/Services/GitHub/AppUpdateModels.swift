@@ -160,6 +160,7 @@ enum AppUpdateState: Equatable, Sendable {
     case unsupported(currentVersion: String)
     case idle(currentVersion: String)
     case checking(currentVersion: String)
+    case noRelease(currentVersion: String)
     case upToDate(currentVersion: String)
     case available(currentVersion: String, availableVersion: String)
     case manual(currentVersion: String, availableVersion: String)
@@ -169,9 +170,9 @@ enum AppUpdateState: Equatable, Sendable {
 
     var currentVersion: String {
         switch self {
-        case .unsupported(let version), .idle(let version), .checking(let version), .upToDate(let version),
-             .available(let version, _), .manual(let version, _), .downloading(let version, _, _, _, _, _),
-             .ready(let version, _), .error(let version, _, _, _):
+        case .unsupported(let version), .idle(let version), .checking(let version), .noRelease(let version),
+             .upToDate(let version), .available(let version, _), .manual(let version, _),
+             .downloading(let version, _, _, _, _, _), .ready(let version, _), .error(let version, _, _, _):
             return version
         }
     }
@@ -183,7 +184,7 @@ enum AppUpdateState: Equatable, Sendable {
             return version
         case .error(_, _, _, let version):
             return version
-        case .unsupported, .idle, .checking, .upToDate:
+        case .unsupported, .idle, .checking, .noRelease, .upToDate:
             return nil
         }
     }

@@ -25,6 +25,40 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-22 — Loose-asset origin, texture fallback and pointer mapping under zoom
+
+Follow-ups to the same change. Deciding where to read a loose asset from by std::filesystem::is_absolute() was wrong: a mounted candidate is /assets/materials/foo.png, absolute too, so every packaged loose picture and video went to the host filesystem. The origin now travels on LooseAssetCandidate. A texture property is only taken when the file it names opens now, so a moved or sandbox-denied pick keeps the authored texture instead of a name that decodes to nothing. Pointer mapping in both backends and the probe read SceneCamera::VisibleWidth/VisibleHeight, the extent the ortho projection is built from, so clicks and mouse-linked particles follow a zoomed 2D scene.
+
+- `python3 scripts/check_renderer.py` — 10 generated cases pixel-equal, 0 diagnostics, reload cycles 0
+- `tex_schema_tests` 19 passed; `media_thumbnail_texture_smoke` 20 passed; `mouse_input_test` 12 passed
+- `scene_schema_tests` 83 passed / 2 pre-existing failures; `script_runtime_compat_test` 71 passed / 1 pre-existing failure
+- Counter-checks: `TexSchema.PackagedLooseImageStillLoadsFromTheMount` fails when LoadLooseAssetPayload decides by is_absolute(); `MouseInput.HitTestingFollowsACameraObjectZoomAcrossAResize` fails when cursor mapping is given Width()/Height(). Both pass after
+- Swift gate not re-run: nothing outside `upstream/renderer` changed since it passed at 537/0/11, and `cargo build --workspace --release` links the new renderer
+- Not rebuilt for Release and never launched; on-screen behaviour of 3588579284 and 3632513108 stays unverified
+
+## 2026-09-22 — Scene textures, camera zoom, layer parents and scripted alpha
+
+Three renderer gaps behind wallpaper 3588579284 and 3632513108. A usertextures entry naming a scenetexture property was never substituted, so eight 'choose your own picture' slots always showed packaged artwork; WPTexImageParser now also reads an absolute host path, and the package probe is skipped for one so it stops logging a missing .tex per slot. A camera object's zoom is applied when the ortho projection is built (SceneCamera::SetZoom) rather than by writing camera width/height, which ApplyCameraFillMode rewrites on every resize. thisLayer.getParent() and a layer alpha that reaches g_UserAlpha fix 3632513108's dock, which threw 'cannot read property visible of undefined' once a frame. Camera path/queuemode stay parse-only: 3588579284 ships scripts/camera_paths_1297271.json containing {"paths": []}.
+
+- `python3 scripts/test.py` — exit 0; 537 passed, 0 failed, 11 skipped of 548
+- `python3 scripts/check_renderer.py` — 10 generated cases pixel-equal, 0 diagnostics, reload cycles 0
+- `media_thumbnail_texture_smoke` 19 passed; `tex_schema_tests` 17 passed (suite now links PkgConfig::TEST_LZ4; it did not compile before)
+- `script_runtime_compat_test` 71 passed, 1 failed — pre-existing HostVectorUpdatesDoNotCallMutableGlobalVectorConstructors, reproduced with ScriptEngine.cpp stashed
+- `scene_schema_tests` 83 passed, 2 failed — the documented pre-existing PointerCapability/MouseButtonCommit timeouts
+- `offscreen_scene_probe` on 3588579284 (3840x2160, 1 frame): WE_TEST_PROPERTIES setting the eight scenetexture slots to a magenta PNG changed 6284367/8294400 pixels (75.8%), max channel delta 255, sampled (237,255,255)->(255,0,255); a rerun logged 0 VFS misses for that path
+- `offscreen_scene_probe` on 3588579284 with newproperty30=2.0 (its camera object's user-bound zoom): 8020854 pixels (96.7%) differ from the baseline frame, max channel delta 255
+- Not rebuilt for Release: no delivery requested, so the running app still has the old renderer and panel.
+
+## 2026-09-22 — Property labels reduced to words; wordless rows dropped
+
+Workshop authors write property labels as HTML — colour tags, breaks, rules and 2000x1 image strips from image boards. A label that stripped to nothing fell back to the property id, and the Wallpaper Engine editor derives ids from that same markup, so the panel printed multi-line 'imgsrchttpphotogzphotostore…' names (seen on 3588579284, 3632513108, 3292361861, 2887099508, 3605722997 — 33 such labels across the local library). plainLabel now turns breaks and block ends into spaces, decodes the editor's entities with &amp; last, resolves the editor's ui_browse_properties_scheme_color token, and returns empty for decoration; the page drops a wordless text row, names a wordless control 'Unnamed option', and omits an empty properties section.
+
+- `python3 scripts/test.py` — exit 0; 537 passed, 0 failed, 11 skipped of 548
+- `python3 scripts/test.py --only WebPanelPropertyLabelTests` — exit 0; 2 passed (snapshot label reduction; page naming and omission through a real offscreen WKWebView)
+- First gate run failed in CodeSign: 'resource fork, Finder information, or similar detritus not allowed' on build/…/Debug/WallpaperMachine.app (com.apple.FinderInfo + com.apple.fileprovider.fpfs#P from the synced checkout). `xattr -c` on the bundle cleared it; unrelated to the change.
+- Not rebuilt for Release: no delivery requested, so the running app still shows the old labels.
+- Renderer untouched, so `scripts/check_renderer.py` was not run.
+
 ## 2026-09-22 — Solar layer name collision
 
 Live Solar System's sun group and a hidden text readout are both named s. The readout registered second and took the name, so the simulation's getLayer("s").scale stretched that label into the full-height white bars and never resized the sun.
@@ -102,38 +136,3 @@ The rename was half applied and was rebased onto the nineteen renderer/media com
 - python3 scripts/package.py --configuration Debug --check passed; existing GPLv3 Release input rejected without mutation. Disposable Debug copy fully packaged and codesign verified; GPL and keg notices checked; repackaging refused; temporary app/archive removed.
 - Installer idempotence and interrupted-reinstall receipt recovery exercised. No desktop launch, install, Developer ID signing or notarization performed; Release app not rebuilt.
 - Public binary CI blocked: GPL-2.0-only with Apache-2.0 Vulkan/shader dependencies still requires copyright-holder permissions or compatible replacements. Selling signed binaries and priority support does not override GPL recipient/source rights.
-
-## 2026-09-21 — Release build delivered with the camera-layer fix
-
-Supersedes the "Not rebuilt" line of the previous entry: the Release build was requested afterwards. Renderer change, so the full build, not --swift-only. Nothing was launched, no wallpaper changed.
-
-- `python3 scripts/build.py --configuration Release` — exit 0 in 54s; cargo workspace, uniffi-bindgen, xcodegen, xcodebuild all clean (14 + 26 warning lines in the logs)
-- Contains the change: WPSceneParser.cpp edited 22:48:40, its object under `target/release/build/wallpaper-core/*/open_wallpaper_engine/build` recompiled 23:07:06, `libwallpaper_bridge.a` 23:07:16, app binary 23:07:47 — each newer than the last
-- `build/Build/Products/Release/WallpaperMachine.app` — 42,069,648-byte arm64 Mach-O, ad-hoc signed, app.wallpapermachine 0.5.0 (16)
-- No tracked file moved: `App/Bridge/Generated/` and the Xcode project are unchanged by the regeneration, so the bridge API is the same
-- Not run: the app was not launched or quit, no wallpaper was applied, no screenshot or desktop check. On-screen behaviour of 3605722997 and 3292361861 stays unverified until the user reopens the app
-
-## 2026-09-21 — Camera layers stop reframing 2D scenes
-
-A visible `camera` layer in a scene with `orthogonalprojection` used to become the active perspective camera at the authored shot pose, framing a few hundred units of a canvas thousands of units wide: workshop 3605722997 rendered one magnified sliver of its top-right corner over `general.clearcolor`, on both backends. `ParseCameraObj` now leaves `scene.cameras`/`activeCamera` alone for orthographic scenes. Local wallpapers are personal copies; only IDs and measurements are recorded.
-
-- `offscreen_scene_probe` 3605722997 — before: non-clear pixels only in x[1280,2559] y[0,719], coverage 0.250; after: full canvas, matches the authored preview.gif composition
-- `offscreen_scene_probe` 3292361861 — before: ~9x perspective crop; after: full canvas with clock, media and FPS widgets in place
-- `metal_scene_draw_smoke` WE_TEST_METAL_PROJECTS — 3605722997 and 3292361861 accepted as Native Metal, 120 frames each; before coverage 0.250, after full canvas, matching the Vulkan probe
-- `scene_schema_tests --gtest_filter=SceneSchema.*Camera*` — exit 0, 9 tests; new `CameraObjectKeepsAnOrthographicSceneOnItsCanvas` fails on the pre-fix branch (active camera perspective, canvas centre at NDC 0.772) and passes after
-- `python3 scripts/check_renderer.py --project 3605722997 --project 3292361861` — 10 generated cases pixel-equal with 0 diagnostics, both local projects exit 0, reload cycles 0. 3292361861 reports pixels_equal=False (543 px, its live clock row) and 25 diagnostics that are byte-identical with the camera layer removed: pre-existing workshop clipping-mask shader and property-script gaps, not this change
-- `python3 scripts/test.py` — exit 0; 535 passed, 11 skipped of 546
-- Not rebuilt: no Release build was requested, so the installed app still has the old renderer
-
-## 2026-09-21 — The flat background: a blur was dividing its step by a 2x2 placeholder
-
-Compatibility flattened this wallpaper's cloud layer. Traced by dumping every pass and reading the constants each one was given.
-
-- A target that follows the screen is registered with placeholder dimensions while the scene parses, because the output size is not known yet. g_TextureNResolution is folded into the material at that same moment, and nothing refreshed it afterwards
-- blur_gaussian steps by 1/g_Texture0Resolution.zw, so it divided by two: its 13 taps spanned six times the whole texture, every one clamped to the edge, and the output was the edge colour everywhere
-- Fixed by re-baking those constants in ResolveScreenBoundRenderTargetSizes, after the real size is known. Effect-chain nodes hang off the camera rather than the scene graph, so they are walked separately -- they are exactly the passes this matters for
-- Result on the reported wallpaper: the cloud layer comes back, final-frame contrast 15.0 -> 30.8, matching what Native Metal already drew
-- New RenderScale.AScreenBoundTargetsResolutionReachesTheMaterialThatSamplesIt: fails without the fix (2 where 480 and 270 are expected), passes with it. It asserts all four components, since the existing resolution test only ever checked the first two and a blur divides by the last two
-- Two false starts recorded so they are not repeated: passes.txt lists parse-time constants rather than live uniform values, and a pass dump is the whole pooled allocation rather than the target
-- scripts/test.py 535 passed / 0 failed / 11 skipped of 546; check_renderer.py 10 cases pixels_equal=True; render_scale_test 9; metal_backend_test 35; metal_scene_draw_smoke 33; scene_schema_tests 80 with the two pre-existing pointer timeouts. rendergraph_smoke segfaults with and without this change -- pre-existing
-- Release rebuilt

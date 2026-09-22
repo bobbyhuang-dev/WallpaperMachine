@@ -161,6 +161,9 @@ executable directly from the renderer check build directory.
 | --- | --- |
 | Camera zoom | `scene_schema_tests --gtest_filter='SceneSchema.*CameraZoom*'`. Scene `general.zoom` may contain an authored scalar animation, not just a fixed camera scale. |
 | Camera layers in 2D scenes | `SceneSchema.CameraObjectKeepsAnOrthographicSceneOnItsCanvas` next to `SceneSchema.DefaultCameraObjectBecomesActivePerspective` in `scene_schema_tests`. A scene with `orthogonalprojection` is projected by that canvas; a `camera` layer in one must not become the active perspective camera (see below). |
+| Camera-object zoom in 2D scenes | `SceneSchema.CameraObjectZoomTightensTheOrthographicFrustum` and `.CameraObjectZoomThatIsNotPositiveFramesTheWholeCanvas` in `scene_schema_tests`, plus `MouseInput.HitTestingFollowsACameraObjectZoomAcrossAResize` in `mouse_input_test`. A shot that does not own the projection still frames it: `zoom` is applied when the ortho projection is built, not by writing camera width and height, because `ApplyCameraFillMode` rewrites those from the authored canvas on every output resize. Pointer mapping reads `SceneCamera::VisibleWidth/VisibleHeight`, the same extent the projection uses — passing `Width()`/`Height()` leaves clicks and mouse-linked particles on the unzoomed image, right at the centre and wrong everywhere else. The authored extent the render targets are sized from must not move with it. |
+| User-chosen scene textures | `MediaThumbnailTextureSmoke.TextureProperty*`, `.UnsetTexturePropertyKeepsTheAuthoredTexture` and `.AnUnreadableUserFileKeepsTheAuthoredTexture` in `media_thumbnail_texture_smoke`; `TexSchema.AbsolutePath*`, `.PackagedLooseImageStillLoadsFromTheMount` and `.OnlyAReadableHostPictureCountsAsOne` in `tex_schema_tests`. A `usertextures` entry is either a cover slot the runtime supplies or the name of a `scenetexture` property. The property stores a path, not a copy, so a slot is only replaced when that file opens now; unset, moved and unreadable all keep the authored texture. Origin travels on `LooseAssetCandidate`, never re-derived from the path: a mounted `/assets/materials/foo.png` is absolute too, and deciding by `is_absolute()` sends every packaged loose picture and video to the host filesystem, where none of them exist. |
+| Layer parents and scripted alpha | `ScriptRuntimeCompat.LayerGetParent*` and `.LayerAlpha*` in `script_runtime_compat_test`. `getParent()` is how an icon script reads its group; without it the whole `update` throws once a frame. `layer.alpha` has to reach `g_UserAlpha`, and only for layers whose authored alpha is not already owned by a timeline, an update script or a user property — two writers per frame fight. |
 | Callback-only property scripts | `*CallbackOnly*` in `scene_schema_tests` and `script_runtime_compat_test` |
 | Property-script feedback / hover easing | `ScriptRuntimeCompat.HoverScaleInterpolatesAcrossFramesAndReversesWithoutSnapping` and `ScriptRuntimeCompat.PropertyFeedbackResumesFromExplicitUserValueChanges` in `script_runtime_compat_test` |
 | Script-driven layer visibility | `SceneSchema.HiddenByDefaultVisibilityScriptDrivesVisibilityAndOrigin` in `scene_schema_tests`. The authored `visible.value` is the script's initial value, never a permission to run it (see below). |
@@ -807,13 +810,12 @@ SceneScript views.
   `EvictingTheCacheDoesNotDisturbAnOpenSource` count published files, so
   leftovers from a previous run make them fail (`added.size()==2`). Delete that
   directory and re-run the same binary before investigating.
-- **`tex_schema_tests` does not compile here.** `tests/tex_schema_tests.cpp`
-  includes `<lz4.h>`, but `src/CMakeLists.txt` links `PkgConfig::LZ4` `PRIVATE`
-  and `tests/CMakeLists.txt` does not link it for this executable, so the
-  include directory never propagates. It is outside
-  `scripts/check_renderer.py`'s target list, so the gate is unaffected; the
-  JPEG/EXIF orientation coverage it owns is therefore unexercised until the
-  target links LZ4 itself.
+- `tex_schema_tests` links `PkgConfig::TEST_LZ4` itself (`tests/CMakeLists.txt`),
+  the same way the video suites re-resolve FFmpeg: the renderer links LZ4
+  `PRIVATE`, so the include directory does not propagate to a test that builds
+  its own compressed `.tex` fixtures. It stays outside
+  `scripts/check_renderer.py`'s target list, so run it by hand when touching
+  `WPTexImageParser`.
 - Asset-dependent `shader` pipeline cases (for example `genericimage4` and a
   Workshop package) are excluded when their referenced files are absent.
 - Some locally installed scenes emit pre-existing MDLA, Rust `light_map` compile

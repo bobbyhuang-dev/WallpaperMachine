@@ -193,6 +193,10 @@ struct WPCameraObject : WPMiscObjectBase {
     std::string queuemode;
     float       fov { 50.0f };
     float       zoom { 1.0f };
+    /// `zoom` as written. The unwrapped float above is the authored default;
+    /// a slider the user drags arrives as `{"user": "<property>", "value": n}`
+    /// and only this form still names the property.
+    nlohmann::json zoom_setting;
     bool        solid { false };
     bool        disablepropagation { false };
 
@@ -203,6 +207,7 @@ struct WPCameraObject : WPMiscObjectBase {
         GET_JSON_NAME_VALUE_NOWARN(json, "queuemode", queuemode);
         GET_JSON_NAME_VALUE_NOWARN(json, "fov", fov);
         GET_JSON_NAME_VALUE_NOWARN(json, "zoom", zoom);
+        if (json.contains("zoom")) zoom_setting = json.at("zoom");
         GET_JSON_NAME_VALUE_NOWARN(json, "solid", solid);
         GET_JSON_NAME_VALUE_NOWARN(json, "disablepropagation", disablepropagation);
         return true;

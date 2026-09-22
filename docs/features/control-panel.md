@@ -26,7 +26,8 @@ labels, menus and dialogs. **Settings → General → Language** offers **System
 Steam's own language is not involved. Unsupported languages and missing keys
 fall back to English. Wallpaper titles, descriptions, creator names, custom
 property labels and upstream diagnostic details remain as supplied; this does
-not translate third-party wallpaper content. Steam filter values and bridge
+not translate third-party wallpaper content, only the two label stand-ins the
+panel supplies itself (see [Properties](#properties)). Steam filter values and bridge
 action identifiers remain unchanged when labels are translated. How the layers
 fit together and how to add a language: [Localization](../localization.md).
 
@@ -274,6 +275,16 @@ configuration for that wallpaper. **Wallpaper properties** renders the
 wallpaper's own authored controls — booleans, sliders, combo menus, colors, text
 fields and image pickers, each with a **Reset** to its default.
 
+Authors write those labels as HTML, and Workshop authors use them as a layout
+surface: colour tags, `<br>` runs, `<hr>` rules and image strips hosted on image
+boards. The panel shows text, so a label is reduced to the words it carries —
+breaks and block ends become spaces so neighbours do not merge, every other tag
+drops out, and the entities the Wallpaper Engine editor emits are decoded. A
+label that is only decoration reduces to nothing: a text property with no words
+is left out, a control keeps its row under **Unnamed option**, and a section with
+nothing left in it is not shown. The property's id is never used as a name — the
+editor derives ids from the markup, so they read as `imgsrchttpphoto…`.
+
 Audio, scaling mode and frame rate take effect immediately. Everything else is
 pending until committed:
 
@@ -281,6 +292,14 @@ pending until committed:
 - **Revert** discards pending changes.
 
 Unsubmitted text stays with its wallpaper when navigating between pages.
+
+A `scenetexture` property's image picker fills the material slot that names it,
+so a wallpaper built around "choose your own picture" shows the picture. The
+choice takes effect on **Apply changes**, which reloads the scene; the picker
+stores the path, not a copy, so moving or deleting the file leaves that slot on
+the artwork the author shipped. A picture outside the app's own storage is not
+readable from the sandboxed lock-screen extension, which keeps the authored
+texture there.
 
 ## Downloads and import
 

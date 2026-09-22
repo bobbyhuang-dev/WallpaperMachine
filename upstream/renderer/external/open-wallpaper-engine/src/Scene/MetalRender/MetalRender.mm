@@ -3829,7 +3829,8 @@ WallpaperCursorMapping MetalRender::CursorMapping(const Scene& scene) const
     const auto position = camera->second->GetPosition();
     return ComputeWallpaperCursorMapping(
         pImpl->scalingLayout(scene, pImpl->output_width, pImpl->output_height),
-        position.x(), position.y(), camera->second->Width(), camera->second->Height());
+        position.x(), position.y(), camera->second->VisibleWidth(),
+        camera->second->VisibleHeight());
 }
 
 const std::string& MetalRender::lastError() const { return pImpl->last_error; }

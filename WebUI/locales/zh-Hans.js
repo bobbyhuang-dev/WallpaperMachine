@@ -286,6 +286,7 @@ export default {
   'No image selected': '未选择图片',
   'Choose image': '选择图片',
   '{name}: unsupported property type.': '{name}：不支持此属性类型。',
+  'Unnamed option': '未命名选项',
   'Reset': '重置',
   'Restore default: {name}': '恢复默认值：{name}',
 

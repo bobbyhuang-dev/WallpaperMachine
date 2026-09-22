@@ -288,6 +288,92 @@ export function update(value) { thisLayer.visible = true; }
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 
+// An icon script asks its dock whether it is showing before it does anything
+// else, through `getParent()`. Without that call the whole update threw once a
+// frame, so the icons never scaled, never faded and never opened anything.
+TEST(ScriptRuntimeCompat, LayerGetParentReachesTheParentLayer) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto dock    = std::make_shared<SceneNode>();
+    auto icon    = std::make_shared<SceneNode>();
+    dock->SetName("App Launcher Dock");
+    icon->SetName("Launcher 1");
+    dock->AppendChild(icon);
+    dock->SetVisible(true);
+    runtime->RegisterNode("App Launcher Dock", dock.get());
+    runtime->RegisterNodeVisibility("Launcher 1", icon.get(), ResolveBoolSetting(*runtime, {
+        {"value", false}, {"script", R"JS(
+let parent;
+export function init() { parent = thisLayer.getParent(); }
+export function update() { return parent !== null && parent.visible; }
+)JS"}}, "Launcher 1"));
+
+    runtime->Tick(0.01);
+    EXPECT_TRUE(icon->Visible());
+    dock->SetVisible(false);
+    runtime->Tick(0.01);
+    EXPECT_FALSE(icon->Visible());
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+// A layer at the scene root has no parent layer, and saying so is the whole
+// answer: an object standing in for the graph's unnamed root would report a
+// visibility that belongs to nothing the author wrote.
+TEST(ScriptRuntimeCompat, LayerGetParentIsNullAtTheSceneRoot) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto node    = std::make_shared<SceneNode>();
+    node->SetName("backdrop");
+    runtime->RegisterNode("backdrop", node.get());
+    runtime->RegisterNodeVisibility("backdrop", node.get(), ResolveBoolSetting(*runtime, {
+        {"value", false}, {"script", R"JS(
+export function update() { return thisLayer.getParent() === null; }
+)JS"}}, "backdrop"));
+
+    runtime->Tick(0.01);
+    EXPECT_TRUE(node->Visible());
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+// `layer.alpha = x` is how one script fades another layer. It has to reach the
+// material the flat shader reads, not stop at a number the script layer keeps
+// to itself.
+TEST(ScriptRuntimeCompat, LayerAlphaWritesReachTheMaterial) {
+    auto runtime  = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto node     = std::make_shared<SceneNode>();
+    auto material = std::make_shared<SceneMaterial>();
+    runtime->RegisterNode("icon", node.get());
+    runtime->RegisterNodeAlpha("icon", material, 1.0f);
+    runtime->RegisterNodeVisibility("icon", node.get(), ResolveBoolSetting(*runtime, {
+        {"value", true}, {"script", R"JS(
+export function update(value) { thisLayer.alpha = 0.25; return value; }
+)JS"}}, "icon"));
+
+    runtime->Tick(0.01);
+    ASSERT_TRUE(material->customShader.constValues.contains("g_UserAlpha"));
+    EXPECT_FLOAT_EQ(material->customShader.constValues.at("g_UserAlpha")[0], 0.25f);
+    EXPECT_FLOAT_EQ(*runtime->NodeAlpha("icon"), 0.25f);
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
+// A layer with no material of its own — a sound layer, an empty group — still
+// remembers what a script wrote to it rather than reporting a made-up 1.
+TEST(ScriptRuntimeCompat, LayerAlphaWithoutAMaterialKeepsWhatWasWritten) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto node    = std::make_shared<SceneNode>();
+    runtime->RegisterNode("group", node.get());
+    runtime->RegisterNodeVisibility("group", node.get(), ResolveBoolSetting(*runtime, {
+        {"value", false}, {"script", R"JS(
+export function update() {
+  thisLayer.alpha = 0.5;
+  return thisLayer.alpha === 0.5;
+}
+)JS"}}, "group"));
+
+    runtime->Tick(0.01);
+    EXPECT_TRUE(node->Visible());
+    EXPECT_FALSE(runtime->NodeAlpha("group").has_value());
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
 namespace
 {
 

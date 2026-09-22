@@ -17,8 +17,14 @@ class WPMaterial;
 struct WPUserTexture;
 }
 
+/// Substitutes the texture slots a material delegates. Two kinds arrive in the
+/// same `usertextures` list: the cover slots the runtime supplies itself, and a
+/// slot that names one of the wallpaper's own `scenetexture` properties. The
+/// second kind needs the property table to resolve, so a parse without one
+/// leaves those slots on their authored texture.
 void ApplySystemUserTextures(std::vector<std::string>& textures,
-                             const std::vector<wpscene::WPUserTexture>& usertextures);
+                             const std::vector<wpscene::WPUserTexture>& usertextures,
+                             const ProjectProperties* properties = nullptr);
 void LoadMaterialConstantShaderValues(SceneMaterial& material, const wpscene::WPMaterial& wpmat,
                                       const WPShaderInfo& info);
 

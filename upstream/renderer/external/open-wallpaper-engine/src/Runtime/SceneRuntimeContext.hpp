@@ -217,6 +217,20 @@ public:
                                                 std::numeric_limits<uint32_t>::max());
     bool            SortNode(std::string_view name, int index);
     bool            NodeVisible(std::string_view name) const;
+    // A layer's parent as scripts address layers: by name. Empty when the layer
+    // is unknown or sits at the scene root, which `getParent()` reports as null
+    // rather than inventing a stand-in layer for the graph's unnamed root.
+    std::string     NodeParentName(std::string_view name) const;
+    // Layer opacity a script writes. The authored `alpha` reaches the same
+    // `g_Alpha` the flat shader reads; when the author already bound alpha to a
+    // script or a user property that binding owns it and this one is not made,
+    // so a frame never has two writers.
+    void            RegisterNodeAlpha(std::string name, std::shared_ptr<SceneMaterial> material,
+                                      float value);
+    // Absent when the layer owns no material the runtime can tint, which the
+    // script layer reports as its own remembered value instead of a false 1.
+    std::optional<float> NodeAlpha(std::string_view name) const;
+    bool            SetNodeAlpha(std::string_view name, float value);
     bool            SetNodeVisible(std::string_view name, bool visible);
     bool            SetNodeTranslate(std::string_view name, const Eigen::Vector3f& value);
     bool            SetNodeScale(std::string_view name, const Eigen::Vector3f& value);
@@ -444,6 +458,11 @@ private:
     std::unordered_map<std::string, NodeVec3Binding>               m_node_rotation;
     std::unordered_map<std::string, NodeEffectFinalBinding>        m_node_effect_final;
     std::vector<MaterialAlphaBinding>                              m_material_alpha;
+    struct NodeAlphaBinding {
+        std::shared_ptr<SceneMaterial> material;
+        float                          value { 1.0f };
+    };
+    std::unordered_map<std::string, NodeAlphaBinding>              m_node_alpha;
     struct ScalarAnimationBinding {
         std::string layer_name;
         std::shared_ptr<ScalarAnimationPlayback> playback;

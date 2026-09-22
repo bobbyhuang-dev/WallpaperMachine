@@ -15,6 +15,41 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — Release build delivered with the camera-layer fix
+
+Supersedes the "Not rebuilt" line of the previous entry: the Release build was requested afterwards. Renderer change, so the full build, not --swift-only. Nothing was launched, no wallpaper changed.
+
+- `python3 scripts/build.py --configuration Release` — exit 0 in 54s; cargo workspace, uniffi-bindgen, xcodegen, xcodebuild all clean (14 + 26 warning lines in the logs)
+- Contains the change: WPSceneParser.cpp edited 22:48:40, its object under `target/release/build/wallpaper-core/*/open_wallpaper_engine/build` recompiled 23:07:06, `libwallpaper_bridge.a` 23:07:16, app binary 23:07:47 — each newer than the last
+- `build/Build/Products/Release/WallpaperMachine.app` — 42,069,648-byte arm64 Mach-O, ad-hoc signed, app.wallpapermachine 0.5.0 (16)
+- No tracked file moved: `App/Bridge/Generated/` and the Xcode project are unchanged by the regeneration, so the bridge API is the same
+- Not run: the app was not launched or quit, no wallpaper was applied, no screenshot or desktop check. On-screen behaviour of 3605722997 and 3292361861 stays unverified until the user reopens the app
+
+## 2026-09-21 — Camera layers stop reframing 2D scenes
+
+A visible `camera` layer in a scene with `orthogonalprojection` used to become the active perspective camera at the authored shot pose, framing a few hundred units of a canvas thousands of units wide: workshop 3605722997 rendered one magnified sliver of its top-right corner over `general.clearcolor`, on both backends. `ParseCameraObj` now leaves `scene.cameras`/`activeCamera` alone for orthographic scenes. Local wallpapers are personal copies; only IDs and measurements are recorded.
+
+- `offscreen_scene_probe` 3605722997 — before: non-clear pixels only in x[1280,2559] y[0,719], coverage 0.250; after: full canvas, matches the authored preview.gif composition
+- `offscreen_scene_probe` 3292361861 — before: ~9x perspective crop; after: full canvas with clock, media and FPS widgets in place
+- `metal_scene_draw_smoke` WE_TEST_METAL_PROJECTS — 3605722997 and 3292361861 accepted as Native Metal, 120 frames each; before coverage 0.250, after full canvas, matching the Vulkan probe
+- `scene_schema_tests --gtest_filter=SceneSchema.*Camera*` — exit 0, 9 tests; new `CameraObjectKeepsAnOrthographicSceneOnItsCanvas` fails on the pre-fix branch (active camera perspective, canvas centre at NDC 0.772) and passes after
+- `python3 scripts/check_renderer.py --project 3605722997 --project 3292361861` — 10 generated cases pixel-equal with 0 diagnostics, both local projects exit 0, reload cycles 0. 3292361861 reports pixels_equal=False (543 px, its live clock row) and 25 diagnostics that are byte-identical with the camera layer removed: pre-existing workshop clipping-mask shader and property-script gaps, not this change
+- `python3 scripts/test.py` — exit 0; 535 passed, 11 skipped of 546
+- Not rebuilt: no Release build was requested, so the installed app still has the old renderer
+
+## 2026-09-21 — The flat background: a blur was dividing its step by a 2x2 placeholder
+
+Compatibility flattened this wallpaper's cloud layer. Traced by dumping every pass and reading the constants each one was given.
+
+- A target that follows the screen is registered with placeholder dimensions while the scene parses, because the output size is not known yet. g_TextureNResolution is folded into the material at that same moment, and nothing refreshed it afterwards
+- blur_gaussian steps by 1/g_Texture0Resolution.zw, so it divided by two: its 13 taps spanned six times the whole texture, every one clamped to the edge, and the output was the edge colour everywhere
+- Fixed by re-baking those constants in ResolveScreenBoundRenderTargetSizes, after the real size is known. Effect-chain nodes hang off the camera rather than the scene graph, so they are walked separately -- they are exactly the passes this matters for
+- Result on the reported wallpaper: the cloud layer comes back, final-frame contrast 15.0 -> 30.8, matching what Native Metal already drew
+- New RenderScale.AScreenBoundTargetsResolutionReachesTheMaterialThatSamplesIt: fails without the fix (2 where 480 and 270 are expected), passes with it. It asserts all four components, since the existing resolution test only ever checked the first two and a blur divides by the last two
+- Two false starts recorded so they are not repeated: passes.txt lists parse-time constants rather than live uniform values, and a pass dump is the whole pooled allocation rather than the target
+- scripts/test.py 535 passed / 0 failed / 11 skipped of 546; check_renderer.py 10 cases pixels_equal=True; render_scale_test 9; metal_backend_test 35; metal_scene_draw_smoke 33; scene_schema_tests 80 with the two pre-existing pointer timeouts. rendergraph_smoke segfaults with and without this change -- pre-existing
+- Release rebuilt
+
 ## 2026-09-21 — Corrected: Native Metal never dropped the album cover, and my fix took the clouds away
 
 Reported as the clouds suddenly disappearing. They did, and I caused it: the album-cover rejection I added earlier forced this wallpaper onto Compatibility, which is the backend that flattens them.

@@ -1267,7 +1267,12 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::WPMaterial& wpmat, Scene* pScene,
                           } };
 
     auto base_textures = wpmat.textures;
-    ApplySystemUserTextures(base_textures, wpmat.usertextures);
+    // A parse with no property table — a schema test, a project without
+    // properties — leaves delegated slots on the texture the author shipped.
+    const ProjectProperties* properties =
+        pScene != nullptr && pScene->runtime != nullptr ? &pScene->runtime->projectProperties()
+                                                        : nullptr;
+    ApplySystemUserTextures(base_textures, wpmat.usertextures, properties);
 
     std::unordered_map<std::string, ImageHeader> texHeaders;
 
@@ -3062,6 +3067,7 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
             if (animation.has_value()) {
                 context.scene->runtime->RegisterMaterialAlphaAnimation(material,
                     context.scene->runtime->RegisterScalarAnimation(runtime_name, *animation));
+                return;
             }
         }
         // `dynamic_alpha` is only the timeline form. An `update` script or a
@@ -3072,7 +3078,13 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
             context.scene->runtime->BindMaterialAlpha(
                 material,
                 ResolveFloatSetting(*context.scene->runtime, wpimgobj.alpha_setting, runtime_name));
+            return;
         }
+        // Nothing the author wrote owns `alpha`, so another layer's script may:
+        // a dock fades its icons by writing `layer.alpha` from the icon script.
+        // One writer per frame, so this is only the branch the bindings above
+        // did not take.
+        context.scene->runtime->RegisterNodeAlpha(runtime_name, material, wpimgobj.alpha);
     };
     // A scripted or user-bound origin replaces the node translate every tick, so
     // an anchor baked into the translate is lost. Hand the anchor to the runtime
@@ -4233,6 +4245,37 @@ void ParseCameraObj(ParseContext& context, wpscene::WPCameraObject& obj) {
     QueueSceneScriptIfNeeded(context, runtime_name, obj.scale_setting);
     QueueSceneScriptIfNeeded(context, runtime_name, obj.angles_setting);
 
+    // The shot does not take over the projection on a 2D canvas, but its zoom
+    // still frames it: the wallpaper's own "camera size" slider is this field.
+    // A perspective scene already spends it on the fov above.
+    if (context.is_ortho) {
+        const auto global = context.scene->cameras.find("global");
+        if (global != context.scene->cameras.end() && global->second != nullptr) {
+            // The runtime holding a listener is owned by the scene, so a raw
+            // pointer here outlives it and does not close a reference cycle.
+            auto* scene  = context.scene.get();
+            auto  camera = global->second;
+            const auto apply = [scene, camera](double zoom) {
+                camera->SetZoom(zoom);
+                camera->Update();
+                scene->UpdateLinkedCamera("global");
+            };
+            if (context.scene->runtime != nullptr) {
+                // The slider form keeps naming its property only in the raw
+                // setting; the unwrapped float is just its authored default.
+                const auto setting =
+                    obj.zoom_setting.is_null() ? nlohmann::json(obj.zoom) : obj.zoom_setting;
+                context.scene->runtime->RegisterDynamicValueListener(
+                    ResolveFloatSetting(*context.scene->runtime, setting, runtime_name),
+                    [apply](const DynamicValue& value) {
+                        apply(value.getFloat());
+                    });
+            } else {
+                apply(obj.zoom);
+            }
+        }
+    }
+
     context.layer_nodes[obj.id]      = node;
     context.layer_parent_ids[obj.id] = obj.parent_id;
 }
@@ -4323,15 +4366,56 @@ std::string NodeRuntimeName(std::string name, int32_t id, uint32_t count) {
     return "__we_layer_" + std::to_string(id);
 }
 
+// A texture property carries whatever the editor or the picker wrote into it:
+// an absolute path to the user's own picture, or a package-relative asset the
+// author shipped. The loader addresses packaged textures by bare name, so the
+// authored form is reduced to that name.
+//
+// The property stores the path, not a copy, so an absolute one is only taken
+// when that file can actually be opened now: moved, deleted, or out of reach of
+// the sandboxed lock-screen extension all leave the slot on the wallpaper's own
+// texture instead of on a name that decodes to nothing.
+std::optional<std::string> TexturePropertyTextureName(const std::string& value) {
+    if (std::filesystem::path(value).is_absolute()) {
+        if (! HostLooseAssetIsReadable(value)) return std::nullopt;
+        return value;
+    }
+    std::string name = value;
+    if (name.size() > 4 && name.compare(name.size() - 4, 4, ".tex") == 0) {
+        name.erase(name.size() - 4);
+    }
+    constexpr std::string_view kMaterials { "materials/" };
+    if (name.compare(0, kMaterials.size(), kMaterials) == 0) name.erase(0, kMaterials.size());
+    if (name.empty()) return std::nullopt;
+    return name;
+}
+
 void wallpaper::ApplySystemUserTextures(std::vector<std::string>&                  textures,
-                                        const std::vector<wpscene::WPUserTexture>& usertextures) {
-    // Anything the runtime does not supply is left on the authored texture in
-    // that position rather than replaced by a blank one.
+                                        const std::vector<wpscene::WPUserTexture>& usertextures,
+                                        const ProjectProperties*                   properties) {
+    // Anything neither the runtime nor the wallpaper's own properties supply is
+    // left on the authored texture in that position rather than replaced by a
+    // blank one.
     for (std::size_t index = 0; index < usertextures.size(); ++index) {
         const auto& user_texture = usertextures[index];
-        if (! wpscene::IsSystemUserTexture(user_texture)) continue;
+        std::string replacement;
+        if (wpscene::IsSystemUserTexture(user_texture)) {
+            replacement = user_texture.name;
+        } else if (properties != nullptr && user_texture.type.empty() &&
+                   ! user_texture.name.empty()) {
+            // The bare-string form names one of this wallpaper's properties. An
+            // unset property is the author's own default, so the slot keeps it.
+            const auto property = properties->find(user_texture.name);
+            if (property == properties->end()) continue;
+            const auto& chosen = property->second.asString();
+            if (chosen.empty()) continue;
+            const auto resolved = TexturePropertyTextureName(chosen);
+            if (! resolved) continue;
+            replacement = *resolved;
+        }
+        if (replacement.empty()) continue;
         if (textures.size() <= index) textures.resize(index + 1);
-        textures[index] = user_texture.name;
+        textures[index] = std::move(replacement);
     }
 }
 

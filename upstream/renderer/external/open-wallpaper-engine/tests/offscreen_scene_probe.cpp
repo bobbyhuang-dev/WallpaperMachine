@@ -399,8 +399,8 @@ int main() {
                       "scene has no global camera to map the cursor through");
                 const auto camera_position = camera->second->GetPosition();
                 const auto mapping        = ComputeWallpaperCursorMapping(
-                    layout, camera_position.x(), camera_position.y(), camera->second->Width(),
-                    camera->second->Height());
+                    layout, camera_position.x(), camera_position.y(),
+                    camera->second->VisibleWidth(), camera->second->VisibleHeight());
                 Check(mapping.valid, "cursor mapping must be valid for this display");
                 scene->runtime->SetCursorViewport(CursorViewport {
                     .origin = Eigen::Vector2f(static_cast<float>(mapping.origin_x),

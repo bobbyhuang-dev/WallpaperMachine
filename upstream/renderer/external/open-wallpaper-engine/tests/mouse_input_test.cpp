@@ -313,6 +313,93 @@ function cursorLeave() { scene.getObject('marker').visible = false; }
     EXPECT_EQ(runtime->scriptErrorCount(), 0u);
 }
 
+// A camera object's zoom moves the image without touching the authored canvas,
+// so pointer mapping has to read the extent that was projected. Reading the
+// authored width and height instead leaves clicks on the unzoomed picture:
+// right at the centre, wrong everywhere else, and wrong by more the further out
+// and the more the window is reshaped.
+//
+// The cursor position here is derived from the projection matrix -- where the
+// drawn frame actually puts that scene point -- not from the mapping under
+// test, so the two have to agree for the layer to be hit.
+TEST(MouseInput, HitTestingFollowsACameraObjectZoomAcrossAResize) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {
+        .canvas_width  = 1920,
+        .canvas_height = 1080,
+    });
+    ASSERT_NE(runtime, nullptr);
+
+    // Off centre, where a zoomed and an unzoomed mapping disagree, and inside
+    // the tighter frustum so the probe never leaves the drawn rectangle.
+    auto layer = std::make_shared<SceneNode>();
+    layer->SetTranslate(Eigen::Vector3f(1200.0f, 540.0f, 0.0f));
+    runtime->RegisterNode("layer", layer.get());
+    runtime->RegisterNodeSize("layer", Eigen::Vector2f(80.0f, 80.0f));
+    auto marker = std::make_shared<SceneNode>();
+    marker->SetVisible(false);
+    runtime->RegisterNode("marker", marker.get());
+    runtime->RegisterSceneScript(
+        R"JS(
+function cursorEnter() { scene.getObject('marker').visible = true; }
+function cursorLeave() { scene.getObject('marker').visible = false; }
+)JS",
+        "layer");
+
+    // The scene's own ortho camera: parked at the canvas centre, zoomed 2x.
+    auto camera_node = std::make_shared<SceneNode>();
+    camera_node->SetTranslate(Eigen::Vector3f(960.0f, 540.0f, 0.0f));
+    SceneCamera camera(1920, 1080, -5000.0f, 5000.0f);
+    camera.AttatchNode(camera_node);
+    camera.SetZoom(2.0);
+    camera.Update();
+    EXPECT_DOUBLE_EQ(camera.VisibleWidth(), 960.0);
+    EXPECT_DOUBLE_EQ(camera.VisibleHeight(), 540.0);
+
+    runtime->SetCursorEnter(true);
+    bool cursor_was_in_window = false;
+    // Each window size is a fresh presentation: the mapping is recomputed the
+    // way both render backends recompute it after a resize.
+    const auto hover = [&](unsigned window_w, unsigned window_h, double world_x, double world_y) {
+        const auto layout = ComputeWallpaperScalingLayout(
+            WallpaperScalingMode::FILL, 1920, 1080, window_w, window_h, 1.0, 1.0);
+        const auto mapping = ComputeWallpaperCursorMapping(layout, 960.0, 540.0,
+                                                           camera.VisibleWidth(),
+                                                           camera.VisibleHeight());
+        EXPECT_TRUE(mapping.valid);
+        runtime->SetCursorViewport(CursorViewport {
+            .origin = Eigen::Vector2f(static_cast<float>(mapping.origin_x),
+                                      static_cast<float>(mapping.origin_y)),
+            .size   = Eigen::Vector2f(static_cast<float>(mapping.size_x),
+                                    static_cast<float>(mapping.size_y)),
+            .content_origin = Eigen::Vector2f(static_cast<float>(mapping.content_origin_x),
+                                              static_cast<float>(mapping.content_origin_y)),
+            .content_size   = Eigen::Vector2f(static_cast<float>(mapping.content_size_x),
+                                            static_cast<float>(mapping.content_size_y)),
+        });
+        // Ground truth: the projection the frame is drawn with, taken to window
+        // fractions through the presented viewport rectangle.
+        const Eigen::Vector4d clip =
+            camera.GetViewProjectionMatrix() * Eigen::Vector4d(world_x, world_y, 0.0, 1.0);
+        const double ndc_x = clip.x() / clip.w();
+        const double ndc_y = clip.y() / clip.w();
+        const double px = layout.viewport_px.x + (ndc_x * 0.5 + 0.5) * layout.viewport_px.width;
+        const double py = layout.viewport_px.y + (0.5 - ndc_y * 0.5) * layout.viewport_px.height;
+        runtime->SetCursorInput(static_cast<float>(px / window_w),
+                                static_cast<float>(py / window_h));
+        cursor_was_in_window = runtime->DispatchCursorFrameEvents(cursor_was_in_window);
+        runtime->Tick(1.0 / 60.0);
+        return runtime->NodeVisible("marker");
+    };
+
+    EXPECT_TRUE(hover(1920, 1080, 1200.0, 540.0));
+    EXPECT_FALSE(hover(1920, 1080, 1200.0 + 120.0, 540.0));
+    // Same layer, a differently shaped window: the zoom must survive the
+    // fill-mode rewrite of the camera's authored width and height.
+    EXPECT_TRUE(hover(2560, 1080, 1200.0, 540.0));
+    EXPECT_FALSE(hover(2560, 1080, 1200.0 + 120.0, 540.0));
+    EXPECT_EQ(runtime->scriptErrorCount(), 0u);
+}
+
 // A letterboxed presentation leaves window area the wallpaper never draws.
 // Extrapolated coordinates there must not reach layers that extend past the
 // canvas edge, or the bars behave like an invisible extension of the scene.

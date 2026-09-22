@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cmath>
 #include <vector>
 #include <memory>
 #include <optional>
@@ -48,6 +49,16 @@ public:
     }
     void SetAspect(double aspect) { m_aspect = aspect; }
     void SetFov(double value) { m_fov = value; }
+    /// A camera object's own zoom, separate from the scene-wide zoom that
+    /// writes width and height. Larger zooms in; anything not positive and
+    /// finite frames the full canvas.
+    void   SetZoom(double value) { m_zoom = value; }
+    double Zoom() const { return m_zoom; }
+    /// The extent the orthographic projection actually shows. Pointer mapping
+    /// reads this rather than the authored width and height: a click has to
+    /// land where the zoomed image is, not where an unzoomed one would be.
+    double VisibleWidth() const { return m_width / EffectiveZoom(); }
+    double VisibleHeight() const { return m_height / EffectiveZoom(); }
 
     void  AttatchImgEffect(std::shared_ptr<SceneImageEffectLayer> eff) { m_imgEffect = eff; }
     bool  HasImgEffect() const { return (bool)m_imgEffect; }
@@ -87,11 +98,17 @@ public:
         m_perspective = cam.m_perspective;
         m_fov         = cam.m_fov;
         m_fovLocked   = cam.m_fovLocked;
+        m_zoom        = cam.m_zoom;
         m_isComposeLayer = cam.m_isComposeLayer;
     }
 
 private:
     void CalculateViewProjectionMatrix();
+    // A zoom of zero, a negative one or a NaN is not a frame anybody can see,
+    // so it reads as the whole canvas rather than as a division.
+    double EffectiveZoom() const {
+        return (std::isfinite(m_zoom) && m_zoom > 0.0) ? m_zoom : 1.0;
+    }
 
     double m_width { 1.0f };
     double m_height { 1.0f };
@@ -99,6 +116,7 @@ private:
     double m_nearClip { 0.01f };
     double m_farClip { 1000.0f };
     double m_fov { 45.0f };
+    double m_zoom { 1.0 };
     bool   m_perspective;
     bool   m_fovLocked { false };
 

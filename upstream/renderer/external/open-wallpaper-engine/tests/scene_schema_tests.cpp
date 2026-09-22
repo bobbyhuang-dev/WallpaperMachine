@@ -1445,6 +1445,79 @@ TEST(SceneSchema, CameraObjectKeepsAnOrthographicSceneOnItsCanvas) {
     EXPECT_NE(FindRootChildByName(*parsed, "shot"), nullptr);
 }
 
+// The shot still frames the canvas it does not own: a wallpaper's "camera size"
+// slider is the camera object's `zoom`, and a 2D scene has nowhere else to
+// spend it now that the fov branch is perspective-only.
+std::shared_ptr<Scene> ParseOrthoCameraZoomScene(fs::VFS& vfs, audio::SoundManager& sound_manager,
+                                                 const std::string& zoom) {
+    WPSceneParser parser;
+    return parser.Parse("ortho-camera-zoom",
+                        R"({
+      "camera": {"center":[0,0,-1], "eye":[0,0,0], "up":[0,1,0]},
+      "general": {
+        "ambientcolor":[0.2,0.2,0.2], "skylightcolor":[0.3,0.3,0.3],
+        "clearcolor":[0,0,0], "cameraparallax":false,
+        "cameraparallaxamount":0, "cameraparallaxdelay":0,
+        "cameraparallaxmouseinfluence":0,
+        "orthogonalprojection":{"width":640,"height":360}
+      },
+      "objects": [
+        {"id":9,"name":"shot","camera":"default","origin":[0,0,500],
+         "angles":[0,0,0],"fov":50,"zoom":)" + zoom + R"(},
+        {"id":310,"name":"canvas image","image":"image.json",
+         "alignment":"bottomleft","scale":[1,1,1],"angles":[0,0,0],"visible":true}
+      ]
+    })",
+                        vfs,
+                        sound_manager);
+}
+
+TEST(SceneSchema, CameraObjectZoomTightensTheOrthographicFrustum) {
+    fs::VFS vfs;
+    MountSceneFiles(vfs);
+    audio::SoundManager sound_manager;
+    auto parsed = ParseOrthoCameraZoomScene(vfs, sound_manager, "2.0");
+    ASSERT_NE(parsed, nullptr);
+    ASSERT_NE(parsed->activeCamera, nullptr);
+    EXPECT_FALSE(parsed->activeCamera->IsPerspective());
+
+    const Eigen::Matrix4d projection = parsed->activeCamera->GetViewProjectionMatrix();
+    const auto            to_ndc     = [&projection](double x, double y) {
+        const Eigen::Vector4d clip = projection * Eigen::Vector4d(x, y, 0.0, 1.0);
+        return Eigen::Vector2d(clip.x() / clip.w(), clip.y() / clip.w());
+    };
+    // Same centre, half the canvas in view: the corner that used to sit on the
+    // edge of the frame is now twice as far out.
+    const auto centre = to_ndc(320.0, 180.0);
+    EXPECT_NEAR(centre.x(), 0.0, 1e-6);
+    EXPECT_NEAR(centre.y(), 0.0, 1e-6);
+    const auto upper_right = to_ndc(640.0, 360.0);
+    EXPECT_NEAR(upper_right.x(), 2.0, 1e-6);
+    EXPECT_NEAR(upper_right.y(), 2.0, 1e-6);
+
+    // Zoom is projection, not canvas: the authored extent the render targets
+    // are sized from is untouched.
+    EXPECT_NEAR(parsed->activeCamera->Width(), 640.0, 1e-6);
+    EXPECT_NEAR(parsed->activeCamera->Height(), 360.0, 1e-6);
+}
+
+TEST(SceneSchema, CameraObjectZoomThatIsNotPositiveFramesTheWholeCanvas) {
+    for (const auto& zoom : { std::string("0"), std::string("-1.5") }) {
+        SCOPED_TRACE(zoom);
+        fs::VFS vfs;
+        MountSceneFiles(vfs);
+        audio::SoundManager sound_manager;
+        auto parsed = ParseOrthoCameraZoomScene(vfs, sound_manager, zoom);
+        ASSERT_NE(parsed, nullptr);
+        ASSERT_NE(parsed->activeCamera, nullptr);
+
+        const Eigen::Matrix4d projection = parsed->activeCamera->GetViewProjectionMatrix();
+        const Eigen::Vector4d clip = projection * Eigen::Vector4d(640.0, 360.0, 0.0, 1.0);
+        EXPECT_NEAR(clip.x() / clip.w(), 1.0, 1e-6);
+        EXPECT_NEAR(clip.y() / clip.w(), 1.0, 1e-6);
+    }
+}
+
 TEST(SceneSchema, ParserKeepsSceneLightsAndUpdatesViewUniforms) {
     auto files = std::map<std::string, std::string> {};
     AddLeafModelSceneFiles(files);

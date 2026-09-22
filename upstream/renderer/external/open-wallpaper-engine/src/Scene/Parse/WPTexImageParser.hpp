@@ -6,6 +6,14 @@
 
 namespace wallpaper
 {
+/// True when `name` is an absolute path to a picture or video on this machine
+/// that can be opened right now. A `scenetexture` property holds the path the
+/// user picked, not a copy of the file, so the file can be moved, deleted, or
+/// out of reach of a sandboxed process: each of those has to leave the slot on
+/// the texture the wallpaper shipped rather than on a name that decodes to
+/// nothing.
+bool HostLooseAssetIsReadable(std::string_view name);
+
 
 class WPTexImageParser : public IImageParser {
 public:

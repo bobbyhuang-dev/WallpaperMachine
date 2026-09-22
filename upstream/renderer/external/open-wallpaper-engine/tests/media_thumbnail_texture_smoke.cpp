@@ -16,6 +16,8 @@
 
 #include <cstdint>
 #include <cstring>
+#include <fstream>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -199,6 +201,96 @@ TEST(MediaThumbnailTextureSmoke, UnknownSystemTextureKeepsAuthoredTexture) {
 
     wpscene::WPMaterial material;
     ASSERT_TRUE(material.FromJson(material_json));
+
+    auto textures = material.textures;
+    ApplySystemUserTextures(textures, material.usertextures);
+
+    ASSERT_EQ(textures.size(), 1u);
+    EXPECT_EQ(textures[0], "materials/base.tex");
+}
+
+// A `scenetexture` property appears in `usertextures` as a bare string naming
+// the property. Wallpapers built around "choose your own picture" slots are
+// only as good as this substitution.
+wpscene::WPMaterial TexturePropertyMaterial() {
+    const nlohmann::json material_json = {
+        { "passes",
+          { {
+              { "shader", "default" },
+              { "textures", { "materials/base.tex" } },
+              { "usertextures", { nullptr, "_1" } },
+          } } },
+    };
+    wpscene::WPMaterial material;
+    EXPECT_TRUE(material.FromJson(material_json));
+    return material;
+}
+
+TEST(MediaThumbnailTextureSmoke, TexturePropertyTakesTheSlotItNames) {
+    const auto material = TexturePropertyMaterial();
+    ProjectProperties properties;
+    properties["_1"] = RuntimeScalarValue::String("materials/chosen.tex");
+
+    auto textures = material.textures;
+    ApplySystemUserTextures(textures, material.usertextures, &properties);
+
+    ASSERT_EQ(textures.size(), 2u);
+    EXPECT_EQ(textures[0], "materials/base.tex");
+    // The loader addresses packaged textures by bare name, so the authored form
+    // the editor writes into the property is reduced to one.
+    EXPECT_EQ(textures[1], "chosen");
+}
+
+TEST(MediaThumbnailTextureSmoke, TexturePropertyCarriesTheUsersOwnFileThrough) {
+    const auto directory = std::filesystem::temp_directory_path() / "wpe-user-texture-slot";
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory);
+    const auto picture = directory / "photo.png";
+    std::ofstream { picture, std::ios::binary } << "a readable file is what decides the slot";
+
+    const auto material = TexturePropertyMaterial();
+    ProjectProperties properties;
+    properties["_1"] = RuntimeScalarValue::String(picture.string());
+
+    auto textures = material.textures;
+    ApplySystemUserTextures(textures, material.usertextures, &properties);
+
+    ASSERT_EQ(textures.size(), 2u);
+    EXPECT_EQ(textures[1], picture.string());
+
+    std::filesystem::remove_all(directory);
+}
+
+// The property holds the path, not a copy. A file the user has since moved, or
+// one a sandboxed process may not open, has to leave the slot on the artwork
+// the wallpaper shipped: a name that decodes to nothing is a hole on screen.
+TEST(MediaThumbnailTextureSmoke, AnUnreadableUserFileKeepsTheAuthoredTexture) {
+    const auto material = TexturePropertyMaterial();
+    ProjectProperties properties;
+    properties["_1"] = RuntimeScalarValue::String(
+        (std::filesystem::temp_directory_path() / "wpe-user-texture-gone.png").string());
+
+    auto textures = material.textures;
+    ApplySystemUserTextures(textures, material.usertextures, &properties);
+
+    ASSERT_EQ(textures.size(), 1u);
+    EXPECT_EQ(textures[0], "materials/base.tex");
+}
+
+TEST(MediaThumbnailTextureSmoke, UnsetTexturePropertyKeepsTheAuthoredTexture) {
+    const auto material = TexturePropertyMaterial();
+    ProjectProperties properties;
+    properties["_1"] = RuntimeScalarValue::String("");
+
+    auto textures = material.textures;
+    ApplySystemUserTextures(textures, material.usertextures, &properties);
+
+    ASSERT_EQ(textures.size(), 1u);
+    EXPECT_EQ(textures[0], "materials/base.tex");
+}
+
+TEST(MediaThumbnailTextureSmoke, TexturePropertyWithoutATableKeepsTheAuthoredTexture) {
+    const auto material = TexturePropertyMaterial();
 
     auto textures = material.textures;
     ApplySystemUserTextures(textures, material.usertextures);

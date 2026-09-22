@@ -71,11 +71,15 @@ void SceneCamera::CalculateViewProjectionMatrix() {
 		const double far_pad = abs_far * 1.0e-3 > 1.0 ? abs_far * 1.0e-3 : 1.0;
 		m_viewProjectionMat = Perspective(Radians(m_fov), m_aspect, m_nearClip, m_farClip + far_pad) * m_viewMat;
 	} else {
-		double left = -m_width/2.0f;
-		double right = m_width/2.0f;
-		double bottom = -m_height/2.0f;
-		double up = m_height/2.0f;
-		m_viewProjectionMat = Ortho(left, right, bottom, up, m_nearClip, m_farClip) * m_viewMat;
+		// A camera object's zoom tightens the frustum around the same centre.
+		// It is applied here rather than by writing width and height because
+		// the fill mode rewrites those from the authored canvas on every
+		// output resize, which would silently drop the zoom. Pointer mapping
+		// reads the same VisibleWidth/VisibleHeight, so a click keeps landing
+		// where the image is.
+		const double half_width = VisibleWidth()/2.0;
+		const double half_height = VisibleHeight()/2.0;
+		m_viewProjectionMat = Ortho(-half_width, half_width, -half_height, half_height, m_nearClip, m_farClip) * m_viewMat;
 	}
 }
 

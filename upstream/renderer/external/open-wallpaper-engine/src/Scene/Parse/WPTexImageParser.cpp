@@ -55,6 +55,10 @@ struct LooseAssetCandidate
     std::string path;
     bool        isVideo { false };
     ImageType   imageType { ImageType::UNKNOWN };
+    /// Where `path` has to be read from. A mounted path is absolute too —
+    /// `/assets/materials/foo.png` — so the origin travels with the candidate
+    /// rather than being guessed back out of the string.
+    bool        isHost { false };
 };
 
 char* Lz4Decompress(const char* src, int size, int decompressed_size) {
@@ -247,8 +251,36 @@ bool IsLooseVideoExtension(std::string_view extension)
            ext == ".avi" || ext == ".mkv";
 }
 
+// A `scenetexture` property can name a picture the user picked from their own
+// disk, which is an absolute path and reaches no VFS mount. It is resolved
+// directly, and only as the loose picture or video it claims to be: no search,
+// no extension guessing, no directory listing. Opening it is part of the
+// question -- a file the user has since moved, or one a sandboxed process may
+// not read, has to leave the slot on the wallpaper's own texture.
+bool IsHostAssetPath(std::string_view name)
+{
+    const std::filesystem::path path { name };
+    if (! path.is_absolute()) return false;
+    const std::string extension = path.extension().string();
+    if (! IsLooseImageExtension(extension) && ! IsLooseVideoExtension(extension)) return false;
+    std::error_code ec;
+    if (! std::filesystem::is_regular_file(path, ec)) return false;
+    return static_cast<bool>(std::ifstream { path, std::ios::binary });
+}
+
 std::optional<LooseAssetCandidate> ResolveLooseAsset(fs::VFS& vfs, std::string_view name)
 {
+    if (IsHostAssetPath(name)) {
+        const std::string extension = std::filesystem::path(name).extension().string();
+        const bool        is_video  = IsLooseVideoExtension(extension);
+        return LooseAssetCandidate {
+            .path = std::string(name),
+            .isVideo = is_video,
+            .imageType = is_video ? ImageType::UNKNOWN : GuessImageTypeFromExtension(extension),
+            .isHost = true,
+        };
+    }
+
     const std::array prefixes {
         std::string("/assets/materials/") + std::string(name),
         std::string("/assets/") + std::string(name),
@@ -313,9 +345,17 @@ std::optional<LooseAssetCandidate> ResolveLooseAsset(fs::VFS& vfs, std::string_v
     return std::nullopt;
 }
 
-std::optional<std::vector<char>> LoadLooseAssetPayload(fs::VFS& vfs, std::string_view path)
+std::optional<std::vector<char>> LoadLooseAssetPayload(fs::VFS& vfs,
+                                                       const LooseAssetCandidate& candidate)
 {
-    auto stream = vfs.Open(path);
+    if (candidate.isHost) {
+        std::ifstream file { std::filesystem::path(candidate.path), std::ios::binary };
+        if (! file) return std::nullopt;
+        return std::vector<char>(std::istreambuf_iterator<char>(file),
+                                 std::istreambuf_iterator<char>());
+    }
+
+    auto stream = vfs.Open(candidate.path);
     if (!stream) return std::nullopt;
 
     const std::string payload = stream->ReadAllStr();
@@ -429,7 +469,12 @@ ImageHeader BuildLooseAssetHeader(
 
 } // namespace
 
+bool wallpaper::HostLooseAssetIsReadable(std::string_view name) { return IsHostAssetPath(name); }
+
 std::shared_ptr<Image> WPTexImageParser::Parse(const std::string& name) {
+    // A picture of the user's own is not in the package, and probing the mount
+    // for it logs a missing-file error for every slot on every load.
+    if (IsHostAssetPath(name)) return ParseLooseAsset(name);
     std::string            path    = "/assets/materials/" + name + ".tex";
     std::shared_ptr<Image> img_ptr = std::make_shared<Image>();
     auto&                  img     = *img_ptr;
@@ -551,6 +596,7 @@ std::shared_ptr<Image> WPTexImageParser::Parse(const std::string& name) {
 }
 
 ImageHeader WPTexImageParser::ParseHeader(const std::string& name) {
+    if (IsHostAssetPath(name)) return ParseLooseAssetHeader(name);
     ImageHeader header;
     std::string path  = "/assets/materials/" + name + ".tex";
     auto        pfile = m_vfs->Open(path);
@@ -726,7 +772,7 @@ std::shared_ptr<Image> WPTexImageParser::ParseLooseAsset(const std::string& name
     const auto candidate = ResolveLooseAsset(*m_vfs, name);
     if (!candidate.has_value()) return nullptr;
 
-    const auto payload = LoadLooseAssetPayload(*m_vfs, candidate->path);
+    const auto payload = LoadLooseAssetPayload(*m_vfs, *candidate);
     if (!payload.has_value() || payload->empty()) return nullptr;
 
     auto image = std::make_shared<Image>();
@@ -807,7 +853,7 @@ ImageHeader WPTexImageParser::ParseLooseAssetHeader(const std::string& name)
     const auto candidate = ResolveLooseAsset(*m_vfs, name);
     if (!candidate.has_value()) return {};
 
-    const auto payload = LoadLooseAssetPayload(*m_vfs, candidate->path);
+    const auto payload = LoadLooseAssetPayload(*m_vfs, *candidate);
     if (!payload.has_value() || payload->empty()) return {};
 
     if (candidate->isVideo) {

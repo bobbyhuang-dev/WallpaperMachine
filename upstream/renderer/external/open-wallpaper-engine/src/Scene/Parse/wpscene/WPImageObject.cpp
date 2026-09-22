@@ -294,7 +294,10 @@ bool WPImageObject::FromJson(const nlohmann::json& json, fs::VFS& vfs) {
         // and keeping it multiplies the image instead: this scene dims its
         // cover layer to 0.118, while the author's own recording of it shows
         // the cover at full strength. A binding that names a project property
-        // does not substitute anything, so that layer keeps its colour.
+        // substitutes too, but only once its user has chosen a picture, and the
+        // property table is not readable from here. Such a layer keeps its
+        // colour rather than guess at a slot that may still hold the
+        // placeholder.
         if (replaces_placeholder) color = { 1.0f, 1.0f, 1.0f };
     }
     AbsorbFieldBindings(json, field_bindings);

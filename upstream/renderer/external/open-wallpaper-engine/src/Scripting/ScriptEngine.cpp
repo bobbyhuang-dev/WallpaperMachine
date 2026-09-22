@@ -1296,8 +1296,27 @@ void AppendCommonHostBootstrap(std::ostringstream& wrapper) {
         << "      get size() { return __layerGetSize(name); },\n"
         << "      get text() { return __layerGetText(name); },\n"
         << "      set text(v) { __layerSetText(name, v); },\n"
-        << "      get alpha() { return state.alpha; },\n"
-        << "      set alpha(v) { state.alpha = Number(v) || 0; },\n"
+        // Null means this layer owns no material the runtime can tint — a sound
+        // layer, an empty group — so it keeps answering with what was written to
+        // it, exactly as it did before the material had a say.
+        << "      get alpha() {\n"
+        << "        var live = __layerGetAlpha(name);\n"
+        << "        return live === null ? state.alpha : live;\n"
+        << "      },\n"
+        << "      set alpha(v) {\n"
+        << "        var numeric = Number(v);\n"
+        << "        if (!Number.isFinite(numeric)) numeric = 0;\n"
+        << "        state.alpha = numeric;\n"
+        // A layer with no material of its own keeps the script-side value it
+        // always kept, so reading back what was written still works there.
+        << "        __layerSetAlpha(name, numeric);\n"
+        << "      },\n"
+        // The graph root has no name, so a top-level layer answers null rather
+        // than a layer object standing in for the scene itself.
+        << "      getParent: function() {\n"
+        << "        var parent = __layerGetParentName(name);\n"
+        << "        return parent ? globalThis.scene.getLayer(parent) : null;\n"
+        << "      },\n"
         << "      play: function() {\n"
         << "        if (__soundKnown(name)) {\n"
         << "          __soundPlay(name);\n"
@@ -2024,6 +2043,46 @@ JSValue JsLayerGetSize(JSContext* context, JSValueConst, int argc, JSValueConst*
     return CreateJsVec2(context, value.x(), value.y());
 }
 
+JSValue JsLayerGetParentName(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NewString(context, "");
+    auto* bridge = GetBridgeState(context);
+    if (bridge == nullptr || bridge->runtime == nullptr) return JS_NewString(context, "");
+
+    const char* layer_name = JS_ToCString(context, argv[0]);
+    const auto  parent =
+        layer_name != nullptr ? bridge->runtime->NodeParentName(layer_name) : std::string();
+    if (layer_name != nullptr) JS_FreeCString(context, layer_name);
+    return JS_NewString(context, parent.c_str());
+}
+
+JSValue JsLayerGetAlpha(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    auto* bridge = GetBridgeState(context);
+    if (bridge == nullptr || bridge->runtime == nullptr) return JS_NULL;
+
+    const char* layer_name = JS_ToCString(context, argv[0]);
+    const std::optional<float> value = layer_name != nullptr
+                                           ? bridge->runtime->NodeAlpha(layer_name)
+                                           : std::optional<float> {};
+    if (layer_name != nullptr) JS_FreeCString(context, layer_name);
+    return value ? JS_NewFloat64(context, *value) : JS_NULL;
+}
+
+JSValue JsLayerSetAlpha(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_NewBool(context, false);
+    auto* bridge = GetBridgeState(context);
+    if (bridge == nullptr || bridge->runtime == nullptr) return JS_NewBool(context, false);
+
+    const char* layer_name = JS_ToCString(context, argv[0]);
+    double      value      = 1.0;
+    bool        applied    = false;
+    if (JS_ToFloat64(context, &value, argv[1]) == 0 && layer_name != nullptr) {
+        applied = bridge->runtime->SetNodeAlpha(layer_name, static_cast<float>(value));
+    }
+    if (layer_name != nullptr) JS_FreeCString(context, layer_name);
+    return JS_NewBool(context, applied);
+}
+
 JSValue JsLayerGetText(JSContext* context, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NewString(context, "");
     auto* bridge = GetBridgeState(context);
@@ -2693,6 +2752,19 @@ bool EnsureSharedHostBindings(JSContext* context, SceneRuntimeContext* runtime,
                           global_object,
                           "__layerGetSize",
                           JS_NewCFunction(context, JsLayerGetSize, "__layerGetSize", 1));
+        JS_SetPropertyStr(
+            context,
+            global_object,
+            "__layerGetParentName",
+            JS_NewCFunction(context, JsLayerGetParentName, "__layerGetParentName", 1));
+        JS_SetPropertyStr(context,
+                          global_object,
+                          "__layerGetAlpha",
+                          JS_NewCFunction(context, JsLayerGetAlpha, "__layerGetAlpha", 1));
+        JS_SetPropertyStr(context,
+                          global_object,
+                          "__layerSetAlpha",
+                          JS_NewCFunction(context, JsLayerSetAlpha, "__layerSetAlpha", 2));
         JS_SetPropertyStr(context,
                           global_object,
                           "__layerGetText",

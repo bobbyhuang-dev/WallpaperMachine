@@ -1054,8 +1054,8 @@ wallpaper::WallpaperCursorMapping VulkanRender::Impl::CursorMapping(const Scene&
     return ComputeWallpaperCursorMapping(computeScalingLayout(scene, extent.width, extent.height),
                                          position.x(),
                                          position.y(),
-                                         camera->second->Width(),
-                                         camera->second->Height());
+                                         camera->second->VisibleWidth(),
+                                         camera->second->VisibleHeight());
 }
 
 void VulkanRender::Impl::UpdateCameraFillMode(wallpaper::Scene&   scene,

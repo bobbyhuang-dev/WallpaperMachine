@@ -891,6 +891,7 @@ void SceneRuntimeContext::UnregisterNode(std::string_view name) {
     m_node_scale.erase(key);
     m_node_rotation.erase(key);
     m_node_effect_final.erase(key);
+    m_node_alpha.erase(key);
     m_nodes.erase(key);
     m_node_size.erase(key);
     m_node_hit_masks.erase(key);
@@ -1678,6 +1679,38 @@ bool SceneRuntimeContext::NodeVisible(std::string_view name) const {
     const auto iterator = m_nodes.find(std::string(name));
     if (iterator == m_nodes.end() || iterator->second == nullptr) return false;
     return iterator->second->Visible();
+}
+
+std::string SceneRuntimeContext::NodeParentName(std::string_view name) const {
+    const auto iterator = m_nodes.find(std::string(name));
+    if (iterator == m_nodes.end() || iterator->second == nullptr) return {};
+    const auto* parent = iterator->second->Parent();
+    // The graph root and the camera anchors carry no author name. A layer that
+    // hangs off one of them has no parent layer, which is what the caller is
+    // asking about, so the empty name is the answer rather than a miss.
+    return parent != nullptr ? parent->Name() : std::string {};
+}
+
+void SceneRuntimeContext::RegisterNodeAlpha(std::string name,
+                                            std::shared_ptr<SceneMaterial> material, float value) {
+    if (name.empty() || material == nullptr) return;
+    m_node_alpha[std::move(name)] = NodeAlphaBinding { .material = std::move(material),
+                                                       .value    = value };
+}
+
+std::optional<float> SceneRuntimeContext::NodeAlpha(std::string_view name) const {
+    const auto iterator = m_node_alpha.find(std::string(name));
+    if (iterator == m_node_alpha.end()) return std::nullopt;
+    return iterator->second.value;
+}
+
+bool SceneRuntimeContext::SetNodeAlpha(std::string_view name, float value) {
+    const auto iterator = m_node_alpha.find(std::string(name));
+    if (iterator == m_node_alpha.end() || iterator->second.material == nullptr) return false;
+    if (iterator->second.value == value) return true;
+    iterator->second.value = value;
+    ApplyMaterialAlpha(*iterator->second.material, value);
+    return true;
 }
 
 bool SceneRuntimeContext::SetNodeVisible(std::string_view name, bool visible) {

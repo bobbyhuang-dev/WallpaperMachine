@@ -388,6 +388,17 @@ WPTexImageParser MakeParser(fs::VFS& vfs, std::vector<uint8_t> tex) {
     return WPTexImageParser(&vfs);
 }
 
+// A package may ship an ordinary picture next to its `.tex` files; those are
+// the loose assets `ResolveLooseAsset` finds under the mount.
+WPTexImageParser MakeParserWithLooseImage(fs::VFS& vfs, std::string path,
+                                          std::vector<uint8_t> bytes) {
+    auto files = std::map<std::string, std::vector<uint8_t>> {
+        { std::move(path), std::move(bytes) },
+    };
+    EXPECT_TRUE(vfs.Mount("/assets", std::make_unique<MemoryFs>(std::move(files))));
+    return WPTexImageParser(&vfs);
+}
+
 struct PkgEntry {
     std::string path;
     std::string payload;
@@ -615,6 +626,98 @@ TEST(TexSchema, FlaggedVideoUnknownTypeUsesExistingMetadataPath) {
     ASSERT_NO_THROW(header = parser.ParseHeader("sample"));
     EXPECT_TRUE(header.isVideo);
     EXPECT_TRUE(*oversized_read_seen);
+}
+
+// A `scenetexture` property the user filled from the image picker holds an
+// absolute path to a picture of their own, which belongs to no VFS mount.
+TEST(TexSchema, AbsolutePathLoadsTheUsersOwnPicture) {
+    const auto directory = std::filesystem::temp_directory_path() / "wpe-host-asset-test";
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory);
+    const auto picture = directory / "chosen.png";
+    {
+        const auto bytes = Png1x1();
+        std::ofstream file { picture, std::ios::binary };
+        file.write(reinterpret_cast<const char*>(bytes.data()),
+                   static_cast<std::streamsize>(bytes.size()));
+    }
+
+    fs::VFS vfs;
+    auto parser = MakeParser(vfs, BuildTex(1, static_cast<int32_t>(ImageType::PNG), 0, Png1x1()));
+
+    const auto header = parser.ParseHeader(picture.string());
+    EXPECT_EQ(header.width, 1);
+    EXPECT_EQ(header.height, 1);
+    EXPECT_FALSE(header.isVideo);
+
+    const auto image = parser.Parse(picture.string());
+    ASSERT_NE(image, nullptr);
+    ASSERT_EQ(image->slots.size(), 1u);
+    EXPECT_EQ(image->slots[0].width, 1);
+
+    std::filesystem::remove_all(directory);
+}
+
+TEST(TexSchema, AbsolutePathToNothingStaysUnresolved) {
+    fs::VFS vfs;
+    auto parser = MakeParser(vfs, BuildTex(1, static_cast<int32_t>(ImageType::PNG), 0, Png1x1()));
+
+    const auto missing =
+        (std::filesystem::temp_directory_path() / "wpe-host-asset-absent.png").string();
+    EXPECT_EQ(parser.Parse(missing), nullptr);
+    // A packaged name still resolves through the mount it always used.
+    EXPECT_NE(parser.Parse("sample"), nullptr);
+}
+
+// The regression the absolute-path branch invites: a mounted loose asset's
+// resolved path is `/assets/...`, which is absolute too. Deciding where to read
+// from by looking at the string sends every packaged PNG, JPG and video to the
+// host filesystem, where none of them exist.
+TEST(TexSchema, PackagedLooseImageStillLoadsFromTheMount) {
+    for (const auto& [label, mounted, name] : {
+             std::tuple { "materials", "/materials/backdrop.png", "backdrop.png" },
+             std::tuple { "assets root", "/pictures/backdrop.png", "pictures/backdrop.png" },
+             std::tuple { "extension guessed", "/materials/guessed.png", "guessed" },
+         }) {
+        SCOPED_TRACE(label);
+        fs::VFS vfs;
+        auto    parser = MakeParserWithLooseImage(vfs, mounted, Png1x1());
+
+        const auto header = parser.ParseHeader(name);
+        EXPECT_EQ(header.width, 1);
+        EXPECT_EQ(header.height, 1);
+        EXPECT_EQ(header.type, ImageType::PNG);
+
+        const auto image = parser.Parse(name);
+        ASSERT_NE(image, nullptr);
+        ASSERT_EQ(image->slots.size(), 1u);
+        EXPECT_EQ(image->slots[0].width, 1);
+        EXPECT_EQ(image->slots[0].height, 1);
+    }
+}
+
+// The property stores the path, not a copy of the file. A directory, a path
+// with no picture behind it, and a relative one are all "not a picture we can
+// read", which is what decides whether a slot may be replaced at all.
+TEST(TexSchema, OnlyAReadableHostPictureCountsAsOne) {
+    const auto directory = std::filesystem::temp_directory_path() / "wpe-host-asset-readable";
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory);
+    const auto picture = directory / "chosen.png";
+    {
+        const auto bytes = Png1x1();
+        std::ofstream file { picture, std::ios::binary };
+        file.write(reinterpret_cast<const char*>(bytes.data()),
+                   static_cast<std::streamsize>(bytes.size()));
+    }
+
+    EXPECT_TRUE(HostLooseAssetIsReadable(picture.string()));
+    EXPECT_FALSE(HostLooseAssetIsReadable((directory / "gone.png").string()));
+    EXPECT_FALSE(HostLooseAssetIsReadable(directory.string()));
+    EXPECT_FALSE(HostLooseAssetIsReadable("materials/packaged"));
+    EXPECT_FALSE(HostLooseAssetIsReadable(""));
+
+    std::filesystem::remove_all(directory);
 }
 
 TEST(PkgFs, ContainsAndOpenResolvePackagePathsCaseInsensitively) {

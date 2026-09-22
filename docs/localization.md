@@ -46,7 +46,10 @@ WebContent recovery starts in the same language.
 
 What is never translated: action identifiers, option values, paths, tags sent
 to Steam, wallpaper titles, descriptions, creator names, custom property labels
-and upstream diagnostic text.
+and upstream diagnostic text. Two labels are ours rather than the author's and
+are translated: the Wallpaper Engine editor's own token for the scheme colour it
+adds to every scene, and the **Unnamed option** stand-in for a control whose
+label was pure decoration.
 
 ## Adding a language
 

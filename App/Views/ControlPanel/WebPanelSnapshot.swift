@@ -676,11 +676,29 @@ extension WebPanelController {
     }
   }
 
+  /// Property labels are author-written HTML. The page shows words, so the markup is
+  /// reduced to the words it carries: breaks and block ends become spaces, so neighbours
+  /// do not merge into one run; every other tag drops out; the entities the Wallpaper
+  /// Engine editor emits are decoded, `&amp;` last so `&amp;lt;` stays literal text.
+  /// A label that is only decoration — a 2000×1 image strip, a rule — carries no words and
+  /// comes back empty. Empty is the honest answer: the id these authors end up with is the
+  /// editor's slug of that same markup, three lines of `imgsrchttpphoto…` in the panel.
   static func plainLabel(_ html: String) -> String {
-    html.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-      .replacingOccurrences(of: "&nbsp;", with: " ").replacingOccurrences(of: "&amp;", with: "&")
+    // The editor writes this token in place of the scheme colour it adds to every scene.
+    if html == "ui_browse_properties_scheme_color" { return String(localized: "Scheme color") }
+    let spaced = html.replacingOccurrences(
+      of: "<(br|hr|/p|/div|/li|/tr|/h[1-6])\\b[^>]*>", with: " ",
+      options: [.regularExpression, .caseInsensitive])
+    return
+      spaced
+      .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+      .replacingOccurrences(of: "&nbsp;?", with: " ", options: .regularExpression)
       .replacingOccurrences(of: "&lt;", with: "<").replacingOccurrences(of: "&gt;", with: ">")
-      .replacingOccurrences(of: "&quot;", with: "\"")
+      .replacingOccurrences(of: "&quot;", with: "\"").replacingOccurrences(of: "&#39;", with: "'")
+      .replacingOccurrences(of: "&apos;", with: "'")
+      .replacingOccurrences(of: "&amp;", with: "&")
+      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   static func workshopItem(_ value: WorkshopItem) -> [String: Any] {

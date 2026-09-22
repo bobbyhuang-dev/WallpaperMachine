@@ -45,8 +45,11 @@ target_compile_definitions(
 add_executable(version_tests version_tests.cpp)
 target_link_libraries(version_tests PRIVATE wpdump_lib GTest::gtest_main)
 
+# The .tex fixtures this suite builds are lz4-compressed, and the renderer links
+# lz4 privately, so the headers do not arrive with it.
+pkg_check_modules(TEST_LZ4 REQUIRED IMPORTED_TARGET liblz4)
 add_executable(tex_schema_tests tex_schema_tests.cpp)
-target_link_libraries(tex_schema_tests PRIVATE ${PROJECT_NAME} wpFs wpScene GTest::gtest_main)
+target_link_libraries(tex_schema_tests PRIVATE ${PROJECT_NAME} wpFs wpScene PkgConfig::TEST_LZ4 GTest::gtest_main)
 target_include_directories(tex_schema_tests PRIVATE .)
 target_compile_features(tex_schema_tests PRIVATE cxx_std_20)
 gtest_discover_tests(

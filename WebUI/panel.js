@@ -2,6 +2,7 @@ import { renderSettings } from './settings.js';
 import { createWelcome, SIGN_IN_ID } from './welcome.js';
 import { glyphs } from './icons.js';
 import { t, applyStaticText, setLanguage, language } from './i18n.js';
+import { renderPropertyLabel } from './property-label.js';
 
 const $ = (id) => document.getElementById(id);
 const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
@@ -420,7 +421,23 @@ function renderInspector(discover) {
   const report = issueLink(item);
   const secondary = `${discover ? button(t('View on Steam Workshop'), 'openExternal', { url: `https://steamcommunity.com/sharedfiles/filedetails/?id=${encodeURIComponent(item.id)}` }, { icon: 'external', className: 'wide' }) : isInstalled ? button(t('Show in Finder'), 'reveal', { id: item.id }, { icon: 'folder', className: 'wide' }) : ''}${!discover && isInstalled ? button('', 'favorite', { id: item.id }, { icon: 'heart', title: state.favorites.includes(item.id) ? t('Remove from favorites') : t('Add to favorites'), className: `icon-button${state.favorites.includes(item.id) ? ' favorite-selected' : ''}` }) : ''}${!discover && isInstalled ? button('', 'delete', { id: item.id }, { icon: 'trash', className: 'icon-button danger', title: t('Move wallpaper to Trash'), disabled: state.busy }) : ''}${report ? button('', 'openExternal', { url: report }, { icon: 'triangleAlert', className: 'icon-button', title: t('Report a problem on GitHub') }) : ''}`;
   const showInLibrary = discover && isInstalled && !(download && !download.pending && !download.error) ? button(t('Show in library'), 'showInstalled', { id: item.id }, { icon: 'image', className: 'link' }) : '';
-  morph($('inspector'), `<div ${keyAttr(`inspector-${item.id}-${discover}`)}><div class="inspector-heading"><div class="inspector-preview">${preview(item.preview)}</div><h2>${escapeHTML(item.title)}</h2>${discover && item.creator ? `<p class="inspector-creator">${escapeHTML(item.creator)}</p>` : ''}<p class="inspector-meta">${meta}</p>${tags(item.tags)}<div class="actions inspector-actions">${isInstalled ? button(target?.wallpaperID === item.id ? t('Reapply wallpaper') : t('Apply wallpaper'), 'activate', { id: item.id }, { icon: 'play', className: 'primary', disabled: !canActivate || state.busy }) : downloadAction}${secondary}</div>${!isInstalled && download?.pending && !download.queued ? `<progress class="inspector-progress" max="1"${Number.isFinite(download.progress) ? ` value="${clamp(download.progress)}"` : ''} aria-label="${escapeHTML(t('{title} download progress', { title: item.title }))}"></progress><p class="muted"><small>${escapeHTML(download.status)}${transfer(download, { includePercent: false }) ? ` · ${transfer(download, { includePercent: false })}` : ''}</small></p>` : ''}${request ? `<p class="muted"><small>${escapeHTML(stageHint(request.stage))}</small></p>` : ''}${!isInstalled && download?.error && !download.pending ? `<p class="notice error">${escapeHTML(download.error)}</p>` : ''}${isInstalled && download && !download.pending && !download.error ? button(t('Show in library'), 'showInstalled', { id: item.id }, { icon: 'image', className: 'link' }) : ''}${download || request ? button(t('Show in downloads'), 'openDownloads', {}, { className: 'link' }) : ''}${compatibility ? `<p class="muted"><small>${escapeHTML(compatibility)}</small></p>` : ''}${item.kind === 'Scene' && !state.settings.sceneAssetsReady ? `<div class="notice warning">${escapeHTML(t('Shared scene resources are required before playback.'))}${button(t('Get shared resources'), 'requestAssets', {}, { className: 'link' })}</div>` : ''}${showInLibrary}</div>${discover ? (item.summary ? `<section class="inspector-section"><p>${escapeHTML(item.summary)}</p></section>` : '') : `${options ? renderOptions(options) : `<section class="inspector-section"><p class="muted">${escapeHTML(t('Loading wallpaper options…'))}</p></section>`}`}</div>`);
+  const activateLabel = target?.wallpaperID === item.id ? t('Reapply wallpaper') : t('Apply wallpaper');
+  const activation = isInstalled ? button('', 'activate', { id: item.id }, { icon: 'play', title: activateLabel, className: 'primary inspector-play', disabled: !canActivate || state.busy }) : '';
+  morph($('inspector'), `<div class="inspector-layout" ${keyAttr(`inspector-${item.id}-${discover}`)}><div class="inspector-scroll"><div class="inspector-heading">
+    <div class="inspector-artwork"><div class="inspector-preview">${preview(item.preview)}</div>${activation}</div>
+    <h2>${escapeHTML(item.title)}</h2>${discover && item.creator ? `<p class="inspector-creator">${escapeHTML(item.creator)}</p>` : ''}
+    <p class="inspector-meta">${meta}</p>${tags(item.tags)}
+    <div class="actions inspector-actions">${!isInstalled ? downloadAction : ''}${secondary}</div>
+    ${!isInstalled && download?.pending && !download.queued ? `<progress class="inspector-progress" max="1"${Number.isFinite(download.progress) ? ` value="${clamp(download.progress)}"` : ''} aria-label="${escapeHTML(t('{title} download progress', { title: item.title }))}"></progress><p class="muted"><small>${escapeHTML(download.status)}${transfer(download, { includePercent: false }) ? ` · ${transfer(download, { includePercent: false })}` : ''}</small></p>` : ''}
+    ${request ? `<p class="muted"><small>${escapeHTML(stageHint(request.stage))}</small></p>` : ''}
+    ${!isInstalled && download?.error && !download.pending ? `<p class="notice error">${escapeHTML(download.error)}</p>` : ''}
+    ${isInstalled && download && !download.pending && !download.error ? button(t('Show in library'), 'showInstalled', { id: item.id }, { icon: 'image', className: 'link' }) : ''}
+    ${download || request ? button(t('Show in downloads'), 'openDownloads', {}, { className: 'link' }) : ''}
+    ${compatibility ? `<p class="inspector-compatibility muted"><small>${escapeHTML(compatibility)}</small></p>` : ''}
+    ${item.kind === 'Scene' && !state.settings.sceneAssetsReady ? `<div class="notice warning">${escapeHTML(t('Shared scene resources are required before playback.'))}${button(t('Get shared resources'), 'requestAssets', {}, { className: 'link' })}</div>` : ''}${showInLibrary}
+    </div>${discover ? (item.summary ? `<section class="inspector-section"><p>${escapeHTML(item.summary)}</p></section>` : '') : options ? renderOptions(options) : `<section class="inspector-section"><p class="muted">${escapeHTML(t('Loading wallpaper options…'))}</p></section>`}
+    </div>${options ? renderInspectorSave(options) : ''}</div>`);
+  for (const image of $('inspector').querySelectorAll('img[data-label-height]')) image.style.height = `${Number(image.dataset.labelHeight)}px`;
 }
 const draftKey = (id, propertyID) => `${id}\u0000${propertyID}`;
 // The audio and media status lines report the user's own setting and what it does not
@@ -430,7 +447,7 @@ const draftKey = (id, propertyID) => `${id}\u0000${propertyID}`;
 function renderAudioAndMedia(options, lock) {
   const id = options.id;
   const web = options.kind === 'Web';
-  const check = (key, label, on) => `<label class="check-label"><input type="checkbox" data-change="wallpaperSetting" data-id="${escapeHTML(id)}" data-setting="${escapeHTML(key)}"${checked(on)}${disabled(lock)}>${escapeHTML(label)}</label>`;
+  const check = (key, label, on) => `<label class="check-label inspector-check">${icon(key === 'audioResponseEnabled' ? 'audioLines' : 'music')}<span>${escapeHTML(label)}</span><input type="checkbox" data-change="wallpaperSetting" data-id="${escapeHTML(id)}" data-setting="${escapeHTML(key)}"${checked(on)}${disabled(lock)}></label>`;
   const note = (text) => `<p class="muted"><small>${escapeHTML(text)}</small></p>`;
   const status = (text) => `<p class="muted" role="status"><small>${escapeHTML(text)}</small></p>`;
   // Three distinct things: the user's setting, whether the page asked for data,
@@ -445,28 +462,39 @@ function renderAudioAndMedia(options, lock) {
         : delivering === false
           ? t('On, but this wallpaper doesn’t use audio.')
           : t('On. Apply the wallpaper to see whether it uses audio.');
-  const media = !(web || options.kind === 'Scene') ? '' : check('mediaIntegrationEnabled', t('Media integration'), options.mediaIntegrationEnabled)
-    + note(t('Share song titles, artists and artwork from system Now Playing. Supports Spotify, Apple Music and compatible browsers and local players.'))
-    + status(!options.mediaIntegrationEnabled
-      ? t('Off. The wallpaper gets no track information.')
-      : options.mediaAvailable === true
-        ? t('On. The wallpaper gets the track details macOS reports.')
-        : options.mediaAvailable === false
-          ? t('On, but track information is unavailable: {reason}', { reason: options.mediaUnavailableReason || t('the system declined to report what is playing.') })
-          : t('On. Apply the wallpaper to see whether track information is available.'));
-  return check('audioResponseEnabled', t('Audio response'), options.audioResponseEnabled)
+  const media = !(web || options.kind === 'Scene') ? '' : check('mediaIntegrationEnabled', t('Media integration'), options.mediaIntegrationEnabled);
+  const mediaStatus = !options.mediaIntegrationEnabled
+    ? t('Off. The wallpaper gets no track information.')
+    : options.mediaAvailable === true
+      ? t('On. The wallpaper gets the track details macOS reports.')
+      : options.mediaAvailable === false
+        ? t('On, but track information is unavailable: {reason}', { reason: options.mediaUnavailableReason || t('the system declined to report what is playing.') })
+        : t('On. Apply the wallpaper to see whether track information is available.');
+  return check('audioResponseEnabled', t('Audio response'), options.audioResponseEnabled) + media
+    + `<details class="inspector-help" ${keyAttr(`audio-help-${id}`)}><summary>${escapeHTML(t('Audio and media status'))}${icon('chevronRight', 12)}</summary><div class="section-content">`
     + note(t('Reactive wallpapers use sound playing in other apps. macOS may request system audio recording permission.'))
     + status(audioStatus)
-    + media;
+    + (media ? note(t('Share song titles, artists and artwork from system Now Playing. Supports Spotify, Apple Music and compatible browsers and local players.')) + status(mediaStatus) : '')
+    + '</div></details>';
 }
 function renderOptions(options) {
   const id = options.id;
   const lock = state.busy || busy('apply', { id }) || busy('revert', { id });
-  const changed = options.dirty || [...drafts.keys()].some(key => key.startsWith(`${id}\u0000`));
-  // Rows first: a wallpaper whose properties are all author decoration has nothing to put
-  // in the section, and an empty disclosure reads as a panel that failed to load them.
   const properties = (options.properties || []).map(property => renderProperty(id, property, lock)).join('');
-  return `${!options.supported ? `<section class="inspector-section"><p class="notice warning">${escapeHTML(t('This wallpaper cannot be rendered on this Mac.'))}</p></section>` : ''}<section class="inspector-section"><details open ${keyAttr(`general-${id}`)}><summary>${escapeHTML(t('General configuration'))}${icon('chevronRight', 14)}</summary><div class="section-content"><label class="check-label"><input type="checkbox" data-change="wallpaperSetting" data-id="${escapeHTML(id)}" data-setting="muted"${checked(options.muted)}${disabled(lock)}>${escapeHTML(t('Mute wallpaper audio'))}</label><div class="field"><label for="wallpaper-volume">${escapeHTML(t('Volume'))}</label><div class="range-field"><input id="wallpaper-volume" type="range" min="0" max="100" step="1" value="${Number(options.volume) * 100}" data-change="wallpaperSetting" data-id="${escapeHTML(id)}" data-setting="volume"${disabled(lock || options.muted)}><output>${Math.round(options.volume * 100)}%</output></div></div>${renderAudioAndMedia(options, lock)}</div></details></section><section class="inspector-section"><details open ${keyAttr(`displays-${id}`)}><summary>${escapeHTML(t('Displays'))}${icon('chevronRight', 14)}</summary><div class="section-content">${(options.displays || []).map(display => `<details class="display-options" open ${keyAttr(display.id)}><summary>${escapeHTML(display.title)}${icon('chevronRight', 13)}</summary><div class="section-content"><label class="check-label"><input type="checkbox" data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="enabled"${checked(display.enabled)}${disabled(lock)}>${escapeHTML(t('Enabled'))}</label><label class="field">${escapeHTML(t('Scaling mode'))}<select data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="scalingMode"${disabled(lock)}>${selectOptions([['none', t('Original size')], ['stretch', t('Stretch')], ['match', t('Fit')], ['fill', t('Fill')]], display.scalingMode)}</select></label><label class="field">${escapeHTML(t('Scale factor'))}<input type="number" min="${Number.MIN_VALUE}" step="any" value="${Number(display.scalingFactor)}" data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="scalingFactor"${disabled(lock)}></label><label class="field">${escapeHTML(t('Frame rate'))}<input type="number" min="1" max="${Number(display.maxFps) || 240}" step="1" value="${Number(display.fps)}" data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="fps"${disabled(lock)}></label>${button(t('Remove from display'), 'eject', { id, displayID: display.id }, { className: 'link', disabled: lock })}</div></details>`).join('') || `<p class="muted">${escapeHTML(t('Apply this wallpaper to a display to configure playback.'))}</p>`}</div></details></section>${properties ? `<section class="inspector-section"><details open ${keyAttr(`properties-${id}`)}><summary>${escapeHTML(t('Wallpaper properties'))}${icon('chevronRight', 14)}</summary><div class="section-content">${properties}</div></details></section>` : ''}<div class="inspector-save"><p>${escapeHTML(changed ? t('You have unapplied changes.') : t('Audio, scaling mode and frame rate update immediately.'))}</p>${button(t('Revert'), 'revert', { id }, { disabled: lock || !changed })}${button(t('Apply changes'), 'apply', { id }, { className: 'primary', disabled: lock || !changed || !options.supported })}</div>`;
+  return `${!options.supported ? `<section class="inspector-section"><p class="notice warning">${escapeHTML(t('This wallpaper cannot be rendered on this Mac.'))}</p></section>` : ''}
+    <section class="inspector-section"><details open ${keyAttr(`general-${id}`)}><summary>${escapeHTML(t('General configuration'))}${icon('chevronRight', 14)}</summary><div class="section-content general-controls">
+      <label class="check-label inspector-check">${icon('volume')}<span>${escapeHTML(t('Mute wallpaper audio'))}</span><input type="checkbox" data-change="wallpaperSetting" data-id="${escapeHTML(id)}" data-setting="muted"${checked(options.muted)}${disabled(lock)}></label>
+      <div class="field inspector-row"><label for="wallpaper-volume">${icon('volume')}${escapeHTML(t('Volume'))}</label><div class="range-field"><input id="wallpaper-volume" type="range" min="0" max="100" step="1" value="${Number(options.volume) * 100}" data-change="wallpaperSetting" data-id="${escapeHTML(id)}" data-setting="volume"${disabled(lock || options.muted)}><output>${Math.round(options.volume * 100)}%</output></div></div>
+      ${renderAudioAndMedia(options, lock)}
+    </div></details></section>
+    ${properties ? `<section class="inspector-section"><details open ${keyAttr(`properties-${id}`)}><summary>${escapeHTML(t('Wallpaper properties'))}${icon('chevronRight', 14)}</summary><div class="section-content wallpaper-properties">${properties}</div></details></section>` : ''}
+    <section class="inspector-section"><details ${keyAttr(`displays-${id}`)}><summary>${escapeHTML(t('Displays'))}${icon('chevronRight', 14)}</summary><div class="section-content">${(options.displays || []).map(display => `<details class="display-options" open ${keyAttr(display.id)}><summary>${escapeHTML(display.title)}${icon('chevronRight', 13)}</summary><div class="section-content"><label class="check-label"><input type="checkbox" data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="enabled"${checked(display.enabled)}${disabled(lock)}>${escapeHTML(t('Enabled'))}</label><label class="field">${escapeHTML(t('Scaling mode'))}<select data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="scalingMode"${disabled(lock)}>${selectOptions([['none', t('Original size')], ['stretch', t('Stretch')], ['match', t('Fit')], ['fill', t('Fill')]], display.scalingMode)}</select></label><label class="field">${escapeHTML(t('Scale factor'))}<input type="number" min="${Number.MIN_VALUE}" step="any" value="${Number(display.scalingFactor)}" data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="scalingFactor"${disabled(lock)}></label><label class="field">${escapeHTML(t('Frame rate'))}<input type="number" min="1" max="${Number(display.maxFps) || 240}" step="1" value="${Number(display.fps)}" data-change="displayConfig" data-id="${escapeHTML(id)}" data-display-id="${escapeHTML(display.id)}" data-setting="fps"${disabled(lock)}></label>${button(t('Remove from display'), 'eject', { id, displayID: display.id }, { className: 'link', disabled: lock })}</div></details>`).join('') || `<p class="muted">${escapeHTML(t('Apply this wallpaper to a display to configure playback.'))}</p>`}</div></details></section>`;
+}
+function renderInspectorSave(options) {
+  const id = options.id;
+  const lock = state.busy || busy('apply', { id }) || busy('revert', { id });
+  const changed = options.dirty || [...drafts.keys()].some(key => key.startsWith(`${id}\u0000`));
+  return `<div class="inspector-save"><p role="status">${escapeHTML(changed ? t('You have unapplied changes.') : t('Audio, scaling mode and frame rate update immediately.'))}</p>${button(t('Apply changes'), 'apply', { id }, { className: 'primary', disabled: lock || !changed || !options.supported })}${button(t('Revert'), 'revert', { id }, { disabled: lock || !changed })}</div>`;
 }
 // A `file` or `directory` property is a path the user picked, not a value typed into the
 // page: the field is read-only and carries the display name, never the staged path the
@@ -515,18 +543,18 @@ function assetProperty(id, property, fieldID, unavailable, name) {
     + (property.error ? `<p class="notice error" role="alert">${escapeHTML(property.error)}</p>` : '');
 }
 function renderProperty(id, property, lock) {
-  // An author's decorative label — an image strip, a rule — carries no words, so native
-  // sends none. The id is no substitute: these authors let the editor slug the markup, so
-  // it reads as `imgsrchttpphoto…`. A control keeps its row under a generic name; a text
-  // property is only its label, so with nothing to say it is left out entirely.
-  const name = property.label || t('Unnamed option');
+  const token = property.labelHTML || property.label;
+  const engineLabel = Object.hasOwn(enginePropertyLabels, token) ? enginePropertyLabels[token] : null;
+  const presentation = engineLabel ? { ...property, label: t(engineLabel), labelHTML: '' } : property;
+  const name = presentation.label || t('Unnamed option');
+  const label = renderPropertyLabel(presentation);
   const fieldID = `property-${encodeURIComponent(id)}-${encodeURIComponent(property.id)}`;
   const value = drafts.has(draftKey(id, property.id)) ? drafts.get(draftKey(id, property.id)) : property.value;
   const unavailable = lock || property.enabled === false || busy('property', { id, propertyID: property.id });
-  const attributes = `id="${escapeHTML(fieldID)}" data-change="property" data-id="${escapeHTML(id)}" data-property-id="${escapeHTML(property.id)}"${disabled(unavailable)}`;
+  const attributes = `id="${escapeHTML(fieldID)}" aria-label="${escapeHTML(name)}" data-change="property" data-id="${escapeHTML(id)}" data-property-id="${escapeHTML(property.id)}"${disabled(unavailable)}`;
   let control;
   switch (property.kind) {
-    case 'boolean': control = `<label class="check-label"><input type="checkbox" ${attributes}${checked(value)}>${escapeHTML(t('Enabled'))}</label>`; break;
+    case 'boolean': control = `<input type="checkbox" ${attributes}${checked(value)}>`; break;
     case 'slider': control = `<div class="range-field"><input type="range" ${attributes} min="${Number(property.min ?? 0)}" max="${Number(property.max ?? 100)}" step="${Number(property.step) > 0 ? Number(property.step) : 'any'}" value="${Number(value)}"><output>${escapeHTML(value)}</output></div>`; break;
     case 'combo': control = `<select ${attributes}>${(property.options || []).map(option => `<option value="${escapeHTML(JSON.stringify(option.value))}"${JSON.stringify(value) === JSON.stringify(option.value) ? ' selected' : ''}>${escapeHTML(t(option.label))}</option>`).join('')}</select>`; break;
     case 'color': control = `<input type="color" ${attributes} value="${/^#[0-9a-f]{6}$/i.test(value) ? value : '#ffffff'}">`; break;
@@ -534,11 +562,29 @@ function renderProperty(id, property, lock) {
     // A scene texture is not a user-chosen file: it keeps the image picker it always had.
     case 'texture': control = `<p class="file-value">${escapeHTML(value || t('No image selected'))}</p><div class="actions">${button(t('Choose image'), 'choosePropertyFile', { id, propertyID: property.id }, { icon: 'folder', disabled: unavailable })}${value ? button(t('Clear'), 'clearProperty', { id, propertyID: property.id }, { disabled: unavailable }) : ''}</div>`; break;
     case 'file': case 'directory': control = assetProperty(id, property, fieldID, unavailable, name); break;
-    case 'text': { const lines = [property.label, value && value !== property.label ? value : ''].filter(Boolean); return lines.length ? `<p ${keyAttr(property.id)} class="muted">${lines.map(escapeHTML).join('<br>')}</p>` : ''; }
+    case 'text': { const extra = value && value !== property.label ? `<p>${escapeHTML(value)}</p>` : ''; return label || extra ? `<div ${keyAttr(property.id)} class="property-description property-label">${label}${extra}</div>` : ''; }
     default: return `<p ${keyAttr(property.id)} class="muted">${escapeHTML(t('{name}: unsupported property type.', { name }))}</p>`;
   }
-  return `<div ${keyAttr(property.id)} class="field${property.dirty || drafts.has(draftKey(id, property.id)) ? ' modified' : ''}"><div class="field-title"><label for="${escapeHTML(fieldID)}">${escapeHTML(name)}</label>${property.defaultValue !== undefined && property.defaultValue !== null ? button(t('Reset'), 'restoreProperty', { id, propertyID: property.id }, { className: 'link', title: t('Restore default: {name}', { name }), disabled: unavailable }) : ''}</div>${control}</div>`;
+  const modified = property.dirty || drafts.has(draftKey(id, property.id));
+  const restore = property.defaultValue !== undefined && property.defaultValue !== null ? button('', 'restoreProperty', { id, propertyID: property.id }, { icon: 'refresh', className: 'quiet icon-button property-reset', title: t('Restore default: {name}', { name }), disabled: unavailable }) : '';
+  return `<div ${keyAttr(property.id)} class="field property-row property-${escapeHTML(property.kind)}${modified ? ' modified' : ''}"><div class="field-title"><label class="property-label" for="${escapeHTML(fieldID)}">${label || escapeHTML(name)}</label>${modified ? `<span class="property-modified" title="${escapeHTML(t('Modified'))}" aria-label="${escapeHTML(t('Modified'))}"></span>` : ''}</div><div class="property-control">${control}</div>${restore}</div>`;
 }
+// Wallpaper Engine's built-in label tokens are UI vocabulary, not author prose.
+const enginePropertyLabels = {
+  ui_browse_properties_scheme_color: 'Scheme color',
+  ui_editor_properties_alert_tip: 'Hint',
+  ui_editor_effect_local_contrast_title: 'Local contrast',
+  ui_editor_properties_brightness: 'Brightness',
+  ui_editor_properties_default: 'Default',
+  ui_editor_properties_left: 'Left',
+  ui_editor_properties_right: 'Right',
+  ui_editor_properties_position: 'Position',
+  ui_editor_layer_solid: 'Solid color',
+  ui_editor_properties_size: 'Size',
+  ui_settings_enable_media_integration_support: 'Media integration',
+  ui_editor_script_snippets: 'Script snippets',
+  ui_editor_preset_stars_title: 'Stars',
+};
 
 const clamp = (value) => Math.max(0, Math.min(1, Number(value)));
 const requestByID = (id) => (state?.downloadRequests || []).find(request => request.id === id);
@@ -898,6 +944,8 @@ document.addEventListener('click', event => {
     if (tab) { run(send('navigate', { page: tab.dataset.page })); return; }
   }
   if (control && !control.disabled) {
+    // An author link sits inside the control's label; don't also toggle that control.
+    if (control.closest('label.property-label')) event.preventDefault();
     // Modifier clicks on installed tiles build a selection instead of changing the inspector.
     if (control.matches('.tile-select') && state?.page === 'installed' && (selecting || event.metaKey || event.ctrlKey || event.shiftKey)) { toggleSelection(control.dataset.id, { range: event.shiftKey }); return; }
     // Apply on the second click instead of starting another selection request first.

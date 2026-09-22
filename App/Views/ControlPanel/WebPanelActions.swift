@@ -795,7 +795,7 @@ extension WebPanelController {
     }
     return [
       "steamcommunity.com", "store.steampowered.com", "github.com", "www.gnu.org",
-      "support.apple.com",
+      "support.apple.com", "space.bilibili.com", "www.bilibili.com",
     ].contains(url.host ?? "")
   }
 }

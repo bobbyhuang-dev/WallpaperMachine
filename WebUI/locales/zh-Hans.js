@@ -223,6 +223,7 @@ export default {
 
   // Audio and media
   'Audio response': '音频响应',
+  'Audio and media status': '音频与媒体状态',
   'Reactive wallpapers use sound playing in other apps. macOS may request system audio recording permission.': '壁纸会跟随其他应用播放的声音变化。macOS 可能会请求录制系统音频的权限。',
   'Off. No audio is captured.': '已关闭，不采集音频。',
   'On. Parts of the wallpaper made to react to sound will respond.': '已开启。壁纸中会响应声音的部分将随音频变化。',
@@ -286,6 +287,19 @@ export default {
   'Unnamed option': '未命名选项',
   'Reset': '重置',
   'Restore default: {name}': '恢复默认值：{name}',
+  'Modified': '已修改',
+  'Scheme color': '配色方案颜色',
+  'Hint': '提示',
+  'Local contrast': '局部对比',
+  'Brightness': '亮度',
+  'Default': '默认',
+  'Left': '左',
+  'Right': '右',
+  'Position': '位置',
+  'Solid color': '纯色',
+  'Size': '大小',
+  'Script snippets': '脚本片段',
+  'Stars': '星星',
 
   // Download stages and dialog
   'Waiting for SteamCMD setup.': '等待 SteamCMD 设置。',
@@ -489,6 +503,9 @@ export default {
   ' · Cancelled': ' · 已取消',
 
   // Settings: sections and general
+  'Interface': '界面',
+  'Startup & desktop': '启动与桌面',
+  'Lock screen': '锁定屏幕',
   'General': '通用',
   'Appearance': '外观',
   'Performance': '性能',
@@ -519,8 +536,10 @@ export default {
   'Video playback': '视频播放',
   'Video playback backend': '视频播放后端',
   'Compatibility': '兼容模式',
-  'Native video preferred (falls back automatically)': '优先原生视频（自动回退）',
-  'Native Metal preferred (falls back automatically)': '优先原生 Metal（自动回退）',
+  'Native video preferred': '优先原生视频',
+  'Native Metal preferred': '优先原生 Metal',
+  'Renderer compatibility': '渲染器兼容性',
+  'Unsupported scenes use Compatibility. Lock screen playback always uses Compatibility.': '不支持的场景会使用兼容模式。锁屏播放始终使用兼容模式。',
   'Native Metal': '原生 Metal',
   'Native plays supported videos through macOS and uses Compatibility for the rest.': '原生模式通过 macOS 播放支持的视频，其余自动使用兼容模式。',
   'In use now': '当前使用',
@@ -615,6 +634,7 @@ export default {
   'Content pacing, shared video decode and direct video plane sampling are experimental. Shared decode merges only the decoding; each screen still draws its own frames. Direct plane sampling skips a color conversion when a layer’s shader can handle it; otherwise the picture is produced as before.': '内容节拍、共享视频解码和直接采样视频平面都是实验性功能。共享解码只合并解码，每个画面仍各自绘制。直接采样在图层着色器能处理时省去一次颜色转换，否则画面与之前完全一样。',
 
   // Settings: appearance
+  'Window appearance': '窗口外观',
   'System follows the macOS light and dark setting.': '“跟随系统”会随 macOS 切换浅色或深色。',
   'System (Auto)': '跟随系统（自动）',
   'Light': '浅色',
@@ -717,6 +737,7 @@ export default {
   'Files you chose in a wallpaper’s settings are copied to the folder above, so clearing caches or updating the wallpaper won’t remove them. To remove one, clear that setting on the wallpaper.': '在壁纸设置中选择的文件会复制到上方的文件夹，清除缓存或更新壁纸都不会删除它们。要删除某个文件，请在对应壁纸中清除该设置。',
 
   // Settings: about
+  'Component versions': '组件版本',
   'Independent macOS client': '独立的 macOS 客户端',
   'App version': '应用版本',
   'Bridge': '桥接层',

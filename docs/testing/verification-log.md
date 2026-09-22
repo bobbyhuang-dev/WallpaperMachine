@@ -25,6 +25,12 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-22 — Integrated settings and inspector commit with remote main
+
+- Rebased the approved UI, branding and property image changes onto origin/main, preserving remote release-note UI and authored property compatibility changes. Resolved the settings CSS overlap by retaining readable disclosure text and the release-note rules; preserved both verification histories.
+- python3 scripts/test.py passed on the integrated tree: 142 Python tests; 550 native passed, 0 failed, 11 opt-in skipped of 561.
+- No new renderer changes authored during integration. No Release rebuild, installation, app launch, restart, screenshots or desktop changes as part of commit and push. The earlier built app predates this remote integration.
+
 ## 2026-09-22 — Release build for Perfect Wallpaper compatibility repair
 
 - Pre-build gate for the unchanged repair sources: cargo test --release -p wallpaper-bridge --lib --quiet passed 322 tests; python3 scripts/test.py passed 141 Python and 544 native tests, with 11 opt-in skips; python3 scripts/check_renderer.py passed its generated matrix with three private-corpus skips. These commands were completed before the requested build and not needlessly rerun.
@@ -58,67 +64,58 @@ Reworked the release system end to end. scripts/release_notes.py writes the GitH
 - Provenance claim corrected against actions/toolkit packages/attest/src/provenance.ts: the SLSA predicate records claims.ref/claims.sha (the triggering push), not the bump commit the tag points at; the built revision is recorded in the release body instead
 - Not verified: no CI run (publishing remains blocked by the LICENSING.md gate), no Release build, no desktop run
 
-## 2026-09-22 — Branding and icon selection rebased onto localization updates
+## 2026-09-22 — Requested Release build with improved Settings
 
-- Rebased the branding and selectable Dock icon changes onto origin/main at 0e85acc; retained remote UI copy and translations alongside the icon picker and welcome branding.
-- Merged verification histories without dropping entries; retained ten active entries and archived older entries with existing link-rewriting rules.
-- python3 scripts/test.py — exit 0; all Python suites passed; native 538 passed, 0 failed, 11 skipped of 549. Build log reports 35 warning lines.
-- No renderer source edits during integration; renderer gate not rerun. No Release rebuild, application launch/restart or desktop verification; existing Release app remains unchanged.
+- python3 scripts/test.py passed: 104 Python tests; 544 native passed, 0 failed, 11 skipped of 555. Opt-in media and live-network checks remain skipped.
+- python3 scripts/build.py --swift-only --configuration Release succeeded using the existing renderer and generated bindings. Xcode reported 26 warning lines; build completed successfully.
+- diff -qr WebUI build/Build/Products/Release/WallpaperMachine.app/Contents/Resources/WebUI passed with no differences: all bundled WebUI files match current source, including the improved Settings page.
+- codesign --verify --deep --strict build/Build/Products/Release/WallpaperMachine.app passed.
+- Delivered build/Build/Products/Release/WallpaperMachine.app. Did not launch, quit, install or restart the app; user must quit and reopen this built app. Desktop visuals and live wallpaper behavior were not checked.
 
-## 2026-09-22 — Consistent Dock icon frame weight
+## 2026-09-22 — Bound and cancel shared property image loads
 
-- Changed Minimal to reuse the regular native frame-and-gear geometry used by Day and Night; preserved blue-on-white styling and left panel/menu-bar glyphs unchanged.
-- python3 scripts/brand.py — exit 0; regenerated native and Dock assets.
-- Rendered PNG smoke measurement: Minimal top frame 61 source pixels, Day/Night 59; the small difference is the wallpaper's inner-edge overlap, below 0.3 px at picker size. Inspected all three generated artwork files.
-- Added rendered thickness comparison to the existing Dock artwork regression; initial one-pixel tolerance failed on the wallpaper overlap, corrected to three source pixels.
-- python3 scripts/test.py — exit 0; all Python checks passed, including 4 brand tests; native 536 passed, 0 failed, 11 skipped of 547.
-- No app launch, desktop capture or live Dock check; in-app visual behavior unverified. No Release rebuild; running app remains unchanged.
+- PropertyImageCache now tracks per-URL consumers, limits active transfers to four across hosts, cancels abandoned queued/active loads, and retains retiring slots until worker completion. Generation identity prevents stale completions affecting a replacement load.
+- python3 scripts/test.py --only PropertyImageCacheTests --only WebPanelAssetsTests — exit 0 after correcting an initializer shadowing error and continuation type inference; 8 passed, 0 failed, 0 skipped.
+- Delayed URLProtocol regressions exercise cancellation with an incomplete response, transport stop, same-URL retry, a 12-request/two-host burst capped at four transfers, queued cancellation without network work, and reuse of all four slots. Fixture sessions never reach the network.
+- python3 scripts/test.py — exit 0; Python suites passed; native 544 passed, 0 failed, 11 opt-in tests skipped.
+- Updated control-panel cache lifecycle documentation. No temporary smoke files created; shared test evidence retained. No Release build, desktop interaction, renderer run, or live-network test.
 
-## 2026-09-22 — Release delivery of selectable Dock icons
+## 2026-09-22 — Settings full gate and branding test review
 
-- Pre-build verification: the preceding feature gate passed with 536 native tests passed, 0 failed, 11 skipped; Python checks passed. No behavioral source changes followed that gate.
-- python3 scripts/build.py --swift-only --configuration Release — exit 0; built version 0.5.0 (16) at build/Build/Products/Release/WallpaperMachine.app; build reported 25 warning lines.
-- All 14 bundled WebUI files match current source byte-for-byte, including Settings > Appearance > App icon and Minimal/Day/Night PNG assets. codesign --verify --deep --strict passed.
-- Refreshed the delivered bundle timestamp and Launch Services registration; removed the competing Debug registration without deleting files. A fresh NSWorkspace lookup resolves app.wallpapermachine to the Release bundle.
-- No app launch/quit, Dock restart, installation, live icon selection or desktop capture. User must quit and reopen the Release app to verify the picker; live Dock presentation remains unverified.
+- Inspected the reported website-icon failure against current generated output: the 256px Day raster contains an opaque black centered frame spanning 61–194 on both central axes. Unmodified current branding suite passed all five tests; the earlier missing-frame result was not reproduced on the current tree.
+- Revised scripts/tests/test_brand.py to assert a visible opaque frame, opposing margin symmetry and colored opaque interior rather than pinning artwork to a 61px inset. Branding generator and production artwork were not changed.
+- Throwaway mutation check: centered artwork at another scale passed; shifted, missing and solid-black artwork each failed the revised test. Temporary outputs removed.
+- python3 scripts/test.py passed: 104 Python tests; 542 native passed, 0 failed, 11 skipped of 553. This supersedes the earlier settings verification blockers.
+- Skipped: nine opt-in NativeVideoPlayerMediaTests and two live-network WorkshopTests. Offscreen panel navigation and settings regression passed in the full gate.
+- Settings layout/interactions retain the headless evidence recorded in prior entries. Desktop visual inspection, screenshots, real Steam/audio operations and live wallpapers were not exercised. No Release build or app restart.
 
-## 2026-09-22 — Selectable Minimal Day and Night Dock icons
+## 2026-09-22 — Wallpaper Engine style property inspector
 
-- Added a localized Settings > Appearance icon picker; choice persists independently of panel appearance and applies at startup/change through NSApplication.applicationIconImage. Finder, menu-bar symbol and signed bundle remain unchanged; reset restores Day.
-- python3 scripts/brand.py — exit 0; generated shared 1024px Minimal/Day/Night PNGs with transparent macOS outer margins. Minimal reuses the blue About glyph; fixed Day/Night reuse current native geometry.
-- python3 -m unittest discover -s scripts/tests -p test_brand.py — exit 0; 4 passed, including variant color/interior, gear hub and transparent margin checks.
-- python3 scripts/test.py --only AppThemeTests --only ControlPanelShellTests/testAppearanceControlsPersistAndFollowNativeAppearanceWithoutWindow — exit 0; 5 passed. Native WebKit exercises Night selection, preview decoding, reset and Minimal recovery; no window.
-- python3 scripts/test.py — exit 0; Python checks passed; native 536 passed, 0 failed, 11 skipped of 547. Reported warnings concern existing media isolation, update-test return values and AppIntents metadata.
-- Headless browser: visually inspected actual settings in light English and compact dark Simplified Chinese; all previews loaded, no horizontal overflow. Keyboard selection retained focus; rejected save restored prior choice; reset selected Day. Preview bridge simulated only for browser interaction checks.
-- Isolated AppKit smoke — exit 0; assigned each PNG to applicationIconImage at 512-point Retina size and read back distinct 1024px native images. Process remained activation-prohibited with no windows or Dock entry. Initial smoke assumptions about setActivationPolicy return value and representation size were corrected before the successful run.
-- Impeccable detector for settings.js/settings.css returned no findings. Updated appearance documentation; closed browser and preview server. clean.py --dry-run identified 1.60 GB including unrelated evidence, so broad cleanup was not performed; no throwaway source files were left.
-- No Release rebuild, app launch/restart, Finder custom-icon change, Dock restart, installation or desktop capture. Live Dock presentation remains unverified; the previously delivered Release app does not include this picker.
+- Focused native gate: WebPanelPropertyLabelTests, PropertyImageCacheTests and WebPanelAssetsTests — exit 0; 8 passed, 0 failed, 0 skipped.
+- python3 scripts/test.py — exit 0; Python suites passed; native 542 passed, 0 failed, 11 skipped (9 opt-in media/device cases, 2 live Steam cases).
+- Isolated native image-loader smoke fetched all six author artwork files from the selected local wallpaper: four GIFs (7, 9, 26 and 60 frames) and two PNGs; all decoded successfully.
+- Headless Chromium loaded all 14 authored image placements using those fetched bytes; exercised checkbox labels, keyboard slider changes, combo selection, reset, author links, Apply and Revert against an isolated bridge recorder.
+- DOM geometry at window widths 760, 960, 1280 and 1830: no property overflow or label/control overlap; edit footer remained visible and stationary during scrolling. Light/dark theme and keyboard reset visibility checked.
+- Impeccable detector over panel.css, panel.js and property-label.js — exit 0, no findings.
+- No desktop interaction or screenshots; live WKWebView visual appearance and animation smoothness were not visually verified. No renderer/corpus run or Release rebuild.
+- Removed the owned smoke runner and downloaded private artwork; preserved other sessions' artifacts after clean.py --dry-run listed 1.65 GB of shared evidence.
 
-## 2026-09-22 — Release delivery of enlarged centered app icon
+## 2026-09-22 — Settings verification after panel dependency integration
 
-- First Release inspection exposed a macOS 26-only issue: appearance recoloring filled the open frame stroke. Replaced the native stroke with a filled outline; website and tray glyphs retain their existing stroke geometry.
-- Pinned icon regressions to Icon Composer --design-generation 26. The gear-clearance assertion failed in both appearances before the outline fix, then all 3 branding tests passed.
-- Final python3 scripts/test.py — exit 0; Python checks passed; native 535 passed, 0 failed, 11 skipped of 546.
-- Final python3 scripts/build.py --swift-only --configuration Release — exit 0; delivered build/Build/Products/Release/WallpaperMachine.app.
-- Visually inspected corrected macOS 26 Default/Dark exports and extracted final bundled AppIcon.icns. Bundled 256 px fallback has equal 61/61 px display-frame margins on both axes, including the system outer inset, and a clear gear cutout.
-- Assets.car contains the updated native mark vector in both Aqua and DarkAqua groups; all 11 bundled WebUI files match source byte-for-byte. codesign --verify --deep --strict passed.
-- Removed temporary layer-isolation icon documents; retained disposable render evidence. No app launch/quit, installation, desktop capture, icon-cache reset or system appearance change. User must quit and reopen the delivered app; live Dock/Finder presentation remains unverified.
+- The concurrently added WebUI/property-label.js is now present. Added its exact filename to WebPanelAssets.files; no routing policy or origin checks changed. Removed one duplicate Chinese translation introduced during concurrent catalog edits.
+- python3 scripts/test.py --only ControlPanelShellTests: current-source offscreen WebKit run passed 11 tests, 0 failed, 0 skipped, including settings keyboard navigation, scroll reset, focus and disclosure preservation.
+- python3 scripts/test.py: latest full-gate attempt stops in scripts/tests/test_brand.py::BrandTests.test_website_icon_centers_the_display_frame (Day icon must have a black display frame). Branding implementation and tests are outside the Settings change and were left untouched. Full gate is not passing; no native results are claimed for that attempt.
+- Settings headless geometry and interaction coverage is recorded in the preceding settings entry: all seven categories, English/Chinese, light/dark, minimum/wide windows, long content and renderer-unavailable state. Final isolated settings check passed 42 layout cases after navigation alignment fix.
+- Documentation updated in control-panel.md and performance.md. Owned smoke tabs and local server closed; no temporary source files created.
+- No desktop screenshots, live wallpaper changes, real Steam/audio integration, Release build, or app restart. Running app retains the old behavior.
 
-## 2026-09-22 — Larger seamless app icon with centered display frame
+## 2026-09-22 — Website icons synchronized with centered native variants
 
-- python3 scripts/brand.py — exit 0; regenerated native vector layers with approximately 24% larger artwork, joined panel/frame edges and an explicit gear cutout.
-- Rendered centering regression failed before the placement fix in both appearances: opposing horizontal margins were 49/40 px.
-- python3 -m unittest discover -s scripts/tests -p test_brand.py — final exit 0; 3 passed, covering light/dark backgrounds, matching display-frame margins, seam-free joins, gear clearance, tray alpha and ICO payloads.
-- Icon Composer offscreen exports at 256, 64 and 32 px succeeded in Default and Dark. Visually inspected final 256 px appearances and the 32 px light icon; measured frame margins were 44/44 px on both axes in both 256 px appearances.
-- python3 scripts/test.py — exit 0; Python checks passed; native 535 passed, 0 failed, 11 skipped. Full gate completed before the subsequent user-requested centering correction; final centering was verified with the targeted branding suite and native icon exports.
-- python3 scripts/clean.py --dry-run — exit 0; broad cleanup would remove 1.66 GB including unrelated evidence, so it was not executed. No throwaway source scripts were created.
-- No Release rebuild, app launch/restart, desktop capture or appearance change. Live Dock/Finder presentation remains unverified; the running app retains its existing icon.
-
-## 2026-09-22 — Release app rebuilt with refreshed native icon
-
-- python3 scripts/test.py — exit 0; 535 passed, 0 failed, 11 skipped. All Python script suites passed, including the three brand export tests.
-- python3 scripts/build.py --swift-only --configuration Release — exit 0; delivered build/Build/Products/Release/WallpaperMachine.app.
-- Verified Release Info.plist references AppIcon and Assets.car contains Aqua white and DarkAqua black native background layers. Extracted the bundled AppIcon.icns and visually confirmed the new fallback artwork.
-- Verified all 11 bundled WebUI files match current WebUI source byte-for-byte; codesign --verify --deep --strict passed.
-- NSWorkspace initially resolved the previous two-background icon from cache. Touched only the rebuilt app bundle and ran lsregister -f on that bundle; a fresh NSWorkspace lookup then resolved the updated single-white-background icon, visually inspected via image export.
-- No app launch or quit, desktop capture, appearance change, Finder/Dock restart or installation performed. User must quit and reopen the delivered Release app; live post-launch presentation remains unverified.
+- python3 scripts/brand.py --skip-app --website ../WallpaperMachineWebiste — exit 0; updated brand images, all three SVG/PNG appearances, favicons, touch icons and manifest without rewriting app resources.
+- New rendered website regression failed against the old charcoal artwork; final python3 -m unittest discover -s scripts/tests -p test_brand.py passed all 5 tests.
+- Headless Chromium decoded all three PNG/SVG variants and browser icons. At 256 px, all six variant renders have equal 61/61 px display-frame margins on both axes and transparent corners; canvas contact sheet visually inspected.
+- Browser pixel checks also confirmed equal frame margins for 16/32 px favicons, SVG favicon, 180 px touch icon and 192/512 px manifest icons.
+- Website variant PNGs match WebUI/app-icons/{minimal,day,night}.png byte-for-byte; default app-icon.png matches Day.
+- python3 scripts/test.py — exit 0; Python checks passed; native 539 passed, 0 failed, 11 skipped of 550.
+- Impeccable detector on the website asset directory returned no findings. Website contains assets only, no pages or separate product photos.
+- No Release rebuild, desktop capture, app launch/restart or appearance change. Native app resources intentionally unchanged.

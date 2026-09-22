@@ -149,6 +149,39 @@ for path in CommandLine.arguments.dropFirst() {
                                  'Dock variants must have consistent rendered frame thickness')
 
     @unittest.skipUnless(sys.platform == 'darwin', 'Requires macOS image tools')
+    def test_website_icon_centers_the_display_frame(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            work = Path(scratch)
+            image = work / 'website.png'
+            brand.rasterize(brand.icon_svg(), {image: 256}, work)
+            result = subprocess.run(['swift', '-e', r'''
+import AppKit
+let image = NSBitmapImageRep(data: try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))!
+let edges = [false, true].map { vertical -> [Int] in
+    let length = vertical ? image.pixelsHigh : image.pixelsWide
+    let pixels = (0..<length).filter { p in
+        let c = image.colorAt(x: vertical ? image.pixelsWide / 2 : p,
+                              y: vertical ? p : image.pixelsHigh / 2)!.usingColorSpace(.sRGB)!
+        return c.alphaComponent > 0.99 && max(c.redComponent, c.greenComponent, c.blueComponent) < 0.04
+    }
+    return [length, pixels.first ?? -1, pixels.last ?? -1]
+}
+let center = image.colorAt(x: image.pixelsWide / 2, y: image.pixelsHigh / 2)!.usingColorSpace(.sRGB)!
+let interior = [center.redComponent, center.greenComponent, center.blueComponent, center.alphaComponent]
+print(String(data: try JSONSerialization.data(withJSONObject: [edges, interior]), encoding: .utf8)!)
+''', str(image)], check=True, capture_output=True, text=True)
+            edges, interior = json.loads(result.stdout)
+            for length, first, last in edges:
+                self.assertGreater(first, 0, 'Opaque display frame must leave an outer margin')
+                self.assertLess(first, length / 2, 'Frame must extend before the center')
+                self.assertGreater(last, length / 2, 'Frame must extend after the center')
+                self.assertAlmostEqual(first, length - 1 - last, delta=1,
+                                       msg='Opposing display-frame margins must match')
+            self.assertGreater(interior[3], 0.99, 'Wallpaper interior must be opaque')
+            self.assertGreater(max(interior[:3]) - min(interior[:3]), 0.2,
+                               'Centered frame must surround a colored wallpaper, not a solid fill')
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'Requires macOS image tools')
     def test_tray_export_preserves_transparent_background_and_antialiasing(self):
         with tempfile.TemporaryDirectory() as scratch:
             work = Path(scratch)

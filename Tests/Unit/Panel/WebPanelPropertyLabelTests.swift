@@ -4,11 +4,8 @@ import XCTest
 
 @testable import WallpaperMachine
 
-/// Property labels are HTML written by wallpaper authors, and Workshop authors use them
-/// as a layout surface: colour tags, `<br>` runs, `<hr>` rules and image strips hosted on
-/// image boards. The panel shows text, so these cover what survives that reduction, and
-/// what the page does when nothing survives it — the case that used to print the editor's
-/// slug of the markup as a three-line property name.
+/// Authored labels retain presentation without gaining panel privileges. Plain
+/// names remain available to native pickers and unnamed controls never expose ids.
 @MainActor
 final class WebPanelPropertyLabelTests: XCTestCase {
   func testAuthorMarkupIsReducedToTheWordsItCarries() throws {
@@ -53,7 +50,7 @@ final class WebPanelPropertyLabelTests: XCTestCase {
     XCTAssertFalse(label("scheme")?.isEmpty ?? true)
   }
 
-  func testThePageNamesAnUnlabelledControlAndLeavesOutWordlessText() async throws {
+  func testPagePreservesPresentationAndRejectsAuthorControls() async throws {
     let context = try Context()
     defer { context.tearDown() }
     let web = context.controller.makeWebView()
@@ -109,7 +106,36 @@ final class WebPanelPropertyLabelTests: XCTestCase {
 
         show([property('deco', 'text', '')]);
         await waitFor(() => !field('real'));
-        return Object.assign(mixed, { decorationOnlySection: section() });
+        const decorationOnlySection = section();
+        const rich = property('rich', 'boolean', 'Character');
+        rich.labelHTML = '<h3>人物<br>Character</h3><font color="red">Tint</font><script>window.injected = true</script><input data-action="delete"><img src="https://evil.test/x" onerror="window.injected = true"><svg onload="window.injected = true"></svg><a href="javascript:alert(1)">Unsafe</a>';
+        const art = property('art', 'text', '');
+        art.labelHTML = '<center><a href="https://space.bilibili.com/111174060/"><img src="https://i.ibb.co/example/image.gif" width="105%" onerror="alert(1)"></a></center><hr>';
+        art.labelImages = { 'https://i.ibb.co/example/image.gif': 'mwe-ui://property-image/' + 'a'.repeat(64) };
+        const escaped = property('escaped', 'text', '<img src=x onerror=alert(1)>');
+        const heading = property('heading', 'text', 'Effect settings');
+        heading.labelHTML = '<h3>Effect settings</h3><a><h5>Instructions</h5></a>';
+        show([rich, art, escaped, heading]);
+        await waitFor(() => field('rich'));
+        const label = field('rich').querySelector('.property-label');
+        const image = field('art').querySelector('img');
+        const link = field('art').querySelector('[data-action="openExternal"]');
+        return Object.assign(mixed, {
+          decorationOnlySection,
+          heading: label.querySelector('h3')?.textContent,
+          lineBreaks: label.querySelectorAll('br').length,
+          color: label.querySelector('font')?.getAttribute('color'),
+          injected: Boolean(window.injected),
+          unsafeElements: label.querySelectorAll('script, input, svg, [onerror], [data-action]').length,
+          escapedText: field('escaped').textContent,
+          escapedImages: field('escaped').querySelectorAll('img').length,
+          imageSource: image?.getAttribute('src'),
+          imageWidth: image?.getAttribute('width'),
+          authorRule: Boolean(field('art').querySelector('hr')),
+          authorLink: link?.dataset.url,
+          linkIsKeyboardControl: link?.tagName === 'BUTTON' && link.type === 'button',
+          descriptionHeading: field('heading').querySelector('h3')?.textContent,
+        });
         """, arguments: ["base": payload, "slug": slug], in: nil, contentWorld: .page)
       as? [String: Any]
     let page = try XCTUnwrap(result)
@@ -130,6 +156,19 @@ final class WebPanelPropertyLabelTests: XCTestCase {
     XCTAssertEqual(
       page["decorationOnlySection"] as? Bool, false,
       "With every property left out, the empty disclosure goes too")
+    XCTAssertEqual(page["heading"] as? String, "人物Character")
+    XCTAssertEqual(page["lineBreaks"] as? Int, 1)
+    XCTAssertEqual(page["color"] as? String, "red")
+    XCTAssertEqual(page["injected"] as? Bool, false)
+    XCTAssertEqual(page["unsafeElements"] as? Int, 0)
+    XCTAssertEqual(page["escapedText"] as? String, "<img src=x onerror=alert(1)>")
+    XCTAssertEqual(page["escapedImages"] as? Int, 0)
+    XCTAssertEqual(page["imageSource"] as? String, "mwe-ui://property-image/" + String(repeating: "a", count: 64))
+    XCTAssertEqual(page["imageWidth"] as? String, "100%")
+    XCTAssertEqual(page["authorRule"] as? Bool, true)
+    XCTAssertEqual(page["authorLink"] as? String, "https://space.bilibili.com/111174060/")
+    XCTAssertEqual(page["linkIsKeyboardControl"] as? Bool, true)
+    XCTAssertEqual(page["descriptionHeading"] as? String, "Effect settings")
   }
 
   static func property(id: String, labelHtml: String) -> BridgePropertyDescriptor {

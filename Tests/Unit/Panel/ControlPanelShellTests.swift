@@ -105,6 +105,45 @@ final class ControlPanelShellTests: ControlPanelTestCase {
     await workshop.steamCMDSetup.shutdown()
   }
 
+  func testSettingsKeyboardNavigationResetsScrollAndPreservesDisclosureState() async throws {
+    try await withPanel { panel in
+      panel.web.setFrameSize(NSSize(width: 760, height: 560))
+      try await panel.waitJS("window.innerWidth === 760")
+      let result = try await panel.js("""
+        const state = await window.webkit.messageHandlers.native.postMessage({action:'navigate', page:'settings'});
+        window.wallpaperUI.receive(state);
+        const tab = name => document.querySelector(`[data-section="${name}"]`);
+        tab('performance').click();
+        const advanced = document.querySelector('[data-key="performance-advanced"]');
+        advanced.querySelector('summary').click();
+        const scroll = document.querySelector('.settings-scroll');
+        scroll.scrollTop = scroll.scrollHeight;
+        const startedScrolled = scroll.scrollTop > 0;
+        tab('performance').focus({preventScroll:true});
+        tab('performance').dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowUp', bubbles:true}));
+        const navigated = !document.getElementById('settings-appearance').hidden
+          && document.activeElement === tab('appearance');
+        const reset = scroll.scrollTop === 0;
+        tab('appearance').dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowDown', bubbles:true}));
+        const input = advanced.querySelector('input');
+        input.focus();
+        window.wallpaperUI.receive(state);
+        return {
+          startedScrolled, navigated, reset,
+          keptDisclosure: advanced.open && advanced.isConnected,
+          keptFocus: document.activeElement === input && input.isConnected,
+          selectedTabs: document.querySelectorAll('.settings-nav [aria-selected="true"]').length
+        };
+        """) as? [String: Any]
+      XCTAssertEqual(result?["startedScrolled"] as? Bool, true)
+      XCTAssertEqual(result?["navigated"] as? Bool, true)
+      XCTAssertEqual(result?["reset"] as? Bool, true)
+      XCTAssertEqual(result?["keptDisclosure"] as? Bool, true)
+      XCTAssertEqual(result?["keptFocus"] as? Bool, true)
+      XCTAssertEqual(result?["selectedTabs"] as? Int, 1)
+    }
+  }
+
   func testPanelRendersInTheControllerLanguage() async throws {
     XCTAssertEqual(WebPanelController.pageLanguage("zh-Hans"), "zh-Hans")
     XCTAssertEqual(WebPanelController.pageLanguage(nil), "en")

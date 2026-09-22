@@ -68,8 +68,9 @@ The last command prints the glyph used by `brands.wallpaperMachine` in
 as `App/Resources/AppIcon.icon`: vector foreground layers plus solid light/dark
 backgrounds. Xcode compiles this Icon Composer document into the app's assets
 and fallback ICNS. macOS owns the outer mask; no inset tile or opaque canvas is
-baked into the artwork. Quick Look and `sips` still produce website and tray
-PNGs; the tray export converts black-on-white coverage to alpha with AppKit so
+baked into the artwork. Website app-icon PNGs reuse the native Dock exports;
+Quick Look and `sips` produce square website and tray PNGs. The tray export converts
+black-on-white coverage to alpha with AppKit so
 the background and enclosed holes stay transparent, including antialiased edges.
 This step requires the Xcode Swift toolchain.
 
@@ -81,9 +82,25 @@ All three Dock variants share the regular native mark geometry and frame weight;
 the heavier small-size glyph remains reserved for the panel and menu bar.
 
 Website export includes `brand/logo.svg` for light backgrounds,
-`brand/logo-dark.svg` for dark backgrounds, `brand/mark.svg`, the app icon,
-SVG/ICO/PNG favicons, touch icons and `site.webmanifest`. The website folder
-currently contains assets only; when adding its HTML, use:
+`brand/logo-dark.svg` for dark backgrounds, and a centered `brand/mark.svg`.
+`brand/app-icon-{minimal,day,night}.{svg,png}` provides all three current appearances;
+the unqualified `brand/app-icon.svg` and `.png` use Day, the app default.
+Every app-icon variant uses the enlarged native geometry with the display frame
+centered on both axes. PNGs are copied from `WebUI/app-icons/` to preserve the
+native rendering and transparent margin; SVGs share the geometry and colors,
+without Icon Composer's lighting. Favicons use Day with no outer margin, and
+touch/manifest icons use Day on a full square white background.
+
+To refresh only website assets from the current generated Dock PNGs without
+rewriting app resources, run:
+
+```sh
+python3 scripts/brand.py --skip-app --website ../WallpaperMachineWebiste
+```
+
+After changing native icon geometry, use the regular `--website` command instead
+to regenerate both sets together. The website folder currently contains assets
+only, with no pages or separate product photos; when adding its HTML, use:
 
 ```html
 <link rel="icon" href="/favicon.ico" sizes="any">

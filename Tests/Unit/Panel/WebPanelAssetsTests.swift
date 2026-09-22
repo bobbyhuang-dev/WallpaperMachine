@@ -149,7 +149,7 @@ final class WebPanelAssetsTests: XCTestCase {
     let assets = WebPanelAssets()
     let locales = AppLanguage.supported.map(\.tag).filter { $0 != "en" }.map { "locales/\($0).js" }
     XCTAssertFalse(locales.isEmpty)
-    for name in ["index.html", "panel.js", "settings.js", "theme.js", "icons.js", "i18n.js", "panel.css", "settings.css"] + locales {
+    for name in ["index.html", "panel.js", "property-label.js", "settings.js", "theme.js", "icons.js", "i18n.js", "panel.css", "settings.css"] + locales {
       let route = assets.route(try XCTUnwrap(URL(string: "mwe-ui://app/\(name)")))
       guard case .file(let file)? = route else { return XCTFail("\(name) is not served") }
       XCTAssertTrue(file.path.hasSuffix("/WebUI/\(name)"), file.path)

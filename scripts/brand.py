@@ -12,10 +12,10 @@ The wordmark is Manrope ("Wallpaper" bold, "Machine" medium), embedded as outlin
     python3 scripts/brand.py --website ../Site    # plus logo, favicons and manifest there
     python3 scripts/brand.py --panel-glyph        # the inline mark used by WebUI/panel.js
 
-The app icon exports vector layers for Icon Composer. Website and tray rasters are drawn
-at 1024 px with Quick Look (`qlmanage`) and downsampled with `sips`, both part of macOS.
-Small website and tray exports use heavier strokes and bigger teeth.
-Dock choices use Icon Composer's macOS 26 renderer with a transparent outer margin.
+The app icon exports vector layers for Icon Composer. Website app-icon PNGs reuse the
+native Dock renders; website vectors share their geometry and appearances. Quick Look
+and sips render square web icons and tray assets. Dock choices use Icon Composer's
+macOS 26 renderer with a transparent outer margin.
 """
 from __future__ import annotations
 
@@ -38,13 +38,11 @@ APP_ICON = ROOT / "App/Resources/AppIcon.icon"
 TRAY_ICON_SET = ROOT / "App/Resources/Assets.xcassets/TrayIcon.imageset"
 DOCK_ICONS = ROOT / "WebUI/app-icons"
 
-# Website exports retain the charcoal tile; native appearance backgrounds live in the
-# Icon Composer document. The wallpaper panel runs cyan -> blue -> violet.
-CHARCOAL_TOP, CHARCOAL_BOTTOM = "#2a3140", "#11151c"
+# The wallpaper panel runs cyan -> blue -> violet in both native and website icons.
 AURORA = ("#7cf0ff", "#3a86ff", "#8a3dff")
 LOGO_ACCENT_ON_LIGHT, LOGO_INK_ON_LIGHT = "#1f6fe5", "#14181f"
 LOGO_ACCENT_ON_DARK, LOGO_INK_ON_DARK = "#3d8bff", "#ffffff"
-FAVICON_BACKGROUND = "#11151c"
+FAVICON_BACKGROUND = "#ffffff"
 
 # Mark geometry in a 24-unit box. The frame is a rounded rectangle drawn as a stroke; the
 # gear centre sits on the frame's bottom-left corner and the frame stops short of the gear
@@ -158,8 +156,9 @@ def panel_glyph() -> str:
             f'<path d="{gear}" fill="currentColor" stroke="none" fill-rule="evenodd"/>')
 
 
-def mark_svg(color: str = LOGO_ACCENT_ON_LIGHT, variant: str = "regular") -> str:
-    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">{mark_markup(color, variant)}</svg>'
+def mark_svg(color: str = LOGO_ACCENT_ON_LIGHT, variant: str = "regular", *, centered: bool = False) -> str:
+    view_box = "0.5 -0.5 24 24" if centered else "0 0 24 24"
+    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{view_box}">{mark_markup(color, variant)}</svg>'
 
 
 def squircle_path(size: float, radius: float, smoothing: float = 0.6) -> str:
@@ -188,7 +187,7 @@ def squircle_path(size: float, radius: float, smoothing: float = 0.6) -> str:
 
 
 def icon_svg(variant: str = "regular", bleed: bool = False, square: bool = False,
-             *, layer: str | None = None) -> str:
+             *, layer: str | None = None, appearance: str = "day") -> str:
     """Website icon, or a transparent screen/mark layer for the native app icon.
 
     `bleed` drops the macOS margin; `square` also drops the rounded corners.
@@ -198,18 +197,19 @@ def icon_svg(variant: str = "regular", bleed: bool = False, square: bool = False
     offset = (size - box) / 2
     spec = VARIANTS[variant]
     _, gear, stroke = mark_parts(variant)
-    scale = box * (0.82 if layer is not None else 0.68 if variant == "small" else 0.66) / 24
-    # Centre native artwork on the display frame so its opposing margins match.
-    # Website exports retain their existing optical placement.
-    anchor_x = (FRAME["left"] + FRAME["right"]) / 2 if layer is not None else 12.0
-    anchor_y = (FRAME["top"] + FRAME["bottom"]) / 2 if layer is not None else 12.0
+    scale = box * 0.82 / 24
+    # Centre every icon on the display frame; the gear extends below and to its left.
+    anchor_x = (FRAME["left"] + FRAME["right"]) / 2
+    anchor_y = (FRAME["top"] + FRAME["bottom"]) / 2
     tx = size / 2 - anchor_x * scale
     ty = size / 2 - anchor_y * scale
+    background = "#000" if appearance == "night" else "#fff"
+    foreground = LOGO_ACCENT_ON_LIGHT if appearance == "minimal" else "#fff" if appearance == "night" else "#000"
     if square:
-        shape = f'<rect width="{size}" height="{size}" fill="url(#bg)"/>'
+        shape = f'<rect width="{size}" height="{size}" fill="{background}"/>'
     else:
         shape = (f'<path transform="translate({num(offset)} {num(offset)})" '
-                 f'd="{squircle_path(box, box * SQUIRCLE_RADIUS)}" fill="url(#bg)"/>')
+                 f'd="{squircle_path(box, box * SQUIRCLE_RADIUS)}" fill="{background}"/>')
     # Tuck the panel under the frame to avoid an antialiased background seam.
     inset = stroke / 2 - 0.08
     left, top = FRAME["left"] + inset, FRAME["top"] + inset
@@ -226,8 +226,6 @@ def icon_svg(variant: str = "regular", bleed: bool = False, square: bool = False
              f'V{num(bottom - radius)}A{num(radius)} {num(radius)} 0 0 1 {num(right - radius)} {num(bottom)}'
              f'H{num(notch_right)}A{num(gap)} {num(gap)} 0 0 0 {num(left)} {num(notch_top)}Z')
     defs = (
-        f'<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{CHARCOAL_TOP}"/>'
-        f'<stop offset="1" stop-color="{CHARCOAL_BOTTOM}"/></linearGradient>'
         f'<linearGradient id="wp" gradientUnits="userSpaceOnUse" x1="5" y1="4" x2="20" y2="19">'
         f'<stop offset="0" stop-color="{AURORA[0]}"/><stop offset=".45" stop-color="{AURORA[1]}"/>'
         f'<stop offset="1" stop-color="{AURORA[2]}"/></linearGradient>'
@@ -238,8 +236,8 @@ def icon_svg(variant: str = "regular", bleed: bool = False, square: bool = False
         frame = frame_outline_path(spec["radius"] + spec["pad"], stroke)
         mark = f'<path d="{frame}" fill="#fff"/><path d="{gear}" fill="#fff" fill-rule="evenodd"/>'
     else:
-        mark = mark_markup("#fff", variant)
-    artwork = screen if layer == "screen" else mark if layer == "mark" else screen + mark
+        mark = mark_markup(foreground, variant)
+    artwork = screen if layer == "screen" else mark if layer == "mark" or appearance == "minimal" else screen + mark
     return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}">'
             f'<defs>{defs}</defs>{shape if layer is None else ""}'
             f'<g transform="translate({num(tx)} {num(ty)}) scale({num(scale)})">{artwork}</g></svg>')
@@ -415,11 +413,11 @@ def write_website(site: Path, work: Path) -> list[Path]:
     brand = site / "brand"
     brand.mkdir(parents=True, exist_ok=True)
     files = {
-        brand / "mark.svg": mark_svg(),
+        brand / "mark.svg": mark_svg(centered=True),
         brand / "logo.svg": logo_svg(LOGO_INK_ON_LIGHT, LOGO_ACCENT_ON_LIGHT),
         brand / "logo-dark.svg": logo_svg(LOGO_INK_ON_DARK, LOGO_ACCENT_ON_DARK),
         brand / "app-icon.svg": icon_svg(),
-        site / "favicon.svg": icon_svg("small", bleed=True),
+        site / "favicon.svg": icon_svg(bleed=True),
         site / "site.webmanifest": json.dumps({
             "name": "Wallpaper Machine", "short_name": "WallpaperMachine",
             "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
@@ -427,17 +425,29 @@ def write_website(site: Path, work: Path) -> list[Path]:
             "theme_color": FAVICON_BACKGROUND, "background_color": FAVICON_BACKGROUND, "display": "standalone",
         }, indent=2) + "\n",
     }
+    for appearance in ("minimal", "day", "night"):
+        files[brand / f"app-icon-{appearance}.svg"] = icon_svg(appearance=appearance)
     for path, text in files.items():
         path.write_text(text)
-    rasterize(icon_svg(), {brand / "app-icon.png": 1024}, work)
-    rasterize(icon_svg("small", bleed=True), {site / "favicon-16.png": 16, site / "favicon-32.png": 32,
-                                              work / "favicon-48.png": 48}, work)
+    images = []
+    for appearance in ("minimal", "day", "night"):
+        target = brand / f"app-icon-{appearance}.png"
+        shutil.copyfile(DOCK_ICONS / f"{appearance}.png", target)
+        images.append(target)
+    shutil.copyfile(brand / "app-icon-day.png", brand / "app-icon.png")
+    # Crop only the native transparent margin; preserve the tile's transparent corners.
+    favicon = work / "favicon.png"
+    subprocess.run(["sips", "--cropToHeightWidth", str(ICON_INSET_BOX), str(ICON_INSET_BOX),
+                    str(brand / "app-icon-day.png"), "--out", str(favicon)], check=True, capture_output=True)
+    for px, folder in ((16, site), (32, site), (48, work)):
+        subprocess.run(["sips", "-z", str(px), str(px), str(favicon), "--out", str(folder / f"favicon-{px}.png")],
+                       check=True, capture_output=True)
     rasterize(icon_svg(square=True), {site / "apple-touch-icon.png": 180, site / "icon-192.png": 192,
                                       site / "icon-512.png": 512}, work)
     ico = site / "favicon.ico"
     ico.write_bytes(ico_bytes([(px, (folder / name).read_bytes()) for px, folder, name in (
         (16, site, "favicon-16.png"), (32, site, "favicon-32.png"), (48, work, "favicon-48.png"))]))
-    return list(files) + [brand / "app-icon.png", site / "favicon-16.png", site / "favicon-32.png",
+    return list(files) + images + [brand / "app-icon.png", site / "favicon-16.png", site / "favicon-32.png",
                           site / "apple-touch-icon.png", site / "icon-192.png", site / "icon-512.png", ico]
 
 

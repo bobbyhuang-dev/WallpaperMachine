@@ -25,9 +25,9 @@ labels, menus and dialogs. **Settings → General → Language** offers **System
 
 Steam's own language is not involved. Unsupported languages and missing keys
 fall back to English. Wallpaper titles, descriptions, creator names, custom
-property labels and upstream diagnostic details remain as supplied; this does
-not translate third-party wallpaper content, only the two label stand-ins the
-panel supplies itself (see [Properties](#properties)). Steam filter values and bridge
+property labels and upstream diagnostic details remain as supplied. The panel
+translates its own labels and recognized Wallpaper Engine UI tokens, not authored
+prose (see [Properties](#properties)). Steam filter values and bridge
 action identifiers remain unchanged when labels are translated. How the layers
 fit together and how to add a language: [Localization](../localization.md).
 
@@ -131,11 +131,15 @@ a download.
 - **Installed** shows the local library.
 - **Settings** replaces the browser with a sectioned native-feeling settings
   view (General, Appearance, Performance, Displays, Library & Steam, Storage,
-  About). **General** starts with the [Language](#language) picker.
-  **Performance** holds the video backend choice, the internal render scale,
-  the opt-in battery quality profile and the experimental content-pacing and
-  shared-video-decode switches. See [Performance settings](performance.md).
-  **About** is where in-app updates live: **Check for Updates** reads the latest
+  About). Everyday categories lead the navigation; library, storage and product
+  information are visually separated. **General** starts with the
+  [Language](#language) picker, then startup/desktop and lock-screen groups.
+  **Performance** groups the video backend, internal render scale and opt-in
+  battery profile; experimental content pacing, shared video decode and direct
+  plane sampling stay under **Advanced**. See [Performance settings](performance.md).
+  **About** leads with the app version and updates; bridge, core, shader and Git
+  revisions are under **Component versions**.
+  **Check for Updates** reads the latest
   GitHub Release, and download / restart-install happen only after confirmation.
   The application menu item **Check for Updates…** opens this section.
 
@@ -174,12 +178,14 @@ screen. Activation is explicit.
   display, or when the wallpaper kind cannot be rendered (Web, Application,
   Unknown).
 
-The inspector's heading is one centered column, laid out like Wallpaper Engine's
-own sidebar: square preview, title, creator (Discover), a facts line (type, size,
-subscribers), pill tags, then the actions. The primary action (**Apply
-wallpaper** or **Download**) spans the full width; the row under it holds
-**Show in Finder**, favorites and the trash on Installed, or **View on Steam
-Workshop** on Discover.
+The inspector follows Wallpaper Engine's centered hierarchy: square preview,
+title, creator (Discover), facts (type, size, subscribers), and pill tags. For
+installed wallpapers, the circular play button overlapping the preview is
+**Apply wallpaper** (or **Reapply wallpaper**); its accessible name and tooltip
+identify the action. **Download** remains a full-width action on Discover.
+The utility row holds **Show in Finder**, favorites and Trash on Installed,
+or **View on Steam Workshop** on Discover. The inspector scrolls independently;
+**Apply changes** and **Revert** stay visible in a fixed footer while editing.
 
 That row ends with **Report a problem on GitHub** (warning-triangle icon). It
 opens the repository's new-issue form in the browser with the wallpaper's title,
@@ -269,21 +275,47 @@ search or the filters.
 
 ## Properties
 
-The inspector's **General configuration** section holds mute, volume and
-[Audio response](audio-response.md). **Displays** holds the per-display playback
-configuration for that wallpaper. **Wallpaper properties** renders the
-wallpaper's own authored controls — booleans, sliders, combo menus, colors, text
-fields and image pickers, each with a **Reset** to its default.
+The inspector's compact **General configuration** section holds mute, volume,
+[Audio response](audio-response.md), and media integration. **Audio and media
+status** expands to show their explanations and delivery status. **Wallpaper
+properties** follows, with the wallpaper's authored controls in their original
+order. **Displays** is collapsed below them and holds per-display playback
+configuration. General, property and display disclosures retain their state
+across snapshot updates.
 
-Authors write those labels as HTML, and Workshop authors use them as a layout
-surface: colour tags, `<br>` runs, `<hr>` rules and image strips hosted on image
-boards. The panel shows text, so a label is reduced to the words it carries —
-breaks and block ends become spaces so neighbours do not merge, every other tag
-drops out, and the entities the Wallpaper Engine editor emits are decoded. A
-label that is only decoration reduces to nothing: a text property with no words
-is left out, a control keeps its row under **Unnamed option**, and a section with
-nothing left in it is not shown. The property's id is never used as a name — the
-editor derives ids from the markup, so they read as `imgsrchttpphoto…`.
+Property rows place the label on the left and the checkbox, slider/value,
+combo menu or color swatch on the right. Text and file editors use the full
+width below the label. A reset icon appears on hover, keyboard focus, or a
+modified row; it restores that property's default. Checkboxes use the author's
+name directly, without a second “Enabled” row. Recognized Wallpaper Engine
+label tokens (brightness, position, default, and similar built-in vocabulary)
+are localized rather than displayed as `ui_editor_…` identifiers.
+
+Authors use HTML labels as a layout surface. `WebUI/property-label.js` parses
+them inertly and reconstructs a small presentation allowlist: headings,
+paragraphs, line breaks, emphasis, font colors, centered content, dividers,
+links and images. Author scripts, styles, embedded documents, form controls,
+event handlers and panel action attributes are discarded. Plain labels remain
+available for accessibility and native file pickers. An empty text property
+is omitted; a control without a readable name uses **Unnamed option**, never
+the editor's markup-derived id.
+
+Author artwork is loaded only through registered `mwe-ui://property-image/`
+routes. `PropertyImageCache` fetches HTTPS raster images natively from the
+allowlisted image CDNs (`i.ibb.co`, `i.imgur.com`, the supported Steam image
+hosts, and QQ's photo-store hosts), rechecks redirects, and rejects credentials,
+custom ports, unregistered routes, oversized images and non-raster content.
+PNG transparency and GIF animation are preserved; repeated dividers share a
+bounded in-memory cache. At most four author-image transfers run across all
+hosts; queued consumers do not start a transfer. Each URL's load is shared by
+its current consumers. Stopping the last consumer cancels queued or active
+work, and an active transfer holds its slot until it exits. A retired load
+cannot deliver to a new request for the same URL or populate the cache.
+Other image hosts are omitted (alt text is retained).
+Images remain author-hosted and require network access on a cache miss; they
+are not copied into the app bundle. Supported author links use the native
+external-link policy, including Bilibili profile/article pages, and open only
+when clicked. Unsupported links retain their text without a clickable action.
 
 Audio, scaling mode and frame rate take effect immediately. Everything else is
 pending until committed:

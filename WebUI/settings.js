@@ -2,10 +2,11 @@ import { t } from './i18n.js';
 
 const views = new WeakMap();
 // Labels below are English source strings; every one is passed through t() where it is drawn.
-const sections = [['general', 'General'], ['appearance', 'Appearance'], ['performance', 'Performance'], ['displays', 'Displays'], ['library', 'Library & Steam'], ['storage', 'Storage'], ['about', 'About']];
+const sections = [['general', 'General', 'settings'], ['appearance', 'Appearance', 'sunMoon'], ['performance', 'Performance', 'slidersVertical'], ['displays', 'Displays', 'monitor'], ['library', 'Library & Steam', 'folder'], ['storage', 'Storage', 'download'], ['about', 'About', 'info']];
+const compactNavigation = window.matchMedia('(max-width: 560px)');
 const renderScales = [[1, '100% (native)'], [0.75, '75%'], [0.5, '50%']];
-const videoBackends = [['compatibility', 'Compatibility'], ['native_preferred', 'Native video preferred (falls back automatically)']];
-const sceneRenderers = [['compatibility', 'Compatibility'], ['native_metal_preferred', 'Native Metal preferred (falls back automatically)']];
+const videoBackends = [['compatibility', 'Compatibility'], ['native_preferred', 'Native video preferred']];
+const sceneRenderers = [['compatibility', 'Compatibility'], ['native_metal_preferred', 'Native Metal preferred']];
 // How a scene's video textures reached the shaders sampling them, as the
 // renderer reported it. `none` is deliberately absent: a scene with no video
 // has nothing to say, and naming it would read as a failure.
@@ -71,14 +72,18 @@ export function renderSettings(container, state, helpers) {
     container.addEventListener('click', event => onClick(view, event));
     container.addEventListener('input', event => onInput(view, event));
     container.addEventListener('change', event => onChange(view, event));
+    compactNavigation.addEventListener('change', () => draw(view));
     container.addEventListener('keydown', event => {
       const target = event.target.closest('[data-section]');
-      if (!target || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+      const previous = compactNavigation.matches ? 'ArrowLeft' : 'ArrowUp';
+      const nextKey = compactNavigation.matches ? 'ArrowRight' : 'ArrowDown';
+      if (!target || ![previous, nextKey, 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
       const index = sections.findIndex(([id]) => id === view.section);
-      const next = event.key === 'Home' ? 0 : event.key === 'End' ? sections.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + sections.length) % sections.length;
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? sections.length - 1 : (index + (event.key === nextKey ? 1 : -1) + sections.length) % sections.length;
       view.section = sections[next][0];
       draw(view);
+      container.querySelector('.settings-scroll').scrollTop = 0;
       container.querySelector(`[data-section="${view.section}"]`).focus();
     });
   }
@@ -107,13 +112,14 @@ function draw(view) {
   const draft = (key, fallback) => drafts.has(key) ? drafts.get(key) : fallback;
   const attrs = (action, args = {}) => `data-action="${e(action)}" data-args="${e(JSON.stringify(args))}"`;
   const button = (label, action, args = {}, off = false, style = '') => `<button type="button" class="settings-button ${style}" ${attrs(action, args)}${disabled(off)}>${e(label)}</button>`;
-  const row = (key, label, control, note = '') => `<div class="settings-row" data-key="${e(key)}"><div class="settings-label">${e(label)}${note ? `<span class="settings-note">${e(note)}</span>` : ''}</div><div class="settings-control">${control}</div></div>`;
-  const toggle = (key, label, checked, data, off = false) => `<label class="settings-switch"><input data-key="${e(key)}" type="checkbox" role="switch" aria-label="${e(label)}" ${data}${checked ? ' checked' : ''}${disabled(off)}><span aria-hidden="true"></span></label>`;
+  const row = (key, label, control, note = '', controlKey = '') => `<div class="settings-row" data-key="${e(key)}"><${controlKey ? `label for="settings-control-${e(controlKey)}"` : 'div'} class="settings-label">${e(label)}${note ? `<span class="settings-note" id="settings-note-${e(key)}">${e(note)}</span>` : ''}</${controlKey ? 'label' : 'div'}><div class="settings-control">${control}</div></div>`;
+  const toggle = (key, label, checked, data, off = false) => `<label class="settings-switch"><input id="settings-control-${e(key)}" data-key="${e(key)}" type="checkbox" role="switch" aria-label="${e(label)}" ${data}${checked ? ' checked' : ''}${disabled(off)}><span aria-hidden="true"></span></label>`;
   const select = (key, label, value, options, data, off = false) => `<select data-key="${e(key)}" aria-label="${e(label)}" ${data}${disabled(off)}>${options.map(([id, title]) => `<option value="${e(id)}"${String(value ?? '') === String(id) ? ' selected' : ''}>${e(title)}</option>`).join('')}</select>`;
   const error = (key, message) => message ? `<div class="settings-error" role="alert" data-key="${key}">${e(message)}</div>` : '';
   const disclosure = (key, title, content) => `<details class="settings-disclosure" data-key="${e(key)}"><summary>${helpers.icon('chevronRight', 12)}${e(title)}</summary><div class="settings-disclosure-body">${content}</div></details>`;
+  const group = (key, title, content) => `<section class="settings-group" data-key="group-${key}" aria-labelledby="settings-group-${key}"><h3 id="settings-group-${key}">${e(title)}</h3>${content}</section>`;
   const section = (id, title, content, action = '') => `<section class="settings-page" id="settings-${id}" role="tabpanel" aria-labelledby="settings-tab-${id}" tabindex="0" data-key="page-${id}"${view.section === id ? '' : ' hidden'}><header class="settings-heading"><h2>${e(title)}</h2>${action}</header>${content}</section>`;
-  const settingToggle = (key, label, off = false, note = '') => row(key, t(label), toggle(key, t(label), draft(key, settings[key]), `data-setting="${key}"`, off || busy || unavailable), note);
+  const settingToggle = (key, label, off = false, note = '') => row(key, t(label), toggle(key, t(label), draft(key, settings[key]), `data-setting="${key}"${note ? ` aria-describedby="settings-note-${key}"` : ''}`, off || busy || unavailable), note, key);
   const paragraphs = (...texts) => texts.map(text => `<p>${e(text)}</p>`).join('');
   const lockUnavailable = unavailable || settings.lockScreenStatus == null;
   // Language lives natively beside the theme, so it stays usable when renderer settings are unavailable.
@@ -121,16 +127,14 @@ function draw(view) {
   const languageState = state.language || {};
   const languageOptions = [['system', t('System (Auto)')], ...(languageState.options || []).map(option => [option.id, option.name])];
   const languageValue = draft('language', languageState.preference || 'system');
-  const general = row('language', t('Language'), select('language', t('Language'), languageValue, languageOptions, 'data-language-setting', view.pending.has('language')), t('The interface switches at once. Menus and dialogs follow the next time you open the app.'))
-    + `<div class="settings-group-gap"></div>`
-    + settingToggle('launchAtLogin', 'Launch at login', !settings.launchAtLoginAvailable, !settings.launchAtLoginAvailable ? t('Move the app to Applications to enable.') : '')
-    + settingToggle('pauseOnBattery', 'Pause on battery')
-    + settingToggle('keepWindowsOnWallpaperClick', 'Keep windows in place when clicking the wallpaper', false, t('Turns off macOS’s “Click wallpaper to reveal desktop” so clicks reach interactive wallpapers.'))
-    + `<div class="settings-group-gap"></div>`
-    + settingToggle('lockScreenEnabled', 'Animate lock screen', lockUnavailable || settings.lockScreenBusy, t('Experimental'))
-    + row('lock-status', t('Lock screen status'), `<span class="settings-status" role="status">${e(lockUnavailable ? t('Unavailable') : settings.lockScreenBusy ? `${settings.lockScreenStatus || t('Updating')}…` : settings.lockScreenStatus)}</span>${settings.lockScreenError ? button(t('Retry'), 'lockScreenRetry', {}, busy || settings.lockScreenBusy) : ''}`)
-    + error('lock-error', settings.lockScreenError)
-    + disclosure('lock-context', t('Compatibility & permissions'), paragraphs(t('Lock screen animation uses private macOS APIs and may stop working after a macOS update. While it is on, the app takes over the desktop and idle wallpaper on displays that are playing a wallpaper, and reloads the macOS wallpaper service. Turning it off or quitting restores what the app changed and keeps any other wallpaper changes.'), t('It keeps separate copies of wallpaper files, which uses extra disk space, and may not render on every macOS version. Pause and battery settings still apply.')));
+  const general = group('language', t('Interface'), row('language', t('Language'), select('language', t('Language'), languageValue, languageOptions, 'data-language-setting', view.pending.has('language')), t('The interface switches at once. Menus and dialogs follow the next time you open the app.')))
+    + group('startup', t('Startup & desktop'), settingToggle('launchAtLogin', 'Launch at login', !settings.launchAtLoginAvailable, !settings.launchAtLoginAvailable ? t('Move the app to Applications to enable.') : '')
+      + settingToggle('pauseOnBattery', 'Pause on battery')
+      + settingToggle('keepWindowsOnWallpaperClick', 'Keep windows in place when clicking the wallpaper', false, t('Turns off macOS’s “Click wallpaper to reveal desktop” so clicks reach interactive wallpapers.')))
+    + group('lock', t('Lock screen'), settingToggle('lockScreenEnabled', 'Animate lock screen', lockUnavailable || settings.lockScreenBusy, t('Experimental'))
+      + row('lock-status', t('Lock screen status'), `<span class="settings-status" role="status">${e(lockUnavailable ? t('Unavailable') : settings.lockScreenBusy ? `${settings.lockScreenStatus || t('Updating')}…` : settings.lockScreenStatus)}</span>${settings.lockScreenError ? button(t('Retry'), 'lockScreenRetry', {}, busy || settings.lockScreenBusy) : ''}`)
+      + error('lock-error', settings.lockScreenError)
+      + disclosure('lock-context', t('Compatibility & permissions'), paragraphs(t('Lock screen animation uses private macOS APIs and may stop working after a macOS update. While it is on, the app takes over the desktop and idle wallpaper on displays that are playing a wallpaper, and reloads the macOS wallpaper service. Turning it off or quitting restores what the app changed and keeps any other wallpaper changes.'), t('It keeps separate copies of wallpaper files, which uses extra disk space, and may not render on every macOS version. Pause and battery settings still apply.'))));
 
   const scaleSupported = settings.renderScaleSupported !== false;
   // Compare what the engine published, not the quantized select step: disabling the
@@ -196,29 +200,25 @@ function draw(view) {
         : applied === 1 ? t('{saved} and in force on the running scene.', { saved: savedState }) : t('{saved} and in force on all {applied} running scenes.', { saved: savedState, applied });
   const noVideo = `<span class="settings-status" role="status">${e(t('No video wallpaper is running.'))}</span>`;
   const noScene = `<span class="settings-status" role="status">${e(t('No scene wallpaper is running.'))}</span>`;
-  const performance = `<h3>${e(t('Video backend'))}</h3>`
-    + row('video-backend', t('Video playback'), select('videoBackend', t('Video playback backend'), draft('videoBackend', settings.videoBackend), localizedOptions(videoBackends), 'data-setting="videoBackend"', busy || unavailable), t('Native plays supported videos through macOS and uses Compatibility for the rest.'))
-    + row('video-backend-report', t('In use now'), backendReport ? `<ul class="settings-list">${backendReport}</ul>` : noVideo)
-    + `<div class="settings-group-gap"></div><h3>${e(t('Render quality'))}</h3>`
-    + row('render-scale', t('Internal render scale'), select('renderScale', t('Internal render scale'), draft('renderScale', preferredScale), scaleOptions(preferredScale), 'data-setting="renderScale" data-number', busy || unavailable || !scaleSupported), scaleSupported ? t('Renders at a lower resolution and scales the result to fill the same area. Size and position on screen don’t change.') : t('Not applicable to the wallpapers currently running'))
-    + (scaleSupported && scaleOverridden ? row('render-scale-effective', t('Effective now'), `<span class="settings-status" role="status">${e(batteryActive ? t('{effective} on battery. Your setting is {saved}.', { effective: percent(settings.renderScale), saved: percent(settings.preferredRenderScale) }) : t('{effective}. Your setting of {saved} is not in effect right now.', { effective: percent(settings.renderScale), saved: percent(settings.preferredRenderScale) }))}</span>`) : '')
-    + `<div class="settings-group-gap"></div><h3>${e(t('Battery profile'))}</h3>`
-    + settingToggle('batteryProfileEnabled', 'Use a reduced quality profile on battery', false, t('On battery, use the render scale and frame rate below instead of your usual quality settings.'))
+  const performance = group('video', t('Video backend'), row('video-backend', t('Video playback'), select('videoBackend', t('Video playback backend'), draft('videoBackend', settings.videoBackend), localizedOptions(videoBackends), 'data-setting="videoBackend"', busy || unavailable), t('Native plays supported videos through macOS and uses Compatibility for the rest.'))
+    + row('video-backend-report', t('In use now'), backendReport ? `<ul class="settings-list">${backendReport}</ul>` : noVideo))
+    + group('quality', t('Render quality'), row('render-scale', t('Internal render scale'), select('renderScale', t('Internal render scale'), draft('renderScale', preferredScale), scaleOptions(preferredScale), 'data-setting="renderScale" data-number', busy || unavailable || !scaleSupported), scaleSupported ? t('Renders at a lower resolution and scales the result to fill the same area. Size and position on screen don’t change.') : t('Not applicable to the wallpapers currently running'))
+    + (scaleSupported && scaleOverridden ? row('render-scale-effective', t('Effective now'), `<span class="settings-status" role="status">${e(batteryActive ? t('{effective} on battery. Your setting is {saved}.', { effective: percent(settings.renderScale), saved: percent(settings.preferredRenderScale) }) : t('{effective}. Your setting of {saved} is not in effect right now.', { effective: percent(settings.renderScale), saved: percent(settings.preferredRenderScale) }))}</span>`) : ''))
+    + group('battery', t('Battery profile'), settingToggle('batteryProfileEnabled', 'Use a reduced quality profile on battery', false, t('On battery, use the render scale and frame rate below instead of your usual quality settings.'))
     + (settings.batteryProfileEnabled ? row('battery-scale', t('Render scale on battery'), select('batteryRenderScale', t('Render scale on battery'), draft('batteryRenderScale', batteryScale), scaleOptions(batteryScale), 'data-setting="batteryRenderScale" data-number', busy || unavailable))
       + row('battery-fps', t('Frame rate on battery'), `<input class="settings-number" data-key="batteryTargetFps" type="number" inputmode="numeric" aria-label="${e(t('Frame rate on battery'))}" min="1" max="240" step="1" value="${e(draft('batteryTargetFps', settings.batteryTargetFps))}" data-setting="batteryTargetFps"${disabled(busy || unavailable)}><span class="settings-unit">fps</span>`)
-      + row('battery-state', t('Power source'), `<span class="settings-status" role="status">${e(batteryActive ? t('On battery. The battery profile is in use.') : settings.onBatteryPower ? t('On battery') : t('Plugged in. Your usual quality settings are in use.'))}</span>`) : '')
-    + `<div class="settings-group-gap"></div><h3>${e(t('Scene wallpapers'))}</h3>`
-    + settingToggle('sceneOptimization', 'Scene render optimisation', false, `${t('Skips rendering work that wouldn’t change the picture, such as parts of a scene that stay the same. Resolution, frame rate and animation speed are unaffected. Works with both scene renderers. Turn it off to compare.')}${nativeSceneRunning ? ` ${t('How much can be skipped depends on the scene. If everything in it moves, nothing is skipped.')}` : ''}`)
+      + row('battery-state', t('Power source'), `<span class="settings-status" role="status">${e(batteryActive ? t('On battery. The battery profile is in use.') : settings.onBatteryPower ? t('On battery') : t('Plugged in. Your usual quality settings are in use.'))}</span>`) : ''))
+    + group('scenes', t('Scene wallpapers'), settingToggle('sceneOptimization', 'Scene render optimisation', false, `${t('Skips rendering work that wouldn’t change the picture, such as parts of a scene that stay the same. Resolution, frame rate and animation speed are unaffected. Works with both scene renderers. Turn it off to compare.')}${nativeSceneRunning ? ` ${t('How much can be skipped depends on the scene. If everything in it moves, nothing is skipped.')}` : ''}`)
     + (sceneOptimizationStatus ? row('scene-optimization-state', t('In force now'), `<span class="settings-status" role="status">${e(sceneOptimizationStatus)}</span>`) : '')
     + settingToggle('sceneOnDemand', 'Update only when the scene changes', false, t('When a scene has nothing left to animate, it stops drawing until something changes. Scenes that are still moving keep running normally, and scripts, sound and input keep working.'))
     + row('scene-update-report', t('Updating now'), sceneModeReport ? `<ul class="settings-list">${sceneModeReport}</ul>` : noScene)
-    + row('scene-renderer', t('Scene renderer'), select('sceneRenderer', t('Scene renderer'), draft('sceneRenderer', settings.sceneRenderer), localizedOptions(sceneRenderers), 'data-setting="sceneRenderer"', busy || unavailable), t('Native Metal draws a scene only if it supports everything in it: image layers, sprite-sheet animation, 2D puppets with their own skinning shader, 2D sprite, sprite-trail, rope and rope-trail particles, perspective cameras for these layers, standard effect chains and post-processing, same-frame layer links, and BGRA or 8-bit NV12 video textures. Scenes with anything else, such as lit particles, 3D models, dynamic lighting, history-feedback effects or HDR video, use Compatibility. This applies to desktop wallpapers only; the lock screen always uses Compatibility.'))
+    + row('scene-renderer', t('Scene renderer'), select('sceneRenderer', t('Scene renderer'), draft('sceneRenderer', settings.sceneRenderer), localizedOptions(sceneRenderers), 'data-setting="sceneRenderer"', busy || unavailable), t('Unsupported scenes use Compatibility. Lock screen playback always uses Compatibility.'))
     + row('scene-renderer-report', t('Drawn by'), sceneBackendReport ? `<ul class="settings-list">${sceneBackendReport}</ul>` : noScene)
-    + `<div class="settings-group-gap"></div><h3>${e(t('Advanced'))}</h3>`
-    + settingToggle('contentPacing', 'Content pacing', false, t('Experimental. Presents frames at the content’s own frame rate instead of the display’s refresh rate.'))
+    + disclosure('scene-compatibility', t('Renderer compatibility'), paragraphs(t('Native Metal draws a scene only if it supports everything in it: image layers, sprite-sheet animation, 2D puppets with their own skinning shader, 2D sprite, sprite-trail, rope and rope-trail particles, perspective cameras for these layers, standard effect chains and post-processing, same-frame layer links, and BGRA or 8-bit NV12 video textures. Scenes with anything else, such as lit particles, 3D models, dynamic lighting, history-feedback effects or HDR video, use Compatibility. This applies to desktop wallpapers only; the lock screen always uses Compatibility.'))))
+    + disclosure('performance-advanced', t('Advanced'), settingToggle('contentPacing', 'Content pacing', false, t('Experimental. Presents frames at the content’s own frame rate instead of the display’s refresh rate.'))
     + settingToggle('sharedVideoDecode', 'Shared video decode', false, t('Experimental. Screens showing the same video share one decoder.'))
     + settingToggle('sceneVideoPlaneSampling', 'Direct video plane sampling', false, t('Experimental. In scenes drawn by Native Metal, lets a layer’s shader read video frames directly instead of converting them to a color image every frame. Only works with 8-bit NV12 video and shaders that support it; everything else converts as before. The list above shows which path each scene uses.'))
-    + (sessions || consumers ? row('shared-decode-report', t('Shared decode in use'), `<span class="settings-status" role="status">${e(t('{sessions} serving {surfaces}', { sessions: t(sessions === 1 ? '{count} session' : '{count} sessions', { count: sessions }), surfaces: t(consumers === 1 ? '{count} surface' : '{count} surfaces', { count: consumers }) }))}</span>`) : '')
+    + (sessions || consumers ? row('shared-decode-report', t('Shared decode in use'), `<span class="settings-status" role="status">${e(t('{sessions} serving {surfaces}', { sessions: t(sessions === 1 ? '{count} session' : '{count} sessions', { count: sessions }), surfaces: t(consumers === 1 ? '{count} surface' : '{count} surfaces', { count: consumers }) }))}</span>`) : ''))
     + disclosure('performance-context', t('What these settings change'), paragraphs(t('Video playback picks a backend for each wallpaper. Native is used only for videos it supports; the rest play in Compatibility. The list above shows what each running wallpaper uses.'), t('Internal render scale sets how many pixels are rendered before the image is scaled to fit. Lower values make text and fine detail softer.'), t('Scene render optimisation reuses work inside a scene and produces the same picture. It only affects scene wallpapers. The switch shows your setting; the line below it shows whether each running scene has picked it up.'), t('Content pacing, shared video decode and direct video plane sampling are experimental. Shared decode merges only the decoding; each screen still draws its own frames. Direct plane sampling skips a color conversion when a layer’s shader can handle it; otherwise the picture is produced as before.')));
 
   // Theme preferences live natively and stay usable even when renderer settings are unavailable.
@@ -229,9 +229,9 @@ function draw(view) {
   const themeValue = name => draft(themeKey(name), theme[name]);
   const accent = /^#[0-9a-f]{6}$/i.test(String(themeValue('accent'))) ? String(themeValue('accent')) : '#80bbff';
   const iconPicker = `<fieldset class="settings-icon-picker" data-key="theme-icon-picker" aria-describedby="theme-icon-note"${disabled(themeBusy('icon'))}><legend>${e(t('App icon'))}</legend><p class="settings-note" id="theme-icon-note">${e(t('Changes the Dock icon while the app is running. Finder and the menu bar stay unchanged.'))}</p><div class="settings-icon-options">${localizedOptions([['minimal', 'Minimal'], ['day', 'Day'], ['night', 'Night']]).map(([id, label]) => `<label class="settings-icon-option" data-key="theme-icon-option-${id}"><img src="app-icons/${id}.png" width="96" height="96" alt=""><span><input type="radio" name="app-icon" value="${id}" data-key="theme-icon-${id}" data-theme-setting="icon"${themeValue('icon') === id ? ' checked' : ''}${disabled(themeBusy('icon'))}>${e(label)}</span></label>`).join('')}</div></fieldset>`;
-  const appearance = row(themeKey('mode-row'), t('Appearance'), select(themeKey('mode'), t('Appearance'), themeValue('mode'), localizedOptions([['system', 'System (Auto)'], ['light', 'Light'], ['dark', 'Dark']]), 'data-theme-setting="mode"', themeBusy('mode')), t('System follows the macOS light and dark setting.'))
+  const appearance = group('theme', t('Window appearance'), row(themeKey('mode-row'), t('Appearance'), select(themeKey('mode'), t('Appearance'), themeValue('mode'), localizedOptions([['system', 'System (Auto)'], ['light', 'Light'], ['dark', 'Dark']]), 'data-theme-setting="mode"', themeBusy('mode')), t('System follows the macOS light and dark setting.'))
     + row(themeKey('accent-row'), t('Accent color'), `<input data-key="${e(themeKey('accent'))}" type="color" aria-label="${e(t('Accent color'))}" value="${e(accent)}" data-theme-setting="accent"${disabled(themeBusy('accent'))}><output class="settings-hex" data-value-for="${e(themeKey('accent'))}">${e(accent.toUpperCase())}</output>`, t('Colors buttons, links and focus rings.'))
-    + row(themeKey('tone-row'), t('Surface tone'), select(themeKey('tone'), t('Surface tone'), themeValue('tone'), localizedOptions([['neutral', 'Neutral'], ['warm', 'Warm'], ['cool', 'Cool']]), 'data-theme-setting="tone"', themeBusy('tone')), t('Warms or cools the window background.'))
+    + row(themeKey('tone-row'), t('Surface tone'), select(themeKey('tone'), t('Surface tone'), themeValue('tone'), localizedOptions([['neutral', 'Neutral'], ['warm', 'Warm'], ['cool', 'Cool']]), 'data-theme-setting="tone"', themeBusy('tone')), t('Warms or cools the window background.')))
     + iconPicker
     + row(themeKey('reset-row'), t('Theme defaults'), button(t('Reset appearance'), 'resetTheme', {}, themePending), t('Restores System, the default accent, Neutral tone and the Day icon.'))
     + `<p class="settings-footnote">${e(t('Appearance changes apply right away and only affect this app’s window, not your wallpapers.'))}</p>`;
@@ -284,17 +284,16 @@ function draw(view) {
     + (!scenePending ? button(t('Locate an installation…'), 'locateAssets', {}, busy || setup.busy) : '')
     + `</div><p class="settings-note">${e(t('Steam downloads the full Windows version to a temporary folder, and only the shared resources are kept. No Windows programs are run. You need several GB of free space and a Steam account that owns Wallpaper Engine.'))}</p></div>`;
   const library = row('library-path', t('Wallpaper library'), button(t('Show in Finder'), 'showLibrary', {}, busy), settings.libraryPath || t('Unavailable'))
-    + `<div class="settings-group-gap"></div><h3>SteamCMD</h3>`
-    + row('steam-status', t('Installation'), `<span class="settings-status" role="status">${e(setup.status || (setup.ready ? t('Ready') : t('Not installed')))}</span>`)
+    + `<div class="settings-group-gap"></div>`
+    + group('steam', 'SteamCMD', row('steam-status', t('Installation'), `<span class="settings-status" role="status">${e(setup.status || (setup.ready ? t('Ready') : t('Not installed')))}</span>`)
     + progress + error('setup-error', setup.error)
     + `<div class="settings-form-actions">${setupControls}${setup.canApprove ? button(t('Allow this SteamCMD…'), 'setupApprove', {}, setupLocked) : ''}</div>`
     + candidate
     + (anyDownload && !setup.busy ? `<div class="settings-note">${e(t('Installation changes are unavailable while downloads are running.'))}</div>` : '')
-    + `<div class="settings-group-gap"></div>`
-    + row('assets-ready', t('Scene resources'), `<span class="settings-status">${e(settings.sceneAssetsReady ? t('Ready') : t('Not installed'))}</span>`)
+    + row('steam-account', t('Steam account'), state.savedAccount ? button(t('Log out…'), 'logOutSteam', {}, anyDownload || busy, 'settings-destructive') : `<span class="settings-note">${e(t('Not signed in'))}</span>`, state.savedAccount ? `${t('Signed in as {account}', { account: state.savedAccount })}${anyDownload ? t(' · log out once downloads finish') : ''}` : t('You sign in when a download starts.')))
     + (settings.sceneAssetsWarning ? `<div class="settings-notice" role="status">${e(settings.sceneAssetsWarning)}</div>` : '')
     + sceneSummary
-    + row('steam-account', t('Steam account'), state.savedAccount ? button(t('Log out…'), 'logOutSteam', {}, anyDownload || busy, 'settings-destructive') : `<span class="settings-note">${e(t('Not signed in'))}</span>`, state.savedAccount ? `${t('Signed in as {account}', { account: state.savedAccount })}${anyDownload ? t(' · log out once downloads finish') : ''}` : t('You sign in when a download starts.'))
+    + `<div class="settings-group-gap"></div>`
     + row('welcome-guide', t('Welcome guide'), button(t('Show again'), 'openWelcome'), t('Shown on first launch: language and appearance, Steam sign-in, preferences and tips.'))
     + disclosure('library-context', t('Setup, compatibility & account privacy'), `${paragraphs(t('Scene wallpapers need shared resources from a purchased Wallpaper Engine installation. Videos do not. Locate its assets folder or download the shared assets once through Steam. Scene support is experimental; effects and scripts may differ from Windows.'), t('Steam downloads the Windows version to temporary storage; only shared assets are kept. Windows programs are never run. Allow several GB of temporary space. Imports are copied; original files and your Steam library stay untouched.'), t('SteamCMD is Valve’s download tool; installing it doesn’t require signing in. Downloading requires a Steam account that owns Wallpaper Engine. Your password and Steam Guard codes go straight to SteamCMD and are not saved by this app. “Keep me signed in” stores Steam’s sign-in on this Mac. Logging out only affects this Mac; other devices stay signed in.'), t('Approve Steam Guard in the Steam mobile app, or enter the fresh code when requested. Steam may require a new sign-in after expiry or security changes. If Steam reports too many attempts, wait before retrying.'), t('Allowing SteamCMD applies only to the downloaded copy you confirmed. Gatekeeper and signature checks stay on.'))}${settings.assetsPath ? `<div class="settings-path">${e(settings.assetsPath)}</div>` : ''}<div class="settings-help-links">${button(t('Wallpaper Engine on Steam'), 'openExternal', { url: 'https://store.steampowered.com/app/431960/Wallpaper_Engine/' })}${button(t('Rosetta installation'), 'openExternal', { url: 'https://support.apple.com/en-us/102527' })}${button(t('macOS app security'), 'openExternal', { url: 'https://support.apple.com/en-us/102445' })}</div>`);
   // Nil released-bytes means no purge has run this session; 0 means one ran and
@@ -329,21 +328,20 @@ function draw(view) {
     + (update.showsReveal ? button(update.revealLabel || t('Show in Finder'), 'revealDownloadedUpdate', {}, updateBusy) : '');
   const about = `<div class="settings-product"><span class="settings-product-mark">${helpers.icon('wallpaperMachine', 48)}</span><div><h3>WallpaperMachine</h3><span class="settings-note">${e(t('Independent macOS client'))}</span></div></div>`
     + versionRow('app-version', t('App version'), state.version)
-    + versionRow('bridge-version', t('Bridge'), settings.bridgeVersion)
-    + versionRow('core-version', t('Core'), settings.coreVersion)
-    + versionRow('shader-version', t('Shader pipeline'), settings.shaderVersion)
-    + versionRow('git-version', t('Git revision'), settings.gitSha)
-    + `<div class="settings-group-gap"></div>`
     + `<div class="settings-download" data-key="about-updates" aria-busy="${updateBusy}"><h3>${e(t('Updates'))}</h3><div class="settings-status" role="status" aria-live="polite">${e(update.statusText || t('Updates not yet checked'))}</div>`
     + updateProgress
     + updateNotes
     + `<div class="settings-form-actions">${updateActions}</div>`
     + `<p class="settings-note">${e(update.footnote || t('Updates are checked against the latest published GitHub Release. Download and restart-install happen only after you confirm.'))}</p></div>`
+    + disclosure('component-versions', t('Component versions'), versionRow('bridge-version', t('Bridge'), settings.bridgeVersion)
+    + versionRow('core-version', t('Core'), settings.coreVersion)
+    + versionRow('shader-version', t('Shader pipeline'), settings.shaderVersion)
+    + versionRow('git-version', t('Git revision'), settings.gitSha))
     + `<div class="settings-group-gap"></div>`
     + row('renderer-source', t('Scene renderer'), button('bigsaltyfishes / Wallpaper Engine for macOS', 'openExternal', { url: 'https://github.com/bigsaltyfishes/wallpaper-engine-for-macos.git' }))
     + `<div class="settings-attribution">${e(t('Not affiliated with Wallpaper Engine or Valve. Built on the GPLv2-only open-source renderer. Workshop browsing is independently implemented. No warranty is provided.'))}</div>`
     + button(t('GNU General Public License v2'), 'openExternal', { url: 'https://www.gnu.org/licenses/old-licenses/gpl-2.0.html' });
-  const html = `<div class="settings-layout" data-key="settings-layout"><nav class="settings-nav" aria-label="${e(t('Settings categories'))}" role="tablist" aria-orientation="vertical" data-key="settings-nav">${sections.map(([id, title]) => `<button type="button" id="settings-tab-${id}" role="tab" aria-selected="${id === view.section}" aria-controls="settings-${id}" tabindex="${id === view.section ? '0' : '-1'}" data-key="nav-${id}" data-section="${id}">${e(t(title))}</button>`).join('')}</nav><div class="settings-scroll" data-key="settings-scroll">${error('settings-action-error', view.error || state.error)}${unavailable ? `<div class="settings-notice" role="status">${e(t('Settings are unavailable. Try refreshing the library.'))}</div>` : ''}${section('general', t('General'), general)}${section('appearance', t('Appearance'), appearance)}${section('performance', t('Performance'), performance)}${section('displays', t('Displays'), displays, button(t('Refresh'), 'refreshDisplays', {}, busy))}${section('library', t('Library & Steam'), library)}${section('storage', t('Storage'), storage)}${section('about', t('About'), about)}</div></div>`;
+  const html = `<div class="settings-layout" data-key="settings-layout"><nav class="settings-nav" aria-label="${e(t('Settings categories'))}" role="tablist" aria-orientation="${compactNavigation.matches ? 'horizontal' : 'vertical'}" data-key="settings-nav">${sections.map(([id, title, glyph]) => `<button type="button" id="settings-tab-${id}" role="tab" aria-selected="${id === view.section}" aria-controls="settings-${id}" tabindex="${id === view.section ? '0' : '-1'}" data-key="nav-${id}" data-section="${id}">${helpers.icon(glyph, 16)}<span>${e(t(title))}</span></button>`).join('')}</nav><div class="settings-scroll" data-key="settings-scroll">${error('settings-action-error', view.error || state.error)}${unavailable ? `<div class="settings-notice" role="status">${e(t('Settings are unavailable. Try refreshing the library.'))}</div>` : ''}${section('general', t('General'), general)}${section('appearance', t('Appearance'), appearance)}${section('performance', t('Performance'), performance)}${section('displays', t('Displays'), displays, button(t('Refresh'), 'refreshDisplays', {}, busy))}${section('library', t('Library & Steam'), library)}${section('storage', t('Storage'), storage)}${section('about', t('About'), about)}</div></div>`;
   const template = document.createElement('template');
   template.innerHTML = html;
   reconcile(view.container, template.content);

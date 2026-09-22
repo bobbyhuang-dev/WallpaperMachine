@@ -5,11 +5,15 @@ previously existed only as environment variables. Every control is applied
 through the bridge and the page re-renders from the snapshot the engine returns,
 so the page never shows a setting the engine did not accept.
 
+Experimental content pacing, shared video decode and direct video plane
+sampling are grouped in the **Advanced** disclosure. Renderer feature support
+is under **Renderer compatibility**, beside the current scene backend report.
+
 ## Video backend
 
 | Setting | Values | Default |
 | --- | --- | --- |
-| Video playback | **Compatibility**, **Native video preferred (falls back automatically)** | Compatibility |
+| Video playback | **Compatibility**, **Native video preferred** | Compatibility |
 
 Native is a preference, not a guarantee: the engine selects a backend per
 running wallpaper and keeps anything that does not qualify on Compatibility.
@@ -79,8 +83,8 @@ are produced, and resolution, frame rate and animation speed are untouched. It
 reaches legacy scene wallpapers only — video, native video and web wallpapers do
 not go through that graph.
 
-It is two clicks from the window (**Settings -> Performance**) so the setting can
-be turned off and on for an A/B comparison without an environment variable.
+It is on the **Settings -> Performance** page so it can be turned off and on
+for an A/B comparison without an environment variable.
 
 Unlike content pacing and shared video decode, which are read back from the
 renderer, this row reports the saved preference: the renderer publishes no query
@@ -166,9 +170,10 @@ be read says so; it is never shown as updating normally.
 
 Which renderer scene wallpapers prefer. **Compatibility** is the existing
 Vulkan-through-MoltenVK path and the default. **Native Metal preferred** asks
-for the native Metal backend, which covers a subset of scene features; a scene
-it cannot draw runs on the compatibility backend and the status line says why.
-
+for the native Metal backend; the menu states that unsupported scenes use
+Compatibility, while **Renderer compatibility** holds the full feature list.
+A scene the native backend cannot draw runs on Compatibility and the status
+line says why. Lock-screen playback always uses Compatibility.
 Native Metal draws image layers, text layers, sprite-sheet animation,
 two-dimensional puppets, two-dimensional sprite, sprite-trail, rope and
 rope-trail particles, perspective cameras for those layer types, ordinary

@@ -507,6 +507,8 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
   /// Workshop preview URLs by item id, served as still thumbnails at `mwe-ui://thumbnail/<id>`
   /// and relayed with their animation at `mwe-ui://animated/<id>`.
   var thumbnails: [String: URL] = [:]
+  var propertyImages: [String: URL] = [:]
+  private let propertyImageCache = PropertyImageCache()
   let thumbnailCache: WorkshopThumbnailCache
   /// In-flight loads by scheme task identity. WebKit frees a stopped task, and a new one can
   /// land on the same address, so each entry carries a unique ticket: a finished job may only
@@ -515,7 +517,7 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
   private var nextTicket: UInt64 = 0
   private static let files: Set<String> = [
     "index.html", "panel.js", "panel.css", "settings.js", "settings.css", "welcome.js",
-    "welcome.css", "theme.js", "icons.js", "i18n.js",
+    "welcome.css", "theme.js", "icons.js", "i18n.js", "property-label.js",
     "app-icons/minimal.png", "app-icons/day.png", "app-icons/night.png",
   ]
   /// One catalog module per shipped language, served as `mwe-ui://app/locales/<tag>.js`.
@@ -528,6 +530,7 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
     case file(URL)
     case thumbnail(URL)
     case animated(URL)
+    case propertyImage(URL)
   }
 
   init(thumbnailCache: WorkshopThumbnailCache = WorkshopThumbnailCache()) {
@@ -568,6 +571,11 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
           data = try await thumbnailCache.animatedPreview(for: preview)
           headers["Content-Type"] = WorkshopThumbnailCache.mimeType(of: data)
           headers["Cache-Control"] = "max-age=86400"
+        case .propertyImage(let source):
+          let image = try await propertyImageCache.image(for: source)
+          data = image.data
+          headers["Content-Type"] = image.mimeType
+          headers["Cache-Control"] = "max-age=86400"
         }
         guard finish(key, ticket: ticket) else { return }
         headers["Content-Length"] = String(data.count)
@@ -605,6 +613,10 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
 
   func route(_ url: URL) -> Route? {
     if let file = resourceURL(url) { return .file(file) }
+    if url.scheme == "mwe-ui", url.host == "property-image", url.user == nil,
+      url.password == nil, url.port == nil, url.query == nil, url.fragment == nil,
+      let image = propertyImages[String(url.path.dropFirst())], PropertyImageCache.allowedURL(image)
+    { return .propertyImage(image) }
     guard url.scheme == "mwe-ui", let host = url.host, url.user == nil, url.password == nil,
       url.port == nil, let preview = thumbnails[String(url.path.dropFirst())],
       preview.scheme == "https"

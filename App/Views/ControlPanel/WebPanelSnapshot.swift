@@ -200,6 +200,13 @@ extension WebPanelController {
       thumbnails[item.id] = item.previewURL
     }
     assets.thumbnails = thumbnails
+    var propertyImages: [String: URL] = [:]
+    for property in store.wallpaperOptionsSnapshot?.properties ?? [] {
+      for image in PropertyImageCache.sources(in: property.labelHtml).values {
+        propertyImages[PropertyImageCache.key(for: image)] = image
+      }
+    }
+    assets.propertyImages = propertyImages
     let titles = displayTitles.resolved()
     let displays: [[String: Any]] = settings.displays.map { display in
       let active = store.monitorInformationSnapshot.rows.first { $0.displayId == display.displayId }
@@ -623,6 +630,8 @@ extension WebPanelController {
         }
         var row: [String: Any] = [
           "id": property.id, "kind": kind, "label": plainLabel(property.labelHtml),
+          "labelHTML": property.labelHtml == "ui_browse_properties_scheme_color" ? "" : property.labelHtml,
+          "labelImages": PropertyImageCache.addresses(in: property.labelHtml),
           "value": propertyValue(property.value),
           "defaultValue": propertyValue(property.defaultValue),
           "enabled": property.enabled, "dirty": property.dirty,
@@ -680,13 +689,9 @@ extension WebPanelController {
     }
   }
 
-  /// Property labels are author-written HTML. The page shows words, so the markup is
-  /// reduced to the words it carries: breaks and block ends become spaces, so neighbours
-  /// do not merge into one run; every other tag drops out; the entities the Wallpaper
-  /// Engine editor emits are decoded, `&amp;` last so `&amp;lt;` stays literal text.
-  /// A label that is only decoration — a 2000×1 image strip, a rule — carries no words and
-  /// comes back empty. Empty is the honest answer: the id these authors end up with is the
-  /// editor's slug of that same markup, three lines of `imgsrchttpphoto…` in the panel.
+  /// Plain names are retained for accessibility and native file pickers. The panel
+  /// separately receives the untrusted markup and reconstructs allowed presentation.
+  /// Empty decoration never falls back to the editor's markup-slug property id.
   static func plainLabel(_ html: String) -> String {
     // The editor writes this token in place of the scheme colour it adds to every scene.
     if html == "ui_browse_properties_scheme_color" { return String(localized: "Scheme color") }

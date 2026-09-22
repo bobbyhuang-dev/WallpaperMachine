@@ -1,5 +1,7 @@
 #pragma once
 #include "Instance.hpp"
+
+#include <string>
 #include "Swapchain.hpp"
 #include "vk_mem_alloc.h"
 #include "Parameters.hpp"
@@ -38,6 +40,12 @@ public:
 
     bool supportExt(std::string_view) const;
 
+    /// Loads a driver pipeline cache from `directory/vk-pipeline-cache.bin`,
+    /// or starts an empty one. A blob the driver does not recognise is dropped.
+    void UsePipelineCacheFile(std::string directory);
+    void SavePipelineCache() const;
+    VkPipelineCache pipelineCache() const { return m_pipeline_cache; }
+
     TextureCache& tex_cache() const { return *m_tex_cache; }
 
     VkDeviceSize GetUsage() const;
@@ -64,6 +72,10 @@ private:
     VkExtent2D m_extent { 1, 1 };
 
     std::unique_ptr<TextureCache> m_tex_cache;
+
+    VkPipelineCache m_pipeline_cache { VK_NULL_HANDLE };
+    std::string     m_pipeline_cache_path;
+    void            destroyPipelineCache();
 };
 
 } // namespace vulkan

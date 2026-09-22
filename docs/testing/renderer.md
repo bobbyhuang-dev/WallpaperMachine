@@ -331,8 +331,13 @@ Puppets, videos, sprite sheets and opaque formats keep the rectangle test.
 Quadratic staging-buffer growth caused the original Sparkle apply timeout: each
 fixed-size extension zeroed a temporary CPU vector and copied the entire
 previous allocation twice. Geometric blocks plus direct replacement-buffer
-copying preserve existing offsets and data without that repeated work. The
-20-second Apply deadline and rollback behavior are unchanged.
+copying preserve existing offsets and data without that repeated work. A cold
+MoltenVK pipeline compile for a large scene still takes longer than 20 seconds.
+Workshop `3588579284` reached its first frame in 25.1 seconds with a warm
+shader cache, and 24.4 seconds on the next launch after the driver pipeline
+cache had been written beside that scene's shader cache, so the cache does
+not remove the wait. The apply wait is 90 seconds. Rollback after the wait is
+unchanged.
 
 ### Alpha compositing
 
@@ -824,14 +829,31 @@ SceneScript views.
   uses it logs `cannot read property … of undefined` once per update and keeps
   its authored value, so the picture is usually unaffected and the errors are
   not a regression.
-- **3D content in a perspective scene is not drawn.** Models that parse, are
-  effective-visible and sit in front of a perspective camera at small authored
-  scales still produce no pixels; the 2D layers of the same scene render.
-  Observed on Live Solar System – SYKM (`3662790108`) with its authored intro
-  disabled: sampled frames are byte-identical, with no stars, orbits or bodies.
-  The `engine.screenResolution` and active-camera fixes repaired that scene's
-  scripts and 2D layers only; the perspective/scale path is a separate
-  unfinished problem.
+- **Perspective models with more than 65535 vertices** are stored with 32-bit
+  indices. Reading that blob as uint16 triples rejects the mesh (Saturn's body,
+  `3589454154`) or draws scrambled triangles (Live Solar System bodies over
+  the same limit). The parser selects the index width from the vertex count,
+  and the vertex cap is 4 million so the asteroid mesh in that scene is kept.
+  `g_NormalModelMatrix` is a std140 `mat3` (48 bytes). Writing the old mat4
+  identity into that slot spilled 16 bytes into `g_ViewProjectionMatrix` and
+  collapsed every perspective vertex onto one screen column, so the 3D pass
+  drew nothing over the HUD. Uniform writes are clamped to the reflected
+  member size. Culled model passes keep Vulkan's counter-clockwise front
+  face; clockwise culls the Saturn skybox and rings on MoltenVK even though
+  `recordDraw` uses a negative viewport height. A perspective far plane is
+  padded by a tenth of a percent so a skybox scaled to exactly `far` is not
+  clipped when the camera is not on its center. An image layer's `alpha`
+  `update` script or user property is applied to `g_Alpha`; previously only an
+  animation timeline was. Workshop `3662790108` uses that script on its opaque
+  black intro card: with intro animation enabled the card covers the scene
+  until its own timeline ends, and with the property off the star shell is
+  visible on the first frame. A text label that repeats another layer's name
+  keeps its own runtime key (`__we_text_<id>`). Workshop `3662790108` has both
+  a sun group and a hidden readout named `s`; the readout used to take the
+  name, so the simulation's `getLayer("s").scale` stretched that label into
+  full-height white bars and never resized the sun. The planets are still
+  placed by the scene's simulation script, so several stay hidden or smaller
+  than a pixel at the start.
 - GPU elapsed measurements vary substantially between repeated runs on this
   hardware. Treat them as samples, not as proof of a GPU-time improvement or
   regression, and never as power or battery measurements.

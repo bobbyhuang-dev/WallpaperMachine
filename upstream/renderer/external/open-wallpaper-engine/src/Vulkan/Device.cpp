@@ -3,6 +3,10 @@
 #include "Utils/Logging.h"
 #include "GraphicsPipeline.hpp"
 
+#include <filesystem>
+#include <fstream>
+#include <vector>
+
 using namespace wallpaper::vulkan;
 
 namespace
@@ -161,6 +165,7 @@ bool Device::Create(Instance& inst, std::span<const Extension> exts, VkExtent2D 
         VVK_CHECK_BOOL_RE(vvk::CreateVmaAllocator(allocatorInfo, device.m_allocator));
     }
     device.m_tex_cache = std::make_unique<TextureCache>(device);
+    device.UsePipelineCacheFile({});
     return true;
 }
 
@@ -170,7 +175,11 @@ VkDeviceSize Device::GetUsage() const {
     return budget.usage;
 }
 
-void Device::Destroy() { VVK_CHECK(m_device.WaitIdle()); }
+void Device::Destroy() {
+    SavePipelineCache();
+    destroyPipelineCache();
+    VVK_CHECK(m_device.WaitIdle());
+}
 
 void Device::releaseSwapchain() { m_swapchain.Destroy(); }
 
@@ -181,6 +190,89 @@ bool Device::recreateSwapchain(VkSurfaceKHR surface, VkExtent2D extent) {
 }
 
 Device::Device(): m_tex_cache(std::make_unique<TextureCache>(*this)) {}
-Device::~Device() {};
+Device::~Device() { destroyPipelineCache(); }
 
 bool Device::supportExt(std::string_view name) const { return exists(m_extensions, name); }
+
+void Device::destroyPipelineCache() {
+    if (m_pipeline_cache == VK_NULL_HANDLE || *m_device == VK_NULL_HANDLE) return;
+    const auto& dispatch = m_device.Dispatch();
+    if (dispatch.vkDestroyPipelineCache != nullptr) {
+        dispatch.vkDestroyPipelineCache(*m_device, m_pipeline_cache, nullptr);
+    }
+    m_pipeline_cache = VK_NULL_HANDLE;
+}
+
+void Device::UsePipelineCacheFile(std::string directory) {
+    destroyPipelineCache();
+    m_pipeline_cache_path.clear();
+    if (*m_device == VK_NULL_HANDLE || m_device.Dispatch().vkCreatePipelineCache == nullptr) return;
+
+    std::vector<char> initial;
+    if (! directory.empty()) {
+        m_pipeline_cache_path = directory + "/vk-pipeline-cache.bin";
+        std::ifstream file(m_pipeline_cache_path, std::ios::binary);
+        if (file) {
+            file.seekg(0, std::ios::end);
+            const auto size = file.tellg();
+            // A driver blob for one scene. Anything larger is not a cache we wrote.
+            if (size > 0 && size < 64 * 1024 * 1024) {
+                initial.resize(static_cast<std::size_t>(size));
+                file.seekg(0);
+                file.read(initial.data(), static_cast<std::streamsize>(initial.size()));
+                if (! file) initial.clear();
+            }
+        }
+    }
+
+    auto create = [&](const void* data, std::size_t size) {
+        VkPipelineCacheCreateInfo info {
+            .sType           = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+            .pNext           = nullptr,
+            .flags           = 0,
+            .initialDataSize = size,
+            .pInitialData    = data,
+        };
+        return m_device.Dispatch().vkCreatePipelineCache(
+            *m_device, &info, nullptr, &m_pipeline_cache);
+    };
+    VkResult result = create(initial.empty() ? nullptr : initial.data(), initial.size());
+    if (result != VK_SUCCESS && ! initial.empty()) {
+        m_pipeline_cache = VK_NULL_HANDLE;
+        result           = create(nullptr, 0);
+    }
+    if (result != VK_SUCCESS) {
+        m_pipeline_cache = VK_NULL_HANDLE;
+        LOG_ERROR("pipeline cache was not created");
+    }
+}
+
+void Device::SavePipelineCache() const {
+    if (m_pipeline_cache == VK_NULL_HANDLE || m_pipeline_cache_path.empty() ||
+        *m_device == VK_NULL_HANDLE) {
+        return;
+    }
+    const auto& dispatch = m_device.Dispatch();
+    if (dispatch.vkGetPipelineCacheData == nullptr) return;
+    std::size_t size = 0;
+    if (dispatch.vkGetPipelineCacheData(*m_device, m_pipeline_cache, &size, nullptr) != VK_SUCCESS ||
+        size == 0) {
+        return;
+    }
+    std::vector<char> data(size);
+    if (dispatch.vkGetPipelineCacheData(*m_device, m_pipeline_cache, &size, data.data()) !=
+        VK_SUCCESS) {
+        return;
+    }
+    data.resize(size);
+    const auto temporary = m_pipeline_cache_path + ".tmp";
+    {
+        std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+        if (! file) return;
+        file.write(data.data(), static_cast<std::streamsize>(data.size()));
+        if (! file) return;
+    }
+    std::error_code error;
+    std::filesystem::rename(temporary, m_pipeline_cache_path, error);
+    if (error) std::filesystem::remove(temporary);
+}

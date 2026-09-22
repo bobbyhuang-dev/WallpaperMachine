@@ -2284,6 +2284,63 @@ TEST(TextObjectRuntime, ParserUsesUniqueTextureKeysForDuplicateTextLayerNames) {
     EXPECT_EQ(scene->runtime->NodeText("__we_text_2"), "second much wider");
 }
 
+TEST(TextObjectRuntime, TextLabelDoesNotStealAnotherLayersName) {
+    fs::VFS vfs;
+    MountAssets(vfs);
+    audio::SoundManager sound_manager;
+    WPSceneParser       parser;
+    ProjectProperties   properties;
+    SceneParseRequest   request {
+        .scene_id           = "text-name-collision",
+        .project_properties = &properties,
+    };
+
+    auto scene = parser.Parse(request,
+                              MinimalSceneObjects(R"JSON([
+          {
+            "id": 10,
+            "name": "s",
+            "solid": true,
+            "scale": "0.20000 0.20000 0.20000",
+            "visible": true
+          },
+          {
+            "id": 11,
+            "name": "s",
+            "text": "label",
+            "font": "Arial",
+            "pointsize": 32,
+            "scale": "0.00010 0.00010 1.00000",
+            "visible": true
+          },
+          {
+            "id": 12,
+            "name": "driver",
+            "origin": {
+              "value": "0 0 0",
+              "script": "export function update(value) { var layer = thisScene.getLayer('s'); if (layer) layer.scale = {x: 5, y: 5, z: 5}; return value; }"
+            }
+          }
+        ])JSON"),
+                              vfs,
+                              sound_manager);
+
+    ASSERT_NE(scene, nullptr);
+    ASSERT_NE(scene->runtime, nullptr);
+    auto* body = FindRootChild(*scene, "s");
+    auto* label = FindRootChild(*scene, "__we_text_11");
+    ASSERT_NE(body, nullptr);
+    ASSERT_NE(label, nullptr);
+
+    scene->runtime->Tick(1.0 / 60.0);
+
+    EXPECT_FLOAT_EQ(body->Scale().x(), 5.0f);
+    EXPECT_FLOAT_EQ(body->Scale().y(), 5.0f);
+    EXPECT_FLOAT_EQ(body->Scale().z(), 5.0f);
+    EXPECT_NEAR(label->Scale().x(), 0.0001f, 1e-6f);
+    EXPECT_EQ(scene->runtime->scriptErrorCount(), 0u);
+}
+
 TEST(TextObjectRuntime, ParserReadsSupportedTextFormsIntoRuntimeState) {
     fs::VFS vfs;
     MountAssets(vfs);

@@ -25,6 +25,34 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-22 — Solar layer name collision
+
+Live Solar System's sun group and a hidden text readout are both named s. The readout registered second and took the name, so the simulation's getLayer("s").scale stretched that label into the full-height white bars and never resized the sun.
+
+- Text labels that repeat a group, image or model name now keep __we_text_<id>; the earlier layer keeps the shared name.
+- TextObjectRuntime.TextLabelDoesNotStealAnotherLayersName passed.
+- Offscreen workshop 3662790108 with intro animation forced off: the white columns are gone (screen-right mean 12.5, was 255). Stars, the sun glow, one orbit arc and the HUD remain. View mode 3 still keeps most bodies small.
+- python3 scripts/check_renderer.py — exit 0; evidence artifacts/renderer/adaptive-20260922-101020.
+- The delivered app was not rebuilt.
+
+## 2026-09-22 — Solar intro card alpha
+
+- Image alpha update scripts now write g_Alpha. Workshop 3662790108's start-black card was stuck at opacity 1 and covered the star shell.
+- Offscreen probe, intro property off: corner 400x200 max 255, 216/5000 samples above 4; full frame 16809/32400 samples above 4. Intro on, first frame, corners stay 0, which matches the card's 0–14s timeline.
+- Saturn 3589454154 still draws: full-frame samples above 4 are 14483/129600, corner max 15.
+- python3 scripts/check_renderer.py exit 0 in 67s. Evidence artifacts/renderer/adaptive-20260922-082842.
+- Planets stay on the scene's own simulation script and can be hidden or sub-pixel at the start. The Release app was not rebuilt.
+
+## 2026-09-22 — Perspective models draw and the apply wait is 90s
+
+- Offscreen probe, 1920x1080, final renderer binary.
+- Saturn 3589454154 first frame 3343ms. Sky corner has star pixels (max 27); rings are in the lower frame.
+- Cause: a mat4 write into std140 g_NormalModelMatrix spilled into g_ViewProjectionMatrix. Writes are clamped to the reflected size. Front face stays counter-clockwise.
+- Live Solar System 3662790108 still shows the HUD only. Several bodies are script-hidden or sub-pixel at the first frames; the star shell still contributes no pixels.
+- Workshop 3588579284 first frame 25061ms cold and 24361ms with vk-pipeline-cache.bin present. Both exceed the old 20s wait and finish inside 90s.
+- mdl_schema_tests 54 passed. python3 scripts/check_renderer.py exit 0 (artifacts/renderer/adaptive-20260922-014221).
+- App was not rebuilt.
+
 ## 2026-09-22 — Re-verified and delivered on the renamed tree, with the LGPL FFmpeg
 
 The trail fix was verified before the rename landed; rebasing onto it made both gates unrunnable because `Formula/mwe-ffmpeg.rb` was not installed. Installed with the user's authorization, then everything re-run on the rebased tree.
@@ -108,39 +136,4 @@ Compatibility flattened this wallpaper's cloud layer. Traced by dumping every pa
 - New RenderScale.AScreenBoundTargetsResolutionReachesTheMaterialThatSamplesIt: fails without the fix (2 where 480 and 270 are expected), passes with it. It asserts all four components, since the existing resolution test only ever checked the first two and a blur divides by the last two
 - Two false starts recorded so they are not repeated: passes.txt lists parse-time constants rather than live uniform values, and a pass dump is the whole pooled allocation rather than the target
 - scripts/test.py 535 passed / 0 failed / 11 skipped of 546; check_renderer.py 10 cases pixels_equal=True; render_scale_test 9; metal_backend_test 35; metal_scene_draw_smoke 33; scene_schema_tests 80 with the two pre-existing pointer timeouts. rendergraph_smoke segfaults with and without this change -- pre-existing
-- Release rebuilt
-
-## 2026-09-21 — Corrected: Native Metal never dropped the album cover, and my fix took the clouds away
-
-Reported as the clouds suddenly disappearing. They did, and I caused it: the album-cover rejection I added earlier forced this wallpaper onto Compatibility, which is the backend that flattens them.
-
-- The finding it rested on was wrong. InjectSystemMediaForMetal was defined but never called -- an edit dropped the call site -- so every Metal render was made with no cover and no thumbnail colours, and the flat grey that produced was read as the backend dropping them
-- With the call restored: Native Metal reports the runtime image source, publishes the cover, and its background keeps the clouds -- stddev 13.5 against Compatibility 6.7 on the same events
-- The rejection and its test are withdrawn. The Metal harness now prints whether it could publish the cover, because a run that could not looks exactly like a backend that dropped it
-- The real remaining defect is the other way round: Compatibility flattens the cloud layer. Contrast falls from 17.0 at the bokeh output to 3.8 after the blur effect. Ruled out with measurements: combo delivery (both variants compiled, one with VERTICAL=1), target allocation (1280x540), the wallpaper parameters (scale "1 1"), scene optimisation (A/B identical), varying locations (SPIR-V decoded, vertex outputs 0-12 match fragment inputs 0-12), and the bound resolution (1280x540 on both blur passes, traced in passes.txt)
-- scripts/test.py 535 passed / 0 failed / 11 skipped of 546; metal_backend_test 35; metal_scene_draw_smoke 33; check_renderer.py 10 cases pixels_equal=True
-- Release rebuilt
-
-## 2026-09-21 — Native Metal never saw the album cover, and the wallpaper has no cover background
-
-Reported as the background not looking like the official example. Two separate things, established by rendering both backends against the same injected now-playing state.
-
-- metal_scene_draw_smoke now takes WE_TEST_MEDIA_ARTWORK and WE_TEST_MEDIA_EVENTS the same way the probe does. Without them a media-driven wallpaper renders flat grey on both backends and the comparison says nothing
-- With the same cover and colours: Compatibility background chroma 29.2 and the cover drawn; Native Metal chroma 0.00 and no cover at all. The native backend uploads an image when it prepares and never sees the runtime republish it, so it drew the transparent placeholder the media slots start with
-- A scene binding a system cover slot now falls back whole, reporting "the wallpaper draws the album cover, which the runtime republishes". Narrowed to $media* on purpose: text layers are runtime-published too and the backend does keep those current -- rejecting all runtime images broke 9 text tests
-- New MetalCapability.ARuntimeRepublishedImageSendsTheWholeSceneBack pins it; the live wallpaper now reports Compatibility with that reason
-- Separately, and not a defect: this wallpaper has no album-art background. Only objects 297 and 295 bind $mediaThumbnail as a texture, both cover displays; every background layer is util/white tinted from the event colours. The blurred-cover background in the official shot comes from its Use Custom Background option
-- scripts/test.py 535 passed / 0 failed / 11 skipped of 546; metal_backend_test 36; metal_scene_draw_smoke 33; check_renderer.py 10 cases pixels_equal=True
-- Release rebuilt
-
-## 2026-09-21 — A trait default swallowed the sink that kept the shortcut channel open
-
-The instrumented build logged 'Stopped waiting for wallpaper shortcuts' at startup, before any press, which placed the fault in the bridge rather than anywhere downstream.
-
-- EngineFacade::set_user_shortcut_callback carried a default no-op body. ArcEngineFacade, which BridgeBuilder::build wraps every facade in, never overrode it, so the callback was dropped on the floor
-- That callback owned the only sender for the shortcut channel. Dropping it closed the channel immediately, so the very first next_user_shortcut returned "the engine stopped reporting user shortcuts" and the loop gave up before the user touched anything
-- The default body is removed; the method is now required, and the compiler found ArcEngineFacade plus three test fakes. FakeEngineFacade keeps the callback and gained report_user_shortcut so a test can report a press the way the engine does
-- New a_reported_press_comes_back_out_of_the_bridge: fails with the forwarder removed ("the bridge never installed its sink"), passes with it
-- Two robustness fixes alongside: a failed consent lookup no longer kills the loop permanently, and the Swift loop retries five times with backoff and logs the actual error instead of discarding it
-- scripts/test.py 535 passed / 0 failed / 11 skipped of 546; wallpaper-bridge 322 passed
 - Release rebuilt

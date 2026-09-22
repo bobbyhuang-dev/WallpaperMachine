@@ -15,6 +15,41 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — Corrected: Native Metal never dropped the album cover, and my fix took the clouds away
+
+Reported as the clouds suddenly disappearing. They did, and I caused it: the album-cover rejection I added earlier forced this wallpaper onto Compatibility, which is the backend that flattens them.
+
+- The finding it rested on was wrong. InjectSystemMediaForMetal was defined but never called -- an edit dropped the call site -- so every Metal render was made with no cover and no thumbnail colours, and the flat grey that produced was read as the backend dropping them
+- With the call restored: Native Metal reports the runtime image source, publishes the cover, and its background keeps the clouds -- stddev 13.5 against Compatibility 6.7 on the same events
+- The rejection and its test are withdrawn. The Metal harness now prints whether it could publish the cover, because a run that could not looks exactly like a backend that dropped it
+- The real remaining defect is the other way round: Compatibility flattens the cloud layer. Contrast falls from 17.0 at the bokeh output to 3.8 after the blur effect. Ruled out with measurements: combo delivery (both variants compiled, one with VERTICAL=1), target allocation (1280x540), the wallpaper parameters (scale "1 1"), scene optimisation (A/B identical), varying locations (SPIR-V decoded, vertex outputs 0-12 match fragment inputs 0-12), and the bound resolution (1280x540 on both blur passes, traced in passes.txt)
+- scripts/test.py 535 passed / 0 failed / 11 skipped of 546; metal_backend_test 35; metal_scene_draw_smoke 33; check_renderer.py 10 cases pixels_equal=True
+- Release rebuilt
+
+## 2026-09-21 — Native Metal never saw the album cover, and the wallpaper has no cover background
+
+Reported as the background not looking like the official example. Two separate things, established by rendering both backends against the same injected now-playing state.
+
+- metal_scene_draw_smoke now takes WE_TEST_MEDIA_ARTWORK and WE_TEST_MEDIA_EVENTS the same way the probe does. Without them a media-driven wallpaper renders flat grey on both backends and the comparison says nothing
+- With the same cover and colours: Compatibility background chroma 29.2 and the cover drawn; Native Metal chroma 0.00 and no cover at all. The native backend uploads an image when it prepares and never sees the runtime republish it, so it drew the transparent placeholder the media slots start with
+- A scene binding a system cover slot now falls back whole, reporting "the wallpaper draws the album cover, which the runtime republishes". Narrowed to $media* on purpose: text layers are runtime-published too and the backend does keep those current -- rejecting all runtime images broke 9 text tests
+- New MetalCapability.ARuntimeRepublishedImageSendsTheWholeSceneBack pins it; the live wallpaper now reports Compatibility with that reason
+- Separately, and not a defect: this wallpaper has no album-art background. Only objects 297 and 295 bind $mediaThumbnail as a texture, both cover displays; every background layer is util/white tinted from the event colours. The blurred-cover background in the official shot comes from its Use Custom Background option
+- scripts/test.py 535 passed / 0 failed / 11 skipped of 546; metal_backend_test 36; metal_scene_draw_smoke 33; check_renderer.py 10 cases pixels_equal=True
+- Release rebuilt
+
+## 2026-09-21 — A trait default swallowed the sink that kept the shortcut channel open
+
+The instrumented build logged 'Stopped waiting for wallpaper shortcuts' at startup, before any press, which placed the fault in the bridge rather than anywhere downstream.
+
+- EngineFacade::set_user_shortcut_callback carried a default no-op body. ArcEngineFacade, which BridgeBuilder::build wraps every facade in, never overrode it, so the callback was dropped on the floor
+- That callback owned the only sender for the shortcut channel. Dropping it closed the channel immediately, so the very first next_user_shortcut returned "the engine stopped reporting user shortcuts" and the loop gave up before the user touched anything
+- The default body is removed; the method is now required, and the compiler found ArcEngineFacade plus three test fakes. FakeEngineFacade keeps the callback and gained report_user_shortcut so a test can report a press the way the engine does
+- New a_reported_press_comes_back_out_of_the_bridge: fails with the forwarder removed ("the bridge never installed its sink"), passes with it
+- Two robustness fixes alongside: a failed consent lookup no longer kills the loop permanently, and the Swift loop retries five times with backoff and logs the actual error instead of discarding it
+- scripts/test.py 535 passed / 0 failed / 11 skipped of 546; wallpaper-bridge 322 passed
+- Release rebuilt
+
 ## 2026-09-21 — Nothing was waiting at the end of the shortcut chain
 
 Presses still did nothing after the value fix. Instrumenting each hop and reading the user's log settled it in one press instead of another round of reasoning.

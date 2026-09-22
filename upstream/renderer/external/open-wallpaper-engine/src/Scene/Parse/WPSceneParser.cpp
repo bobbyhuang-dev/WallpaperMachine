@@ -1446,7 +1446,16 @@ std::string TextAnchorForObject(const wpscene::WPTextObject& obj) {
 std::string TextRuntimeName(const ParseContext& context, const wpscene::WPTextObject& obj) {
     if (! obj.name.empty()) {
         const auto count = context.text_name_counts.find(obj.name);
-        if (count == context.text_name_counts.end() || count->second <= 1u) return obj.name;
+        // Images, models and plain groups share `layer_name_counts`. A text
+        // label that repeats one of those names has to keep its own key, or
+        // scene scripts such as getLayer("s") move the label instead of the body.
+        const auto other = context.layer_name_counts.find(obj.name);
+        const bool used_by_other_layer =
+            other != context.layer_name_counts.end() && other->second > 0;
+        if (! used_by_other_layer &&
+            (count == context.text_name_counts.end() || count->second <= 1u)) {
+            return obj.name;
+        }
     }
     return "__we_text_" + std::to_string(obj.id);
 }
@@ -2939,7 +2948,13 @@ void InitContext(ParseContext& context, fs::VFS& vfs, wpscene::WPScene& sc) {
         gb["g_TexelSizeHalf"] = std::array { 1.0f / 1920.0f / 2.0f, 1.0f / 1080.0f / 2.0f };
 
         gb["g_LightAmbientColor"] = sc.general.ambientcolor;
-        gb["g_NormalModelMatrix"] = ShaderValue::fromMatrix(Matrix4f::Identity());
+        // std140 mat3 is three vec4 columns (48 bytes). A mat4 identity is 64
+        // bytes and spills into the following view-projection uniform.
+        gb["g_NormalModelMatrix"] = std::array<float, 12> {
+            1.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+        };
     }
 
     {
@@ -3041,12 +3056,23 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
         context.layer_parent_ids[wpimgobj.id] = wpimgobj.parent_id;
     };
     const auto registerImageAlphaAnimation = [&context, &wpimgobj, &runtime_name](std::shared_ptr<SceneMaterial> material) {
-        if (context.scene->runtime == nullptr || material == nullptr || ! wpimgobj.dynamic_alpha)
-            return;
-        const auto animation = ResolveScalarAnimation(wpimgobj.alpha_setting);
-        if (! animation.has_value()) return;
-        context.scene->runtime->RegisterMaterialAlphaAnimation(material,
-            context.scene->runtime->RegisterScalarAnimation(runtime_name, *animation));
+        if (context.scene->runtime == nullptr || material == nullptr) return;
+        if (wpimgobj.dynamic_alpha) {
+            const auto animation = ResolveScalarAnimation(wpimgobj.alpha_setting);
+            if (animation.has_value()) {
+                context.scene->runtime->RegisterMaterialAlphaAnimation(material,
+                    context.scene->runtime->RegisterScalarAnimation(runtime_name, *animation));
+            }
+        }
+        // `dynamic_alpha` is only the timeline form. An `update` script or a
+        // user slider is how an intro card fades itself out; leaving `g_Alpha`
+        // at the authored value keeps that card opaque over the scene.
+        if (HasUpdateScript(wpimgobj.alpha_setting) ||
+            (wpimgobj.alpha_setting.is_object() && wpimgobj.alpha_setting.contains("user"))) {
+            context.scene->runtime->BindMaterialAlpha(
+                material,
+                ResolveFloatSetting(*context.scene->runtime, wpimgobj.alpha_setting, runtime_name));
+        }
     };
     // A scripted or user-bound origin replaces the node translate every tick, so
     // an anchor baked into the translate is lost. Hand the anchor to the runtime

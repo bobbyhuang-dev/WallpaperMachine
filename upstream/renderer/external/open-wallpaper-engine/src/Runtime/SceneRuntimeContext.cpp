@@ -1301,6 +1301,14 @@ void SceneRuntimeContext::RegisterMaterialAlphaAnimation(
     });
 }
 
+void SceneRuntimeContext::BindMaterialAlpha(std::shared_ptr<SceneMaterial> material,
+                                            std::unique_ptr<DynamicValue> value) {
+    if (material == nullptr || value == nullptr) return;
+    RegisterDynamicValueListener(std::move(value), [material](const DynamicValue& current) {
+        ApplyMaterialAlpha(*material, current.getFloat());
+    });
+}
+
 std::shared_ptr<ScalarAnimationPlayback> SceneRuntimeContext::RegisterScalarAnimation(
     std::string_view layer_name, ScalarAnimation animation) {
     if (!animation.name.empty()) {

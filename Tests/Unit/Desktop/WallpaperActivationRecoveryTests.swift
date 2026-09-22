@@ -70,7 +70,7 @@ private func XCTAssertThrowsErrorAsync(
 
 private final class ApplyFailureBridge: WallpaperBridge {
     var applyError: Error? = WallpaperActionError(
-        message: "The wallpaper did not render a first frame within 20 seconds.")
+        message: "The wallpaper did not render a first frame within 90 seconds.")
     var snapshotsFail = false
 
     override func allSnapshots() async throws -> BridgeSnapshotBundle {

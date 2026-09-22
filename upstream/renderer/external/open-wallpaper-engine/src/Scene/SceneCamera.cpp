@@ -63,7 +63,13 @@ void SceneCamera::CalculateViewProjectionMatrix() {
 	};
 
 	if(m_perspective) {
-		m_viewProjectionMat = Perspective(Radians(m_fov), m_aspect, m_nearClip, m_farClip) * m_viewMat;
+		// Skyboxes are often scaled to exactly `far`. A camera that is not on
+		// the shell's center puts that surface a little past the plane, and
+		// the clipper drops the whole backdrop. The pad stays small next to
+		// the authored range so near-plane precision is unchanged.
+		const double abs_far = m_farClip < 0.0 ? -m_farClip : m_farClip;
+		const double far_pad = abs_far * 1.0e-3 > 1.0 ? abs_far * 1.0e-3 : 1.0;
+		m_viewProjectionMat = Perspective(Radians(m_fov), m_aspect, m_nearClip, m_farClip + far_pad) * m_viewMat;
 	} else {
 		double left = -m_width/2.0f;
 		double right = m_width/2.0f;

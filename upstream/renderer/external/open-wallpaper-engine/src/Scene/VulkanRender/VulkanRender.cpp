@@ -257,6 +257,9 @@ void VulkanRender::SetWallpaperScalingFactor(double factor) {
 void VulkanRender::SetWallpaperHorizontalFlip(bool enabled) {
     pImpl->SetWallpaperHorizontalFlip(enabled);
 }
+void VulkanRender::SetPipelineCachePath(std::string path) {
+    if (pImpl->m_device != nullptr) pImpl->m_device->UsePipelineCacheFile(std::move(path));
+}
 wallpaper::WallpaperCursorMapping VulkanRender::CursorMapping(const Scene& scene) const {
     return pImpl->CursorMapping(scene);
 }
@@ -1487,6 +1490,9 @@ bool VulkanRender::Impl::preparePasses(Scene& scene) {
         const auto idle_result = quiesceFrame();
         if (idle_result != VK_SUCCESS) return false;
     }
+    // The pipelines this prepare just built. A later launch of the same
+    // wallpaper reads them back instead of compiling again.
+    if (m_device != nullptr) m_device->SavePipelineCache();
     return true;
 }
 

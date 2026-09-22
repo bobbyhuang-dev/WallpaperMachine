@@ -362,6 +362,36 @@ std::vector<uint8_t> BuildMdlv23MaskedMeshOnlyFixture() {
     return b.Take();
 }
 
+// One triangle naming vertex 65536. The index blob is 12 bytes, which is also
+// divisible by 6, so a uint16 reader would report two triangles and could not
+// name that vertex at all.
+std::vector<uint8_t> BuildMdlv23WideIndexMeshFixture() {
+    constexpr uint32_t kVertexCount = 65537u;
+    Bytes b;
+    b.Stamp("MDL", 23);
+    b.U32(0);
+    b.U32(1);
+    b.U32(1);
+    b.Str("mat/body.json");
+    b.U32(0);
+    for (int i = 0; i < 6; ++i) b.F32(i == 0 || i == 3 ? -1.0f : 1.0f);
+    b.U32(0);
+    b.U32(kVertexCount * 12u);
+    for (uint32_t i = 0; i < kVertexCount; ++i) {
+        b.F32(static_cast<float>(i));
+        b.F32(0.0f);
+        b.F32(0.0f);
+    }
+    b.U32(12);
+    b.U32(0);
+    b.U32(1);
+    b.U32(kVertexCount - 1);
+    b.U8(0);
+    b.U8(0);
+    b.U32(0);
+    return b.Take();
+}
+
 std::vector<uint8_t> BuildMdlv23IncompleteFlagMeshOnlyFixture() {
     Bytes b;
     b.Stamp("MDL", 23);
@@ -1375,6 +1405,29 @@ TEST(MdlSchema, ParsesMdlv21MeshDataWithoutOptionalMdlsBlock) {
     EXPECT_EQ(mdl.mat_json_file, "mat/head.json");
     EXPECT_EQ(mdl.vertexs.size(), 3u);
     EXPECT_EQ(mdl.puppet, nullptr);
+}
+
+TEST(MdlSchema, WideMeshesKeepThirtyTwoBitIndices) {
+    fs::VFS vfs;
+    MountMdlFixture(vfs, BuildMdlv23WideIndexMeshFixture());
+    WPMdl mdl;
+
+    ASSERT_TRUE(WPMdlParser::Parse("sample.mdl", vfs, mdl));
+    ASSERT_EQ(mdl.meshes.size(), 1u);
+    EXPECT_EQ(mdl.meshes[0].positions.size(), 65537u);
+    ASSERT_EQ(mdl.meshes[0].indices.size(), 1u);
+    EXPECT_EQ(mdl.meshes[0].indices[0][0], 0u);
+    EXPECT_EQ(mdl.meshes[0].indices[0][1], 1u);
+    EXPECT_EQ(mdl.meshes[0].indices[0][2], 65536u);
+
+    SceneMesh mesh;
+    WPMdlParser::GenPuppetMesh(mesh, mdl, false);
+    ASSERT_EQ(mesh.Submeshes().size(), 1u);
+    ASSERT_EQ(mesh.Submeshes()[0].IndexCount(), 1u);
+    const auto& indices = mesh.GetIndexArray(0);
+    EXPECT_EQ(indices.Width(), SceneIndexWidth::UInt32);
+    EXPECT_EQ(indices.DrawIndexCount(), 3u);
+    EXPECT_EQ(indices.Data()[2], 65536u);
 }
 
 TEST(MdlSchema, ParsesMdlv23MaskBlocksWithoutDesynchronizingFollowingSections) {

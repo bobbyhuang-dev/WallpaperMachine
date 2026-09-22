@@ -47,7 +47,10 @@ struct WPMdl {
         std::vector<std::array<float, 4>>    blend_weights;
         std::vector<std::array<float, 2>>    texcoords;
         std::vector<std::array<float, 2>>    texcoord2;
-        std::vector<std::array<uint16_t, 3>> indices;
+        // 32-bit once a mesh has more vertices than a uint16 index can name.
+        // High-poly bodies are stored that way; reading them as uint16 triples
+        // doubles the triangle count and the mesh is then rejected.
+        std::vector<std::array<uint32_t, 3>> indices;
 
         struct Part {
             uint32_t id { 0 };
@@ -98,7 +101,7 @@ struct WPMdl {
         std::array<float, 2>    texcoord;
     };
     std::vector<Vertex>                  vertexs;
-    std::vector<std::array<uint16_t, 3>> indices;
+    std::vector<std::array<uint32_t, 3>> indices;
 
     // std::vector<Eigen::Matrix<float, 3, 4>> bones;
     std::shared_ptr<WPPuppet> puppet;

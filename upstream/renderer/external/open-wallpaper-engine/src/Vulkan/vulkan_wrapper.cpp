@@ -137,6 +137,7 @@ bool Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCreateFence);
     X(vkCreateFramebuffer);
     X(vkCreateGraphicsPipelines);
+    X(vkCreatePipelineCache);
     X(vkCreateImage);
     X(vkCreateImageView);
     X(vkCreatePipelineLayout);
@@ -158,6 +159,7 @@ bool Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkDestroyImage);
     X(vkDestroyImageView);
     X(vkDestroyPipeline);
+    X(vkDestroyPipelineCache);
     X(vkDestroyPipelineLayout);
     X(vkDestroyQueryPool);
     X(vkDestroyRenderPass);
@@ -180,6 +182,7 @@ bool Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkGetSemaphoreFdKHR);
     X(vkGetImageDrmFormatModifierPropertiesEXT);
     X(vkGetQueryPoolResults);
+    X(vkGetPipelineCacheData);
     X(vkGetPipelineExecutablePropertiesKHR);
     X(vkGetPipelineExecutableStatisticsKHR);
     X(vkGetSemaphoreCounterValueKHR);
@@ -474,10 +477,10 @@ VkResult Device::CreateSampler(const VkSamplerCreateInfo& ci, Sampler& sam) cons
     return res;
 }
 
-VkResult Device::CreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& ci,
-                                        Pipeline& pipeline) const noexcept {
+VkResult Device::CreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& ci, Pipeline& pipeline,
+                                        VkPipelineCache cache) const noexcept {
     VkPipeline object;
-    VkResult res = dld->vkCreateGraphicsPipelines(handle, VK_NULL_HANDLE, 1, &ci, nullptr, &object);
+    VkResult res = dld->vkCreateGraphicsPipelines(handle, cache, 1, &ci, nullptr, &object);
     if (res == VK_SUCCESS) pipeline = Pipeline(object, handle, *dld);
     return res;
 }

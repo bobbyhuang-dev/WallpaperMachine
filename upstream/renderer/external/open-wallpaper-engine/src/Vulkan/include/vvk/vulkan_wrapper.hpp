@@ -134,6 +134,7 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkCreateFence                         vkCreateFence {};
     PFN_vkCreateFramebuffer                   vkCreateFramebuffer {};
     PFN_vkCreateGraphicsPipelines             vkCreateGraphicsPipelines {};
+    PFN_vkCreatePipelineCache                 vkCreatePipelineCache {};
     PFN_vkCreateImage                         vkCreateImage {};
     PFN_vkCreateImageView                     vkCreateImageView {};
     PFN_vkCreatePipelineLayout                vkCreatePipelineLayout {};
@@ -155,6 +156,7 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkDestroyImage                        vkDestroyImage {};
     PFN_vkDestroyImageView                    vkDestroyImageView {};
     PFN_vkDestroyPipeline                     vkDestroyPipeline {};
+    PFN_vkDestroyPipelineCache                vkDestroyPipelineCache {};
     PFN_vkDestroyPipelineLayout               vkDestroyPipelineLayout {};
     PFN_vkDestroyQueryPool                    vkDestroyQueryPool {};
     PFN_vkDestroyRenderPass                   vkDestroyRenderPass {};
@@ -176,6 +178,7 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkGetMemoryFdKHR                      vkGetMemoryFdKHR {};
     PFN_vkGetSemaphoreFdKHR                   vkGetSemaphoreFdKHR {};
     PFN_vkGetImageDrmFormatModifierPropertiesEXT vkGetImageDrmFormatModifierPropertiesEXT {};
+    PFN_vkGetPipelineCacheData                vkGetPipelineCacheData {};
     PFN_vkGetPipelineExecutablePropertiesKHR  vkGetPipelineExecutablePropertiesKHR {};
     PFN_vkGetPipelineExecutableStatisticsKHR  vkGetPipelineExecutableStatisticsKHR {};
     PFN_vkGetQueryPoolResults                 vkGetQueryPoolResults {};
@@ -495,8 +498,8 @@ public:
     VkResult CreateCommandPool(const VkCommandPoolCreateInfo& ci, CommandPool&) const;
     VkResult CreateDescriptorSetLayout(const VkDescriptorSetLayoutCreateInfo& ci,
                                        DescriptorSetLayout&) const noexcept;
-    VkResult CreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& ci,
-                                    Pipeline&) const noexcept;
+    VkResult CreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& ci, Pipeline&,
+                                    VkPipelineCache cache = VK_NULL_HANDLE) const noexcept;
 
     VkResult CreateRenderPass(const VkRenderPassCreateInfo& ci, RenderPass&) const noexcept;
 

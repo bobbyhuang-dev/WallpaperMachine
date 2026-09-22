@@ -518,6 +518,9 @@ int main() {
         scene->shaderValueUpdater->SetTexelSize(1.0f / static_cast<float>(std::max(1u, extent.width)),
                                                 1.0f / static_cast<float>(std::max(1u, extent.height)));
         Check(Device::Create(instance, extensions, extent, device), "create device");
+        if (const char* output = std::getenv("WE_TEST_OUTPUT")) {
+            device.UsePipelineCacheFile(output);
+        }
         StagingBuffer vertices(device, 8 * 1024 * 1024, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
         StagingBuffer dynamic(device, 8 * 1024 * 1024, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         Check(vertices.allocate() && dynamic.allocate(), "allocate buffers");
@@ -735,6 +738,7 @@ int main() {
                       << " cacheable targets, " << stats.pinned_targets << " pinned\n";
         }
         Check(device.handle().WaitIdle() == VK_SUCCESS, "final probe idle");
+        device.SavePipelineCache();
         Check(rr.command.Reset() == VK_SUCCESS, "discard final probe command");
         Check(device.tex_cache().WaitForPendingUploads(), "retire texture uploads");
         for (auto* pass : passes) pass->destory(device, rr);

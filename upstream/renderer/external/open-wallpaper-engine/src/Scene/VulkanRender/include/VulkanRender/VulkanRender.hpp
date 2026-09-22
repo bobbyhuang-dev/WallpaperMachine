@@ -9,6 +9,7 @@
 
 #include <cstdio>
 #include <memory>
+#include <string>
 
 namespace wallpaper
 {
@@ -61,6 +62,8 @@ public:
     void SetWallpaperScalingMode(wallpaper::WallpaperScalingMode);
     void SetWallpaperScalingFactor(double);
     void SetWallpaperHorizontalFlip(bool enabled);
+    /// Driver pipeline cache beside this scene's shader cache. Empty clears it.
+    void SetPipelineCachePath(std::string path);
     void SetVideoPlaybackPaused(bool paused);
     void SetVideoPlaybackRate(float rate);
     /// Shortest frame period among the live video sources, in seconds, or 0

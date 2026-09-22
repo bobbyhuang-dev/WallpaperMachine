@@ -302,6 +302,13 @@ static bool UpdateUniform(StagingBuffer* buf, const StagingBufferRef& bufref,
             return true;
         }
     }
+    // Reflection size is the std140 slot. A wider host value (a mat4 written
+    // into a mat3) used to continue into the next member and replace the first
+    // column of g_ViewProjectionMatrix, which collapsed every perspective
+    // vertex onto one screen column.
+    if (member.size > 0 && bytes.size() > member.size) {
+        bytes = bytes.first(member.size);
+    }
     return buf->writeToBuf(bufref, bytes, member.offset);
 }
 
@@ -530,6 +537,10 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
             case CullMode::None:
             default: pipeline.raster.cullMode = VK_CULL_MODE_NONE; break;
             }
+            // MoltenVK keeps counter-clockwise as the visible front face after
+            // recordDraw's negative viewport. Clockwise culls the Saturn
+            // skybox and its rings together.
+            pipeline.raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         }
         pipeline.addDescriptorSetInfo(spanone { descriptor_info })
             .setColorBlendStates(spanone { color_blend })

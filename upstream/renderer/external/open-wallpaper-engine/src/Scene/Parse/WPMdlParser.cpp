@@ -17,11 +17,15 @@ using namespace wallpaper;
 
 namespace
 {
-constexpr uint32_t kIndexTriangleBytes = 2 * 3;
+constexpr uint32_t kIndexTriangleBytes   = 2 * 3;
+constexpr uint32_t kIndex32TriangleBytes = 4 * 3;
 constexpr uint32_t kSingleBoneFrameBytes = 4 * 9;
 constexpr uint32_t kMaxMdlMeshes       = 64;
-constexpr uint32_t kMaxMdlVertices     = 1'000'000;
-constexpr uint32_t kMaxMdlTriangles    = 2'000'000;
+// A scanned asteroid in a perspective scene is about 3.1 million vertices.
+// The cap stays well below a corrupt size field (those arrive near 2^31)
+// and the payload still has to be present in the file before anything is stored.
+constexpr uint32_t kMaxMdlVertices     = 4'000'000;
+constexpr uint32_t kMaxMdlTriangles    = 4'000'000;
 constexpr uint32_t kMaxMdlParts        = 1'000'000;
 constexpr uint32_t kMaxMdlMasks        = 16'384;
 constexpr uint32_t kMaxMdlMaskParts    = 1'000'000;
@@ -206,19 +210,31 @@ bool ParseMesh(fs::MemBinaryStream& f, const WPMdl::Header& header, WPMdl::Mesh&
 
     if (! HasRemaining(f, 4)) return false;
     const uint32_t indices_size = f.ReadUint32();
-    if (indices_size % kIndexTriangleBytes != 0) {
+    // A mesh whose vertices no longer fit in a 16-bit index is stored as
+    // uint32 triples. Treating that blob as uint16 reports twice as many
+    // triangles, trips the triangle cap, and the body never enters the scene.
+    const bool     wide_indices = vertex_num > 65535u;
+    const uint32_t index_stride = wide_indices ? kIndex32TriangleBytes : kIndexTriangleBytes;
+    if (index_stride == 0 || indices_size % index_stride != 0) {
         LOG_ERROR("unsupport mdl indices size %d in %s", indices_size, std::string(path).c_str());
         return false;
     }
-    const uint32_t index_count = indices_size / kIndexTriangleBytes;
-    if (index_count > kMaxMdlTriangles || ! HasRemaining(f, indices_size)) {
+    const uint32_t triangle_count = indices_size / index_stride;
+    if (triangle_count > kMaxMdlTriangles || ! HasRemaining(f, indices_size)) {
         LOG_ERROR("mdlv%d index payload too large or truncated in %s",
                   header.mdlv, std::string(path).c_str());
         return false;
     }
-    mesh.indices.resize(index_count);
+    mesh.indices.resize(triangle_count);
     for (auto& id : mesh.indices) {
-        for (auto& v : id) v = f.ReadUint16();
+        for (auto& v : id) {
+            v = wide_indices ? f.ReadUint32() : static_cast<uint32_t>(f.ReadUint16());
+            if (wide_indices && v >= vertex_num) {
+                LOG_ERROR("mdlv%d index %u out of range (vertices %u) in %s",
+                          header.mdlv, v, vertex_num, std::string(path).c_str());
+                return false;
+            }
+        }
     }
 
     if (header.mdlv >= 21) {
@@ -936,23 +952,39 @@ SceneVertexArray MakePuppetVertexArray(const std::size_t vertex_count) {
                             vertex_count);
 }
 
-std::vector<uint16_t> FlattenIndices16(std::span<const std::array<uint16_t, 3>> triangles) {
-    std::vector<uint16_t> indices;
-    indices.reserve(triangles.size() * 3);
+bool MeshIndicesNeedWideStorage(std::span<const std::array<uint32_t, 3>> triangles) {
     for (const auto& triangle : triangles) {
-        for (const uint16_t index : triangle) indices.push_back(index);
+        for (const uint32_t index : triangle) {
+            if (index > 65535u) return true;
+        }
     }
-    return indices;
+    return false;
 }
 
-SceneIndexArray MakePuppetIndexArray(std::span<const std::array<uint16_t, 3>> triangles) {
-    const auto indices = FlattenIndices16(triangles);
-    if (indices.empty()) {
+SceneIndexArray MakePuppetIndexArray(std::span<const std::array<uint32_t, 3>> triangles) {
+    if (triangles.empty()) {
         static constexpr std::array<uint32_t, 1> kPaddedEmptyIndex { 0u };
         return SceneIndexArray(kPaddedEmptyIndex);
     }
-    SceneIndexArray index_array(triangles.size());
-    index_array.AssignHalf(0, indices);
+    if (! MeshIndicesNeedWideStorage(triangles)) {
+        std::vector<uint16_t> indices;
+        indices.reserve(triangles.size() * 3);
+        for (const auto& triangle : triangles) {
+            for (const uint32_t index : triangle) indices.push_back(static_cast<uint16_t>(index));
+        }
+        SceneIndexArray index_array(triangles.size());
+        index_array.AssignHalf(0, indices);
+        return index_array;
+    }
+    std::vector<uint32_t> indices;
+    indices.reserve(triangles.size() * 3);
+    for (const auto& triangle : triangles) {
+        for (const uint32_t index : triangle) indices.push_back(index);
+    }
+    // UInt32 capacity is counted in quads (6 indices). One triangle is half a quad.
+    const usize quads = (triangles.size() + 1) / 2;
+    SceneIndexArray index_array(quads == 0 ? 1 : quads, SceneIndexWidth::UInt32);
+    index_array.Assign(0, indices);
     return index_array;
 }
 

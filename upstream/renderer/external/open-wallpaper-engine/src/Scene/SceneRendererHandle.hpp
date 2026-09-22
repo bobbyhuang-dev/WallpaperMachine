@@ -65,6 +65,7 @@ public:
         auto candidate = std::make_unique<vulkan::VulkanRender>();
         if (! candidate->init(info)) return false;
         m_vulkan = std::move(candidate);
+        if (! m_pipeline_cache_path.empty()) m_vulkan->SetPipelineCachePath(m_pipeline_cache_path);
         return true;
     }
 
@@ -205,11 +206,12 @@ public:
     void SetWallpaperHorizontalFlip(bool value) {
         OWE_FORWARD_VOID(SetWallpaperHorizontalFlip(value));
     }
-    /// Native-only: the compatibility backend has no pipeline archive, and
-    /// giving it one would mean inventing an equivalent for a renderer that
-    /// does not create Metal pipelines.
+    /// Both backends keep compiled pipelines beside this scene's shaders.
+    /// Metal uses its binary archive; Vulkan uses the driver's pipeline cache.
     void SetPipelineArchivePath(std::string_view path) {
+        m_pipeline_cache_path = std::string(path);
         if (m_metal != nullptr) m_metal->SetPipelineArchivePath(path);
+        if (m_vulkan != nullptr) m_vulkan->SetPipelineCachePath(m_pipeline_cache_path);
     }
     void SetVideoPlaybackPaused(bool value) { OWE_FORWARD_VOID(SetVideoPlaybackPaused(value)); }
     void SetVideoPlaybackRate(float value) { OWE_FORWARD_VOID(SetVideoPlaybackRate(value)); }
@@ -253,6 +255,7 @@ private:
 
     std::unique_ptr<vulkan::VulkanRender> m_vulkan;
     std::unique_ptr<metal::MetalRender>   m_metal;
+    std::string                           m_pipeline_cache_path;
 };
 
 } // namespace wallpaper

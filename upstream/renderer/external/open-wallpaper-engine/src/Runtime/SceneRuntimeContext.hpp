@@ -158,6 +158,10 @@ public:
                                  TextLayerRenderFrame target_frame = {});
     void RegisterMaterialAlphaAnimation(std::shared_ptr<SceneMaterial> material,
                                         std::shared_ptr<ScalarAnimationPlayback> animation);
+    // A scripted or user-bound image `alpha` is not an animation timeline.
+    // The flat shader reads `g_Alpha`, so the live value has to land there.
+    void BindMaterialAlpha(std::shared_ptr<SceneMaterial> material,
+                           std::unique_ptr<DynamicValue> value);
     std::shared_ptr<ScalarAnimationPlayback> RegisterScalarAnimation(std::string_view layer_name,
                                                                    ScalarAnimation animation);
     ScalarAnimationPlayback* FindScalarAnimation(std::string_view layer_name,

@@ -286,7 +286,10 @@ impl EngineFacade for RealEngineFacade {
                 results?
             };
             *previous = scenes;
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            // A cold MoltenVK pipeline compile for a large 3D or puppet scene
+            // runs past 20s. The driver's cache makes the next launch short;
+            // the first one still has to be allowed to finish.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
             loop {
                 let ready = {
                     let frames = ready_frames.lock().unwrap_or_else(|e| e.into_inner());
@@ -296,7 +299,7 @@ impl EngineFacade for RealEngineFacade {
                 };
                 if ready { break; }
                 if std::time::Instant::now() >= deadline {
-                    return Err(EngineError::Render("The wallpaper did not render a first frame within 20 seconds. Check the project files and shared scene assets; this wallpaper may use unsupported effects. Your previous configuration will be restored.".into()));
+                    return Err(EngineError::Render("The wallpaper did not render a first frame within 90 seconds. Check the project files and shared scene assets; this wallpaper may use unsupported effects. Your previous configuration will be restored.".into()));
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }

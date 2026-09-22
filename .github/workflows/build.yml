@@ -1,4 +1,5 @@
-# Build the Release app on macOS and attach it to the tag's GitHub Release.
+# Build the Release app on macOS, prove what was built, and attach it to the tag's
+# GitHub Release.
 #
 # Called by Version right after it pushes a bump tag, and by Release for hand-pushed
 # tags. Version has to call it directly: a tag pushed with GITHUB_TOKEN never starts
@@ -9,6 +10,11 @@
 # with Apache-2.0 MoltenVK, vulkan-loader, SPIRV-Tools and glslang) and what resolves
 # them. Delete that step only in the commit that records the resolution there; there
 # is no input or secret that bypasses it. Local packaging (docs/build.md) is unaffected.
+#
+# The release is created as a draft and published only after the archive it needs is
+# uploaded, so the in-app updater never sees a "latest" release with nothing to
+# download. Everything published is derived from the build: the notes from the commit
+# range, the checksum from the archive, the provenance attestation from this run.
 name: Build
 
 on:
@@ -25,7 +31,13 @@ permissions:
 jobs:
   publish:
     runs-on: macos-26
-    timeout-minutes: 120
+    timeout-minutes: 150
+    permissions:
+      contents: write
+      # actions/attest-build-provenance signs with a workflow OIDC token and records
+      # the attestation against the repository.
+      id-token: write
+      attestations: write
     steps:
       - name: Distribution is blocked pending LICENSING.md
         run: |
@@ -37,6 +49,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag }}
+          # Release notes read the commits between this tag and the previous one.
+          fetch-depth: 0
 
       - name: Install renderer and Xcode project dependencies
         run: |
@@ -57,28 +71,88 @@ jobs:
           key: renderer-${{ hashFiles('upstream/renderer/Cargo.lock') }}
           restore-keys: renderer-
 
-      - name: Build and package
+      - name: Build
         run: |
           set -euo pipefail
           xcodebuild -version
           python3 scripts/build.py --configuration Release
-          python3 scripts/package.py --configuration Release
 
-      - name: Publish the release asset
+      - name: Test
+        # A published binary has passed the same gate a change has to pass. The
+        # renderer and the generated bridge already exist from the build step, so
+        # this adds the test target, not another renderer build.
+        run: python3 scripts/test.py
+
+      - name: Package
+        run: python3 scripts/package.py --configuration Release
+
+      - name: Verify the archive
+        id: verify
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          # package.py names the archive from CFBundleShortVersionString, so a mismatch here
-          # means the bump never reached the build the in-app updater would download.
-          archive="build/Build/Products/Release/WallpaperMachine-${TAG#v}-arm64.zip"
-          if [ ! -f "$archive" ]; then
-            echo "Built archive does not match ${TAG}:"
-            ls build/Build/Products/Release/*.zip || true
+          version="${TAG#v}"
+          directory="build/Build/Products/Release"
+          name="WallpaperMachine-${version}-arm64.zip"
+          if [ ! -f "${directory}/${name}" ]; then
+            echo "::error::No ${name} in ${directory}. scripts/package.py names the archive from the built bundle's CFBundleShortVersionString, so the version bump never reached this build."
+            ls -1 "${directory}"/*.zip 2>/dev/null || true
             exit 1
           fi
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+          # Prove the archive, not the build tree: the updater downloads and unpacks
+          # exactly this file, and an app that does not survive the round trip is not
+          # a release.
+          work="$(mktemp -d)"
+          ditto -x -k "${directory}/${name}" "${work}"
+          app="${work}/WallpaperMachine.app"
+          built="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${app}/Contents/Info.plist")"
+          if [ "${built}" != "${version}" ]; then
+            echo "::error::The archive carries version ${built} but the tag is ${TAG}."
+            exit 1
           fi
-          gh release upload "$TAG" "$archive" --clobber
+          codesign --verify --deep --strict "${app}"
+          rm -rf "${work}"
+          ( cd "${directory}" && shasum -a 256 "${name}" > "${name}.sha256" )
+          {
+            echo "archive=${directory}/${name}"
+            echo "checksum=${directory}/${name}.sha256"
+            echo "version=${version}"
+          } >> "$GITHUB_OUTPUT"
+          echo "### \`${name}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          cat "${directory}/${name}.sha256" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write the release notes
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_notes.py --tag "$TAG" --release-body \
+            --built-from "$(git rev-parse HEAD)" --output "${RUNNER_TEMP}/notes.md"
+          cat "${RUNNER_TEMP}/notes.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attest the build provenance
+        # The SLSA predicate records this workflow run and the revision that
+        # triggered it. For a Version-produced tag that trigger is the push to main,
+        # not the bump commit the tag points at, so the attestation identifies the
+        # run and the builder, not the built source. The notes carry the built
+        # revision instead, and it is checkable against the tag.
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ steps.verify.outputs.archive }}
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          ARCHIVE: ${{ steps.verify.outputs.archive }}
+          CHECKSUM: ${{ steps.verify.outputs.checksum }}
+        # Drafts first, a live release is refused rather than clobbered, and Latest
+        # is claimed only when no greater version is public: scripts/publish_release.py,
+        # covered by scripts/tests/test_publish_release.py.
+        run: |
+          python3 scripts/publish_release.py --tag "$TAG" --notes "${RUNNER_TEMP}/notes.md" \
+            "$ARCHIVE" "$CHECKSUM"

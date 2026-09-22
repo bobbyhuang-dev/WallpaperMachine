@@ -42,6 +42,74 @@ final class AppUpdateTests: XCTestCase {
         XCTAssertNil(GitHubReleaseParser.selectAsset(from: release))
     }
 
+    func testPublishedArchiveNameIsTheOneTheBuildUploads() {
+        // scripts/package.py writes this name and .github/workflows/build.yml refuses
+        // to publish anything else. Renaming one side without the others silently
+        // drops every user back to a manual download.
+        XCTAssertEqual(AppUpdateConfiguration.assetName(for: SemanticVersion("1.2.3")!),
+                       "WallpaperMachine-1.2.3-arm64.zip")
+    }
+
+    func testParserPrefersTheArchiveNamedForThisVersion() throws {
+        let release = try GitHubReleaseParser.decode(Self.releaseJSON(
+            tag: "v1.2.3",
+            assets: [
+                ("WallpaperMachine-1.2.2-arm64.zip", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/old.zip", 100, nil),
+                ("WallpaperMachine-1.2.3-arm64.zip", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/new.zip", 300, nil)
+            ]
+        ))
+        XCTAssertEqual(GitHubReleaseParser.selectAsset(from: release)?.name, "WallpaperMachine-1.2.3-arm64.zip")
+    }
+
+    func testChecksumSidecarIsNeverDownloadedAsAnUpdate() throws {
+        let release = try GitHubReleaseParser.decode(Self.releaseJSON(
+            tag: "v1.2.3",
+            assets: [("WallpaperMachine-1.2.3-arm64.zip.sha256", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/sum", 90, nil)]
+        ))
+        XCTAssertNil(GitHubReleaseParser.selectAsset(from: release))
+    }
+
+    func testReleaseNotesReadTheSectionsAndStopAtTheInstallFooter() throws {
+        let body = """
+        ### New
+
+        - **panel** — Add a filter rail ([`aaa1111`](https://github.com/o/r/commit/aaa1111))
+
+        ### Fixed
+
+        - **scene** — Stop a crash ([`bbb2222`](https://github.com/o/r/commit/bbb2222))
+
+        Plus 3 documentation, test and tooling commits.
+
+        **Full changelog**: https://github.com/o/r/compare/v1.2.2...v1.2.3
+
+        \(ReleaseNotes.boundary)
+
+        ### Install
+
+        1. Download `WallpaperMachine-1.2.3-arm64.zip` and unzip it.
+        """
+        let notes = try XCTUnwrap(ReleaseNotes(version: "1.2.3", body: body))
+        XCTAssertEqual(notes.sections.map(\.title), ["New", "Fixed", ""])
+        XCTAssertEqual(notes.sections[0].items, ["panel — Add a filter rail"])
+        XCTAssertEqual(notes.sections[1].items, ["scene — Stop a crash"])
+        XCTAssertEqual(notes.sections[2].items, ["Plus 3 documentation, test and tooling commits."])
+    }
+
+    func testAReleaseWithNothingToSayHasNoNotes() {
+        XCTAssertNil(ReleaseNotes(version: "1.2.3", body: ""))
+        XCTAssertNil(ReleaseNotes(version: "1.2.3",
+                                  body: "**Full changelog**: https://github.com/o/r/compare/v1.2.2...v1.2.3"))
+    }
+
+    func testCheckPublishesWhatTheNewestReleaseChanged() async {
+        let fixture = Fixture()
+        fixture.client.release = fixture.release(version: "1.1.0", notes: "### Fixed\n\n- **scene** — Stop a crash\n")
+        await fixture.store.checkForUpdates()
+        XCTAssertEqual(fixture.store.releaseNotes?.version, "1.1.0")
+        XCTAssertEqual(fixture.store.releaseNotes?.sections.first?.items, ["scene — Stop a crash"])
+    }
+
     func testDownloadHostAllowlistAndDigestParsing() {
         XCTAssertTrue(GitHubReleaseDownload.isAllowed(URL(string: "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1/app.zip")!))
         XCTAssertTrue(GitHubReleaseDownload.isAllowed(URL(string: "https://objects.githubusercontent.com/github-production-release-asset/1")!))
@@ -211,7 +279,7 @@ private final class Fixture {
         )
     }
 
-    func release(version: String, assets: [GitHubReleaseAsset]? = nil) -> GitHubRelease {
+    func release(version: String, assets: [GitHubReleaseAsset]? = nil, notes: String = "") -> GitHubRelease {
         let defaultAssets = [
             GitHubReleaseAsset(
                 name: "WallpaperMachine-\(version)-arm64.zip",
@@ -224,7 +292,8 @@ private final class Fixture {
             version: SemanticVersion(version)!,
             htmlURL: URL(string: "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/tag/v\(version)")!,
             prerelease: false,
-            assets: assets ?? defaultAssets
+            assets: assets ?? defaultAssets,
+            notes: notes
         )
     }
 }
@@ -326,19 +395,20 @@ private final class Gate: @unchecked Sendable {
 }
 
 private extension AppUpdateTests {
-    static func releaseJSON(tag: String, prerelease: Bool = false,
+    static func releaseJSON(tag: String, prerelease: Bool = false, body: String = "",
                             assets: [(String, String, Int, String?)] = []) -> Data {
-        let assetJSON = assets.map { name, url, size, digest in
-            var fields = """
-            "name":"\(name)","browser_download_url":"\(url)","size":\(size)
-            """
-            if let digest {
-                fields += ",\"digest\":\"\(digest)\""
-            }
-            return "{\(fields)}"
-        }.joined(separator: ",")
-        return Data("""
-        {"tag_name":"\(tag)","html_url":"https://github.com/bobbyhuang-dev/WallpaperMachine/releases/tag/\(tag)","prerelease":\(prerelease),"assets":[\(assetJSON)]}
-        """.utf8)
+        let assetObjects: [[String: Any]] = assets.map { name, url, size, digest in
+            var fields: [String: Any] = ["name": name, "browser_download_url": url, "size": size]
+            if let digest { fields["digest"] = digest }
+            return fields
+        }
+        let payload: [String: Any] = [
+            "tag_name": tag,
+            "html_url": "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/tag/\(tag)",
+            "prerelease": prerelease,
+            "body": body,
+            "assets": assetObjects,
+        ]
+        return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
     }
 }

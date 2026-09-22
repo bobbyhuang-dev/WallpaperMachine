@@ -418,7 +418,7 @@ extension WebPanelController {
       "savedAccount": workshop.downloader.savedAccount as Any? ?? null,
       "rememberSession": workshop.downloader.rememberSessionWhileRunning ?? remembersSession,
       "downloadError": downloadError as Any? ?? null,
-      "update": Self.update(updater.state),
+      "update": Self.update(updater.state, notes: updater.releaseNotes),
       "import": [
         "busy": importTask != nil, "status": importStatus,
         "report": importReport.map { report -> [String: Any] in
@@ -431,7 +431,7 @@ extension WebPanelController {
     ]
   }
 
-  static func update(_ state: AppUpdateState) -> [String: Any] {
+  static func update(_ state: AppUpdateState, notes: ReleaseNotes? = nil) -> [String: Any] {
     let null = NSNull()
     let status: String
     let statusText: String
@@ -519,6 +519,10 @@ extension WebPanelController {
       "status": status, "statusText": statusText, "action": action, "actionLabel": actionLabel,
       "showsAction": showsAction, "showsReleases": showsReleases, "showsReveal": showsReveal,
       "busy": state.isBusy, "percent": percent, "transferred": transferred, "total": total,
+      "notesVersion": notes?.version as Any? ?? null,
+      "notes": notes?.sections.map { section -> [String: Any] in
+        ["title": section.title, "items": section.items]
+      } ?? [],
       "footnote": String(
         localized:
           "Updates are checked against the latest published GitHub Release. Download and restart-install happen only after you confirm."

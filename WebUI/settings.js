@@ -314,6 +314,16 @@ function draw(view) {
     ? `<progress class="settings-progress" max="1" value="${Math.max(0, Math.min(1, Number(update.percent || 0) / 100))}" aria-label="${e(update.progressLabel || t('Update download progress'))}"></progress>`
       + (Number(update.total) > 0 ? `<div class="settings-note">${e(t('{received} of {expected}', { received: bytes(update.transferred), expected: bytes(update.total) }))}</div>` : '')
     : '';
+  // The release body the app shows is what scripts/release_notes.py wrote from the
+  // commits; its headings go through t() so a known one is translated and an
+  // unexpected one still reads.
+  const noteSections = (Array.isArray(update.notes) ? update.notes : []).filter(part => (part.items || []).length);
+  const updateNotes = noteSections.length
+    ? disclosure('about-notes',
+      update.notesVersion ? t('What’s new in {version}', { version: update.notesVersion }) : t('What’s new'),
+      `<div class="settings-notes">${noteSections.map(part => (part.title ? `<h4>${e(t(part.title))}</h4>` : '')
+        + `<ul>${(part.items || []).map(item => `<li>${e(item)}</li>`).join('')}</ul>`).join('')}</div>`)
+    : '';
   const updateActions = (update.showsAction && update.action ? button(update.actionLabel || t('Check for Updates'), update.action, {}, updateBusy || busy, update.status === 'available' || update.status === 'ready' ? 'settings-primary' : '') : '')
     + (update.showsReleases ? button(update.releasesLabel || t('Open GitHub Releases'), 'openReleases', {}, updateBusy) : '')
     + (update.showsReveal ? button(update.revealLabel || t('Show in Finder'), 'revealDownloadedUpdate', {}, updateBusy) : '');
@@ -326,6 +336,7 @@ function draw(view) {
     + `<div class="settings-group-gap"></div>`
     + `<div class="settings-download" data-key="about-updates" aria-busy="${updateBusy}"><h3>${e(t('Updates'))}</h3><div class="settings-status" role="status" aria-live="polite">${e(update.statusText || t('Updates not yet checked'))}</div>`
     + updateProgress
+    + updateNotes
     + `<div class="settings-form-actions">${updateActions}</div>`
     + `<p class="settings-note">${e(update.footnote || t('Updates are checked against the latest published GitHub Release. Download and restart-install happen only after you confirm.'))}</p></div>`
     + `<div class="settings-group-gap"></div>`

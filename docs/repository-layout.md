@@ -8,6 +8,7 @@ For how the pieces interact at runtime, see [architecture.md](architecture.md).
 ```
 AGENTS.md                          agent rules; authoritative for automated contributors
 CLAUDE.md -> AGENTS.md              Claude entry point; relative symlink, same rules
+CHANGELOG.md                       published versions, newest first; written by scripts/release_notes.py
 CONTRIBUTING.md                    contributor working agreement
 LICENSE                            GNU GPL version 2 text; the license of this repository's source (verbatim copy of upstream/renderer/LICENSE)
 LICENSING.md                       GPL-2.0-only policy, sales model, component licenses and distribution blockers
@@ -115,9 +116,9 @@ Things that must not appear:
 | Swift source | `UpperCamelCase.swift` matching its primary type (`BridgeStore.swift`, `WallpaperSurface.swift`) |
 | Swift files holding a family of types | Named after the concept, not one type (`AppTheme.swift`, `AppUpdateModels.swift`) |
 | Swift tests | `<Subject>Tests.swift`, in the domain folder of the code under test |
-| Python scripts and helpers | `snake_case.py` (`build.py`, `check_renderer.py`, `bump_version.py`, `log_verification.py`, `lib/xcode.py`) |
+| Python scripts and helpers | `snake_case.py` (`build.py`, `check_renderer.py`, `bump_version.py`, `release_notes.py`, `publish_release.py`, `lib/xcode.py`) |
 | Python tests | `test_<module>.py` under `scripts/tests/` |
 | Web panel files | lowercase, one concern per file (`panel.js`, `settings.css`, `theme.js`) |
 | Markdown under `docs/` | lowercase-hyphenated (`repository-layout.md`, `development-tools.md`); `README.md` is the only uppercase name |
-| Root Markdown | uppercase (`README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `LICENSING.md`); the license text is the extensionless `LICENSE` |
+| Root Markdown | uppercase (`README.md`, `AGENTS.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `LICENSING.md`); the license text is the extensionless `LICENSE` |
 | Bundle identifiers | `app.wallpapermachine` and `app.wallpapermachine.wallpaper-extension` |

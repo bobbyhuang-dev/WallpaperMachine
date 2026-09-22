@@ -160,6 +160,10 @@
 .settings-disclosure[open] > summary svg { transform: rotate(90deg); }
 .settings-disclosure-body { min-width: 0; padding-top: 9px; }
 .settings-disclosure-body p { color: var(--muted); font-size: 11px; line-height: 1.6; margin: 0 0 10px; max-width: 70ch; }
+.settings-notes h4 { color: var(--text); font-size: 11px; font-weight: 600; margin: 0 0 5px; }
+.settings-notes h4 + ul { margin-top: 0; }
+.settings-notes ul { list-style: disc; color: var(--muted); font-size: 11px; line-height: 1.6; margin: 0 0 10px; padding-left: 16px; max-width: 70ch; }
+.settings-notes li { margin: 0 0 3px; overflow-wrap: anywhere; user-select: text; }
 .settings-display + .settings-display { margin-top: 28px; }
 .settings-display .settings-disclosure-body { padding-top: 0; }
 .settings-form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 10px 0; }

@@ -15,6 +15,14 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-22 — Transparent menu bar icon
+
+- Regenerated 1x/2x tray assets; export converts Quick Look's white matte to alpha while retaining antialiased coverage.
+- python3 -m unittest discover -s scripts/tests -p test_brand.py: 2 passed, including generated background/interior transparency, opaque glyph and partial edge alpha at both sizes.
+- python3 scripts/test.py: Python checks passed; native 535 passed, 0 failed, 11 skipped.
+- Offscreen AppKit composite visually inspected on a blue background; no rectangular white matte. Live menu bar not inspected; no desktop interaction.
+- Release app not rebuilt; running app retains previous assets.
+
 ## 2026-09-22 — Release build with new WallpaperMachine branding
 
 - Prior python3 scripts/test.py gate passed: 535 native passed, 0 failed, 11 skipped; Python checks passed.

@@ -26,7 +26,8 @@ live under `testing/`.
 | Document | Purpose |
 |---|---|
 | [conventions.md](conventions.md) | Code, test, documentation, commit and pull-request rules |
-| [release.md](release.md) | Versioning, release specs, CI pipeline, in-app updater contract |
+| [release.md](release.md) | Versioning, release specs, notes generation, CI pipeline, in-app updater contract |
+| [../CHANGELOG.md](../CHANGELOG.md) | Published versions, newest first; written by `scripts/release_notes.py` |
 | [development-tools.md](development-tools.md) | Optional diagnostics and the desktop authorization boundary |
 | [../AGENTS.md](../AGENTS.md) / [../CLAUDE.md](../CLAUDE.md) | Agent rules; CLAUDE.md is a symlink, not a separate policy |
 | [../LICENSING.md](../LICENSING.md) | GPL-2.0-only source policy, sales model (official build plus priority support), component licenses, distribution blockers |

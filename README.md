@@ -52,7 +52,8 @@ boundaries.
 - [docs/README.md](docs/README.md) — documentation index
 - [CONTRIBUTING.md](CONTRIBUTING.md) — contributor working agreement
 - [docs/testing/README.md](docs/testing/README.md) — test strategy, commands, evidence policy
-- [docs/release.md](docs/release.md) — versioning and the CI release pipeline
+- [docs/release.md](docs/release.md) — versioning, release notes and the CI release pipeline
+- [CHANGELOG.md](CHANGELOG.md) — what changed in each published version
 - [AGENTS.md](AGENTS.md) — rules for agents working in this repository
 
 ## Source, licensing and status

@@ -341,7 +341,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       downloader: WorkshopDownloadManager(sessionDirectory: root), supportDirectory: root,
       defaults: defaults)
     let client = PanelUpdateClient()
-    client.release = PanelUpdateClient.release(version: "1.1.0")
+    client.release = PanelUpdateClient.release(version: "1.1.0", notes: PanelUpdateClient.notesBody)
     let installer = PanelUpdateInstaller()
     let updater = AppUpdateStore(
       currentVersion: "1.0.0", client: client, installer: installer,
@@ -389,7 +389,10 @@ final class ControlPanelShellTests: ControlPanelTestCase {
         const ready = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
         document.querySelector('[data-section="general"]').click();
         await waitFor(() => !document.getElementById('settings-general').hidden);
-        return {status: ready.update.status, action: ready.update.action, fetchCalls: true};
+        const notes = Array.from(document.querySelectorAll('[data-key="about-notes"] li')).map(node => node.textContent);
+        const headings = Array.from(document.querySelectorAll('[data-key="about-notes"] h4')).map(node => node.textContent);
+        const notesTitle = document.querySelector('[data-key="about-notes"] summary').textContent;
+        return {status: ready.update.status, action: ready.update.action, notes, headings, notesTitle};
         """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
     XCTAssertEqual(byTab?["status"] as? String, "ready")
     XCTAssertEqual(byTab?["action"] as? String, "installUpdate")
@@ -398,6 +401,12 @@ final class ControlPanelShellTests: ControlPanelTestCase {
     XCTAssertEqual(installer.installCalls, 0)
     XCTAssertEqual(
       updater.state, .ready(currentVersion: "1.0.0", availableVersion: "1.1.0"))
+    XCTAssertEqual(byTab?["notesTitle"] as? String, "What’s new in 1.1.0")
+    XCTAssertEqual(byTab?["headings"] as? [String], ["Fixed"])
+    XCTAssertEqual(
+      byTab?["notes"] as? [String],
+      ["scene — Stop a crash", "Plus 2 documentation, test and tooling commits."],
+      "The card shows the release's own words and stops at the install footer")
 
     navigation.revealSettingsSection(.about)
     let restored =

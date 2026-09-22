@@ -132,7 +132,24 @@ final class PanelUpdateClient: AppUpdateClient, @unchecked Sendable {
     try Data("zip".utf8).write(to: destination)
   }
 
-  static func release(version: String) -> GitHubRelease {
+  /// A release body in the shape `scripts/release_notes.py --release-body` writes.
+  static let notesBody = """
+    ### Fixed
+
+    - **scene** — Stop a crash ([`bbb2222`](https://github.com/o/r/commit/bbb2222))
+
+    Plus 2 documentation, test and tooling commits.
+
+    **Full changelog**: https://github.com/o/r/compare/v1.0.0...v1.1.0
+
+    \(ReleaseNotes.boundary)
+
+    ### Install
+
+    1. Download `WallpaperMachine-1.1.0-arm64.zip` and unzip it.
+    """
+
+  static func release(version: String, notes: String = "") -> GitHubRelease {
     GitHubRelease(
       version: SemanticVersion(version)!,
       htmlURL: URL(
@@ -146,7 +163,7 @@ final class PanelUpdateClient: AppUpdateClient, @unchecked Sendable {
               "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v\(version)/WallpaperMachine-\(version)-arm64.zip"
           )!,
           size: 1_000, digest: nil)
-      ])
+      ], notes: notes)
   }
 }
 

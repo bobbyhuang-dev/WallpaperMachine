@@ -726,6 +726,14 @@ export default {
   'Updates': '更新',
   'Updates not yet checked': '尚未检查更新',
   'Update download progress': '更新下载进度',
+  'What’s new': '更新内容',
+  'What’s new in {version}': '{version} 的更新内容',
+  // Section headings written by scripts/release_notes.py; an unknown heading
+  // falls back to the release's own wording.
+  'Breaking changes': '不兼容变更',
+  'New': '新增',
+  'Fixed': '修复',
+  'Other changes': '其他变更',
   'Check for Updates': '检查更新',
   'Open GitHub Releases': '打开 GitHub Releases',
   'Updates are checked against the latest published GitHub Release. Download and restart-install happen only after you confirm.': '从 GitHub 检查最新发布的版本。确认之后才会下载并重启安装。',

@@ -6,6 +6,9 @@ import Observation
 @Observable
 final class AppUpdateStore {
     private(set) var state: AppUpdateState
+    /// What the newest published release says it changed, for the About card. Present
+    /// whether or not that release is newer than the running build.
+    private(set) var releaseNotes: ReleaseNotes?
     @ObservationIgnored private let currentVersion: String
     @ObservationIgnored private let client: any AppUpdateClient
     @ObservationIgnored private let installer: any AppUpdateInstalling
@@ -115,6 +118,7 @@ final class AppUpdateStore {
 
     private func performCheck() async -> AppUpdateState {
         available = nil
+        releaseNotes = nil
         activeOperation = .check
         state = .checking(currentVersion: currentVersion)
         defer {
@@ -127,6 +131,7 @@ final class AppUpdateStore {
             guard let current = SemanticVersion(currentVersion) else {
                 return fail(.check, AppUpdateIssue(code: .configuration, detail: String(localized: "The GitHub Release update metadata is unavailable.")))
             }
+            releaseNotes = ReleaseNotes(version: release.version.display, body: release.notes)
             if release.version <= current {
                 state = .upToDate(currentVersion: currentVersion)
                 return state

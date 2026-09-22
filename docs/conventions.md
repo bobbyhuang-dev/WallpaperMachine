@@ -186,6 +186,12 @@ The rules that bind every change:
   `docs(agents): record the new regression coverage and probe controls`,
   `chore(xcodeproj): match xcodegen target order`. Imperative mood, lower case
   after the colon, no trailing period.
+- The type is not decoration: `scripts/release_notes.py` groups `feat` under
+  **New**, `fix` under **Fixed**, `perf` under **Performance**, a `!` suffix or a
+  `BREAKING CHANGE:` trailer under **Breaking changes**, and counts `docs`, `test`,
+  `chore`, `ci`, `build` and `style` in one closing line. The subject is what users
+  read on the release page and in the app's What's new card, so write it for them.
+  See [release.md](release.md#release-notes-and-the-changelog).
 - A version bump is requested with a standalone `release: patch|minor|major|x.y.z`
   line and performed by CI; `chore: bump version to x.y.z` commits are produced
   by the Version workflow, not by hand. See [release.md](release.md).

@@ -18,6 +18,8 @@ jobs:
       tag: ${{ github.ref_name }}
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     # Same group as Version's publish job: one tag is only ever built once at a time.
     concurrency:
       group: publish-${{ github.ref_name }}

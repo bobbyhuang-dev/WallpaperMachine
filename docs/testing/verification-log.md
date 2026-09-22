@@ -25,6 +25,19 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-22 — Release system: generated notes, draft-first publishing, deleted old releases
+
+Reworked the release system end to end. scripts/release_notes.py writes the GitHub Release body and CHANGELOG.md from the commits between two tags; scripts/publish_release.py refuses a live release and cannot let Latest go backwards; build.yml gates on the test suite, verifies the unpacked archive and attests provenance; Settings -> About shows what the newest release changed. All thirteen releases through v0.5.0 were deleted at the owner's request, tags kept.
+
+- `python3 scripts/test.py` — exit 0; 554 tests: 543 passed, 0 failed, 11 skipped
+- `scripts/tests/test_release_notes.py` — 25 tests: classification, rendering, changelog ordering and range resolution against a throwaway git repository
+- `scripts/tests/test_publish_release.py` — 13 tests: a live release is refused before any mutation, a failed upload never reaches --draft=false, an older version finishing last gets --latest=false
+- Offscreen WebKit (ControlPanelShellTests) drives Settings -> About and asserts the What's new title, heading and lines, and that it stops at the install footer
+- Both CI invocation shapes exercised locally: `--tag vX --to HEAD --changelog --apply` (Version) and `--tag vX --release-body --built-from --output` (Build)
+- Release deletion verified: `gh release list` empty, `git ls-remote --tags origin` still 13 version tags, releases/latest 404, v0.1.0 and v0.5.0 still resolve to eb72174b0 and 66cfd6e0d
+- Provenance claim corrected against actions/toolkit packages/attest/src/provenance.ts: the SLSA predicate records claims.ref/claims.sha (the triggering push), not the bump commit the tag points at; the built revision is recorded in the release body instead
+- Not verified: no CI run (publishing remains blocked by the LICENSING.md gate), no Release build, no desktop run
+
 ## 2026-09-22 — Branding and icon selection rebased onto localization updates
 
 - Rebased the branding and selectable Dock icon changes onto origin/main at 0e85acc; retained remote UI copy and translations alongside the icon picker and welcome branding.
@@ -108,11 +121,3 @@ goes. Trimming is allowed; editing an entry's recorded result is not.
 - Offscreen AppKit rendering of TrayIcon loaded from the Release bundle at 16px and 32px matches source alpha within one 8-bit level; background and interior are transparent.
 - Initial bitmap-representation inspection was unsuitable for catalog-backed NSImage; verification used actual offscreen drawing instead.
 - Delivered build/Build/Products/Release/WallpaperMachine.app. App not launched or restarted; live menu bar verification left to user.
-
-## 2026-09-22 — Transparent menu bar icon
-
-- Regenerated 1x/2x tray assets; export converts Quick Look's white matte to alpha while retaining antialiased coverage.
-- python3 -m unittest discover -s scripts/tests -p test_brand.py: 2 passed, including generated background/interior transparency, opaque glyph and partial edge alpha at both sizes.
-- python3 scripts/test.py: Python checks passed; native 535 passed, 0 failed, 11 skipped.
-- Offscreen AppKit composite visually inspected on a blue background; no rectangular white matte. Live menu bar not inspected; no desktop interaction.
-- Release app not rebuilt; running app retains previous assets.

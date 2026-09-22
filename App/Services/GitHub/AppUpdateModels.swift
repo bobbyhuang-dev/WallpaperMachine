@@ -3,8 +3,15 @@ import Foundation
 enum AppUpdateConfiguration {
     static let repository = "bobbyhuang-dev/WallpaperMachine"
     static let bundleIdentifier = "app.wallpapermachine"
-    static let applicationName = "WallpaperMachine.app"
+    static let productName = "WallpaperMachine"
+    static let applicationName = productName + ".app"
     static let maximumDownloadBytes: Int64 = 1_073_741_824
+
+    /// The archive `scripts/package.py` produces and the Build workflow publishes.
+    /// Renaming the product moves both sides of this contract at once.
+    static func assetName(for version: SemanticVersion) -> String {
+        "\(productName)-\(version.display)-arm64.zip"
+    }
 
     static var repositoryURL: URL {
         URL(string: "https://github.com/\(repository)")!
@@ -68,6 +75,85 @@ struct GitHubRelease: Equatable, Sendable {
     let htmlURL: URL
     let prerelease: Bool
     let assets: [GitHubReleaseAsset]
+    /// The release body as GitHub published it, Markdown and all.
+    let notes: String
+
+    init(version: SemanticVersion, htmlURL: URL, prerelease: Bool, assets: [GitHubReleaseAsset], notes: String = "") {
+        self.version = version
+        self.htmlURL = htmlURL
+        self.prerelease = prerelease
+        self.assets = assets
+        self.notes = notes
+    }
+}
+
+/// What a release body says, reduced to the headings and lines a panel can show.
+///
+/// `scripts/release_notes.py` writes the body from the commits between two tags and
+/// ends the part meant for the app with ``boundary``; everything after it is download
+/// instructions the updater already performs. A hand-written body still parses: any
+/// heading starts a section and any other line becomes one of its lines.
+struct ReleaseNotes: Equatable, Sendable {
+    struct Section: Equatable, Sendable {
+        let title: String
+        let items: [String]
+    }
+
+    static let boundary = "<!-- release-notes-end -->"
+
+    let version: String
+    let sections: [Section]
+
+    init?(version: String, body: String) {
+        let sections = Self.parse(body)
+        guard !sections.isEmpty else { return nil }
+        self.version = version
+        self.sections = sections
+    }
+
+    static func parse(_ body: String) -> [Section] {
+        let text = body.components(separatedBy: boundary).first ?? body
+        var sections: [Section] = []
+        var title = ""
+        var items: [String] = []
+        var bullets = false
+        func flush(into next: String) {
+            if !items.isEmpty { sections.append(Section(title: title, items: items)) }
+            title = next
+            items = []
+        }
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            if trimmed.hasPrefix("#") {
+                flush(into: plain(trimmed.drop(while: { $0 == "#" })))
+                continue
+            }
+            // The compare link is the page's navigation, not something to read here.
+            if trimmed.hasPrefix("**Full changelog**") { continue }
+            let isBullet = trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ")
+            // A paragraph after a list closes it; it is a remark, not another entry.
+            if !items.isEmpty, isBullet != bullets { flush(into: "") }
+            bullets = isBullet
+            let item = plain(isBullet ? trimmed.dropFirst(2) : trimmed[...])
+            if !item.isEmpty { items.append(item) }
+        }
+        flush(into: "")
+        return sections
+    }
+
+    /// Markdown reduced to the words: the trailing commit reference goes, links keep
+    /// their text, emphasis and code fences lose their markers.
+    private static func plain(_ value: Substring) -> String {
+        var text = String(value).trimmingCharacters(in: .whitespaces)
+        for pattern in [#"\s*\(\[`[0-9a-f]{7,40}`\]\([^)]*\)\)$"#, #"\s*\(`[0-9a-f]{7,40}`\)$"#] {
+            text = text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+        }
+        text = text.replacingOccurrences(of: #"\[([^\]]*)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"\*{1,2}([^*]+)\*{1,2}"#, with: "$1", options: .regularExpression)
+        text = text.replacingOccurrences(of: "`", with: "")
+        return text.trimmingCharacters(in: .whitespaces)
+    }
 }
 
 enum AppUpdateState: Equatable, Sendable {
@@ -178,17 +264,20 @@ enum GitHubReleaseParser {
             guard let url = URL(string: asset.browserDownloadURL) else { return nil }
             return GitHubReleaseAsset(name: asset.name, downloadURL: url, size: asset.size, digest: asset.digest)
         }
-        return GitHubRelease(version: version, htmlURL: htmlURL, prerelease: payload.prerelease, assets: assets)
+        return GitHubRelease(version: version, htmlURL: htmlURL, prerelease: payload.prerelease,
+                             assets: assets, notes: payload.body ?? "")
     }
 
     static func selectAsset(from release: GitHubRelease) -> GitHubReleaseAsset? {
+        let expected = AppUpdateConfiguration.assetName(for: release.version).lowercased()
         let candidates = release.assets.filter { asset in
             let name = asset.name.lowercased()
             guard asset.isZip || asset.isDiskImage else { return false }
             if name.contains("blockmap") || name.contains(".yml") { return false }
-            return name.contains("wallpapermachine")
+            return name.contains(AppUpdateConfiguration.productName.lowercased())
         }
-        return candidates.first { $0.isZip && $0.name.lowercased().contains("arm64") }
+        return candidates.first { $0.name.lowercased() == expected }
+            ?? candidates.first { $0.isZip && $0.name.lowercased().contains("arm64") }
             ?? candidates.first { $0.isZip }
             ?? candidates.first { $0.isDiskImage }
     }
@@ -198,11 +287,12 @@ enum GitHubReleaseParser {
         let htmlURL: String
         let prerelease: Bool
         let assets: [Asset]
+        let body: String?
 
         enum CodingKeys: String, CodingKey {
             case tagName = "tag_name"
             case htmlURL = "html_url"
-            case prerelease, assets
+            case prerelease, assets, body
         }
 
         struct Asset: Decodable {

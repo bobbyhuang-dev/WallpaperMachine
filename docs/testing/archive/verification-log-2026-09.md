@@ -15,6 +15,14 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-22 — Requested Release build with improved Settings
+
+- python3 scripts/test.py passed: 104 Python tests; 544 native passed, 0 failed, 11 skipped of 555. Opt-in media and live-network checks remain skipped.
+- python3 scripts/build.py --swift-only --configuration Release succeeded using the existing renderer and generated bindings. Xcode reported 26 warning lines; build completed successfully.
+- diff -qr WebUI build/Build/Products/Release/WallpaperMachine.app/Contents/Resources/WebUI passed with no differences: all bundled WebUI files match current source, including the improved Settings page.
+- codesign --verify --deep --strict build/Build/Products/Release/WallpaperMachine.app passed.
+- Delivered build/Build/Products/Release/WallpaperMachine.app. Did not launch, quit, install or restart the app; user must quit and reopen this built app. Desktop visuals and live wallpaper behavior were not checked.
+
 ## 2026-09-22 — Bound and cancel shared property image loads
 
 - PropertyImageCache now tracks per-URL consumers, limits active transfers to four across hosts, cancels abandoned queued/active loads, and retains retiring slots until worker completion. Generation identity prevents stale completions affecting a replacement load.

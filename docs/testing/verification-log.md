@@ -25,6 +25,18 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-22 — Current Release built and old build residue cleared
+
+- Requested build and cleanup. Prebuild gate: python3 scripts/test.py: 142 Python tests passed; 563 native passed, 0 failed, 11 skipped of 574. No desktop UI, network or media opt-ins enabled.
+- Build: python3 scripts/build.py --swift-only --configuration Release: exit 0; reused the existing renderer archive and generated bindings. Delivered build/Build/Products/Release/WallpaperMachine.app, version 0.5.0 (16).
+- Bundle identity: all 15 WebUI source files, including property-label.js, match Contents/Resources/WebUI byte-for-byte via diff -rq. Sorted relative-path/file-digest manifest SHA-256: a4afba8dc4ef327abbb53118a2f5658861aa82ccd7f66dbe4c4bf88abd49d2bc.
+- Compiled Chinese localization verified with plutil: the normal no-update message is 暂无可用更新，可继续使用当前版本。 The Release now includes the updater feedback correction and integrated remote UI/property-label changes.
+- Cleanup previewed with scripts/clean.py --dry-run and --derived --dry-run. python3 scripts/clean.py --derived removed old artifacts, Python caches and Xcode module/index/compilation/SDK/log caches; script reported 1.38 GB reclaimed.
+- Also removed the inspected build/Build/Intermediates.noindex compiler tree (308168 KiB by du before deletion) and obsolete MacWallpaperEngine_macosx27.0-arm64.xctestrun. Combined cleanup approximately 1.7 GB; accounting is logical/script-estimated size, not a filesystem free-space benchmark.
+- Kept build/Build/Products/Release and Debug, the renderer release outputs and generated bindings. Did not use --all, --user-assets or --managed-user-assets; wallpapers, managed imports, settings and unrelated source/document work were not cleanup targets.
+- After cleanup: python3 -B scripts/clean.py --derived --dry-run reported Nothing to remove; WebUI diff and codesign --verify --deep --strict both exited 0. Release executable SHA-256 stayed 5b98ef7bb3de794d47df2aa0bd3edf2e9dd2daaeb123e2ffa45046cf338e16b0.
+- No package/install step, application launch/quit/restart or desktop control performed. User must quit the old running copy and reopen the delivered Release. Actual desktop presentation and power remain unverified.
+
 ## 2026-09-22 — Safe integration of remote UI and property-label changes
 
 - Push of local commit 2dd31b0 was rejected because origin/main advanced from 80f191b to 30e2ac7. Fetched the remote and rebased without force-pushing or dropping the upstream commit.
@@ -123,11 +135,3 @@ Reworked the release system end to end. scripts/release_notes.py writes the GitH
 - Release deletion verified: `gh release list` empty, `git ls-remote --tags origin` still 13 version tags, releases/latest 404, v0.1.0 and v0.5.0 still resolve to eb72174b0 and 66cfd6e0d
 - Provenance claim corrected against actions/toolkit packages/attest/src/provenance.ts: the SLSA predicate records claims.ref/claims.sha (the triggering push), not the bump commit the tag points at; the built revision is recorded in the release body instead
 - Not verified: no CI run (publishing remains blocked by the LICENSING.md gate), no Release build, no desktop run
-
-## 2026-09-22 — Requested Release build with improved Settings
-
-- python3 scripts/test.py passed: 104 Python tests; 544 native passed, 0 failed, 11 skipped of 555. Opt-in media and live-network checks remain skipped.
-- python3 scripts/build.py --swift-only --configuration Release succeeded using the existing renderer and generated bindings. Xcode reported 26 warning lines; build completed successfully.
-- diff -qr WebUI build/Build/Products/Release/WallpaperMachine.app/Contents/Resources/WebUI passed with no differences: all bundled WebUI files match current source, including the improved Settings page.
-- codesign --verify --deep --strict build/Build/Products/Release/WallpaperMachine.app passed.
-- Delivered build/Build/Products/Release/WallpaperMachine.app. Did not launch, quit, install or restart the app; user must quit and reopen this built app. Desktop visuals and live wallpaper behavior were not checked.

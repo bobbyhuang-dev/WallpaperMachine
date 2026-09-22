@@ -18,12 +18,28 @@ struct AppThemePreferences: Equatable {
     case neutral, warm, cool
   }
 
+  enum Icon: String {
+    case minimal, day, night
+
+    func image(in bundle: Bundle = .main) throws -> NSImage {
+      guard let url = bundle.url(
+        forResource: rawValue, withExtension: "png", subdirectory: "WebUI/app-icons")
+      else { throw CocoaError(.fileNoSuchFile) }
+      guard let image = NSImage(contentsOf: url), image.isValid else {
+        throw CocoaError(.fileReadCorruptFile)
+      }
+      image.size = NSSize(width: 512, height: 512)
+      return image
+    }
+  }
+
   var mode: Mode = .system
   var accent = "#80bbff"
   var tone: Tone = .neutral
+  var icon: Icon = .day
 
   var snapshot: [String: Any] {
-    ["mode": mode.rawValue, "accent": accent, "tone": tone.rawValue]
+    ["mode": mode.rawValue, "accent": accent, "tone": tone.rawValue, "icon": icon.rawValue]
   }
 
   static func validAccent(_ value: String) -> Bool {
@@ -55,6 +71,9 @@ final class AppThemeStore: ObservableObject {
     if let tone = saved["tone"] as? String, let value = AppThemePreferences.Tone(rawValue: tone) {
       preferences.tone = value
     }
+    if let icon = saved["icon"] as? String, let value = AppThemePreferences.Icon(rawValue: icon) {
+      preferences.icon = value
+    }
     self.preferences = preferences
   }
 
@@ -74,6 +93,11 @@ final class AppThemeStore: ObservableObject {
         throw WebPanelRequest.invalid
       }
       next.tone = tone
+    case "icon":
+      guard let icon = AppThemePreferences.Icon(rawValue: value) else {
+        throw WebPanelRequest.invalid
+      }
+      next.icon = icon
     default: throw WebPanelRequest.invalid
     }
     guard next != preferences else { return }

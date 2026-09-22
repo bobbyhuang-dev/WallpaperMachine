@@ -194,12 +194,12 @@ final class WebPanelController: NSObject, WKNavigationDelegate {
     let preferences = preferences ?? theme.preferences
     let content = view.configuration.userContentController
     content.removeAllUserScripts()
-    // Mode/tone are closed enums, accent is validated as six hexadecimal digits and the
+    // Mode/tone/icon are closed enums, accent is validated as six hexadecimal digits and the
     // language tag is reduced to letters, digits and hyphens by pageLanguage.
     content.addUserScript(
       WKUserScript(
         source:
-          "window.__appTheme = {mode:'\(preferences.mode.rawValue)',accent:'\(preferences.accent)',tone:'\(preferences.tone.rawValue)'};window.__appLanguage='\(language)';",
+          "window.__appTheme = {mode:'\(preferences.mode.rawValue)',accent:'\(preferences.accent)',tone:'\(preferences.tone.rawValue)',icon:'\(preferences.icon.rawValue)'};window.__appLanguage='\(language)';",
         injectionTime: .atDocumentStart, forMainFrameOnly: true))
   }
 
@@ -516,6 +516,7 @@ final class WebPanelAssets: NSObject, WKURLSchemeHandler {
   private static let files: Set<String> = [
     "index.html", "panel.js", "panel.css", "settings.js", "settings.css", "welcome.js",
     "welcome.css", "theme.js", "icons.js", "i18n.js",
+    "app-icons/minimal.png", "app-icons/day.png", "app-icons/night.png",
   ]
   /// One catalog module per shipped language, served as `mwe-ui://app/locales/<tag>.js`.
   private static let localeFiles: Set<String> = Set(

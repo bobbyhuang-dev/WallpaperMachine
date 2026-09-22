@@ -477,11 +477,16 @@ final class ControlPanelShellTests: ControlPanelTestCase {
         await change('accent', '#b43271');
         await change('tone', 'warm');
         await waitFor(() => root.dataset.tone === 'warm');
+        const night = document.querySelector('[data-theme-setting="icon"][value="night"]');
+        night.click();
+        await waitFor(() => !night.disabled && night.checked);
+        await Promise.all(Array.from(document.querySelectorAll('.settings-icon-option img'), image => image.decode()));
         const saved = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
         document.querySelector('[data-action="resetTheme"]').click();
         await waitFor(() => root.dataset.themeMode === 'system' && root.dataset.tone === 'neutral');
         const reset = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
-        return {initialBackground, darkBackground, saved:saved.theme, reset:reset.theme};
+        return {initialBackground, darkBackground, saved:saved.theme, reset:reset.theme,
+                resetIcon:document.querySelector('[data-theme-setting="icon"]:checked')?.value};
         """, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
     XCTAssertEqual(interactions?["initialBackground"] as? String, "rgb(255, 255, 255)")
     XCTAssertNotEqual(interactions?["darkBackground"] as? String, "rgb(255, 255, 255)")
@@ -489,9 +494,12 @@ final class ControlPanelShellTests: ControlPanelTestCase {
     XCTAssertEqual(saved?["mode"] as? String, "dark")
     XCTAssertEqual(saved?["accent"] as? String, "#b43271")
     XCTAssertEqual(saved?["tone"] as? String, "warm")
+    XCTAssertEqual(saved?["icon"] as? String, "night")
     let reset = interactions?["reset"] as? [String: Any]
     XCTAssertEqual(reset?["mode"] as? String, "system")
     XCTAssertEqual(reset?["tone"] as? String, "neutral")
+    XCTAssertEqual(reset?["icon"] as? String, "day")
+    XCTAssertEqual(interactions?["resetIcon"] as? String, "day")
     XCTAssertEqual(AppThemeStore(defaults: defaults).preferences, theme.preferences)
 
     // Override only this detached view to simulate live macOS appearance changes.
@@ -527,6 +535,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
     XCTAssertEqual(override, "light", "Explicit Light must win over a dark native appearance")
     try theme.set("accent", value: "#b43271")
     try theme.set("tone", value: "cool")
+    try theme.set("icon", value: "minimal")
     controller.webViewWebContentProcessDidTerminate(web)
     let recoveryDeadline = Date().addingTimeInterval(15)
     while !controller.isReady && Date() < recoveryDeadline {
@@ -538,11 +547,13 @@ final class ControlPanelShellTests: ControlPanelTestCase {
         """
         return {mode:document.documentElement.dataset.theme,
                 tone:document.documentElement.dataset.tone,
-                accent:getComputedStyle(document.documentElement).getPropertyValue('--accent-base').trim()};
+                accent:getComputedStyle(document.documentElement).getPropertyValue('--accent-base').trim(),
+                icon:document.querySelector('[data-theme-setting="icon"]:checked')?.value};
         """, arguments: [:], in: nil, contentWorld: .page) as? [String: String]
     XCTAssertEqual(recovered?["mode"], "light")
     XCTAssertEqual(recovered?["tone"], "cool")
     XCTAssertEqual(recovered?["accent"], "#b43271")
+    XCTAssertEqual(recovered?["icon"], "minimal")
     XCTAssertNil(web.window)
     await workshop.steamCMDSetup.shutdown()
   }

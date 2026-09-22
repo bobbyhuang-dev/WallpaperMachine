@@ -22,6 +22,7 @@
 .welcome-page { width: min(620px, 100%); display: grid; gap: 26px; animation: welcome-page-in 360ms cubic-bezier(.16, 1, .3, 1); }
 @keyframes welcome-page-in { from { opacity: 0; transform: translateY(12px); filter: blur(6px); } }
 .welcome-head { display: grid; gap: 10px; }
+.welcome-brand { display: flex; color: var(--accent); }
 .welcome-head h1 { font-size: 30px; font-weight: 700; letter-spacing: -.025em; line-height: 1.15; text-wrap: balance; outline: none; }
 .welcome-lead { font-size: 14px; line-height: 1.55; color: var(--muted); max-width: 62ch; }
 .welcome-note { font-size: 12px; line-height: 1.5; color: var(--muted); max-width: 68ch; }
@@ -33,6 +34,7 @@
 .welcome-choice legend svg { color: var(--accent); }
 .welcome-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 .welcome-option { position: relative; display: grid; gap: 4px; align-content: start; justify-items: start; min-height: 64px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); text-align: left; color: var(--text); transition: border-color 140ms, background-color 140ms; }
+.welcome-languages .welcome-option:not(:has(.welcome-option-note)) { align-content: center; justify-content: center; align-items: center; justify-items: center; text-align: center; }
 .welcome-option:hover:not(:disabled) { background: var(--raised); border-color: var(--line-strong); }
 .welcome-option[aria-checked="true"], .welcome-option[aria-checked="true"]:hover:not(:disabled) { border-color: var(--primary); background: var(--accent-soft); }
 .welcome-option-title { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 600; line-height: 1.3; }

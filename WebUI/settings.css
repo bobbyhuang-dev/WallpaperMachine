@@ -134,6 +134,18 @@
 #settings-content input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
 #settings-content input[type="color"]::-webkit-color-swatch { border: 1px solid var(--line-strong); border-radius: 3px; }
 .settings-hex { min-width: 62px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; text-align: right; user-select: text; }
+.settings-icon-picker { margin: 20px 0 12px; padding: 0; border: 0; min-width: 0; }
+.settings-icon-picker legend { padding: 0; font-weight: 600; }
+.settings-icon-picker > .settings-note { margin: 4px 0 12px; max-width: 60ch; }
+.settings-icon-options { display: flex; flex-wrap: wrap; gap: 12px; }
+.settings-icon-option { display: grid; justify-items: center; gap: 6px; cursor: pointer; }
+.settings-icon-option img { display: block; border: 2px solid transparent; border-radius: 12px; }
+.settings-icon-option:hover img { background: var(--raised); }
+.settings-icon-option:has(input:checked) img { border-color: var(--control); background: var(--accent-soft); }
+.settings-icon-option > span { display: flex; align-items: center; gap: 5px; }
+.settings-icon-option input { margin: 0; cursor: pointer; }
+.settings-icon-picker:disabled .settings-icon-option { cursor: not-allowed; }
+.settings-icon-picker:disabled img { opacity: 0.45; }
 .settings-switch { position: relative; display: inline-flex; flex: 0 0 30px; width: 30px; height: 18px; cursor: pointer; }
 .settings-switch input { appearance: none; position: absolute; width: 100%; height: 100%; margin: 0; border: 0; border-radius: 10px; background: var(--track); cursor: pointer; }
 .settings-switch input:checked { background: var(--primary); box-shadow: inset 0 0 0 1px var(--primary-line); }
@@ -164,7 +176,8 @@
 .settings-inline input { flex: 1; }
 .settings-path { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; user-select: text; margin: 9px 0; }
 .settings-help-links { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
-.settings-product { margin-bottom: 18px; }
+.settings-product { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
+.settings-product-mark { display: flex; flex: none; color: var(--accent); }
 .settings-product h3 { font-size: 16px; margin-bottom: 3px; letter-spacing: -0.02em; }
 .settings-attribution { margin: 14px 0; color: var(--muted); font-size: 11px; line-height: 1.6; max-width: 70ch; }
 .settings-footnote { margin: 16px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; max-width: 70ch; }

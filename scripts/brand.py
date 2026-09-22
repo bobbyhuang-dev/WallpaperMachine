@@ -1,0 +1,473 @@
+#!/usr/bin/env python3
+"""Generate the WallpaperMachine logo, app icon, tray icon and web favicons from one geometry.
+
+The mark is a rounded display frame, open at the bottom-left corner, with an eight-tooth gear
+sitting in the opening: the same two ideas as Wallpaper Engine's badge (a frame and a gear),
+drawn as a single mark that stays legible at 16 px. The native app icon uses a white
+background in light appearance and black in dark, with an aurora wallpaper panel.
+The wordmark is Manrope ("Wallpaper" bold, "Machine" medium), embedded as outlines in
+`lib/wordmark.py`.
+
+    python3 scripts/brand.py                      # native app, Dock choices and tray icon
+    python3 scripts/brand.py --website ../Site    # plus logo, favicons and manifest there
+    python3 scripts/brand.py --panel-glyph        # the inline mark used by WebUI/panel.js
+
+The app icon exports vector layers for Icon Composer. Website and tray rasters are drawn
+at 1024 px with Quick Look (`qlmanage`) and downsampled with `sips`, both part of macOS.
+Small website and tray exports use heavier strokes and bigger teeth.
+Dock choices use Icon Composer's macOS 26 renderer with a transparent outer margin.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+from pathlib import Path
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+
+from lib.glyphs import markers
+from lib.paths import ROOT
+from lib.wordmark import MACHINE_ADVANCE, MACHINE_PATH, WALLPAPER_ADVANCE, WALLPAPER_PATH
+
+MARK = markers()
+APP_ICON = ROOT / "App/Resources/AppIcon.icon"
+TRAY_ICON_SET = ROOT / "App/Resources/Assets.xcassets/TrayIcon.imageset"
+DOCK_ICONS = ROOT / "WebUI/app-icons"
+
+# Website exports retain the charcoal tile; native appearance backgrounds live in the
+# Icon Composer document. The wallpaper panel runs cyan -> blue -> violet.
+CHARCOAL_TOP, CHARCOAL_BOTTOM = "#2a3140", "#11151c"
+AURORA = ("#7cf0ff", "#3a86ff", "#8a3dff")
+LOGO_ACCENT_ON_LIGHT, LOGO_INK_ON_LIGHT = "#1f6fe5", "#14181f"
+LOGO_ACCENT_ON_DARK, LOGO_INK_ON_DARK = "#3d8bff", "#ffffff"
+FAVICON_BACKGROUND = "#11151c"
+
+# Mark geometry in a 24-unit box. The frame is a rounded rectangle drawn as a stroke; the
+# gear centre sits on the frame's bottom-left corner and the frame stops short of the gear
+# by `pad` units so the two never touch. `small` is for sizes at or below 64 px.
+FRAME = dict(left=4.0, top=3.0, right=21.0, bottom=20.0, radius=3.6)
+GEAR_CENTER = (5.9, 18.1)
+VARIANTS = {
+    "regular": dict(stroke=2.2, radius=4.7, pad=1.25, teeth=dict(
+        count=8, root=0.74, hub=0.31, tip=0.52, base=0.76, corner=0.10)),
+    "small": dict(stroke=2.9, radius=5.3, pad=1.35, teeth=dict(
+        count=8, root=0.72, hub=0.30, tip=0.56, base=0.82, corner=0.08)),
+}
+MARK_BOX = (1.0, 2.0, 22.1, 22.9)  # visual bounds of the mark inside the 24 box: x0 y0 x1 y1
+
+# Standalone website artwork uses an inset macOS squircle; native masking belongs to macOS.
+ICON_CANVAS = 1024
+ICON_INSET_BOX = 824
+SQUIRCLE_RADIUS = 0.2237
+TRAY_ICON_SIZES = {"TrayIcon.png": 16, "TrayIcon@2x.png": 32}
+
+
+def num(value: float) -> str:
+    """Compact SVG number: three decimals, no trailing zeros, no negative zero."""
+    text = f"{value:.3f}".rstrip("0").rstrip(".")
+    return "0" if text in ("-0", "") else text
+
+
+def rounded_polygon(points: list[tuple[float, float]], radius: float) -> str:
+    """Closed path through the vertices with every corner rounded by a quadratic curve."""
+    count = len(points)
+    parts = []
+    for index, (x, y) in enumerate(points):
+        px, py = points[index - 1]
+        nx, ny = points[(index + 1) % count]
+        into = math.hypot(x - px, y - py)
+        out = math.hypot(nx - x, ny - y)
+        r = min(radius, into / 2, out / 2)
+        ax, ay = x + (px - x) / into * r, y + (py - y) / into * r
+        bx, by = x + (nx - x) / out * r, y + (ny - y) / out * r
+        parts.append(("M" if index == 0 else "L") + f"{num(ax)} {num(ay)}")
+        parts.append(f"Q{num(x)} {num(y)} {num(bx)} {num(by)}")
+    return "".join(parts) + "Z"
+
+
+def gear_path(cx: float, cy: float, outer: float, teeth: dict) -> str:
+    """Gear body with a round hub hole, for `fill-rule="evenodd"`."""
+    root = outer * teeth["root"]
+    pitch = 2 * math.pi / teeth["count"]
+    half_tip, half_base = pitch * teeth["tip"] / 2, pitch * teeth["base"] / 2
+    points = []
+    for tooth in range(teeth["count"]):
+        angle = pitch / 2 + tooth * pitch
+        for theta, r in ((angle - half_base, root), (angle - half_tip, outer),
+                         (angle + half_tip, outer), (angle + half_base, root)):
+            points.append((cx + r * math.cos(theta), cy + r * math.sin(theta)))
+    hub = outer * teeth["hub"]
+    hole = (f"M{num(cx + hub)} {num(cy)}A{num(hub)} {num(hub)} 0 1 0 {num(cx - hub)} {num(cy)}"
+            f"A{num(hub)} {num(hub)} 0 1 0 {num(cx + hub)} {num(cy)}Z")
+    return rounded_polygon(points, outer * teeth["corner"]) + hole
+
+
+def frame_path(gap_radius: float) -> str:
+    """The frame's centreline, open where a circle of `gap_radius` around the gear cuts it."""
+    left, top, right, bottom, r = (FRAME[k] for k in ("left", "top", "right", "bottom", "radius"))
+    cx, cy = GEAR_CENTER
+    y_left = cy - math.sqrt(gap_radius ** 2 - (left - cx) ** 2)
+    x_bottom = cx + math.sqrt(gap_radius ** 2 - (bottom - cy) ** 2)
+    return (f"M{num(x_bottom)} {num(bottom)}H{num(right - r)}"
+            f"A{num(r)} {num(r)} 0 0 0 {num(right)} {num(bottom - r)}V{num(top + r)}"
+            f"A{num(r)} {num(r)} 0 0 0 {num(right - r)} {num(top)}H{num(left + r)}"
+            f"A{num(r)} {num(r)} 0 0 0 {num(left)} {num(top + r)}V{num(y_left)}")
+
+
+def frame_outline_path(gap_radius: float, stroke: float) -> str:
+    """Filled round-cap outline; macOS 26 icon recoloring ignores a stroke's fill=none."""
+    left, top, right, bottom, r = (FRAME[k] for k in ("left", "top", "right", "bottom", "radius"))
+    cx, cy = GEAR_CENTER
+    y_left = cy - math.sqrt(gap_radius ** 2 - (left - cx) ** 2)
+    x_bottom = cx + math.sqrt(gap_radius ** 2 - (bottom - cy) ** 2)
+    half = stroke / 2
+    outer, inner = r + half, r - half
+    return (f'M{num(x_bottom)} {num(bottom + half)}H{num(right - r)}'
+            f'A{num(outer)} {num(outer)} 0 0 0 {num(right + half)} {num(bottom - r)}V{num(top + r)}'
+            f'A{num(outer)} {num(outer)} 0 0 0 {num(right - r)} {num(top - half)}H{num(left + r)}'
+            f'A{num(outer)} {num(outer)} 0 0 0 {num(left - half)} {num(top + r)}V{num(y_left)}'
+            f'A{num(half)} {num(half)} 0 0 0 {num(left + half)} {num(y_left)}V{num(top + r)}'
+            f'A{num(inner)} {num(inner)} 0 0 1 {num(left + r)} {num(top + half)}H{num(right - r)}'
+            f'A{num(inner)} {num(inner)} 0 0 1 {num(right - half)} {num(top + r)}V{num(bottom - r)}'
+            f'A{num(inner)} {num(inner)} 0 0 1 {num(right - r)} {num(bottom - half)}H{num(x_bottom)}'
+            f'A{num(half)} {num(half)} 0 0 0 {num(x_bottom)} {num(bottom + half)}Z')
+
+
+def mark_parts(variant: str = "regular") -> tuple[str, str, float]:
+    """(frame path, gear path, stroke width) in the 24-unit box."""
+    spec = VARIANTS[variant]
+    return (frame_path(spec["radius"] + spec["pad"]),
+            gear_path(*GEAR_CENTER, spec["radius"], spec["teeth"]), spec["stroke"])
+
+
+def mark_markup(color: str = "currentColor", variant: str = "regular") -> str:
+    frame, gear, stroke = mark_parts(variant)
+    return (f'<path d="{frame}" fill="none" stroke="{color}" stroke-width="{num(stroke)}" stroke-linecap="round"/>'
+            f'<path d="{gear}" fill="{color}" fill-rule="evenodd"/>')
+
+
+def panel_glyph() -> str:
+    """Node list for `WebUI/panel.js` `brands.wallpaperMachine`: the panel's `icon()` wraps it in a
+    24x24 SVG that already sets `stroke="currentColor"`, `fill="none"` and round caps."""
+    frame, gear, stroke = mark_parts("small")
+    return (f'<path d="{frame}" stroke-width="{num(stroke)}"/>'
+            f'<path d="{gear}" fill="currentColor" stroke="none" fill-rule="evenodd"/>')
+
+
+def mark_svg(color: str = LOGO_ACCENT_ON_LIGHT, variant: str = "regular") -> str:
+    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">{mark_markup(color, variant)}</svg>'
+
+
+def squircle_path(size: float, radius: float, smoothing: float = 0.6) -> str:
+    """Rounded square with continuous (Figma-style smoothed) corners, the macOS icon shape."""
+    p = min((1 + smoothing) * radius, size / 2)
+    smoothing = p / radius - 1
+    arc = 90 * (1 - smoothing)
+    chord = math.sin(math.radians(arc / 2)) * radius * math.sqrt(2)
+    tangent = radius * math.tan(math.radians((90 - arc) / 4))
+    beta = 45 * smoothing
+    c = tangent * math.cos(math.radians(beta))
+    d = c * math.tan(math.radians(beta))
+    b = (p - chord - c - d) / 3
+    a = 2 * b
+    local = [(a, 0), (a + b, 0), (a + b + c, d), (chord, chord), (d, c), (d, b + c), (d, a + b + c)]
+
+    def corner(sx: int, sy: int, swap: bool) -> str:
+        pts = [((y if swap else x) * sx, (x if swap else y) * sy) for x, y in local]
+        c1, arc_to, c2 = pts[:3], pts[3], pts[4:]
+        return (f"c{num(c1[0][0])} {num(c1[0][1])} {num(c1[1][0])} {num(c1[1][1])} {num(c1[2][0])} {num(c1[2][1])}"
+                f"a{num(radius)} {num(radius)} 0 0 1 {num(arc_to[0])} {num(arc_to[1])}"
+                f"c{num(c2[0][0])} {num(c2[0][1])} {num(c2[1][0])} {num(c2[1][1])} {num(c2[2][0])} {num(c2[2][1])}")
+
+    return (f"M{num(size - p)} 0" + corner(1, 1, False) + f"L{num(size)} {num(size - p)}" + corner(-1, 1, True)
+            + f"L{num(p)} {num(size)}" + corner(-1, -1, False) + f"L0 {num(p)}" + corner(1, -1, True) + "Z")
+
+
+def icon_svg(variant: str = "regular", bleed: bool = False, square: bool = False,
+             *, layer: str | None = None) -> str:
+    """Website icon, or a transparent screen/mark layer for the native app icon.
+
+    `bleed` drops the macOS margin; `square` also drops the rounded corners.
+    """
+    size = ICON_CANVAS
+    box = size if bleed or square or layer is not None else ICON_INSET_BOX
+    offset = (size - box) / 2
+    spec = VARIANTS[variant]
+    _, gear, stroke = mark_parts(variant)
+    scale = box * (0.82 if layer is not None else 0.68 if variant == "small" else 0.66) / 24
+    # Centre native artwork on the display frame so its opposing margins match.
+    # Website exports retain their existing optical placement.
+    anchor_x = (FRAME["left"] + FRAME["right"]) / 2 if layer is not None else 12.0
+    anchor_y = (FRAME["top"] + FRAME["bottom"]) / 2 if layer is not None else 12.0
+    tx = size / 2 - anchor_x * scale
+    ty = size / 2 - anchor_y * scale
+    if square:
+        shape = f'<rect width="{size}" height="{size}" fill="url(#bg)"/>'
+    else:
+        shape = (f'<path transform="translate({num(offset)} {num(offset)})" '
+                 f'd="{squircle_path(box, box * SQUIRCLE_RADIUS)}" fill="url(#bg)"/>')
+    # Tuck the panel under the frame to avoid an antialiased background seam.
+    inset = stroke / 2 - 0.08
+    left, top = FRAME["left"] + inset, FRAME["top"] + inset
+    right, bottom = FRAME["right"] - inset, FRAME["bottom"] - inset
+    radius = FRAME["radius"] - inset
+    gap = spec["radius"] + spec["pad"] * 0.55
+    cx, cy = GEAR_CENTER
+    notch_top = cy - math.sqrt(gap ** 2 - (left - cx) ** 2)
+    notch_right = cx + math.sqrt(gap ** 2 - (bottom - cy) ** 2)
+    # A real contour survives Icon Composer's SVG import; a luminance mask does not.
+    panel = (f'M{num(left)} {num(notch_top)}V{num(top + radius)}'
+             f'A{num(radius)} {num(radius)} 0 0 1 {num(left + radius)} {num(top)}'
+             f'H{num(right - radius)}A{num(radius)} {num(radius)} 0 0 1 {num(right)} {num(top + radius)}'
+             f'V{num(bottom - radius)}A{num(radius)} {num(radius)} 0 0 1 {num(right - radius)} {num(bottom)}'
+             f'H{num(notch_right)}A{num(gap)} {num(gap)} 0 0 0 {num(left)} {num(notch_top)}Z')
+    defs = (
+        f'<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{CHARCOAL_TOP}"/>'
+        f'<stop offset="1" stop-color="{CHARCOAL_BOTTOM}"/></linearGradient>'
+        f'<linearGradient id="wp" gradientUnits="userSpaceOnUse" x1="5" y1="4" x2="20" y2="19">'
+        f'<stop offset="0" stop-color="{AURORA[0]}"/><stop offset=".45" stop-color="{AURORA[1]}"/>'
+        f'<stop offset="1" stop-color="{AURORA[2]}"/></linearGradient>'
+        '<radialGradient id="glow" gradientUnits="userSpaceOnUse" cx="17.5" cy="6.5" r="9">'
+        '<stop offset="0" stop-color="#fff" stop-opacity=".5"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>')
+    screen = f'<path d="{panel}" fill="url(#wp)"/><path d="{panel}" fill="url(#glow)"/>'
+    if layer == "mark":
+        frame = frame_outline_path(spec["radius"] + spec["pad"], stroke)
+        mark = f'<path d="{frame}" fill="#fff"/><path d="{gear}" fill="#fff" fill-rule="evenodd"/>'
+    else:
+        mark = mark_markup("#fff", variant)
+    artwork = screen if layer == "screen" else mark if layer == "mark" else screen + mark
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}">'
+            f'<defs>{defs}</defs>{shape if layer is None else ""}'
+            f'<g transform="translate({num(tx)} {num(ty)}) scale({num(scale)})">{artwork}</g></svg>')
+
+
+def tray_svg() -> str:
+    """Template image for the status item: black mark, transparent elsewhere; AppKit tints it."""
+    return mark_svg("#000", "small")
+
+
+def logo_svg(ink: str, accent: str) -> str:
+    """Horizontal lockup: mark, then "Wallpaper Machine" on one line, cap-height aligned."""
+    cap = 72.0  # Manrope cap height at 100 px
+    scale = cap / (FRAME["bottom"] - FRAME["top"]) * 1.18
+    x0, y0, x1, y1 = MARK_BOX
+    text_x = x1 * scale + 30
+    word_gap = 9
+    width = text_x + WALLPAPER_ADVANCE + word_gap + MACHINE_ADVANCE + 6
+    height = 24 * scale
+    baseline = (FRAME["top"] + FRAME["bottom"]) / 2 * scale + cap / 2
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {num(width)} {num(height)}" '
+            f'role="img" aria-label="Wallpaper Machine">'
+            f'<g transform="scale({num(scale)})">{mark_markup(accent)}</g>'
+            f'<g transform="translate({num(text_x)} {num(baseline)})" fill="{ink}"><path d="{WALLPAPER_PATH}"/>'
+            f'<path transform="translate({num(WALLPAPER_ADVANCE + word_gap)} 0)" fill-opacity=".74" d="{MACHINE_PATH}"/></g></svg>')
+
+
+def rasterize(svg: str, sizes: dict[Path, int], work: Path, source: int = ICON_CANVAS,
+              template: bool = False) -> None:
+    """Draw with Quick Look and resize; template exports turn black-on-white into alpha."""
+    stem = work / f"{abs(hash(svg))}.svg"
+    stem.write_text(svg)
+    subprocess.run(["qlmanage", "-t", "-s", str(source), "-o", str(work), str(stem)],
+                   check=True, capture_output=True)
+    master = stem.with_name(stem.name + ".png")
+    if not master.exists():
+        raise RuntimeError("qlmanage produced no thumbnail")
+    for target, px in sizes.items():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if px == source:
+            shutil.copyfile(master, target)
+        else:
+            subprocess.run(["sips", "-z", str(px), str(px), str(master), "--out", str(target)],
+                           check=True, capture_output=True)
+    if template:
+        # Quick Look flattens SVG transparency onto white. Recover coverage, including
+        # antialiased edges and enclosed holes, rather than keying out only pure white.
+        subprocess.run(["swift", "-e", r'''
+import AppKit
+for path in CommandLine.arguments.dropFirst() {
+    guard let image = NSBitmapImageRep(data: try Data(contentsOf: URL(fileURLWithPath: path))),
+          let output = NSBitmapImageRep(bitmapDataPlanes: nil,
+              pixelsWide: image.pixelsWide, pixelsHigh: image.pixelsHigh,
+              bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+              isPlanar: false, colorSpaceName: .deviceRGB,
+              bitmapFormat: .alphaNonpremultiplied, bytesPerRow: 0, bitsPerPixel: 0)
+    else { fatalError("Cannot decode template image: \(path)") }
+    for y in 0..<image.pixelsHigh {
+        for x in 0..<image.pixelsWide {
+            guard let color = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+            else { fatalError("Cannot read template pixel") }
+            output.setColor(NSColor(deviceRed: 0, green: 0, blue: 0,
+                alpha: (1 - color.redComponent) * color.alphaComponent), atX: x, y: y)
+        }
+    }
+    guard let png = output.representation(using: .png, properties: [:])
+    else { fatalError("Cannot encode template image: \(path)") }
+    try png.write(to: URL(fileURLWithPath: path))
+}
+''', *map(str, sizes)], check=True, capture_output=True)
+
+
+def ico_bytes(pngs: list[tuple[int, bytes]]) -> bytes:
+    """A Windows ICO container holding PNG-encoded images (supported since Vista)."""
+    header = struct.pack("<HHH", 0, 1, len(pngs))
+    offset = len(header) + 16 * len(pngs)
+    entries, blobs = [], []
+    for px, data in pngs:
+        entries.append(struct.pack("<BBBBHHII", px % 256, px % 256, 0, 0, 1, 32, len(data), offset))
+        blobs.append(data)
+        offset += len(data)
+    return header + b"".join(entries) + b"".join(blobs)
+
+
+def write_app_icons(work: Path) -> list[Path]:
+    assets = APP_ICON / "Assets"
+    assets.mkdir(parents=True, exist_ok=True)
+    written = []
+    for layer in ("screen", "mark"):
+        path = assets / f"{layer}.svg"
+        path.write_text(icon_svg(layer=layer))
+        written.append(path)
+    document = {
+        "fill-specializations": [
+            {"value": {"solid": "srgb:1,1,1,1"}},
+            {"appearance": "dark", "value": {"solid": "srgb:0,0,0,1"}},
+        ],
+        "groups": [{
+            "layers": [
+                {"image-name": "screen.svg", "name": "Wallpaper", "glass": False},
+                {"image-name": "mark.svg", "name": "Frame and gear", "glass": False,
+                 "fill-specializations": [
+                     {"value": {"solid": "srgb:0,0,0,1"}},
+                     {"appearance": "dark", "value": {"solid": "srgb:1,1,1,1"}},
+                 ]},
+            ],
+            "lighting": "individual",
+            "shadow": {"kind": "neutral", "opacity": 0},
+            "specular": False,
+            "translucency": {"enabled": False, "value": 0},
+        }],
+        "supported-platforms": {"squares": ["macOS"]},
+    }
+    path = APP_ICON / "icon.json"
+    path.write_text(json.dumps(document, indent=2) + "\n")
+    written.append(path)
+    tray = {TRAY_ICON_SET / name: px for name, px in TRAY_ICON_SIZES.items()}
+    rasterize(tray_svg(), tray, work, source=256, template=True)
+    return written + list(tray)
+
+
+def write_dock_icons(work: Path) -> list[Path]:
+    """Render fixed Dock appearances with the same outer margin as the compiled app icon."""
+    developer = Path(subprocess.check_output(["xcode-select", "-p"], text=True).strip())
+    tool = developer.parent / "Applications/Icon Composer.app/Contents/Executables/ictool"
+    minimal = work / "Minimal.icon"
+    (minimal / "Assets").mkdir(parents=True, exist_ok=True)
+    (minimal / "Assets/mark.svg").write_text(icon_svg(layer="mark"))
+    document = json.loads((APP_ICON / "icon.json").read_text())
+    document["fill-specializations"] = [{"value": {"solid": "srgb:1,1,1,1"}}]
+    blue = ",".join(num(int(LOGO_ACCENT_ON_LIGHT[i:i + 2], 16) / 255) for i in (1, 3, 5))
+    document["groups"][0]["layers"] = [{
+        "image-name": "mark.svg", "name": "Minimal mark", "glass": False,
+        "fill-specializations": [{"value": {"solid": f"srgb:{blue},1"}}],
+    }]
+    (minimal / "icon.json").write_text(json.dumps(document, indent=2) + "\n")
+    DOCK_ICONS.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for name, source, rendition in (("minimal", minimal, "Default"),
+                                    ("day", APP_ICON, "Default"), ("night", APP_ICON, "Dark")):
+        image = work / f"dock-{name}.png"
+        subprocess.run([str(tool), str(source), "--export-image", "--output-file", str(image),
+                        "--platform", "macOS", "--rendition", rendition,
+                        "--width", str(ICON_INSET_BOX), "--height", str(ICON_INSET_BOX),
+                        "--scale", "1", "--design-generation", "26"], check=True, capture_output=True)
+        paths.extend((image, DOCK_ICONS / f"{name}.png"))
+    # Icon Composer exports a full-bleed tile. NSApplication's replacement image needs
+    # the transparent margin normally added by actool, not Quick Look's white matte.
+    subprocess.run(["swift", "-e", r'''
+import AppKit
+let canvas = Int(CommandLine.arguments[1])!
+let tile = Int(CommandLine.arguments[2])!
+for index in stride(from: 3, to: CommandLine.arguments.count, by: 2) {
+    let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[index]))
+    guard let image = NSBitmapImageRep(data: data)?.cgImage,
+          let space = CGColorSpace(name: CGColorSpace.sRGB),
+          let context = CGContext(data: nil, width: canvas, height: canvas, bitsPerComponent: 8,
+              bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { fatalError("Cannot decode Dock icon") }
+    context.clear(CGRect(x: 0, y: 0, width: canvas, height: canvas))
+    let margin = (canvas - tile) / 2
+    context.draw(image, in: CGRect(x: margin, y: margin, width: tile, height: tile))
+    guard let rendered = context.makeImage(),
+          let png = NSBitmapImageRep(cgImage: rendered).representation(using: .png, properties: [:])
+    else { fatalError("Cannot encode Dock icon") }
+    try png.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+}
+''', str(ICON_CANVAS), str(ICON_INSET_BOX), *map(str, paths)], check=True, capture_output=True)
+    return paths[1::2]
+
+
+def write_website(site: Path, work: Path) -> list[Path]:
+    brand = site / "brand"
+    brand.mkdir(parents=True, exist_ok=True)
+    files = {
+        brand / "mark.svg": mark_svg(),
+        brand / "logo.svg": logo_svg(LOGO_INK_ON_LIGHT, LOGO_ACCENT_ON_LIGHT),
+        brand / "logo-dark.svg": logo_svg(LOGO_INK_ON_DARK, LOGO_ACCENT_ON_DARK),
+        brand / "app-icon.svg": icon_svg(),
+        site / "favicon.svg": icon_svg("small", bleed=True),
+        site / "site.webmanifest": json.dumps({
+            "name": "Wallpaper Machine", "short_name": "WallpaperMachine",
+            "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+                      {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"}],
+            "theme_color": FAVICON_BACKGROUND, "background_color": FAVICON_BACKGROUND, "display": "standalone",
+        }, indent=2) + "\n",
+    }
+    for path, text in files.items():
+        path.write_text(text)
+    rasterize(icon_svg(), {brand / "app-icon.png": 1024}, work)
+    rasterize(icon_svg("small", bleed=True), {site / "favicon-16.png": 16, site / "favicon-32.png": 32,
+                                              work / "favicon-48.png": 48}, work)
+    rasterize(icon_svg(square=True), {site / "apple-touch-icon.png": 180, site / "icon-192.png": 192,
+                                      site / "icon-512.png": 512}, work)
+    ico = site / "favicon.ico"
+    ico.write_bytes(ico_bytes([(px, (folder / name).read_bytes()) for px, folder, name in (
+        (16, site, "favicon-16.png"), (32, site, "favicon-32.png"), (48, work, "favicon-48.png"))]))
+    return list(files) + [brand / "app-icon.png", site / "favicon-16.png", site / "favicon-32.png",
+                          site / "apple-touch-icon.png", site / "icon-192.png", site / "icon-512.png", ico]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--website", type=Path, help="also write logo, favicons and manifest into this directory")
+    parser.add_argument("--panel-glyph", action="store_true", help="print the WebUI/panel.js brand glyph and exit")
+    parser.add_argument("--skip-app", action="store_true", help="do not touch native app, Dock or tray assets")
+    args = parser.parse_args()
+    if args.panel_glyph:
+        print(panel_glyph())
+        return 0
+    if sys.platform != "darwin":
+        print(f"{MARK.missing} brand.py rasterizes with qlmanage and sips; macOS only", file=sys.stderr)
+        return 1
+    with tempfile.TemporaryDirectory(prefix="brand-") as scratch:
+        work = Path(scratch)
+        written = [] if args.skip_app else write_app_icons(work)
+        if not args.skip_app:
+            written += write_dock_icons(work)
+        if args.website:
+            written += write_website(args.website.resolve(), work)
+    for path in written:
+        try:
+            shown = path.relative_to(ROOT)
+        except ValueError:
+            shown = path
+        print(f"{MARK.ok} {shown}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

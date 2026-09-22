@@ -222,16 +222,18 @@ function draw(view) {
     + disclosure('performance-context', t('What these settings change'), paragraphs(t('Video playback picks a backend for each wallpaper. Native is used only for videos it supports; the rest play in Compatibility. The list above shows what each running wallpaper uses.'), t('Internal render scale sets how many pixels are rendered before the image is scaled to fit. Lower values make text and fine detail softer.'), t('Scene render optimisation reuses work inside a scene and produces the same picture. It only affects scene wallpapers. The switch shows your setting; the line below it shows whether each running scene has picked it up.'), t('Content pacing, shared video decode and direct video plane sampling are experimental. Shared decode merges only the decoding; each screen still draws its own frames. Direct plane sampling skips a color conversion when a layer’s shader can handle it; otherwise the picture is produced as before.')));
 
   // Theme preferences live natively and stay usable even when renderer settings are unavailable.
-  const theme = { mode: 'system', accent: '#80bbff', tone: 'neutral', ...(window.__appTheme || {}), ...(state.theme || {}) };
+  const theme = { mode: 'system', accent: '#80bbff', tone: 'neutral', icon: 'day', ...(window.__appTheme || {}), ...(state.theme || {}) };
   const themeKey = name => `theme-${name}`;
   const themeBusy = name => view.pending.has(themeKey(name)) || view.pending.has(themeKey('reset'));
-  const themePending = ['mode', 'accent', 'tone', 'reset'].some(themeBusy);
+  const themePending = ['mode', 'accent', 'tone', 'icon', 'reset'].some(themeBusy);
   const themeValue = name => draft(themeKey(name), theme[name]);
   const accent = /^#[0-9a-f]{6}$/i.test(String(themeValue('accent'))) ? String(themeValue('accent')) : '#80bbff';
+  const iconPicker = `<fieldset class="settings-icon-picker" data-key="theme-icon-picker" aria-describedby="theme-icon-note"${disabled(themeBusy('icon'))}><legend>${e(t('App icon'))}</legend><p class="settings-note" id="theme-icon-note">${e(t('Changes the Dock icon while the app is running. Finder and the menu bar stay unchanged.'))}</p><div class="settings-icon-options">${localizedOptions([['minimal', 'Minimal'], ['day', 'Day'], ['night', 'Night']]).map(([id, label]) => `<label class="settings-icon-option" data-key="theme-icon-option-${id}"><img src="app-icons/${id}.png" width="96" height="96" alt=""><span><input type="radio" name="app-icon" value="${id}" data-key="theme-icon-${id}" data-theme-setting="icon"${themeValue('icon') === id ? ' checked' : ''}${disabled(themeBusy('icon'))}>${e(label)}</span></label>`).join('')}</div></fieldset>`;
   const appearance = row(themeKey('mode-row'), t('Appearance'), select(themeKey('mode'), t('Appearance'), themeValue('mode'), localizedOptions([['system', 'System (Auto)'], ['light', 'Light'], ['dark', 'Dark']]), 'data-theme-setting="mode"', themeBusy('mode')), t('System follows the macOS light and dark setting.'))
     + row(themeKey('accent-row'), t('Accent color'), `<input data-key="${e(themeKey('accent'))}" type="color" aria-label="${e(t('Accent color'))}" value="${e(accent)}" data-theme-setting="accent"${disabled(themeBusy('accent'))}><output class="settings-hex" data-value-for="${e(themeKey('accent'))}">${e(accent.toUpperCase())}</output>`, t('Colors buttons, links and focus rings.'))
     + row(themeKey('tone-row'), t('Surface tone'), select(themeKey('tone'), t('Surface tone'), themeValue('tone'), localizedOptions([['neutral', 'Neutral'], ['warm', 'Warm'], ['cool', 'Cool']]), 'data-theme-setting="tone"', themeBusy('tone')), t('Warms or cools the window background.'))
-    + row(themeKey('reset-row'), t('Theme defaults'), button(t('Reset appearance'), 'resetTheme', {}, themePending), t('Restores System, the default accent and Neutral tone.'))
+    + iconPicker
+    + row(themeKey('reset-row'), t('Theme defaults'), button(t('Reset appearance'), 'resetTheme', {}, themePending), t('Restores System, the default accent, Neutral tone and the Day icon.'))
     + `<p class="settings-footnote">${e(t('Appearance changes apply right away and only affect this app’s window, not your wallpapers.'))}</p>`;
 
   const displays = (state.displays || []).map(display => {
@@ -315,7 +317,7 @@ function draw(view) {
   const updateActions = (update.showsAction && update.action ? button(update.actionLabel || t('Check for Updates'), update.action, {}, updateBusy || busy, update.status === 'available' || update.status === 'ready' ? 'settings-primary' : '') : '')
     + (update.showsReleases ? button(update.releasesLabel || t('Open GitHub Releases'), 'openReleases', {}, updateBusy) : '')
     + (update.showsReveal ? button(update.revealLabel || t('Show in Finder'), 'revealDownloadedUpdate', {}, updateBusy) : '');
-  const about = `<div class="settings-product"><h3>WallpaperMachine</h3><span class="settings-note">${e(t('Independent macOS client'))}</span></div>`
+  const about = `<div class="settings-product"><span class="settings-product-mark">${helpers.icon('wallpaperMachine', 48)}</span><div><h3>WallpaperMachine</h3><span class="settings-note">${e(t('Independent macOS client'))}</span></div></div>`
     + versionRow('app-version', t('App version'), state.version)
     + versionRow('bridge-version', t('Bridge'), settings.bridgeVersion)
     + versionRow('core-version', t('Core'), settings.coreVersion)
@@ -358,7 +360,7 @@ function reconcile(parent, desired) {
           if (existing.getAttribute(attribute.name) !== attribute.value) existing.setAttribute(attribute.name, attribute.value);
         }
         if (existing.tagName === 'INPUT') {
-          if (existing.type === 'checkbox') existing.checked = incoming.checked;
+          if (existing.type === 'checkbox' || existing.type === 'radio') existing.checked = incoming.checked;
           else if (existing !== document.activeElement && existing.value !== incoming.value) existing.value = incoming.value;
         }
         reconcile(existing, incoming);
@@ -376,7 +378,7 @@ function reconcile(parent, desired) {
 
 function onInput(view, event) {
   const input = event.target;
-  if (!input.matches('input[data-key]')) return;
+  if (!input.matches('input[data-key]') || input.type === 'radio') return;
   const key = input.dataset.key;
   view.drafts.set(key, input.type === 'checkbox' ? input.checked : input.value);
   if (input.dataset.local) draw(view);
@@ -402,11 +404,13 @@ async function onChange(view, event) {
     return;
   }
   if (input.dataset.themeSetting) {
-    const themeDraft = input.dataset.key;
+    const themeDraft = `theme-${input.dataset.themeSetting}`;
+    const restoreFocus = input.type === 'radio' && input === document.activeElement;
     view.drafts.set(themeDraft, input.value);
     await perform(view, themeDraft, 'themeSetting', { key: input.dataset.themeSetting, value: String(input.value) });
     view.drafts.delete(themeDraft);
     draw(view);
+    if (restoreFocus && document.activeElement === document.body && input.isConnected) input.focus({ preventScroll: true });
     return;
   }
   if (!input.dataset.setting && !input.dataset.displaySetting) return;

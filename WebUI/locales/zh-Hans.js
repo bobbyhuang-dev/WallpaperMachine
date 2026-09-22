@@ -626,9 +626,14 @@ export default {
   'Warm': '暖色',
   'Cool': '冷色',
   'Warms or cools the window background.': '让窗口背景偏暖或偏冷。',
+  'App icon': '应用图标',
+  'Minimal': '简约',
+  'Day': '日间',
+  'Night': '夜间',
+  'Changes the Dock icon while the app is running. Finder and the menu bar stay unchanged.': '应用运行时更改程序坞图标。访达和菜单栏中的图标保持不变。',
   'Theme defaults': '主题默认值',
   'Reset appearance': '重置外观',
-  'Restores System, the default accent and Neutral tone.': '恢复为跟随系统、默认强调色和中性色调。',
+  'Restores System, the default accent, Neutral tone and the Day icon.': '恢复为跟随系统、默认强调色、中性色调和日间图标。',
   'Appearance changes apply right away and only affect this app’s window, not your wallpapers.': '外观设置会立即生效，只影响本应用的窗口，不影响壁纸。',
 
   // Settings: displays

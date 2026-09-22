@@ -251,6 +251,7 @@ small, .muted { color: var(--muted); }
 .tabs button[aria-current="page"] { border-bottom-color: var(--accent); color: var(--text); }
 .tabs button:hover:not(:disabled) { border-color: var(--accent); background: transparent; color: var(--text); }
 .app-identity { display: flex; align-items: center; justify-self: center; gap: 4px; min-width: 0; overflow: hidden; }
+.app-brand-mark { display: flex; flex: none; margin-right: 4px; color: var(--text); }
 .app-title { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
 .app-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .app-version { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }

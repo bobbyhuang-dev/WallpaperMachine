@@ -25,111 +25,94 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
-## 2026-09-22 — Chinese for service-layer and lock-screen extension messages
+## 2026-09-22 — Branding and icon selection rebased onto localization updates
 
-- Wrapped user-facing messages in String(localized:): Workshop downloader/queue errors and statuses, import errors, library deletion, scene-assets locator, lock-screen service statuses and errors, media relay reason, SteamCMD setup/lock status fallbacks.
-- Messages that named removed buttons (Retry Steam sign-in, Install scene assets…, Refresh in Library) now name the current ones.
-- New Extension/Localizable.xcstrings (26 keys); WallpaperRuntime.failure takes String.LocalizationValue, failure(detail:) carries renderer text as-is; appex now ships en.lproj and zh-Hans.lproj.
-- Catalogs equal the compiler-extracted key sets (SWIFT_EMIT_LOC_STRINGS=YES): app 385, extension 26, every key with zh-Hans.
-- Left in English on purpose: SteamCMD output patterns, logs, diagnostics report fields, native-video admission reasons (logged), desktop poster sync errors (NSLog), identifiers and paths.
-- test_panel_localization.py now also checks Extension/Localizable.xcstrings; LockScreenWallpaperServiceTests compare with String(localized:) instead of English text.
-- python3 scripts/test.py: 537 passed, 0 failed, 11 skipped.
-- Not checked: messages rendered in a running app or System Settings (no desktop run); no Release build.
+- Rebased the branding and selectable Dock icon changes onto origin/main at 0e85acc; retained remote UI copy and translations alongside the icon picker and welcome branding.
+- Merged verification histories without dropping entries; retained ten active entries and archived older entries with existing link-rewriting rules.
+- python3 scripts/test.py — exit 0; all Python suites passed; native 538 passed, 0 failed, 11 skipped of 549. Build log reports 35 warning lines.
+- No renderer source edits during integration; renderer gate not rerun. No Release rebuild, application launch/restart or desktop verification; existing Release app remains unchanged.
 
-## 2026-09-22 — UI copy rewrite, native localization gaps and catalog cleanup
+## 2026-09-22 — Consistent Dock icon frame weight
 
-- Rewrote AI-sounding panel copy in English and zh-Hans (WebUI/panel.js, settings.js, welcome.js, locales/zh-Hans.js).
-- Localized native confirm dialogs, open-panel titles/messages, action errors, SteamCMD setup status, import progress and menus (AppDelegate menuItem now takes String.LocalizationValue).
-- Import panel message no longer claims web projects cannot play.
-- Native catalog synced to compiler-extracted keys (SWIFT_EMIT_LOC_STRINGS=YES build): 65 missing keys added with zh-Hans, 361 unused keys removed; 293 keys now, equal to the extracted set.
-- Panel catalog: 3 unreferenced keys removed; dynamic keys (shortcut actions, '(standard)' resolutions) kept; Steam password/Steam Guard code labels now go through t().
-- Docs: localization.md gains the catalog sync procedure; workshop-downloads.md points at current labels.
-- python3 scripts/test.py: 537 passed, 0 failed, 11 skipped (after xattr -cr on the Debug app for the known CodeSign detritus failure).
-- Not checked: rendered dialogs/menus in a running app (no desktop run); no Release build.
+- Changed Minimal to reuse the regular native frame-and-gear geometry used by Day and Night; preserved blue-on-white styling and left panel/menu-bar glyphs unchanged.
+- python3 scripts/brand.py — exit 0; regenerated native and Dock assets.
+- Rendered PNG smoke measurement: Minimal top frame 61 source pixels, Day/Night 59; the small difference is the wallpaper's inner-edge overlap, below 0.3 px at picker size. Inspected all three generated artwork files.
+- Added rendered thickness comparison to the existing Dock artwork regression; initial one-pixel tolerance failed on the wallpaper overlap, corrected to three source pixels.
+- python3 scripts/test.py — exit 0; all Python checks passed, including 4 brand tests; native 536 passed, 0 failed, 11 skipped of 547.
+- No app launch, desktop capture or live Dock check; in-app visual behavior unverified. No Release rebuild; running app remains unchanged.
 
-## 2026-09-22 — Loose-asset origin, texture fallback and pointer mapping under zoom
+## 2026-09-22 — Release delivery of selectable Dock icons
 
-Follow-ups to the same change. Deciding where to read a loose asset from by std::filesystem::is_absolute() was wrong: a mounted candidate is /assets/materials/foo.png, absolute too, so every packaged loose picture and video went to the host filesystem. The origin now travels on LooseAssetCandidate. A texture property is only taken when the file it names opens now, so a moved or sandbox-denied pick keeps the authored texture instead of a name that decodes to nothing. Pointer mapping in both backends and the probe read SceneCamera::VisibleWidth/VisibleHeight, the extent the ortho projection is built from, so clicks and mouse-linked particles follow a zoomed 2D scene.
+- Pre-build verification: the preceding feature gate passed with 536 native tests passed, 0 failed, 11 skipped; Python checks passed. No behavioral source changes followed that gate.
+- python3 scripts/build.py --swift-only --configuration Release — exit 0; built version 0.5.0 (16) at build/Build/Products/Release/WallpaperMachine.app; build reported 25 warning lines.
+- All 14 bundled WebUI files match current source byte-for-byte, including Settings > Appearance > App icon and Minimal/Day/Night PNG assets. codesign --verify --deep --strict passed.
+- Refreshed the delivered bundle timestamp and Launch Services registration; removed the competing Debug registration without deleting files. A fresh NSWorkspace lookup resolves app.wallpapermachine to the Release bundle.
+- No app launch/quit, Dock restart, installation, live icon selection or desktop capture. User must quit and reopen the Release app to verify the picker; live Dock presentation remains unverified.
 
-- `python3 scripts/check_renderer.py` — 10 generated cases pixel-equal, 0 diagnostics, reload cycles 0
-- `tex_schema_tests` 19 passed; `media_thumbnail_texture_smoke` 20 passed; `mouse_input_test` 12 passed
-- `scene_schema_tests` 83 passed / 2 pre-existing failures; `script_runtime_compat_test` 71 passed / 1 pre-existing failure
-- Counter-checks: `TexSchema.PackagedLooseImageStillLoadsFromTheMount` fails when LoadLooseAssetPayload decides by is_absolute(); `MouseInput.HitTestingFollowsACameraObjectZoomAcrossAResize` fails when cursor mapping is given Width()/Height(). Both pass after
-- Swift gate not re-run: nothing outside `upstream/renderer` changed since it passed at 537/0/11, and `cargo build --workspace --release` links the new renderer
-- Not rebuilt for Release and never launched; on-screen behaviour of 3588579284 and 3632513108 stays unverified
+## 2026-09-22 — Selectable Minimal Day and Night Dock icons
 
-## 2026-09-22 — Scene textures, camera zoom, layer parents and scripted alpha
+- Added a localized Settings > Appearance icon picker; choice persists independently of panel appearance and applies at startup/change through NSApplication.applicationIconImage. Finder, menu-bar symbol and signed bundle remain unchanged; reset restores Day.
+- python3 scripts/brand.py — exit 0; generated shared 1024px Minimal/Day/Night PNGs with transparent macOS outer margins. Minimal reuses the blue About glyph; fixed Day/Night reuse current native geometry.
+- python3 -m unittest discover -s scripts/tests -p test_brand.py — exit 0; 4 passed, including variant color/interior, gear hub and transparent margin checks.
+- python3 scripts/test.py --only AppThemeTests --only ControlPanelShellTests/testAppearanceControlsPersistAndFollowNativeAppearanceWithoutWindow — exit 0; 5 passed. Native WebKit exercises Night selection, preview decoding, reset and Minimal recovery; no window.
+- python3 scripts/test.py — exit 0; Python checks passed; native 536 passed, 0 failed, 11 skipped of 547. Reported warnings concern existing media isolation, update-test return values and AppIntents metadata.
+- Headless browser: visually inspected actual settings in light English and compact dark Simplified Chinese; all previews loaded, no horizontal overflow. Keyboard selection retained focus; rejected save restored prior choice; reset selected Day. Preview bridge simulated only for browser interaction checks.
+- Isolated AppKit smoke — exit 0; assigned each PNG to applicationIconImage at 512-point Retina size and read back distinct 1024px native images. Process remained activation-prohibited with no windows or Dock entry. Initial smoke assumptions about setActivationPolicy return value and representation size were corrected before the successful run.
+- Impeccable detector for settings.js/settings.css returned no findings. Updated appearance documentation; closed browser and preview server. clean.py --dry-run identified 1.60 GB including unrelated evidence, so broad cleanup was not performed; no throwaway source files were left.
+- No Release rebuild, app launch/restart, Finder custom-icon change, Dock restart, installation or desktop capture. Live Dock presentation remains unverified; the previously delivered Release app does not include this picker.
 
-Three renderer gaps behind wallpaper 3588579284 and 3632513108. A usertextures entry naming a scenetexture property was never substituted, so eight 'choose your own picture' slots always showed packaged artwork; WPTexImageParser now also reads an absolute host path, and the package probe is skipped for one so it stops logging a missing .tex per slot. A camera object's zoom is applied when the ortho projection is built (SceneCamera::SetZoom) rather than by writing camera width/height, which ApplyCameraFillMode rewrites on every resize. thisLayer.getParent() and a layer alpha that reaches g_UserAlpha fix 3632513108's dock, which threw 'cannot read property visible of undefined' once a frame. Camera path/queuemode stay parse-only: 3588579284 ships scripts/camera_paths_1297271.json containing {"paths": []}.
+## 2026-09-22 — Release delivery of enlarged centered app icon
 
-- `python3 scripts/test.py` — exit 0; 537 passed, 0 failed, 11 skipped of 548
-- `python3 scripts/check_renderer.py` — 10 generated cases pixel-equal, 0 diagnostics, reload cycles 0
-- `media_thumbnail_texture_smoke` 19 passed; `tex_schema_tests` 17 passed (suite now links PkgConfig::TEST_LZ4; it did not compile before)
-- `script_runtime_compat_test` 71 passed, 1 failed — pre-existing HostVectorUpdatesDoNotCallMutableGlobalVectorConstructors, reproduced with ScriptEngine.cpp stashed
-- `scene_schema_tests` 83 passed, 2 failed — the documented pre-existing PointerCapability/MouseButtonCommit timeouts
-- `offscreen_scene_probe` on 3588579284 (3840x2160, 1 frame): WE_TEST_PROPERTIES setting the eight scenetexture slots to a magenta PNG changed 6284367/8294400 pixels (75.8%), max channel delta 255, sampled (237,255,255)->(255,0,255); a rerun logged 0 VFS misses for that path
-- `offscreen_scene_probe` on 3588579284 with newproperty30=2.0 (its camera object's user-bound zoom): 8020854 pixels (96.7%) differ from the baseline frame, max channel delta 255
-- Not rebuilt for Release: no delivery requested, so the running app still has the old renderer and panel.
+- First Release inspection exposed a macOS 26-only issue: appearance recoloring filled the open frame stroke. Replaced the native stroke with a filled outline; website and tray glyphs retain their existing stroke geometry.
+- Pinned icon regressions to Icon Composer --design-generation 26. The gear-clearance assertion failed in both appearances before the outline fix, then all 3 branding tests passed.
+- Final python3 scripts/test.py — exit 0; Python checks passed; native 535 passed, 0 failed, 11 skipped of 546.
+- Final python3 scripts/build.py --swift-only --configuration Release — exit 0; delivered build/Build/Products/Release/WallpaperMachine.app.
+- Visually inspected corrected macOS 26 Default/Dark exports and extracted final bundled AppIcon.icns. Bundled 256 px fallback has equal 61/61 px display-frame margins on both axes, including the system outer inset, and a clear gear cutout.
+- Assets.car contains the updated native mark vector in both Aqua and DarkAqua groups; all 11 bundled WebUI files match source byte-for-byte. codesign --verify --deep --strict passed.
+- Removed temporary layer-isolation icon documents; retained disposable render evidence. No app launch/quit, installation, desktop capture, icon-cache reset or system appearance change. User must quit and reopen the delivered app; live Dock/Finder presentation remains unverified.
 
-## 2026-09-22 — Property labels reduced to words; wordless rows dropped
+## 2026-09-22 — Larger seamless app icon with centered display frame
 
-Workshop authors write property labels as HTML — colour tags, breaks, rules and 2000x1 image strips from image boards. A label that stripped to nothing fell back to the property id, and the Wallpaper Engine editor derives ids from that same markup, so the panel printed multi-line 'imgsrchttpphotogzphotostore…' names (seen on 3588579284, 3632513108, 3292361861, 2887099508, 3605722997 — 33 such labels across the local library). plainLabel now turns breaks and block ends into spaces, decodes the editor's entities with &amp; last, resolves the editor's ui_browse_properties_scheme_color token, and returns empty for decoration; the page drops a wordless text row, names a wordless control 'Unnamed option', and omits an empty properties section.
+- python3 scripts/brand.py — exit 0; regenerated native vector layers with approximately 24% larger artwork, joined panel/frame edges and an explicit gear cutout.
+- Rendered centering regression failed before the placement fix in both appearances: opposing horizontal margins were 49/40 px.
+- python3 -m unittest discover -s scripts/tests -p test_brand.py — final exit 0; 3 passed, covering light/dark backgrounds, matching display-frame margins, seam-free joins, gear clearance, tray alpha and ICO payloads.
+- Icon Composer offscreen exports at 256, 64 and 32 px succeeded in Default and Dark. Visually inspected final 256 px appearances and the 32 px light icon; measured frame margins were 44/44 px on both axes in both 256 px appearances.
+- python3 scripts/test.py — exit 0; Python checks passed; native 535 passed, 0 failed, 11 skipped. Full gate completed before the subsequent user-requested centering correction; final centering was verified with the targeted branding suite and native icon exports.
+- python3 scripts/clean.py --dry-run — exit 0; broad cleanup would remove 1.66 GB including unrelated evidence, so it was not executed. No throwaway source scripts were created.
+- No Release rebuild, app launch/restart, desktop capture or appearance change. Live Dock/Finder presentation remains unverified; the running app retains its existing icon.
 
-- `python3 scripts/test.py` — exit 0; 537 passed, 0 failed, 11 skipped of 548
-- `python3 scripts/test.py --only WebPanelPropertyLabelTests` — exit 0; 2 passed (snapshot label reduction; page naming and omission through a real offscreen WKWebView)
-- First gate run failed in CodeSign: 'resource fork, Finder information, or similar detritus not allowed' on build/…/Debug/WallpaperMachine.app (com.apple.FinderInfo + com.apple.fileprovider.fpfs#P from the synced checkout). `xattr -c` on the bundle cleared it; unrelated to the change.
-- Not rebuilt for Release: no delivery requested, so the running app still shows the old labels.
-- Renderer untouched, so `scripts/check_renderer.py` was not run.
+## 2026-09-22 — Release app rebuilt with refreshed native icon
 
-## 2026-09-22 — Solar layer name collision
+- python3 scripts/test.py — exit 0; 535 passed, 0 failed, 11 skipped. All Python script suites passed, including the three brand export tests.
+- python3 scripts/build.py --swift-only --configuration Release — exit 0; delivered build/Build/Products/Release/WallpaperMachine.app.
+- Verified Release Info.plist references AppIcon and Assets.car contains Aqua white and DarkAqua black native background layers. Extracted the bundled AppIcon.icns and visually confirmed the new fallback artwork.
+- Verified all 11 bundled WebUI files match current WebUI source byte-for-byte; codesign --verify --deep --strict passed.
+- NSWorkspace initially resolved the previous two-background icon from cache. Touched only the rebuilt app bundle and ran lsregister -f on that bundle; a fresh NSWorkspace lookup then resolved the updated single-white-background icon, visually inspected via image export.
+- No app launch or quit, desktop capture, appearance change, Finder/Dock restart or installation performed. User must quit and reopen the delivered Release app; live post-launch presentation remains unverified.
 
-Live Solar System's sun group and a hidden text readout are both named s. The readout registered second and took the name, so the simulation's getLayer("s").scale stretched that label into the full-height white bars and never resized the sun.
+## 2026-09-22 — Single-background light and dark app icons
 
-- Text labels that repeat a group, image or model name now keep __we_text_<id>; the earlier layer keeps the shared name.
-- TextObjectRuntime.TextLabelDoesNotStealAnotherLayersName passed.
-- Offscreen workshop 3662790108 with intro animation forced off: the white columns are gone (screen-right mean 12.5, was 255). Stars, the sun glow, one orbit arc and the HUD remain. View mode 3 still keeps most bodies small.
-- python3 scripts/check_renderer.py — exit 0; evidence artifacts/renderer/adaptive-20260922-101020.
-- The delivered app was not rebuilt.
+- Replaced flattened AppIcon.appiconset PNGs with generated App/Resources/AppIcon.icon; white/light and black/dark native backgrounds, contrasting frame and gear, unchanged aurora panel.
+- python3 scripts/brand.py — exit 0; generated native vector layers and tray assets.
+- python3 -m unittest discover -s scripts/tests -p test_brand.py — exit 0; 3 passed, including native rendered-pixel checks for both appearances, transparent corners, uniform backgrounds and colored wallpaper panel.
+- xcrun actool — exit 0; compiled the native icon for macOS 26. Icon Composer Default/Dark exports and the small compiled ICNS fallback were visually inspected without desktop capture.
+- Debug bundle inspection confirmed CFBundleIconName AppIcon and compiled Aqua white / DarkAqua black background layers.
+- First python3 scripts/test.py run: 534 passed, 1 failed, 11 skipped; ControlPanelSyncTests.testHiddenPanelContinuesSetupAndObservesNestedDownloadChanges reported InvalidTransition idle to failed(deinit). Isolated retry passed without code changes.
+- Second python3 scripts/test.py run — exit 0; 535 passed, 0 failed, 11 skipped. Final branding-only rerun also passed after comment/docstring cleanup.
+- No Release build, app restart, desktop appearance change or live Dock/Finder verification. Cleanup dry-run included unrelated existing artifacts; broad deletion was not performed.
 
-## 2026-09-22 — Solar intro card alpha
+## 2026-09-22 — Release build with transparent tray icon
 
-- Image alpha update scripts now write g_Alpha. Workshop 3662790108's start-black card was stuck at opacity 1 and covered the star shell.
-- Offscreen probe, intro property off: corner 400x200 max 255, 216/5000 samples above 4; full frame 16809/32400 samples above 4. Intro on, first frame, corners stay 0, which matches the card's 0–14s timeline.
-- Saturn 3589454154 still draws: full-frame samples above 4 are 14483/129600, corner max 15.
-- python3 scripts/check_renderer.py exit 0 in 67s. Evidence artifacts/renderer/adaptive-20260922-082842.
-- Planets stay on the scene's own simulation script and can be hidden or sub-pixel at the start. The Release app was not rebuilt.
+- Prior python3 scripts/test.py gate passed: Python checks passed; native 535 passed, 0 failed, 11 skipped.
+- python3 scripts/build.py --swift-only --configuration Release succeeded.
+- Offscreen AppKit rendering of TrayIcon loaded from the Release bundle at 16px and 32px matches source alpha within one 8-bit level; background and interior are transparent.
+- Initial bitmap-representation inspection was unsuitable for catalog-backed NSImage; verification used actual offscreen drawing instead.
+- Delivered build/Build/Products/Release/WallpaperMachine.app. App not launched or restarted; live menu bar verification left to user.
 
-## 2026-09-22 — Perspective models draw and the apply wait is 90s
+## 2026-09-22 — Transparent menu bar icon
 
-- Offscreen probe, 1920x1080, final renderer binary.
-- Saturn 3589454154 first frame 3343ms. Sky corner has star pixels (max 27); rings are in the lower frame.
-- Cause: a mat4 write into std140 g_NormalModelMatrix spilled into g_ViewProjectionMatrix. Writes are clamped to the reflected size. Front face stays counter-clockwise.
-- Live Solar System 3662790108 still shows the HUD only. Several bodies are script-hidden or sub-pixel at the first frames; the star shell still contributes no pixels.
-- Workshop 3588579284 first frame 25061ms cold and 24361ms with vk-pipeline-cache.bin present. Both exceed the old 20s wait and finish inside 90s.
-- mdl_schema_tests 54 passed. python3 scripts/check_renderer.py exit 0 (artifacts/renderer/adaptive-20260922-014221).
-- App was not rebuilt.
-
-## 2026-09-22 — Re-verified and delivered on the renamed tree, with the LGPL FFmpeg
-
-The trail fix was verified before the rename landed; rebasing onto it made both gates unrunnable because `Formula/mwe-ffmpeg.rb` was not installed. Installed with the user's authorization, then everything re-run on the rebased tree.
-
-- `python3 scripts/install_ffmpeg.py` — exit 0 in 93s; `--check` reports mwe-ffmpeg 8.1.2 installed from the current formula
-- `artifacts/renderer/bin` deleted first: its CMake cache still pointed at Homebrew ffmpeg@8, which is what made the pre-install test host abort with "search path '/opt/homebrew/opt/mwe-ffmpeg/lib' not found"
-- `python3 scripts/test.py` — exit 0; 535 passed, 11 skipped of 546
-- `python3 scripts/check_renderer.py --assets <old SceneAssets> --project 3605722997` — exit 0 in 156s; every gtest binary 0 including particle_mouse_controlpoint_test, 10 generated cases pixel-equal with 0 diagnostics, local project pooled+isolated exit 0 and pixels_equal=True, reload cycles 0
-- `python3 scripts/build.py --configuration Release` — exit 0; ParticleSystem.cpp 23:43:31, its object 00:06:27, libwallpaper_bridge.a 00:06:56, app binary 00:07:34
-- `build/Build/Products/Release/WallpaperMachine.app` — 42,039,392-byte arm64 Mach-O, ad-hoc signed, app.wallpapermachine 0.5.0 (16); otool shows libavcodec/libavformat/libavutil/libswscale resolved to /opt/homebrew/opt/mwe-ffmpeg, not Homebrew ffmpeg@8. Stale MacWallpaperEngine.* products removed from the Release directory
-- Gap the rename leaves, not this change: nothing migrates ~/Library/Application Support/mac-wallpaper-engine to .../WallpaperMachine and the defaults domain moved from app.mac-wallpaper-engine to the empty app.wallpapermachine, so the new bundle starts with no library and default settings until the data is moved
-- Not run: the app was not launched, no wallpaper applied, no desktop check. Trail and interaction behaviour on screen stay unverified
-
-## 2026-09-21 — The mouse trail tracked the canvas, not the window
-
-A particle system's mouse-linked control point derived its own scene coordinate as `pointerPosition * ortho` while the scripts used the presentation's cursor viewport. Reported as a trail that tracks in the middle of the screen and slides away toward the sides, on more than one wallpaper. `SetCursorInput` now publishes its mapped point to `Scene::pointerScenePosition` and the control point reads it.
-
-- `offscreen_scene_probe` WE_TEST_CLICK_VIEWPORT=4112x2658@2.0:fill on 3605722997 — the window shows canvas x [166.3, 2394.2] of 2560, so the old product was wrong by 165.8 scene units (~306 physical px, 7.4% of width) at either edge and exact at the centre. Under :fit the same display letterboxes to y [-107.1, 1547.7]
-- `particle_mouse_controlpoint_test` — exit 0, 39 tests; new `MouseControlpointFollowsTheCroppedPresentation` fails on the pre-fix branch with x=200 vs 160 and x=0 vs 40 while its centre assertion passes, which is the reported symptom as numbers
-- `mouse_input_test` — exit 0, 11 tests; the viewport mapping the fix consumes is unchanged
-- `python3 scripts/check_renderer.py --project 3605722997` — every binary 0, 10 generated cases pixel-equal with 0 diagnostics, local project exit 0 and pixels_equal=True, reload cycles 0. `particle_mouse_controlpoint_test` added to the gate so the new case actually runs
-- `python3 scripts/test.py` — exit 0; 535 passed, 11 skipped of 546
-- `python3 scripts/build.py --configuration Release` — exit 0 in 64s; ParticleSystem.cpp edited 23:27:58, its object 23:40:21, libwallpaper_bridge.a 23:40:50, app binary 23:41:21
-- Not covered: nothing exercises SceneWallpaper's message loop offscreen, so the host half — polling the pointer, publishing the viewport — is still only unit-covered. On-screen trail behaviour unverified until the user reopens the app
+- Regenerated 1x/2x tray assets; export converts Quick Look's white matte to alpha while retaining antialiased coverage.
+- python3 -m unittest discover -s scripts/tests -p test_brand.py: 2 passed, including generated background/interior transparency, opaque glyph and partial edge alpha at both sizes.
+- python3 scripts/test.py: Python checks passed; native 535 passed, 0 failed, 11 skipped.
+- Offscreen AppKit composite visually inspected on a blue background; no rectangular white matte. Live menu bar not inspected; no desktop interaction.
+- Release app not rebuilt; running app retains previous assets.

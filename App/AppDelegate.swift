@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var shutdownInProgress = false
     private var shutdownComplete = false
     private var themeSubscription: AnyCancellable?
+    private var iconSubscription: AnyCancellable?
     private var diagnostics: RuntimeDiagnosticsSession?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -35,6 +36,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         themeSubscription = AppThemeStore.shared.$preferences
             .map(\.mode).removeDuplicates()
             .sink { mode in NSApp.appearance = mode.appearance }
+        iconSubscription = AppThemeStore.shared.$preferences
+            .map(\.icon).removeDuplicates()
+            .sink { icon in
+                do {
+                    NSApp.applicationIconImage = try icon.image()
+                } catch {
+                    AppLog.error("Dock icon \(icon.rawValue) could not load: \(error.localizedDescription)")
+                }
+            }
         logStartup("didFinishLaunching start")
         BridgeEnvironment.configureVulkanICDIfNeeded()
         logStartup("vulkan icd configured")

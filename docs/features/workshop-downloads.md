@@ -284,9 +284,10 @@ scene playback stays unavailable until its resources are installed.
 Scene support is experimental; [web wallpapers](web-wallpapers.md) run in a
 built-in web view; Windows application wallpapers are labeled unsupported.
 
-**Install scene assets…** in Settings, or the same action in an installed
-scene's Workshop details, starts the installation; **Locate assets…** instead
-points at an existing purchased installation. Installation reuses the private
+**Download from Steam…** in **Settings → Library & Steam**, or **Get shared
+resources** in a scene's details, starts the installation; **Locate an
+installation…** (**Use an existing installation** in the dialog) instead points
+at an existing purchased installation. Installation reuses the private
 SteamCMD login and cancellation flow and requests the Windows application with
 `app_update 431960 validate`. Only the validated `assets` tree is retained, at
 `~/Library/Application Support/WallpaperMachine/SceneAssets`; the Windows
@@ -341,8 +342,9 @@ prompt; a terminal cached-credential rejection clears the stale cache before an
 explicit retry. Every download still uses private temporary staging, and the
 child process is stopped before that staging is removed.
 
-**Steam Guard sign-in help** in the download form — also translated into
-Simplified Chinese — covers both methods. For mobile approval, open the Steam
+The sign-in dialog, and the welcome guide's Steam page, show step-by-step
+Steam Guard help for whichever method Steam asked for, in every shipped
+language. For mobile approval, open the Steam
 mobile app's shield tab for the same account and approve only the sign-in you
 initiated; if Steam asks where the sign-in comes from, choose **Steam Client**.
 For an authenticator or emailed code, enter the current code in the
@@ -362,8 +364,8 @@ newline. Login failures are processed before credential prompts, and output is
 drained before process exit is handled. The five-minute inactivity timeout is a
 safety limit, not a substitute for receiving a login prompt.
 
-After authentication is rejected or times out, **Retry Steam sign-in** starts a
-new private SteamCMD session for the selected wallpaper or asset installation
+After authentication is rejected or times out, **Try again** (or the failed
+tile's retry) starts a new private SteamCMD session for the selected wallpaper or asset installation
 and for the account name still in the form. The prior process is stopped and its
 private staging removed first. Supply a password or a fresh code when Steam
 asks: rejected requests are never reused, approval is never bypassed, and

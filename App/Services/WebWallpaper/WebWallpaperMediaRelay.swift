@@ -189,7 +189,7 @@ extension WebWallpaperMediaRelay.Event {
 /// being told a fabricated silence.
 @MainActor
 final class UnavailableSystemMediaProvider: SystemMediaProvider {
-    let availability = SystemMediaAvailability.unavailable(reason: "No system media provider is configured.")
+    let availability = SystemMediaAvailability.unavailable(reason: String(localized: "No system media provider is configured."))
     var onPropertiesChanged: ((SystemMediaProperties) -> Void)?
     var onThumbnailChanged: ((SystemMediaThumbnail) -> Void)?
     var onPlaybackChanged: ((SystemMediaPlaybackState) -> Void)?

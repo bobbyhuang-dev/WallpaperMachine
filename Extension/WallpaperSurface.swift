@@ -146,8 +146,9 @@ final class WallpaperSurface {
 
   private func check(_ result: Int32) throws {
     guard result != 0 else { return }
-    let message = owe_last_error().map { String(cString: $0) } ?? "Unknown native rendering error."
-    throw WallpaperRuntime.failure(message)
+    let message =
+      owe_last_error().map { String(cString: $0) } ?? String(localized: "Unknown native rendering error.")
+    throw WallpaperRuntime.failure(detail: message)
   }
 
   private func requestFrame() {

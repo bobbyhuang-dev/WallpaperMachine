@@ -516,7 +516,7 @@ final class BridgeStore {
         if (manifest?["type"] as? String)?.lowercased() == "scene" {
             let assets = ClientPaths.assetsURL
             guard ClientPaths.hasSceneAssets(at: assets) else {
-                throw NSError(domain: "WallpaperMachine", code: 2, userInfo: [NSLocalizedDescriptionKey: String(localized: "This wallpaper is downloaded, but Wallpaper Engine’s shared scene assets are not installed. Use Install scene assets… in Settings or the Workshop wallpaper, or locate the assets folder from your purchased installation.")])
+                throw NSError(domain: "WallpaperMachine", code: 2, userInfo: [NSLocalizedDescriptionKey: String(localized: "This wallpaper is downloaded, but Wallpaper Engine’s shared scene resources are not installed. Choose Get shared resources in the wallpaper’s details, or go to Settings → Library & Steam.")])
             }
             setenv("WALLPAPER_MACHINE_ASSETS_ROOT", assets.path, 1)
         }

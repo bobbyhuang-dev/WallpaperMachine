@@ -3,7 +3,7 @@
 Every language the app ships is declared in three places that must agree:
 `AppLanguage.supported` (Swift), the `catalogs` registry in `WebUI/i18n.js`
 (one module per language under `WebUI/locales/`), and the locales present in
-`App/Resources/*.xcstrings`. See docs/localization.md.
+`App/Resources/*.xcstrings` and `Extension/Localizable.xcstrings`. See docs/localization.md.
 """
 import ast
 from collections import Counter
@@ -17,7 +17,11 @@ ROOT = Path(__file__).resolve().parents[2]
 LITERAL = r"'(?:[^'\\\n]|\\.)*'"
 SOURCE_LANGUAGE = "en"
 LOCALES = ROOT / "WebUI/locales"
-XCSTRINGS = [ROOT / "App/Resources/Localizable.xcstrings", ROOT / "App/Resources/InfoPlist.xcstrings"]
+XCSTRINGS = [
+    ROOT / "App/Resources/Localizable.xcstrings",
+    ROOT / "App/Resources/InfoPlist.xcstrings",
+    ROOT / "Extension/Localizable.xcstrings",
+]
 
 
 class StaticKeys(HTMLParser):
@@ -96,13 +100,14 @@ class PanelLocalizationTests(unittest.TestCase):
                 self.assertEqual(source, SOURCE_LANGUAGE)
                 self.assertTrue(translated <= set(languages), f"{path.name} lacks {sorted(translated - set(languages))}")
                 self.assertTrue(set(languages) <= set(swift), f"{path.name} carries unregistered {sorted(set(languages) - set(swift))}")
-        source, keys, languages = xcstrings_languages(XCSTRINGS[0])
-        for tag in translated:
-            with self.subTest(tag=tag):
-                data = json.loads(XCSTRINGS[0].read_text())["strings"]
-                missing = sorted(key for key, entry in data.items() if tag not in entry.get("localizations", {}))
-                self.assertEqual(missing, [], f"{tag}: native strings without a translation")
-                self.assertEqual(sorted(languages[tag]), [], f"{tag}: native strings not marked translated")
+        for path in XCSTRINGS:
+            source, keys, languages = xcstrings_languages(path)
+            data = json.loads(path.read_text())["strings"]
+            for tag in translated:
+                with self.subTest(catalog=path.name, tag=tag):
+                    missing = sorted(key for key, entry in data.items() if tag not in entry.get("localizations", {}))
+                    self.assertEqual(missing, [], f"{tag}: native strings without a translation")
+                    self.assertEqual(sorted(languages.get(tag, ())), [], f"{tag}: native strings not marked translated")
 
     def test_catalog_has_no_duplicates_or_empty_translations(self):
         for tag, entries in self.catalogs.items():

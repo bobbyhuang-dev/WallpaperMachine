@@ -406,7 +406,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let trayIcon = NSImage(named: "TrayIcon")
         if let button {
             button.image = trayIcon
-                ?? NSImage(systemSymbolName: "play.rectangle", accessibilityDescription: "Wallpaper Engine")
+                ?? NSImage(systemSymbolName: "play.rectangle", accessibilityDescription: "WallpaperMachine")
             button.image?.isTemplate = true
         }
 
@@ -455,12 +455,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let menu = NSMenu()
         let applicationItem = NSMenuItem()
         let applicationMenu = NSMenu(title: "WallpaperMachine")
-        let settings = menuItem(titleKey: "Settings…", action: #selector(openSettings))
+        let settings = menuItem("Settings…", action: #selector(openSettings))
         settings.keyEquivalent = ","
         applicationMenu.addItem(settings)
-        applicationMenu.addItem(menuItem(titleKey: "Check for Updates…", action: #selector(checkForUpdates)))
+        applicationMenu.addItem(menuItem("Check for Updates…", action: #selector(checkForUpdates)))
         applicationMenu.addItem(.separator())
-        let quit = menuItem(titleKey: "Quit WallpaperMachine", action: #selector(exitApplication))
+        let quit = menuItem("Quit WallpaperMachine", action: #selector(exitApplication))
         quit.keyEquivalent = "q"
         applicationMenu.addItem(quit)
         applicationItem.submenu = applicationMenu
@@ -468,16 +468,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         // Keep standard text editing shortcuts in search and setup fields.
         let editItem = NSMenuItem()
-        let editMenu = NSMenu(title: "Edit")
-        for (title, action, key) in [
+        let editMenu = NSMenu(title: String(localized: "Edit"))
+        let editCommands: [(String.LocalizationValue, Selector, String)] = [
             ("Undo", Selector(("undo:")), "z"),
             ("Redo", Selector(("redo:")), "Z"),
             ("Cut", #selector(NSText.cut(_:)), "x"),
             ("Copy", #selector(NSText.copy(_:)), "c"),
             ("Paste", #selector(NSText.paste(_:)), "v"),
             ("Select All", #selector(NSText.selectAll(_:)), "a")
-        ] {
-            editMenu.addItem(withTitle: title, action: action, keyEquivalent: key)
+        ]
+        for (title, action, key) in editCommands {
+            editMenu.addItem(withTitle: String(localized: title), action: action, keyEquivalent: key)
         }
         editItem.submenu = editMenu
         menu.addItem(editItem)
@@ -490,15 +491,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
 
         menu.removeAllItems()
-        menu.addItem(menuItem(titleKey: "Control Panel", action: #selector(openControlPanel)))
+        menu.addItem(menuItem("Control Panel", action: #selector(openControlPanel)))
 
         if let store,
            playbackSnapshotCurrent,
            !store.appSnapshot.activeWallpaperIds.isEmpty
         {
             menu.addItem(.separator())
-            let playbackTitleKey = store.appSnapshot.playbackState == .paused ? "Play" : "Pause"
-            let playbackItem = menuItem(titleKey: playbackTitleKey, action: #selector(togglePlayback))
+            let playbackTitle: String.LocalizationValue = store.appSnapshot.playbackState == .paused ? "Play" : "Pause"
+            let playbackItem = menuItem(playbackTitle, action: #selector(togglePlayback))
             playbackItem.isEnabled = true
             menu.addItem(playbackItem)
         }
@@ -509,12 +510,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
 
         menu.addItem(.separator())
-        menu.addItem(menuItem(titleKey: "Exit", action: #selector(exitApplication)))
+        menu.addItem(menuItem("Exit", action: #selector(exitApplication)))
     }
 
-    private func menuItem(titleKey: String, action: Selector) -> NSMenuItem {
+    private func menuItem(_ title: String.LocalizationValue, action: Selector) -> NSMenuItem {
         let item = NSMenuItem(
-            title: NSLocalizedString(titleKey, comment: ""),
+            title: String(localized: title),
             action: action,
             keyEquivalent: ""
         )
@@ -711,7 +712,7 @@ private struct BridgeUnavailableView: View {
         ContentUnavailableView(
             "Bridge Unavailable",
             systemImage: "exclamationmark.triangle",
-            description: Text(error?.localizedDescription ?? "The rendering bridge could not be started.")
+            description: Text(error?.localizedDescription ?? String(localized: "The rendering bridge could not be started."))
         )
         .frame(minWidth: 640, minHeight: 420)
     }

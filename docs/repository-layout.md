@@ -38,7 +38,8 @@ App/                               WallpaperMachine application target sources o
   ViewModels/                      BridgeStore and editor draft state; observable, no view code
   Views/ControlPanel/              SwiftUI container, WKWebView host, snapshot builder, action handlers
   Resources/                       Info.plist, string catalogs, Assets.xcassets; app resources only
-Extension/                         WallpaperMachineExtension sources, Info.plist, entitlements, bridging header
+Extension/                         WallpaperMachineExtension sources, Info.plist, entitlements, bridging header,
+                                   its own string catalog (Localizable.xcstrings)
 Shared/                            contracts compiled into both targets: LockScreenConfiguration,
                                    RuntimeCounters, WallpaperPresentationAuthority
 WebUI/                             HTML/CSS/JS control panel; bundled verbatim as the app resource folder WebUI

@@ -70,7 +70,7 @@ enum ClientPaths {
 
     static func configureAssetsFolder(at url: URL) throws {
         guard hasSceneAssets(at: url) else {
-            throw WorkshopFailure(message: "This folder does not contain Wallpaper Engine’s shared shaders and materials. Choose its complete assets folder, or install scene assets through Steam.")
+            throw WorkshopFailure(message: String(localized: "This folder does not contain Wallpaper Engine’s shared shaders and materials. Choose its complete assets folder, or install scene assets through Steam."))
         }
         UserDefaults.standard.set(url.path, forKey: "WallpaperMachineAssetsPath")
         setenv("WALLPAPER_MACHINE_ASSETS_ROOT", url.path, 1)
@@ -78,7 +78,7 @@ enum ClientPaths {
 
     static func installSceneAssets(from source: URL, to destination: URL) throws {
         guard hasSceneAssets(at: source) else {
-            throw WorkshopFailure(message: "Steam did not produce complete scene assets. Confirm this account owns Wallpaper Engine and retry. Existing assets have not been changed.")
+            throw WorkshopFailure(message: String(localized: "Steam did not produce complete scene assets. Confirm this account owns Wallpaper Engine and retry. Existing assets have not been changed."))
         }
         try Task.checkCancellation()
         if FileManager.default.fileExists(atPath: destination.path) {
@@ -90,8 +90,8 @@ enum ClientPaths {
 
     static func selectAssetsFolder() -> Bool {
         let panel = NSOpenPanel()
-        panel.title = "Locate Wallpaper Engine assets"
-        panel.message = "Choose the assets folder inside your legitimate Wallpaper Engine installation. These shared resources are required by many scenes."
+        panel.title = String(localized: "Locate Wallpaper Engine assets")
+        panel.message = String(localized: "Choose the assets folder inside your legitimate Wallpaper Engine installation. These shared resources are required by many scenes.")
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false

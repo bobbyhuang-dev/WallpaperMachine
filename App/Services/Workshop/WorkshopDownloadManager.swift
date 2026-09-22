@@ -34,15 +34,15 @@ final class WorkshopDownload: Identifiable {
   var status: String {
     if isQueued {
       if retriesAfterSessionConflict {
-        return "Steam allows one session at a time for this account; waiting to retry"
+        return String(localized: "Steam allows one session at a time for this account; waiting to retry")
       }
       switch hold {
-      case .slot: return "Waiting for a free download slot"
-      case .signIn: return "Waiting for the current sign-in to finish"
-      case .previous: return "Waiting for the previous download"
+      case .slot: return String(localized: "Waiting for a free download slot")
+      case .signIn: return String(localized: "Waiting for the current sign-in to finish")
+      case .previous: return String(localized: "Waiting for the previous download")
       }
     }
-    if wasCancelled { return "Download cancelled" }
+    if wasCancelled { return String(localized: "Download cancelled") }
     return worker.status
   }
   /// A job back in line for an automatic retry carries no failure; the retry decides.
@@ -204,12 +204,12 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
     guard !isShuttingDown, downloads.first(where: { $0.id == id })?.isPending != true else { return }
     guard let account = WorkshopDownloader.normalizedAccount(username) else {
       errorMessage =
-        "Enter your Steam account login name (not your display name). An account that owns Wallpaper Engine is required."
+        String(localized: "Enter your Steam account login name (not your display name). An account that owns Wallpaper Engine is required.")
       return
     }
     if let current = rememberSessionWhileRunning, current != rememberSession {
       errorMessage =
-        "Wait for active and queued downloads to finish before changing saved sign-in settings."
+        String(localized: "Wait for active and queued downloads to finish before changing saved sign-in settings.")
       return
     }
     if !rememberSession && !isRunning {

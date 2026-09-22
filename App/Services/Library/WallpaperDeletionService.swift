@@ -4,14 +4,14 @@ import Foundation
 enum WallpaperDeletionService {
     static func wallpaperURL(id: String, library: URL) throws -> URL {
         guard !id.isEmpty, id != ".", id != "..", !id.contains("/"), !id.contains("\\") else {
-            throw failure("Invalid wallpaper ID. Nothing was deleted.")
+            throw failure(String(localized: "Invalid wallpaper ID. Nothing was deleted."))
         }
         let root = library.resolvingSymlinksInPath().standardizedFileURL
         let item = root.appendingPathComponent(id, isDirectory: true)
         let values = try item.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
         guard values.isSymbolicLink != true, values.isDirectory == true,
               item.resolvingSymlinksInPath().deletingLastPathComponent().standardizedFileURL == root else {
-            throw failure("This wallpaper is not a folder in the managed library. Nothing was deleted.")
+            throw failure(String(localized: "This wallpaper is not a folder in the managed library. Nothing was deleted."))
         }
         return item
     }

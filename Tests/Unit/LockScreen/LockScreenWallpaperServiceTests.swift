@@ -177,7 +177,8 @@ final class LockScreenWallpaperServiceTests: XCTestCase {
     XCTAssertEqual(after, 1)
     XCTAssertFalse(service.ownsDesktopProvider)
     XCTAssertFalse(service.isEnabled)
-    XCTAssertTrue(service.errorMessage?.contains("Restoration also failed") == true)
+    XCTAssertTrue(
+      service.errorMessage?.contains(String(localized: "Restoration also failed: \("agent missing")")) == true)
   }
 
   @MainActor
@@ -563,10 +564,9 @@ final class LockScreenWallpaperServiceTests: XCTestCase {
     service.setEnabled(true)
     await waitFor("settled status") { !service.isBusy }
 
-    XCTAssertTrue(
-      service.status.lowercased().contains("not applicable"),
-      "web plus lock screen is unsupported, not failed: got “\(service.status)”")
-    XCTAssertFalse(service.status.lowercased().contains("failed"))
+    XCTAssertEqual(
+      service.status, String(localized: "Not applicable — web wallpapers have no lock-screen support"),
+      "web plus lock screen is unsupported, not failed")
     XCTAssertNil(service.errorMessage)
     XCTAssertFalse(service.isEnabled)
 

@@ -83,7 +83,7 @@ enum WallpaperSettingsProvider {
         provider: provider, identifier: "current", files: [], configuration: Data("current".utf8)))
     let choice = WallpaperChoice(
       id: identity, provider: provider, identifier: "current", name: "WallpaperMachine",
-      localizedDescription: "Applied wallpaper — animate on lock screen", thumbnail: thumbnail,
+      localizedDescription: String(localized: "Applied wallpaper, animated on the lock screen"), thumbnail: thumbnail,
       isDownloaded: true, options: [])
     let item = WallpaperSettingsItem(
       id: identity, localizedName: "WallpaperMachine", thumbnail: thumbnail, choice: choice,

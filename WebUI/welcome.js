@@ -16,16 +16,16 @@ const STEPS = [
 ];
 const PREFERENCES = [
   ['launchAtLogin', 'power', 'Launch at login', 'Wallpapers come back on their own after a restart.'],
-  ['pauseOnBattery', 'pause', 'Pause on battery', 'Stops playback while your Mac runs on battery, so wallpapers cost nothing on the go.'],
+  ['pauseOnBattery', 'pause', 'Pause on battery', 'Pauses wallpapers while your Mac runs on battery and resumes when you plug in.'],
   ['batteryProfileEnabled', 'batteryCharging', 'Reduced quality on battery', 'Renders at a lower scale and frame rate on battery instead of pausing.'],
   ['keepWindowsOnWallpaperClick', 'mousePointerClick', 'Keep windows in place when clicking the wallpaper', 'Turns off macOS’s “Click wallpaper to reveal desktop” so clicks reach interactive wallpapers.'],
 ];
 const TIPS = [
-  ['search', 'Discover is the whole Workshop', 'Search, sort and filter by type, resolution and tags. Looking around needs no account.'],
-  ['download', 'Download, then apply', 'Downloads land in Installed. Select a wallpaper and press Apply wallpaper, or double-click it, to put it on the chosen display.'],
+  ['search', 'Browse the Workshop in Discover', 'Search, sort and filter by type, resolution and tags. No account needed.'],
+  ['download', 'Download, then apply', 'Downloaded wallpapers appear in Installed. Select one and click Apply wallpaper, or double-click it, to show it on the chosen display.'],
   ['monitor', 'One wallpaper per display', 'Pick the target display in the top bar. Settings → Displays sets scaling, frame rate and audio per screen.'],
   ['plus', 'Import your own', 'Installed → Import copies wallpaper folders or files into your library and leaves the originals untouched.'],
-  ['pause', 'Pause any time', 'The control at the bottom pauses playback; Pause on battery does it for you.'],
+  ['pause', 'Pause any time', 'The button at the bottom pauses playback. Pause on battery does this automatically.'],
 ];
 const STEAM_JOIN_URL = 'https://store.steampowered.com/join/';
 const STEAM_STORE_URL = 'https://store.steampowered.com/app/431960/Wallpaper_Engine/';
@@ -170,7 +170,7 @@ export function createWelcome(helpers) {
     const language = languageOptions().map(([id, name, note]) => option('language', id, id === languageValue(), `<span class="welcome-option-title">${e(name)}</span>${note ? `<span class="welcome-option-note">${e(note)}</span>` : ''}`, languageBusy)).join('');
     const appearance = [['system', 'sunMoon', 'System (Auto)', 'Follows macOS light and dark'], ['light', 'sun', 'Light', ''], ['dark', 'moon', 'Dark', '']]
       .map(([id, glyph, title, note]) => option('theme', id, id === themeMode(), `<span class="welcome-swatch" data-appearance="${id}" aria-hidden="true"><span></span></span><span class="welcome-option-title">${icon(glyph, 14)}${e(t(title))}</span>${note ? `<span class="welcome-option-note">${e(t(note))}</span>` : ''}`, themeBusy)).join('');
-    return `${head(t('Welcome to WallpaperMachine'), t('Steam Workshop wallpapers on your Mac’s desktop. Two quick choices first; both can be changed later in Settings.'))}
+    return `${head(t('Welcome to WallpaperMachine'), t('Use Steam Workshop wallpapers on your Mac desktop. Choose a language and appearance to start. You can change both later in Settings.'))}
       <fieldset class="welcome-choice"><legend>${icon('languages', 15)}${e(t('Language'))}</legend><div class="welcome-options" role="radiogroup" aria-label="${e(t('Language'))}">${language}</div><p class="welcome-note">${e(t('The interface switches at once. Menus and dialogs follow the next time you open the app.'))}</p></fieldset>
       <fieldset class="welcome-choice"><legend>${icon('sunMoon', 15)}${e(t('Appearance'))}</legend><div class="welcome-options" role="radiogroup" aria-label="${e(t('Appearance'))}">${appearance}</div></fieldset>
       ${error ? `<p class="notice error" role="alert">${e(error)}</p>` : ''}`;
@@ -180,7 +180,7 @@ export function createWelcome(helpers) {
     const job = signInJob();
     const request = signInRequest();
     const setup = state.setup || {};
-    const lead = t('Browsing is free. Downloading needs a Steam account that owns Wallpaper Engine, because Steam only hands Workshop files to accounts that own it. Sign in now, or skip and sign in when your first download starts.');
+    const lead = t('You can browse without an account. Downloading requires a Steam account that owns Wallpaper Engine. Sign in now, or skip and sign in at your first download.');
     const links = `<div class="welcome-steam-links"><div class="welcome-steam-link"><p><b>${e(t('No Steam account yet?'))}</b> ${e(t('Creating one is free.'))}</p>${button(t('Create a Steam account'), 'openExternal', { url: STEAM_JOIN_URL }, { icon: 'external', className: 'link' })}</div><div class="welcome-steam-link"><p><b>${e(t('Don’t own Wallpaper Engine?'))}</b> ${e(t('It is a one-time purchase on Steam.'))}</p>${button(t('Buy Wallpaper Engine'), 'openExternal', { url: STEAM_STORE_URL }, { icon: 'external', className: 'link' })}</div></div>`;
     let body;
     if (done) {
@@ -223,12 +223,12 @@ export function createWelcome(helpers) {
       const secure = Boolean(job.securePrompt);
       const help = guide?.phone ? button(t('Get the Steam mobile app'), 'openExternal', { url: 'https://store.steampowered.com/mobile' }, { icon: 'external', className: 'link' }) : guide?.mail ? button(t('Help with emailed codes'), 'openExternal', { url: 'https://help.steampowered.com/en/wizard/HelpWithSteamGuardCode' }, { icon: 'external', className: 'link' }) : '';
       const explain = secure ? statusCard('lock', t('Steam asks for your password'), t('Enter it below. It goes straight to Steam and is never stored by this app.')) : guide ? helpers.guideMarkup(guide) : '';
-      return `${explain}<form class="welcome-form" data-form="prompt" data-id="${e(job.id)}" data-key="prompt-${e(job.prompt)}"><label class="field" for="welcome-response">${e(job.prompt)}<input id="welcome-response" name="response" type="${secure ? 'password' : 'text'}" autocomplete="${secure ? 'current-password' : 'one-time-code'}" spellcheck="false" autocapitalize="off" required${working ? ' disabled' : ''}></label><div class="welcome-form-actions"><button type="submit" class="primary"${working ? ' disabled' : ''}>${icon(secure ? 'lock' : 'keyRound')}<span class="button-label">${e(t('Submit'))}</span></button>${cancel}${help}</div></form>`;
+      return `${explain}<form class="welcome-form" data-form="prompt" data-id="${e(job.id)}" data-key="prompt-${e(job.prompt)}"><label class="field" for="welcome-response">${e(t(job.prompt))}<input id="welcome-response" name="response" type="${secure ? 'password' : 'text'}" autocomplete="${secure ? 'current-password' : 'one-time-code'}" spellcheck="false" autocapitalize="off" required${working ? ' disabled' : ''}></label><div class="welcome-form-actions"><button type="submit" class="primary"${working ? ' disabled' : ''}>${icon(secure ? 'lock' : 'keyRound')}<span class="button-label">${e(t('Submit'))}</span></button>${cancel}${help}</div></form>`;
     }
     if (job.challenge) {
       return `${helpers.guideMarkup(guide, `<progress aria-label="${e(t('Waiting for Steam'))}"></progress>`)}<div class="welcome-status-actions">${cancel}${guide?.phone ? button(t('Get the Steam mobile app'), 'openExternal', { url: 'https://store.steampowered.com/mobile' }, { icon: 'external', className: 'link' }) : ''}</div>`;
     }
-    return statusCard('logIn', job.status || t('Contacting Steam…'), t('Any password or Steam Guard request appears here.'), `<progress aria-label="${e(t('Connecting to Steam'))}"></progress><div class="welcome-status-actions">${cancel}</div>`);
+    return statusCard('logIn', job.status || t('Contacting Steam…'), t('Password and Steam Guard prompts appear here.'), `<progress aria-label="${e(t('Connecting to Steam'))}"></progress><div class="welcome-status-actions">${cancel}</div>`);
   }
 
   function signInForm(job, setup) {
@@ -238,7 +238,7 @@ export function createWelcome(helpers) {
     return `<form class="welcome-form" data-form="signIn" data-key="sign-in-form" novalidate>
       <label class="field" for="welcome-account">${e(t('Steam account name'))}<input id="welcome-account" name="account" type="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="${e(t('The name you log in with'))}" value="${e(signIn.account)}"${working ? ' disabled' : ''}><span class="welcome-field-note">${e(t('Your login name, not the profile name other players see.'))}</span></label>
       <label class="field" for="welcome-password">${e(t('Password'))}<span class="welcome-password"><input id="welcome-password" name="password" type="${signIn.reveal ? 'text' : 'password'}" autocomplete="current-password" spellcheck="false" autocapitalize="off" data-key="password"${working ? ' disabled' : ''}>${button('', 'reveal', {}, { icon: signIn.reveal ? 'eyeOff' : 'eye', title: signIn.reveal ? t('Hide password') : t('Show password'), className: 'quiet icon-button', disabled: working })}</span></label>
-      <label class="check-label welcome-remember" data-key="remember"><input type="checkbox" name="remember"${signIn.remember ? ' checked' : ''}${working ? ' disabled' : ''}><span>${e(t('Keep me signed in on this Mac'))}<span class="welcome-field-note">${e(t('Saves Steam’s own sign-in files on this Mac so downloads don’t ask again. Never your password.'))}</span></span></label>
+      <label class="check-label welcome-remember" data-key="remember"><input type="checkbox" name="remember"${signIn.remember ? ' checked' : ''}${working ? ' disabled' : ''}><span>${e(t('Keep me signed in on this Mac'))}<span class="welcome-field-note">${e(t('Keeps you signed in to Steam on this Mac so downloads don’t ask again. Your password is not saved.'))}</span></span></label>
       ${failure ? `<p class="notice error" role="alert">${e(failure)}</p>` : ''}
       <div class="welcome-form-actions"><button type="submit" class="primary"${working ? ' disabled' : ''}>${icon('logIn')}<span class="button-label">${e(label)}</span></button></div>
       <p class="welcome-note">${e(setup.ready ? t('Your password goes straight to Valve’s SteamCMD and is never stored by this app. Steam Guard requests appear here.') : t('SteamCMD is Valve’s free download tool. It is installed into this app’s own folder the first time. Your password goes straight to it and is never stored by this app.'))}</p>
@@ -254,21 +254,21 @@ export function createWelcome(helpers) {
       const extra = key === 'launchAtLogin' && settings && !settings.launchAtLoginAvailable ? ` ${t('Move the app to Applications to enable.')}` : '';
       return `<label class="welcome-pref" data-key="pref-${key}"><span class="dialog-guide-icon">${icon(glyph, 18)}</span><span class="welcome-pref-body"><span class="welcome-pref-title">${e(t(title))}</span><span class="welcome-pref-note">${e(t(note))}${e(extra)}</span></span><span class="settings-switch"><input type="checkbox" role="switch" data-pref="${key}" aria-label="${e(t(title))}"${value ? ' checked' : ''}${off ? ' disabled' : ''}><span aria-hidden="true"></span></span></label>`;
     }).join('');
-    return `${head(t('A few preferences'), t('Sensible defaults are already set. Change what you like; everything here lives in Settings too.'))}${unavailable ? `<p class="notice">${e(t('Settings are unavailable right now. You can set these later in Settings.'))}</p>` : ''}<div class="welcome-prefs">${rows}</div>${error ? `<p class="notice error" role="alert">${e(error)}</p>` : ''}`;
+    return `${head(t('A few preferences'), t('You can change these later in Settings.'))}${unavailable ? `<p class="notice">${e(t('Settings are unavailable right now. You can set these later in Settings.'))}</p>` : ''}<div class="welcome-prefs">${rows}</div>${error ? `<p class="notice error" role="alert">${e(error)}</p>` : ''}`;
   }
 
   function pageTips() {
     const repository = helpers.safeLink(state.repositoryURL);
     const tips = TIPS.map(([glyph, title, text]) => `<li><span class="dialog-guide-icon">${icon(glyph, 18)}</span><div class="welcome-tip-body"><p class="welcome-tip-title">${e(t(title))}</p><p class="welcome-tip-text">${e(t(text))}</p></div></li>`).join('');
-    const github = repository ? `<section class="welcome-github" aria-label="GitHub"><span class="welcome-github-mark">${icon('github', 22)}</span><div class="welcome-github-body"><p class="welcome-tip-title">${e(t('WallpaperMachine is open source'))}</p><p class="welcome-tip-text">${e(t('Source code, releases and the issue tracker live on GitHub. Found a bug or have an idea? Open an issue.'))}</p><div class="welcome-status-actions">${button(t('Open on GitHub'), 'openExternal', { url: repository }, { icon: 'external' })}${button(t('Report an issue'), 'openExternal', { url: `${repository.replace(/\/$/, '')}/issues` }, { icon: 'external', className: 'quiet' })}</div></div></section>` : '';
-    return `${head(t('Good to know'), t('Five things that make the first hour easier.'))}<ol class="welcome-tips">${tips}</ol>${github}`;
+    const github = repository ? `<section class="welcome-github" aria-label="GitHub"><span class="welcome-github-mark">${icon('github', 22)}</span><div class="welcome-github-body"><p class="welcome-tip-title">${e(t('WallpaperMachine is open source'))}</p><p class="welcome-tip-text">${e(t('Source code, releases and issue reports are on GitHub.'))}</p><div class="welcome-status-actions">${button(t('Open on GitHub'), 'openExternal', { url: repository }, { icon: 'external' })}${button(t('Report an issue'), 'openExternal', { url: `${repository.replace(/\/$/, '')}/issues` }, { icon: 'external', className: 'quiet' })}</div></div></section>` : '';
+    return `${head(t('The basics'), t('Where things are and how to put a wallpaper on your desktop.'))}<ol class="welcome-tips">${tips}</ol>${github}`;
   }
 
   function pageStart(done) {
     const language = languageOptions().find(([id]) => id === languageValue());
     const mode = { system: 'System (Auto)', light: 'Light', dark: 'Dark' }[themeMode()] || 'System (Auto)';
-    const recap = `<dl class="welcome-recap"><div><dt>${e(t('Language'))}</dt><dd>${e(language ? language[1] : t('System (Auto)'))}</dd></div><div><dt>${e(t('Appearance'))}</dt><dd>${e(t(mode))}</dd></div><div><dt>${e(t('Steam'))}</dt><dd>${e(done ? t('Signed in as {account}', { account: done }) : t('Not signed in — Steam asks at your first download'))}</dd></div></dl>`;
-    return `${head(t('You’re ready'), t('Pick where to begin. Nothing reaches your desktop until you apply a wallpaper.'))}${recap}<div class="welcome-start"><button type="button" class="welcome-start-option" data-action="browse"><span class="dialog-guide-icon">${icon('search', 18)}</span><span class="welcome-pref-body"><span class="welcome-pref-title">${e(t('Browse the Workshop'))}</span><span class="welcome-pref-note">${e(t('Open Discover and look through Steam’s catalogue.'))}</span></span>${icon('chevronRight', 16)}</button><button type="button" class="welcome-start-option" data-action="import"><span class="dialog-guide-icon">${icon('plus', 18)}</span><span class="welcome-pref-body"><span class="welcome-pref-title">${e(t('Import wallpapers'))}</span><span class="welcome-pref-note">${e(t('Bring in wallpaper folders or files you already have.'))}</span></span>${icon('chevronRight', 16)}</button></div><p class="welcome-note">${e(t('Read this guide again any time from Settings → Library & Steam.'))}</p>`;
+    const recap = `<dl class="welcome-recap"><div><dt>${e(t('Language'))}</dt><dd>${e(language ? language[1] : t('System (Auto)'))}</dd></div><div><dt>${e(t('Appearance'))}</dt><dd>${e(t(mode))}</dd></div><div><dt>${e(t('Steam'))}</dt><dd>${e(done ? t('Signed in as {account}', { account: done }) : t('Not signed in. You’ll be asked at your first download.'))}</dd></div></dl>`;
+    return `${head(t('Setup complete'), t('Your desktop won’t change until you apply a wallpaper.'))}${recap}<div class="welcome-start"><button type="button" class="welcome-start-option" data-action="browse"><span class="dialog-guide-icon">${icon('search', 18)}</span><span class="welcome-pref-body"><span class="welcome-pref-title">${e(t('Browse the Workshop'))}</span><span class="welcome-pref-note">${e(t('Find wallpapers from Steam in Discover.'))}</span></span>${icon('chevronRight', 16)}</button><button type="button" class="welcome-start-option" data-action="import"><span class="dialog-guide-icon">${icon('plus', 18)}</span><span class="welcome-pref-body"><span class="welcome-pref-title">${e(t('Import wallpapers'))}</span><span class="welcome-pref-note">${e(t('Bring in wallpaper folders or files you already have.'))}</span></span>${icon('chevronRight', 16)}</button></div><p class="welcome-note">${e(t('You can open this guide again from Settings → Library & Steam.'))}</p>`;
   }
 
   // Actions

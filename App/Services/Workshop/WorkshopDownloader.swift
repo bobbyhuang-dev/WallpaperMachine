@@ -88,7 +88,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
     func start(item: WorkshopItem, username: String, executable: URL, library: URL, rememberSession: Bool = true, onImported: @escaping @MainActor () async throws -> Void) {
         guard !isRunning else { return }
         guard let id = UInt64(item.id), id > 0, item.id.allSatisfy({ $0.isASCII && $0.isNumber }), item.kind != .application else {
-            errorMessage = "Choose a valid Workshop wallpaper. Application wallpapers execute Windows programs and cannot be used on macOS."
+            errorMessage = String(localized: "Choose a valid Workshop wallpaper. Application wallpapers execute Windows programs and cannot be used on macOS.")
             return
         }
         download(itemID: item.id, username: username, executable: executable, root: library.deletingLastPathComponent(),
@@ -99,7 +99,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             self.downloadedID = item.id
             self.status = String(localized: "Downloaded to your library")
             do { try await onImported() }
-            catch { self.errorMessage = "Downloaded successfully, but the library could not refresh: \(error.localizedDescription). Use Refresh in Library before applying." }
+            catch { self.errorMessage = String(localized: "Downloaded, but the library could not refresh: \(error.localizedDescription). Refresh the library before applying it.") }
         }
     }
 
@@ -127,7 +127,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                           expectedBytes: Int64? = nil, onDownloaded: @escaping @MainActor (URL) async throws -> Void) {
         guard !isRunning else { return }
         guard let account = Self.normalizedAccount(username) else {
-            errorMessage = "Enter your Steam account login name (not your display name). An account that owns Wallpaper Engine is required."
+            errorMessage = String(localized: "Enter your Steam account login name (not your display name). An account that owns Wallpaper Engine is required.")
             return
         }
         if !rememberSession {
@@ -230,7 +230,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                         if failure != nil || Date().timeIntervalSince(started) > 1800 || Date().timeIntervalSince(lastActivity) > 300 {
                             if failure == nil {
                                 authenticationFailed = isAuthenticating
-                                failure = "SteamCMD timed out. If Steam Guard was not completed, retry signing in and approve the new request or enter a fresh code. Otherwise check your connection and available disk space."
+                                failure = String(localized: "SteamCMD timed out. If Steam Guard was not completed, retry signing in and approve the new request or enter a fresh code. Otherwise check your connection and available disk space.")
                             }
                             await stopProcess()
                             break
@@ -251,22 +251,22 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
                 guard process?.terminationStatus == 0 else {
                     authenticationFailed = isAuthenticating
                     if isSigningInOnly {
-                        throw WorkshopFailure(message: "SteamCMD exited before confirming the sign-in. Check the account name and password, approve Steam Guard, and retry. On Apple silicon, SteamCMD may require Rosetta 2.")
+                        throw WorkshopFailure(message: String(localized: "SteamCMD exited before confirming the sign-in. Check the account name and password, approve Steam Guard, and retry. On Apple silicon, SteamCMD may require Rosetta 2."))
                     }
-                    throw WorkshopFailure(message: "SteamCMD exited before completing the download. Confirm this account owns Wallpaper Engine, approve Steam Guard, and retry. On Apple silicon, SteamCMD may require Rosetta 2.")
+                    throw WorkshopFailure(message: String(localized: "SteamCMD exited before completing the download. Confirm this account owns Wallpaper Engine, approve Steam Guard, and retry. On Apple silicon, SteamCMD may require Rosetta 2."))
                 }
                 progress = nil
                 receivesNetwork = false
                 bytesPerSecond = nil
                 if isSigningInOnly && isAuthenticating {
                     authenticationFailed = true
-                    throw WorkshopFailure(message: "Steam closed the session without confirming the sign-in. Check the account name and password, then retry.")
+                    throw WorkshopFailure(message: String(localized: "Steam closed the session without confirming the sign-in. Check the account name and password, then retry."))
                 }
                 if isInstallingAssets && !assetsDownloadCompleted {
-                    throw WorkshopFailure(message: "Steam exited without confirming a complete Wallpaper Engine installation. Retry installing scene assets; existing assets have not been changed.")
+                    throw WorkshopFailure(message: String(localized: "Steam exited without confirming a complete Wallpaper Engine installation. Retry installing scene assets; existing assets have not been changed."))
                 }
                 if !isInstallingAssets && !isSigningInOnly && !workshopDownloadCompleted {
-                    throw WorkshopFailure(message: "Steam exited without confirming a complete Workshop download. Retry; no partial wallpaper has been added to your library.")
+                    throw WorkshopFailure(message: String(localized: "Steam exited without confirming a complete Workshop download. Retry; no partial wallpaper has been added to your library."))
                 }
                 try await onDownloaded(staging)
             } catch is CancellationError {
@@ -322,7 +322,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             lastActivity = Date()
         } catch {
             authenticationFailed = true
-            failure = "SteamCMD closed its login prompt. Retry signing in to start a new session."
+            failure = String(localized: "SteamCMD closed its login prompt. Retry signing in to start a new session.")
         }
     }
 
@@ -353,7 +353,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         var master: Int32 = 0
         var slave: Int32 = 0
         guard openpty(&master, &slave, nil, nil, nil) == 0 else {
-            throw WorkshopFailure(message: "Could not create a private terminal for SteamCMD. Restart WallpaperMachine and retry.")
+            throw WorkshopFailure(message: String(localized: "Could not create a private terminal for SteamCMD. Restart WallpaperMachine and retry."))
         }
         var settings = termios()
         if tcgetattr(slave, &settings) == 0 {
@@ -364,7 +364,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         let child = FileHandle(fileDescriptor: slave, closeOnDealloc: true)
         let flags = fcntl(master, F_GETFL)
         guard flags >= 0, fcntl(master, F_SETFL, flags | O_NONBLOCK) == 0 else {
-            throw WorkshopFailure(message: "Could not read SteamCMD’s private terminal without blocking. Restart WallpaperMachine and retry.")
+            throw WorkshopFailure(message: String(localized: "Could not read SteamCMD’s private terminal without blocking. Restart WallpaperMachine and retry."))
         }
         terminal = input
         let installDirectory = isInstallingAssets ? staging.appendingPathComponent("wallpaper-engine") : staging
@@ -393,7 +393,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         }
         catch {
             try? child.close()
-            throw WorkshopFailure(message: "Cannot launch SteamCMD: \(error.localizedDescription). Install the macOS SteamCMD distribution; on Apple silicon install Rosetta 2 if requested.")
+            throw WorkshopFailure(message: String(localized: "Cannot launch SteamCMD: \(error.localizedDescription). Install the macOS SteamCMD distribution; on Apple silicon install Rosetta 2 if requested."))
         }
         try? child.close()
         phase = .connecting
@@ -413,7 +413,7 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
             } else if count == 0 || errno == EAGAIN || errno == EWOULDBLOCK || errno == EIO {
                 return
             } else if errno != EINTR {
-                throw WorkshopFailure(message: "Lost the connection to SteamCMD’s login terminal. Retry signing in.")
+                throw WorkshopFailure(message: String(localized: "Lost the connection to SteamCMD’s login terminal. Retry signing in."))
             }
         }
     }
@@ -449,32 +449,32 @@ final class WorkshopDownloader: SteamCMDDownloadActivity {
         if output.contains("logged in elsewhere") || output.contains("logged in from another") || output.contains("loggedinelsewhere") {
             endedBySessionConflict = true
             authenticationFailed = isAuthenticating
-            failure = "Steam ended this session because the account signed in somewhere else. Retry once the other sign-in is done."
+            failure = String(localized: "Steam ended this session because the account signed in somewhere else. Retry once the other sign-in is done.")
         } else if output.contains("no subscription") || (output.contains("access denied") && !isAuthenticating) || output.contains("does not own") {
-            failure = "Steam denied this download. Sign in with an account that owns Wallpaper Engine and has access to this Workshop item."
+            failure = String(localized: "Steam denied this download. Sign in with an account that owns Wallpaper Engine and has access to this Workshop item.")
         } else if output.contains("error! download item") || output.contains("failed to download") || output.contains("error! failed to start downloading item") {
-            failure = "Steam could not download this item. It may be private, removed, or unavailable to this account. Open its Workshop page and retry."
+            failure = String(localized: "Steam could not download this item. It may be private, removed, or unavailable to this account. Open its Workshop page and retry.")
         } else if isInstallingAssets && (output.contains("error! app") || output.contains("failed to install app")) {
-            failure = "Steam could not install Wallpaper Engine’s shared assets. Confirm ownership and check available disk space, then retry."
+            failure = String(localized: "Steam could not install Wallpaper Engine’s shared assets. Confirm ownership and check available disk space, then retry.")
         } else if let match = Self.failurePattern.firstMatch(in: output, range: NSRange(output.startIndex..., in: output)),
                   let range = Range(match.range(at: 1), in: output) {
             let reason = output[range]
             authenticationFailed = isAuthenticating
             if cachedCredentialsRejected && reason.contains("cached credential") {
-                failure = String(localized: "Your saved Steam sign-in has expired or was revoked. Choose Retry Steam sign-in and complete authentication again.")
+                failure = String(localized: "Your saved Steam sign-in has expired or was revoked. Try again and sign in to Steam.")
             } else if reason.contains("two-factor") || reason.contains("auth code") || reason.contains("steam guard")
                 || (steamGuardChallenge != nil && (reason.contains("denied") || reason.contains("cancel"))) {
-                failure = "Steam Guard was rejected, cancelled, or expired. Choose Retry Steam sign-in, enter your password again, then approve the new request or use a fresh code."
+                failure = String(localized: "Steam Guard was rejected, cancelled or expired. Try again, enter your password, then approve the new request or use a new code.")
             } else if reason.contains("timeout") || reason.contains("timed out") || reason.contains("connection") || reason.contains("service unavailable") {
-                failure = "Steam could not complete the connection or sign-in in time. Check your connection and any Steam Guard approval, then retry."
+                failure = String(localized: "Steam could not complete the connection or sign-in in time. Check your connection and any Steam Guard approval, then retry.")
             } else if reason.contains("rate limit") || reason.contains("too many") {
-                failure = "Steam has temporarily limited sign-in attempts. Wait before retrying."
+                failure = String(localized: "Steam has temporarily limited sign-in attempts. Wait before retrying.")
             } else {
-                failure = "Steam rejected the sign-in. Check your account login name, password, and Steam Guard approval, then retry."
+                failure = String(localized: "Steam rejected the sign-in. Check your account login name, password, and Steam Guard approval, then retry.")
             }
         } else if output.contains("invalid password") || output.contains("invalid login") || output.contains("account logon denied") {
             authenticationFailed = true
-            failure = "Steam rejected the sign-in. Check your account login name and password, then retry."
+            failure = String(localized: "Steam rejected the sign-in. Check your account login name and password, then retry.")
         } else if output.hasSuffix("password:") {
             prompt = .password
             steamGuardChallenge = nil

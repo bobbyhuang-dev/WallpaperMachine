@@ -1,0 +1,84 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "No applied wallpaper is available for this display. Enable Animate Lock Screen in WallpaperMachine." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "No applied wallpaper is available for this display. Enable Animate Lock Screen in WallpaperMachine."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "这台显示器没有已应用的壁纸。请在 WallpaperMachine 中开启“锁定屏幕动态壁纸”。"}}}
+    },
+    "Unsupported native wallpaper creation request." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Unsupported native wallpaper creation request."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "不支持的墙纸创建请求。"}}}
+    },
+    "Unknown wallpaper surface." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Unknown wallpaper surface."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "未知的墙纸画面。"}}}
+    },
+    "Invalid wallpaper surface dimensions." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Invalid wallpaper surface dimensions."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "墙纸画面尺寸无效。"}}}
+    },
+    "Metal rendering is unavailable." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Metal rendering is unavailable."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Metal 渲染不可用。"}}}
+    },
+    "Invalid lock-screen playback configuration." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Invalid lock-screen playback configuration."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "锁定屏幕播放配置无效。"}}}
+    },
+    "Wallpaper surface is not available." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wallpaper surface is not available."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "墙纸画面不可用。"}}}
+    },
+    "The lock-screen renderer did not produce a frame within 30 seconds." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The lock-screen renderer did not produce a frame within 30 seconds."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "锁定屏幕渲染器在 30 秒内没有输出画面。"}}}
+    },
+    "Unknown native rendering error." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Unknown native rendering error."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "未知的渲染错误。"}}}
+    },
+    "Wallpaper snapshot is unavailable." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wallpaper snapshot is unavailable."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "墙纸快照不可用。"}}}
+    },
+    "Wallpaper frame is not ready." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wallpaper frame is not ready."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "墙纸画面尚未就绪。"}}}
+    },
+    "Wallpaper snapshot timed out." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wallpaper snapshot timed out."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "墙纸快照超时。"}}}
+    },
+    "Applied wallpaper, animated on the lock screen" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Applied wallpaper, animated on the lock screen"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "当前壁纸，在锁定屏幕上动态显示"}}}
+    },
+    "macOS rejected the wallpaper provider description." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "macOS rejected the wallpaper provider description."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 拒绝了墙纸提供程序的描述。"}}}
+    },
+    "Wallpaper provider preview is missing." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wallpaper provider preview is missing."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "缺少墙纸提供程序的预览图。"}}}
+    },
+    "This macOS version does not provide WallpaperExtensionKit." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This macOS version does not provide WallpaperExtensionKit."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "这个 macOS 版本没有提供 WallpaperExtensionKit。"}}}
+    },
+    "Missing macOS wallpaper type: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Missing macOS wallpaper type: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "缺少 macOS 墙纸类型：%@"}}}
+    },
+    "Unsupported macOS wallpaper payload size: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Unsupported macOS wallpaper payload size: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "不支持的 macOS 墙纸数据大小：%@"}}}
+    },
+    "Unsupported macOS wallpaper layout: %@.%@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Unsupported macOS wallpaper layout: %@.%@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "不支持的 macOS 墙纸结构：%1$@.%2$@"}}}
+    },
+    "Cannot allocate wallpaper context reply." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Cannot allocate wallpaper context reply."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法分配墙纸上下文响应。"}}}
+    },
+    "Cannot allocate wallpaper snapshot reply." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Cannot allocate wallpaper snapshot reply."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法分配墙纸快照响应。"}}}
+    },
+    "macOS refused to create a remote wallpaper surface." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "macOS refused to create a remote wallpaper surface."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 拒绝创建远程墙纸画面。"}}}
+    },
+    "Remote wallpaper composition is unavailable on this macOS version." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Remote wallpaper composition is unavailable on this macOS version."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "这个 macOS 版本不支持远程墙纸合成。"}}}
+    },
+    "Unsupported lock-screen configuration version." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Unsupported lock-screen configuration version."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "不支持的锁定屏幕配置版本。"}}}
+    },
+    "Lock-screen asset is unavailable: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Lock-screen asset is unavailable: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "锁定屏幕文件不可用：%@"}}}
+    },
+    "Invalid lock-screen asset path." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Invalid lock-screen asset path."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "锁定屏幕文件路径无效。"}}}
+    }
+  },
+  "version" : "1.0"
+}

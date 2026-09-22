@@ -15,6 +15,31 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-21 — Renamed the project from MacWallpaperEngine to WallpaperMachine
+
+The rename was half applied and was rebased onto the nineteen renderer/media commits already on origin/main, so the incoming work had to be carried onto the new name as well.
+
+- Zero occurrences of MacWallpaperEngine / MacWallpaperExtension / mac-wallpaper-engine / MAC_WALLPAPER_ENGINE remain in the tracked tree (build output and artifacts/ excluded)
+- Runtime breaks the partial rename had left: upstream/renderer/crates/bridge/src/paths.rs read MAC_WALLPAPER_ENGINE_* while ClientPaths exports WALLPAPER_MACHINE_*, and SceneWallpaperBindings.mm observed MacWallpaperEngine.requestDesktopPoster while the host posts WallpaperMachine.requestDesktopPoster; both boundaries now pair on every name
+- Also renamed in the vendored tree: BUNDLE_IDENTIFIER app.wallpapermachine, WALLPAPER_MACHINE_CONTENT_PACING in VideoFramePacing.cpp, the SceneAssets fallback in metal_scene_draw_smoke.mm, the shader pipeline test overrides, and the audio-permission message; recorded in upstream/provenance.json
+- docs/testing/renderer.md claimed MAC_WALLPAPER_ENGINE_DISABLE_CONTENT_PACING=1 disables pacing off a paced default; no such variable exists. Corrected to WALLPAPER_MACHINE_CONTENT_PACING=1 enabling pacing over a fixed-cadence default, matching VideoFramePacing.cpp and power-benchmark.md
+- DownloadTelemetryTests nettop fixtures used the 15-character truncation MacWallpaperEng.42; now WallpaperMachin.42
+- WallpaperMachine.xcodeproj regenerated with xcodegen after the rebase; this dropped SceneMediaCoordinator.swift, which origin had removed in 9cd8719 and the pre-rebase project still referenced
+- The stale prebuilt bridge library failed to link system_media_consent_handles (added by the incoming commits); python3 scripts/build.py --renderer-only rebuilt it and left App/Bridge/Generated/ unchanged
+- python3 scripts/test.py — 535 passed, 0 failed, 11 skipped of 546
+- python3 scripts/check_renderer.py — 21 gtest binaries, 0 failures, 408 assertions; 10 probe cases pooled+isolated exit 0, pixels_equal=True, 0 diagnostics; reload cycles 0
+- artifacts/renderer/bin held a CMake cache pinned to the old directory name and had to be deleted before the renderer could configure; that is what the rename costs an existing checkout
+- Not rebuilt: no Release build was requested, so build/Build/Products/Release still holds the old bundle
+
+## 2026-09-21 — GPL licensing and commercial distribution policy
+
+- Replaced Homebrew GPLv3 FFmpeg with Formula/mwe-ffmpeg.rb (8.1.2, LGPL-2.1-or-later); installed formula and brew test passed; actual avcodec_license/configuration and otool dependencies verified.
+- python3 scripts/build.py --renderer-only passed; python3 scripts/check_renderer.py passed ten generated pooled/isolated scenes, reload cycles and renderer suites; three local-fixture tests skipped.
+- python3 scripts/test.py: 529 passed, 0 failed, 11 skipped; Python script tests passed.
+- python3 scripts/package.py --configuration Debug --check passed; existing GPLv3 Release input rejected without mutation. Disposable Debug copy fully packaged and codesign verified; GPL and keg notices checked; repackaging refused; temporary app/archive removed.
+- Installer idempotence and interrupted-reinstall receipt recovery exercised. No desktop launch, install, Developer ID signing or notarization performed; Release app not rebuilt.
+- Public binary CI blocked: GPL-2.0-only with Apache-2.0 Vulkan/shader dependencies still requires copyright-holder permissions or compatible replacements. Selling signed binaries and priority support does not override GPL recipient/source rights.
+
 ## 2026-09-21 — Release build delivered with the camera-layer fix
 
 Supersedes the "Not rebuilt" line of the previous entry: the Release build was requested afterwards. Renderer change, so the full build, not --swift-only. Nothing was launched, no wallpaper changed.

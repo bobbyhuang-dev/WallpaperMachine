@@ -156,10 +156,12 @@ extension WebPanelController {
       let id = try wallpaperID(request)
       let title = store.librarySnapshot.wallpapers.first { $0.id == id }?.title ?? id
       if await confirm(
-        "Move \(title) to Trash?",
-        detail:
-          "This removes the library copy and stops it on its displays. Original imports stay untouched.",
-        button: "Move to Trash")
+        String(localized: "Move \(title) to Trash?"),
+        detail: String(
+          localized:
+            "It is removed from your library and stops playing. The original files you imported are not affected."
+        ),
+        button: String(localized: "Move to Trash"))
       {
         try await store.deleteWallpaperAsync(id: id)
         try forgetFavorites([id])
@@ -168,13 +170,17 @@ extension WebPanelController {
       let ids = try wallpaperIDs(request)
       let title =
         ids.count == 1
-        ? "Move \(store.librarySnapshot.wallpapers.first(where: { $0.id == ids[0] })?.title ?? ids[0]) to Trash?"
-        : "Move \(ids.count) wallpapers to Trash?"
+        ? String(
+          localized:
+            "Move \(store.librarySnapshot.wallpapers.first(where: { $0.id == ids[0] })?.title ?? ids[0]) to Trash?")
+        : String(localized: "Move \(ids.count) wallpapers to Trash?")
       if await confirm(
         title,
-        detail:
-          "This removes the library copies and stops them on their displays. Original imports stay untouched.",
-        button: "Move to Trash")
+        detail: String(
+          localized:
+            "They are removed from your library and stop playing. The original files you imported are not affected."
+        ),
+        button: String(localized: "Move to Trash"))
       {
         let report = try await store.deleteWallpapersAsync(ids: ids)
         try forgetFavorites(report.deleted)
@@ -183,8 +189,10 @@ extension WebPanelController {
             store.librarySnapshot.wallpapers.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
           let details = report.failures.map { "\(titles[$0.id] ?? $0.id): \($0.error.localizedDescription)" }
           throw WallpaperActionError(
-            message:
-              "Moved \(report.deleted.count) of \(ids.count) wallpapers to Trash. Couldn't move \(details.joined(separator: "; "))"
+            message: String(
+              localized:
+                "Moved \(report.deleted.count) of \(ids.count) wallpapers to Trash. Couldn’t move \(details.joined(separator: "; "))"
+            )
           )
         }
       }
@@ -216,7 +224,7 @@ extension WebPanelController {
         })
       else { throw WebPanelRequest.invalid }
       let panel = NSOpenPanel()
-      panel.title = "Choose Image"
+      panel.title = String(localized: "Choose Image")
       panel.allowedContentTypes = [.image]
       if await choose(panel), let url = panel.url {
         try await store.editPropertyAsync(
@@ -277,7 +285,7 @@ extension WebPanelController {
     case "refreshDisplays": try await store.refreshDisplaysAsync()
     case "locateAssets":
       let panel = NSOpenPanel()
-      panel.title = "Locate Scene Assets"
+      panel.title = String(localized: "Locate Scene Assets")
       panel.canChooseDirectories = true
       panel.canChooseFiles = false
       if await choose(panel), let url = panel.url {
@@ -290,15 +298,17 @@ extension WebPanelController {
     case "showLogs": NSWorkspace.shared.open(try store.logFolderURL())
     case "clearCache":
       if await confirm(
-        "Clear shader cache?",
-        detail: "Shaders will be rebuilt the next time wallpapers need them.", button: "Clear Cache"
-      ) {
+        String(localized: "Clear shader cache?"),
+        detail: String(localized: "Shaders are rebuilt the next time wallpapers need them."),
+        button: String(localized: "Clear Cache"))
+      {
         try await store.clearShaderCacheAsync()
       }
     case "clearLogs":
       if await confirm(
-        "Clear logs?", detail: "This removes diagnostic logs, not wallpapers or settings.",
-        button: "Clear Logs")
+        String(localized: "Clear logs?"),
+        detail: String(localized: "Only diagnostic logs are removed. Wallpapers and settings are not affected."),
+        button: String(localized: "Clear Logs"))
       {
         try store.clearLogsAsync()
       }
@@ -309,10 +319,10 @@ extension WebPanelController {
       // originals that nothing can regenerate, so the confirmation says what
       // is kept, not only what goes.
       if await confirm(
-        "Clear unused caches?",
-        detail:
-          "This removes only regenerable caches under the managed assets folder. Files you imported for a wallpaper's settings are kept.",
-        button: "Clear Caches")
+        String(localized: "Clear unused caches?"),
+        detail: String(
+          localized: "Only caches that can be rebuilt are removed. Files you chose in wallpaper settings are kept."),
+        button: String(localized: "Clear Caches"))
       {
         let released = try UserAssetStorage.purgeUnreferencedDerivedCaches()
         // A negative figure would be a bug in the accounting, not a real
@@ -327,25 +337,29 @@ extension WebPanelController {
         let approved =
           exists
           ? await confirm(
-            "Reinstall SteamCMD?",
-            detail:
-              "Replace only the managed download tool after validation. Wallpapers and saved sign-in are kept.",
-            button: "Reinstall") : true
+            String(localized: "Reinstall SteamCMD?"),
+            detail: String(
+              localized:
+                "The new copy replaces the current one only after it passes validation. Wallpapers and your saved sign-in are kept."
+            ),
+            button: String(localized: "Reinstall")) : true
         if approved { workshop.steamCMDSetup.install(replacingExisting: exists) }
       }
     case "setupLocate":
       let panel = NSOpenPanel()
-      panel.title = "Locate SteamCMD"
+      panel.title = String(localized: "Locate SteamCMD")
       panel.canChooseDirectories = true
       panel.canChooseFiles = true
       if await choose(panel), let url = panel.url { workshop.steamCMDSetup.selectExisting(at: url) }
     case "setupApprove":
       let candidate = try await workshop.steamCMDSetup.prepareApproval()
       if await confirm(
-        "Allow this SteamCMD installation?",
-        detail:
-          "This runs software macOS has not approved and may put your data at risk. Only files matching this fingerprint will be allowed. Quarantine is removed from this copy only; global Gatekeeper and signature checks stay enabled.\n\nPath: \(candidate.rootURL.path)\nSHA-256: \(candidate.fingerprint)",
-        button: "Allow This Copy and Continue")
+        String(localized: "Allow this SteamCMD installation?"),
+        detail: String(
+          localized:
+            "macOS has not approved this software, and running it may put your data at risk. Only files matching this fingerprint are allowed, and the quarantine flag is removed from this copy only. Gatekeeper and signature checks stay on for everything else.\n\nPath: \(candidate.rootURL.path)\nSHA-256: \(candidate.fingerprint)"
+        ),
+        button: String(localized: "Allow This Copy and Continue"))
       {
         workshop.steamCMDSetup.approveRetainedCandidate(candidate)
       }
@@ -355,10 +369,10 @@ extension WebPanelController {
       }
     case "setupDiscardCandidate":
       if await confirm(
-        "Discard downloaded SteamCMD?",
-        detail:
-          "Only the retained candidate is removed. The installed runtime and saved sign-in are kept.",
-        button: "Discard Download")
+        String(localized: "Discard downloaded SteamCMD?"),
+        detail: String(
+          localized: "Only this downloaded copy is removed. The installed SteamCMD and your saved sign-in are kept."),
+        button: String(localized: "Discard Download"))
       {
         workshop.steamCMDSetup.discardRetainedCandidate()
       }
@@ -439,7 +453,7 @@ extension WebPanelController {
     let id = try request.string("id")
     guard store.librarySnapshot.wallpapers.contains(where: { $0.id == id }) else {
       throw WallpaperActionError(
-        message: "This wallpaper is no longer installed. Refresh your library.")
+        message: String(localized: "This wallpaper is no longer installed. Refresh your library."))
     }
     return id
   }
@@ -454,7 +468,7 @@ extension WebPanelController {
     let ids = raw.filter { seen.insert($0).inserted }
     guard ids.allSatisfy(installed.contains) else {
       throw WallpaperActionError(
-        message: "Some selected wallpapers are no longer installed. Refresh your library.")
+        message: String(localized: "Some selected wallpapers are no longer installed. Refresh your library."))
     }
     return ids
   }
@@ -520,8 +534,10 @@ extension WebPanelController {
     let directory = descriptor.kind == .directory
     let label = Self.plainLabel(descriptor.labelHtml)
     let panel = NSOpenPanel()
-    panel.title = directory ? "Choose Folder" : "Choose File"
-    panel.message = directory ? "Choose a folder for \(label)." : "Choose a file for \(label)."
+    panel.title = directory ? String(localized: "Choose Folder") : String(localized: "Choose File")
+    panel.message =
+      directory
+      ? String(localized: "Choose a folder for \(label).") : String(localized: "Choose a file for \(label).")
     panel.canChooseDirectories = directory
     panel.canChooseFiles = !directory
     panel.canCreateDirectories = false
@@ -548,9 +564,9 @@ extension WebPanelController {
     var isDirectory: ObjCBool = false
     guard FileManager.default.fileExists(atPath: project.path, isDirectory: &isDirectory),
       isDirectory.boolValue
-    else { return "This wallpaper’s folder is missing, so the file cannot be prepared for it." }
+    else { return String(localized: "This wallpaper’s folder is missing, so the file cannot be prepared for it.") }
     guard FileManager.default.isWritableFile(atPath: project.path) else {
-      return "This wallpaper’s folder is read-only, so the file cannot be prepared for it."
+      return String(localized: "This wallpaper’s folder is read-only, so the file cannot be prepared for it.")
     }
     return nil
   }
@@ -682,9 +698,9 @@ extension WebPanelController {
       (request.body["duplicates"] as? String) == "keepBoth"
       ? WallpaperImportService.DuplicatePolicy.keepBoth : .skip
     let panel = NSOpenPanel()
-    panel.title = "Import Wallpapers"
-    panel.message =
-      "Choose videos, project folders, or a Steam library. Originals are kept. Web projects can be imported but cannot be played."
+    panel.title = String(localized: "Import Wallpapers")
+    panel.message = String(
+      localized: "Choose videos, HTML files, project folders or a Steam library. Your original files are kept.")
     panel.canChooseDirectories = true
     panel.canChooseFiles = true
     panel.allowsMultipleSelection = true
@@ -695,7 +711,7 @@ extension WebPanelController {
       .compactMap { UTType(filenameExtension: $0) }
     guard await choose(panel) else { return }
     let urls = panel.urls
-    importStatus = "Preparing import…"
+    importStatus = String(localized: "Preparing import…")
     importReport = nil
     importTask = Task { @MainActor [weak self] in
       guard let self else { return }
@@ -716,10 +732,11 @@ extension WebPanelController {
         let refresh = Task { @MainActor in try await self.store.refreshLibraryAsync() }
         try await refresh.value
         self.importStatus =
-          self.importReport?.cancelled == true ? "Import cancelled" : "Import complete"
+          self.importReport?.cancelled == true
+          ? String(localized: "Import cancelled") : String(localized: "Import complete")
       } catch {
         self.actionError = error.localizedDescription
-        self.importStatus = "Import could not finish"
+        self.importStatus = String(localized: "Import could not finish")
       }
     }
   }

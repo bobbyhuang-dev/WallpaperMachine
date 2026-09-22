@@ -9,7 +9,7 @@ final class LockScreenWallpaperService {
   private(set) var isEnabled = false
   private(set) var isRequested = false
   private(set) var isBusy = false
-  private(set) var status = "Off"
+  private(set) var status = String(localized: "Off")
   private(set) var errorMessage: String?
   @ObservationIgnored var beforeActivation: (() throws -> Void)?
   @ObservationIgnored var afterDeactivation: (() throws -> Void)?
@@ -67,10 +67,10 @@ final class LockScreenWallpaperService {
     do {
       try selection.recover()
       recovered = true
-      if isRequested { status = "Waiting for committed wallpapers…" }
+      if isRequested { status = String(localized: "Waiting for committed wallpapers…") }
     } catch {
       errorMessage = error.localizedDescription
-      status = "Recovery failed — action required"
+      status = String(localized: "Recovery failed — action required")
       throw error
     }
   }
@@ -134,7 +134,7 @@ final class LockScreenWallpaperService {
       stopping = false
       isBusy = false
       errorMessage = error.localizedDescription
-      status = "Restoration failed — quit cancelled"
+      status = String(localized: "Restoration failed — quit cancelled")
       throw error
     }
   }
@@ -152,13 +152,13 @@ final class LockScreenWallpaperService {
         recovered = true
       }
       guard isRequested else {
-        status = "Restoring system wallpapers…"
+        status = String(localized: "Restoring system wallpapers…")
         try deactivate()
         errorMessage = nil
-        status = "Off"
+        status = String(localized: "Off")
         return
       }
-      status = "Preparing committed wallpapers…"
+      status = String(localized: "Preparing committed wallpapers…")
       let records = try await scenes()
       try Task.checkCancellation()
       guard generation == revision else { return }
@@ -169,7 +169,7 @@ final class LockScreenWallpaperService {
         else {
           throw LockScreenWallpaperFailure(
             message:
-              "An active wallpaper display is no longer connected. Refresh displays before retrying."
+              String(localized: "An active wallpaper display is no longer connected. Refresh displays before retrying.")
           )
         }
         let mode: Int32
@@ -193,8 +193,8 @@ final class LockScreenWallpaperService {
         // failure and not something the user can act on: it is the combination
         // being unsupported. Anything else means nothing eligible is applied yet.
         status = await webWallpapersApplied()
-          ? "Not applicable — web wallpapers have no lock-screen support"
-          : "Waiting for an applied video or live scene on a connected display"
+          ? String(localized: "Not applicable — web wallpapers have no lock-screen support")
+          : String(localized: "Waiting for an applied video or live scene on a connected display")
         errorMessage = nil
         return
       }
@@ -203,7 +203,7 @@ final class LockScreenWallpaperService {
         // snapshots must not invalidate thumbnails or reload WallpaperAgent.
         try selection.synchronize(
           displays: Set(inputs.map(\.displayUUID)), revision: published.revision)
-        status = "Enabled for \(inputs.count) display(s)"
+        status = String(localized: "Enabled for \(inputs.count) display(s)")
         errorMessage = nil
         return
       }
@@ -239,14 +239,14 @@ final class LockScreenWallpaperService {
         documents: root, keeping: prepared.referencedRevisions)
       try selection.synchronize(
         displays: Set(inputs.map(\.displayUUID)), revision: configuration.revision)
-      status = "Waiting for the system wallpaper renderer…"
+      status = String(localized: "Waiting for the system wallpaper renderer…")
       try await awaitReadiness(configuration)
       try Task.checkCancellation()
       guard generation == revision, isRequested else { return }
       lastInputs = inputs
       isEnabled = true
       defaults.set(true, forKey: Self.preference)
-      status = "Enabled for \(inputs.count) display(s)"
+      status = String(localized: "Enabled for \(inputs.count) display(s)")
       errorMessage = nil
     } catch is CancellationError {
       // A newer snapshot/disable owns the next publication and final status.
@@ -254,10 +254,10 @@ final class LockScreenWallpaperService {
       guard generation == revision else { return }
       var message = error.localizedDescription
       do { try deactivate() } catch {
-        message += " Restoration also failed: \(error.localizedDescription)"
+        message += " " + String(localized: "Restoration also failed: \(error.localizedDescription)")
       }
       errorMessage = message
-      status = "Not enabled — action required"
+      status = String(localized: "Not enabled — action required")
       AppLog.error("Lock screen wallpaper: \(message)")
     }
   }
@@ -298,7 +298,7 @@ final class LockScreenWallpaperService {
     }
     throw LockScreenWallpaperFailure(
       message:
-        "macOS did not load the lock-screen renderer. The original wallpaper has been restored. Check for another wallpaper app or a conflicting system-wide wallpaper selection."
+        String(localized: "macOS did not load the lock-screen renderer. The original wallpaper has been restored. Check for another wallpaper app or a conflicting system-wide wallpaper selection.")
     )
   }
 
@@ -385,12 +385,12 @@ private enum LockScreenAssetPublisher {
       try Task.checkCancellation()
       guard input.projectPath.hasPrefix("/"), input.assetsPath.hasPrefix("/") else {
         throw LockScreenWallpaperFailure(
-          message: "The committed wallpaper contains a non-absolute source path.")
+          message: String(localized: "The committed wallpaper contains a non-absolute source path."))
       }
       let project = URL(fileURLWithPath: input.projectPath)
       guard project.lastPathComponent == "project.json" else {
         throw LockScreenWallpaperFailure(
-          message: "The committed wallpaper does not reference project.json.")
+          message: String(localized: "The committed wallpaper does not reference project.json."))
       }
       let source = project.deletingLastPathComponent()
       let data = try Data(contentsOf: project)
@@ -398,11 +398,11 @@ private enum LockScreenAssetPublisher {
         let type = metadata["type"] as? String
       else {
         throw LockScreenWallpaperFailure(
-          message: "The committed wallpaper does not declare a project type.")
+          message: String(localized: "The committed wallpaper does not declare a project type."))
       }
       guard ["video", "scene"].contains(type.lowercased()) else {
         throw LockScreenWallpaperFailure(
-          message: "Only committed video and live scene projects support Animate Lock Screen.")
+          message: String(localized: "Only committed video and live scene projects support Animate Lock Screen."))
       }
       let projectRevision = try snapshot(source: source, documents: documents, reused: &sources)
       let assetsRevision: String
@@ -577,7 +577,7 @@ private enum LockScreenAssetPublisher {
       guard digest(source: source, items: try inventory(source)) == fingerprint else {
         throw LockScreenWallpaperFailure(
           message:
-            "Wallpaper assets changed while preparing the lock screen. Retry after the download or edit finishes."
+            String(localized: "Wallpaper assets changed while preparing the lock screen. Retry after the download or edit finishes.")
         )
       }
       try Task.checkCancellation()
@@ -595,7 +595,7 @@ private enum LockScreenAssetPublisher {
     let root = try source.resourceValues(forKeys: keys)
     guard root.isDirectory == true, root.isSymbolicLink != true else {
       throw LockScreenWallpaperFailure(
-        message: "The wallpaper asset source must be a real directory: \(source.path)")
+        message: String(localized: "The wallpaper asset source must be a real directory: \(source.path)"))
     }
     var enumerationError: Error?
     guard
@@ -606,7 +606,7 @@ private enum LockScreenAssetPublisher {
           return false
         })
     else {
-      throw LockScreenWallpaperFailure(message: "Cannot enumerate wallpaper assets: \(source.path)")
+      throw LockScreenWallpaperFailure(message: String(localized: "Cannot enumerate wallpaper assets: \(source.path)"))
     }
     var result: [Item] = []
     for case let file as URL in enumerator {
@@ -616,7 +616,7 @@ private enum LockScreenAssetPublisher {
         values.isDirectory == true || values.isRegularFile == true
       else {
         throw LockScreenWallpaperFailure(
-          message: "Lock-screen assets cannot contain symbolic links or special files: \(file.path)"
+          message: String(localized: "Lock-screen assets cannot contain symbolic links or special files: \(file.path)")
         )
       }
       result.append(
@@ -645,7 +645,7 @@ private enum LockScreenAssetPublisher {
     if clonefile(source.path, destination.path, 0) == 0 { return }
     guard FileManager.default.createFile(atPath: destination.path, contents: nil) else {
       throw LockScreenWallpaperFailure(
-        message: "Cannot create lock-screen asset: \(destination.path)")
+        message: String(localized: "Cannot create lock-screen asset: \(destination.path)"))
     }
     let input = try FileHandle(forReadingFrom: source)
     defer { try? input.close() }

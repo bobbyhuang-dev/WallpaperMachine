@@ -1,9 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "Finished downloads" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Finished downloads"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已结束的下载"}}}
-    },
     "The appearance could not update: %@" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The appearance could not update: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "外观无法更新：%@"}}}
     },
@@ -28,365 +25,35 @@
     "Assets folder not found" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Assets folder not found"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "未找到资源文件夹"}}}
     },
-    "Sign-in needed" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Sign-in needed"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "需要登录验证"}}}
-    },
-    "Clear finished downloads" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Clear finished downloads"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "清除已结束的任务"}}}
-    },
-    "Select a download" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Select a download"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择下载任务"}}}
-    },
-    "Choose a download to view progress, complete Steam Guard, or show it in Library." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose a download to view progress, complete Steam Guard, or show it in Library."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择下载任务以查看进度、完成 Steam 令牌验证，或在壁纸库中显示。"}}}
-    },
-    "Up to three downloads run at once, each in its own private SteamCMD session. Extra requests wait in the order added. Close details, search, or switch pages while downloads continue; Download Details keeps every item available for progress, Steam Guard, retry, and cancellation. Quit stops active and queued downloads." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Up to three downloads run at once, each in its own private SteamCMD session. Extra requests wait in the order added. Close details, search, or switch pages while downloads continue; Download Details keeps every item available for progress, Steam Guard, retry, and cancellation. Quit stops active and queued downloads."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "最多同时进行三个下载，每项使用独立的私有 SteamCMD 会话。其余请求按添加顺序排队。关闭详情、搜索或切换页面时下载仍会继续；“下载详情”可查看每项任务的进度、完成 Steam 令牌验证、重试或取消。退出应用会停止正在进行和排队的下载。"}}}
-    },
-    "WallpaperMachine runs private copies of SteamCMD and removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Sign-in settings and Forget are locked while any downloads are active or queued. Once they finish, turn the setting off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "WallpaperMachine runs private copies of SteamCMD and removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Sign-in settings and Forget are locked while any downloads are active or queued. Once they finish, turn the setting off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "WallpaperMachine 运行 SteamCMD 的私有副本，并清理临时下载目录。“在此 Mac 上保持登录”仅在私有应用支持目录保存 Steam 签发的登录缓存，不保存提交的密码或 Steam 令牌验证码。存在正在进行或排队的下载时，登录设置和忘记登录操作会锁定。任务结束后，可关闭该设置或选择“忘记已保存的 Steam 登录”移除本地缓存；其他 Steam 设备仍保持登录。缓存过期、撤销或安全检查后，Steam 可能要求重新验证。首次启动时 SteamCMD 更新可能使下载耗时更长。"}}}
-    },
-    "Reacts to sound playing in other apps, not the microphone. macOS asks for system audio recording access when an enabled wallpaper starts. Wallpaper volume and mute do not affect this input." : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "响应其他应用播放的声音，而非麦克风。启用此功能的壁纸启动时，macOS 会请求系统音频录制权限。壁纸音量和静音不会影响此输入。"
-          }
-        }
-      }
-    },
-    "Updating audio response…" : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在更新音频响应…"
-          }
-        }
-      }
-    },
-    "Downloads" : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "下载"
-          }
-        }
-      }
-    },
-    "Queued" : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "排队中"
-          }
-        }
-      }
-    },
-    "Downloading" : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "下载中"
-          }
-        }
-      }
-    },
-    "Cancel queued download" : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "取消排队下载"
-          }
-        }
-      }
-    },
-    "%lld/%lld active · %lld queued" : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld/%2$lld 项正在下载 · %3$lld 项排队中"
-          }
-        }
-      }
-    },
-    "Sign-in needed · %@" : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "需要登录 · %@"
-          }
-        }
-      }
-    },
-    "Waiting for a free download slot. Queued downloads start in the order added." : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在等待可用的下载名额。排队的下载将按添加顺序开始。"
-          }
-        }
-      }
-    },
-    "Saved sign-in settings are locked until all active and queued downloads finish." : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "所有正在进行和排队的下载结束前，已保存的登录设置将保持锁定。"
-          }
-        }
-      }
-    },
-    "Use an account that owns Wallpaper Engine. SteamCMD enforces access. Downloads run in the background and do not subscribe or automatically apply wallpapers." : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请使用拥有 Wallpaper Engine 的账号，SteamCMD 会验证访问权限。下载在后台进行，不会订阅或自动应用壁纸。"
-          }
-        }
-      }
-    },
-    "Up to three downloads run at once, each in its own private SteamCMD session. Extra requests wait in the order added. Close details, search, or switch pages while downloads continue; Workshop’s Downloads panel keeps every item available for progress, Steam Guard, retry, and cancellation. Quit stops active and queued downloads." : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "最多可同时进行三个下载，每个下载使用独立的私有 SteamCMD 会话。其他请求按添加顺序排队。关闭详情、搜索或切换页面不会中断下载；创意工坊的“下载”面板可查看每个项目的进度、完成 Steam 令牌验证、重试或取消。退出应用会停止所有正在进行和排队的下载。"
-          }
-        }
-      }
-    },
-    "You can close this view and keep browsing. Reopen this download from Workshop’s Downloads panel for Steam Guard. Downloads stop after 5 minutes without SteamCMD output or 30 minutes overall." : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "可以关闭此窗口继续浏览。在创意工坊的“下载”面板中重新打开此项目以完成 Steam 令牌验证。SteamCMD 连续 5 分钟无输出或总耗时超过 30 分钟时，本次下载会停止。"
-          }
-        }
-      }
-    },
-    "3. Choose a wallpaper, select steamcmd.sh, enter your Steam account login name, and confirm ownership on first use or when switching accounts. Enter your password or Steam Guard code only when prompted; mobile approval is supported." : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "3. 选择壁纸和 steamcmd.sh，输入 Steam 账号登录名，并在首次使用或切换账号时确认拥有 Wallpaper Engine。仅在出现提示时输入密码或 Steam 令牌验证码；也支持通过手机批准登录。"
-          }
-        }
-      }
-    },
-    "WallpaperMachine removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Sign-in settings and Forget are locked while any downloads are active or queued. Once they finish, turn the setting off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates." : {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "WallpaperMachine 会清理临时下载目录。“在这台 Mac 上保持登录”会将 Steam 签发的登录缓存保存在私有的应用支持目录中，绝不保存输入的密码或 Steam 令牌验证码。有下载正在进行或排队时，登录设置和清除按钮会锁定。全部结束后，关闭此设置或选择“清除已保存的 Steam 登录”即可删除本地缓存；其他 Steam 设备仍保持登录。缓存过期、被撤销或触发安全检查时，Steam 可能要求重新验证。首次启动时 SteamCMD 需要更新，下载可能耗时更长。"
-          }
-        }
-      }
-    },
     "macOS could not complete its SteamCMD security assessment. Retry after resolving the system security error; an explicit approval cannot bypass an assessment failure." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "macOS could not complete its SteamCMD security assessment. Retry after resolving the system security error; an explicit approval cannot bypass an assessment failure."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 未能完成 SteamCMD 安全评估。请解决系统安全评估错误后重试；显式授权不能绕过评估过程的故障。"}}}
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "macOS could not complete its SteamCMD security assessment. Retry after resolving the system security error; an explicit approval cannot bypass an assessment failure."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 未能完成对 SteamCMD 的安全评估。请先解决系统安全错误再重试；手动批准无法跳过评估失败。"}}}
     },
     "macOS has not approved SteamCMD at %@. Review and approve this SteamCMD copy, or follow Apple’s app security guidance, then Retry. System security settings have not been changed." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "macOS has not approved SteamCMD at %@. Review and approve this SteamCMD copy, or follow Apple’s app security guidance, then Retry. System security settings have not been changed."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 尚未批准位于 %@ 的 SteamCMD。请核对并仅允许这份副本，或按 Apple 安全指引操作后重试。系统安全设置未被修改。"}}}
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "macOS has not approved SteamCMD at %@. Review and approve this SteamCMD copy, or follow Apple’s app security guidance, then Retry. System security settings have not been changed."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 尚未批准位于 %@ 的 SteamCMD。请检查并批准这份副本，或按照 Apple 的安全指引操作，然后重试。系统安全设置没有被修改。"}}}
     },
     "The SteamCMD approval candidate or private approval record changed or is unsafe. Review the current copy again; no approval was saved." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The SteamCMD approval candidate or private approval record changed or is unsafe. Review the current copy again; no approval was saved."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD 候选文件或私有授权记录已改变或不安全。请重新核对当前副本；本次未保存授权。"}}}
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The SteamCMD approval candidate or private approval record changed or is unsafe. Review the current copy again; no approval was saved."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "待批准的 SteamCMD 或批准记录已变化或不安全，本次没有保存批准。请重新检查当前副本。"}}}
     },
     "The retained SteamCMD candidate changed. Review it again before approving." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The retained SteamCMD candidate changed. Review it again before approving."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "保留的 SteamCMD 候选文件已改变。请重新核对后再确认授权。"}}}
-    },
-    "All Wallpapers" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "All Wallpapers"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "全部壁纸"}}}
-    },
-    "The downloaded candidate is kept here for approval and retry." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The downloaded candidate is kept here for approval and retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载的候选文件保留在此处，供确认放行后重试。"}}}
-    },
-    "Show Downloaded File" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Show Downloaded File"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "显示已下载文件"}}}
-    },
-    "Allow This SteamCMD…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Allow This SteamCMD…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "仅允许这份 SteamCMD…"}}}
-    },
-    "Discard Download…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Discard Download…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "丢弃下载…"}}}
-    },
-    "Continue Installation" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Continue Installation"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "继续安装"}}}
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The retained SteamCMD candidate changed. Review it again before approving."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "保留的 SteamCMD 已发生变化，请重新检查后再批准。"}}}
     },
     "Allow this SteamCMD installation?" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Allow this SteamCMD installation?"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "是否仅允许这份 SteamCMD？"}}}
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Allow this SteamCMD installation?"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "要允许这份 SteamCMD 运行吗？"}}}
     },
     "Allow This Copy and Continue" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Allow This Copy and Continue"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "仅允许此副本并继续"}}}
-    },
-    "This runs software macOS has not approved and may put your data at risk. Only the signed files matching this fingerprint will be allowed. Quarantine is removed from this copy only; global Gatekeeper and signature checks stay enabled. Changed files require another approval.\n\nPath: %@\nSHA-256: %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This runs software macOS has not approved and may put your data at risk. Only the signed files matching this fingerprint will be allowed. Quarantine is removed from this copy only; global Gatekeeper and signature checks stay enabled. Changed files require another approval.\n\nPath: %@\nSHA-256: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此操作将运行未经 macOS 批准的软件，可能危及你的数据。仅允许与此指纹匹配且通过签名检查的文件。仅移除此副本的隔离标记，全局 Gatekeeper 和签名检查仍保持启用。文件发生变化后需要再次确认。\n\n路径：%@\nSHA-256：%@"}}}
-    },
-    "Discard this downloaded candidate?" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Discard this downloaded candidate?"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "丢弃这份已下载的候选文件？"}}}
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Allow This Copy and Continue"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "允许这份副本并继续"}}}
     },
     "Discard Download" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Discard Download"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "丢弃下载"}}}
     },
-    "Only the retained SteamCMD download will be removed. Your installed runtime, wallpapers, and saved Steam sign-in are kept." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Only the retained SteamCMD download will be removed. Your installed runtime, wallpapers, and saved Steam sign-in are kept."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "仅删除保留的 SteamCMD 下载文件。已安装的运行时、壁纸和已保存的 Steam 登录均会保留。"}}}
-    },
-    "Signature checks remain required. Allow This SteamCMD authorizes only the exact downloaded copy after confirmation; it never disables global Gatekeeper or re-signs code." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Signature checks remain required. Allow This SteamCMD authorizes only the exact downloaded copy after confirmation; it never disables global Gatekeeper or re-signs code."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "签名检查仍为必需。确认“仅允许这份 SteamCMD”只授权这一份下载副本，不会关闭全局 Gatekeeper 或重新签名代码。"}}}
-    },
-    "Library" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸库"}}}
-    },
-    "Workshop" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Workshop"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "创意工坊"}}}
-    },
-    "WallpaperMachine" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "WallpaperMachine"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "WallpaperMachine"}}}
-    },
-    "This wallpaper is no longer in your library. Refresh Library and retry." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper is no longer in your library. Refresh Library and retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此壁纸已不在壁纸库中。请刷新壁纸库后重试。"}}}
-    },
-    "A little life on your desktop." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "A little life on your desktop."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "为桌面添一点生机。"}}}
-    },
-    "Playback" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Playback"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "播放"}}}
-    },
-    "Resume wallpapers" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Resume wallpapers"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "继续播放壁纸"}}}
-    },
-    "Pause wallpapers" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Pause wallpapers"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "暂停壁纸"}}}
-    },
-    "Select a wallpaper" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Select a wallpaper"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择壁纸"}}}
-    },
-    "Select a Workshop wallpaper to see its details. Browsing does not change your desktop." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Select a Workshop wallpaper to see its details. Browsing does not change your desktop."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择创意工坊壁纸以查看详情。浏览不会更改桌面。"}}}
-    },
-    "Couldn’t complete that action" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Couldn’t complete that action"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法完成此操作"}}}
-    },
-    "Apply to" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Apply to"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "应用到"}}}
-    },
-    "Selected display unavailable" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Selected display unavailable"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "所选显示器不可用"}}}
-    },
-    "Refresh Displays" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Refresh Displays"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "刷新显示器"}}}
-    },
     "Refresh all wallpaper state before applying again." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Refresh all wallpaper state before applying again."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "再次应用前，请刷新所有壁纸状态。"}}}
-    },
-    "Choose an enabled independent display." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose an enabled independent display."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请选择已启用的独立显示器。"}}}
-    },
-    "Active on selected display" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Active on selected display"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在所选显示器上播放"}}}
-    },
-    "Active on another display" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Active on another display"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在其他显示器上播放"}}}
-    },
-    "Not playable" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Not playable"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法播放"}}}
-    },
-    "Not active" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Not active"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "未播放"}}}
-    },
-    "Selected" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Selected"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已选中"}}}
-    },
-    "Remove %@ from favorites" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Remove %@ from favorites"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "将 %@ 移出收藏"}}}
-    },
-    "Add %@ to favorites" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Add %@ to favorites"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "将 %@ 加入收藏"}}}
-    },
-    "Remove from favorites" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Remove from favorites"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "移出收藏"}}}
-    },
-    "Add to favorites" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Add to favorites"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "加入收藏"}}}
-    },
-    "Apply to the selected display and view wallpaper settings" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Apply to the selected display and view wallpaper settings"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "应用到所选显示器并查看壁纸设置"}}}
-    },
-    "View details about why this wallpaper cannot be played" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "View details about why this wallpaper cannot be played"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "查看此壁纸无法播放的原因"}}}
-    },
-    "This wallpaper type cannot be played by the renderer" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper type cannot be played by the renderer"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此渲染器无法播放这种类型的壁纸"}}}
-    },
-    "Properties apply to this wallpaper on all displays and are saved with Apply Changes." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Properties apply to this wallpaper on all displays and are saved with Apply Changes."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "属性影响此壁纸在所有显示器上的效果，点击“应用修改”保存。"}}}
-    },
-    "Group" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Group"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "分组"}}}
-    },
-    "Restore defaults for %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Restore defaults for %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "恢复 %@ 的默认值"}}}
-    },
-    "On" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "On"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "开启"}}}
-    },
-    "Off" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Off"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "关闭"}}}
-    },
-    "Value" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Value"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "值"}}}
-    },
-    "No image selected" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "No image selected"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "未选择图片"}}}
-    },
-    "Clear image for %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Clear image for %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "清除 %@ 的图片"}}}
     },
     "Choose Image" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose Image"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择图片"}}}
     },
-    "Choose image for %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose image for %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "为 %@ 选择图片"}}}
-    },
-    "Unsupported property type." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Unsupported property type."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "不支持此属性类型。"}}}
-    },
-    "Red %@, green %@, blue %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Red %@, green %@, blue %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "红色 %@，绿色 %@，蓝色 %@"}}}
-    },
     "Preparing import…" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Preparing import…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在准备导入…"}}}
-    },
-    "Import to WallpaperMachine" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Import to WallpaperMachine"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入到 WallpaperMachine"}}}
-    },
-    "Your originals stay exactly where they are." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Your originals stay exactly where they are."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "原始文件会保留在原位置。"}}}
-    },
-    "Choose Wallpaper Engine project folders, a Steam library, or video files. Projects are copied into your local library only when their files are ready." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose Wallpaper Engine project folders, a Steam library, or video files. Projects are copied into your local library only when their files are ready."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择 Wallpaper Engine 项目文件夹、Steam 库或视频文件。只有在项目文件准备就绪后，才会将项目复制到本地壁纸库。"}}}
-    },
-    "If a wallpaper already exists" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "If a wallpaper already exists"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸已存在时"}}}
-    },
-    "Existing wallpapers are never replaced. “Keep both copies” creates a separate library item." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Existing wallpapers are never replaced. “Keep both copies” creates a separate library item."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "不会替换已有壁纸。“保留两份副本”会创建一个独立的壁纸库项目。"}}}
-    },
-    "Cancel Import" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Cancel Import"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "取消导入"}}}
     },
     "Cancelling…" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Cancelling…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在取消…"}}}
@@ -394,44 +61,8 @@
     "Import cancelled" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Import cancelled"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入已取消"}}}
     },
-    "Import finished" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Import finished"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入已完成"}}}
-    },
-    "Completed imports were kept. Unfinished copies were removed." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Completed imports were kept. Unfinished copies were removed."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已完成的导入已保留，未完成的副本已移除。"}}}
-    },
-    "Choose Files or Folders…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose Files or Folders…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择文件或文件夹…"}}}
-    },
-    "Done" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Done"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "完成"}}}
-    },
-    "Import Item" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Import Item"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入项目"}}}
-    },
-    "Import Items" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Import Items"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入项目"}}}
-    },
-    "Choose Wallpaper Content" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose Wallpaper Content"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择壁纸内容"}}}
-    },
-    "Choose" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择"}}}
-    },
-    "Select project folders, a Steam library folder, videos, or HTML files. Image-only wallpapers are not supported." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Select project folders, a Steam library folder, videos, or HTML files. Image-only wallpapers are not supported."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择项目文件夹、Steam 库文件夹、视频或 HTML 文件。不支持纯图片壁纸。"}}}
-    },
-    "Loading wallpaper settings…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Loading wallpaper settings…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在加载壁纸设置…"}}}
-    },
-    "Wallpaper settings are unavailable." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wallpaper settings are unavailable."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸设置不可用。"}}}
-    },
     "Retry" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Retry"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "重试"}}}
-    },
-    "Click a wallpaper to apply it to the selected display and show its settings. Use Select & Customize in its context menu to inspect without applying." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Click a wallpaper to apply it to the selected display and show its settings. Use Select & Customize in its context menu to inspect without applying."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "单击壁纸可将其应用到所选显示器并显示设置。若只想查看而不应用，请使用右键菜单中的“选择并自定义”。"}}}
     },
     "This web wallpaper’s entry page is missing. Import the complete project folder, including its HTML file, before applying it." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This web wallpaper’s entry page is missing. Import the complete project folder, including its HTML file, before applying it."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此网页壁纸缺少入口页面。请先导入包含 HTML 文件的完整项目文件夹，再应用。"}}}
@@ -445,293 +76,17 @@
     "This wallpaper type cannot be played on macOS. You can still inspect or remove it from your library." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper type cannot be played on macOS. You can still inspect or remove it from your library."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 无法播放这种类型的壁纸。你仍可查看详情或将其从壁纸库中移除。"}}}
     },
-    "Scene assets are ready" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scene assets are ready"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "场景资源已就绪"}}}
-    },
-    "Shared scene assets required" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Shared scene assets required"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "需要共享场景资源"}}}
-    },
-    "Scene wallpapers need Wallpaper Engine’s shared shaders and materials before they can play." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scene wallpapers need Wallpaper Engine’s shared shaders and materials before they can play."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "场景壁纸需要 Wallpaper Engine 的共享着色器和材质才能播放。"}}}
-    },
-    "Set Up Scene Assets…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Set Up Scene Assets…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "设置场景资源…"}}}
-    },
-    "Correct the scaling factor for %@ before applying." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Correct the scaling factor for %@ before applying."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "应用前，请修正 %@ 的缩放系数。"}}}
-    },
-    "Wait for the current setting to finish saving." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wait for the current setting to finish saving."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请等待当前设置保存完成。"}}}
-    },
-    "Apply Changes" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Apply Changes"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "应用修改"}}}
-    },
-    "Apply Changes saves pending properties and scaling factor. Revert discards only pending changes." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Apply Changes saves pending properties and scaling factor. Revert discards only pending changes."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "“应用修改”会保存待提交的属性与缩放系数。“撤销”仅放弃待提交的修改。"}}}
-    },
-    "Scaling mode and frame rate changes take effect immediately." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scaling mode and frame rate changes take effect immediately."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "缩放模式和帧率的修改立即生效。"}}}
-    },
-    "Scaling mode for %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scaling mode for %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "%@ 的缩放模式"}}}
-    },
-    "Scaling factor for %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scaling factor for %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "%@ 的缩放系数"}}}
-    },
-    "Apply Changes saves the scaling factor." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Apply Changes saves the scaling factor."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "点击“应用修改”保存缩放系数。"}}}
-    },
-    "Target frame rate for %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Target frame rate for %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "%@ 的目标帧率"}}}
-    },
     "Enter a finite scaling factor greater than zero." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Enter a finite scaling factor greater than zero."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请输入大于零的有限缩放系数。"}}}
-    },
-    "Dismiss status" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Dismiss status"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "关闭状态消息"}}}
-    },
-    "Back to Results" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Back to Results"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "返回原结果"}}}
-    },
-    "Select & Customize" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Select & Customize"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择并自定义"}}}
-    },
-    "Apply to Selected Display" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Apply to Selected Display"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "应用到所选显示器"}}}
-    },
-    "Apply to %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Apply to %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "应用到 %@"}}}
-    },
-    "Remove from Favorites" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Remove from Favorites"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "移出收藏"}}}
-    },
-    "Add to Favorites" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Add to Favorites"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "加入收藏"}}}
-    },
-    "Delete…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Delete…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "删除…"}}}
-    },
-    "Move this wallpaper to Trash; original imported files are kept" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Move this wallpaper to Trash; original imported files are kept"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "将此壁纸移到废纸篓；保留导入时的原始文件"}}}
     },
     "Show in Finder" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Show in Finder"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "在访达中显示"}}}
     },
-    "Import" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Import"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入"}}}
-    },
-    "Import videos, project folders, or an existing Steam library" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Import videos, project folders, or an existing Steam library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入视频、项目文件夹或已有的 Steam 库"}}}
-    },
-    "Scan your local library for changes" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scan your local library for changes"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "扫描本地壁纸库中的更改"}}}
-    },
-    "Delete wallpaper?" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Delete wallpaper?"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "删除壁纸？"}}}
-    },
     "Move to Trash" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Move to Trash"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "移到废纸篓"}}}
     },
-    "“%@” will be moved from your library to the Mac’s Trash. If active, it will stop playing. Original imported files are kept. You can recover it from Trash." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "“%@” will be moved from your library to the Mac’s Trash. If active, it will stop playing. Original imported files are kept. You can recover it from Trash."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "“%@”将从壁纸库移到 Mac 的废纸篓。如果正在播放，将停止播放。导入时的原始文件会保留。你可以从废纸篓中恢复它。"}}}
-    },
-    "Couldn’t Complete Action" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Couldn’t Complete Action"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法完成操作"}}}
-    },
-    "Your collection" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Your collection"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "你的收藏库"}}}
-    },
-    "Click a wallpaper to apply it to the selected display." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Click a wallpaper to apply it to the selected display."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "单击壁纸，将其应用到所选显示器。"}}}
-    },
-    "Search Library" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Search Library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "搜索壁纸库"}}}
-    },
-    "Search titles or Workshop IDs" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Search titles or Workshop IDs"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "搜索标题或创意工坊 ID"}}}
-    },
-    "Clear library search" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Clear library search"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "清除壁纸库搜索"}}}
-    },
-    "Favorites" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Favorites"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "收藏"}}}
-    },
-    "Show only your favorite wallpapers" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Show only your favorite wallpapers"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "仅显示已收藏的壁纸"}}}
-    },
-    "Active Only" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Active Only"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "仅显示正在播放的壁纸"}}}
-    },
-    "Favorites Only" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Favorites Only"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "仅显示收藏"}}}
-    },
-    "Clear Search & Filters" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Clear Search & Filters"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "清除搜索与筛选"}}}
-    },
-    "Showing %lld of %lld wallpapers" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Showing %lld of %lld wallpapers"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "显示 %lld 张壁纸，共 %lld 张"}}}
-    },
-    "Refreshing library…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Refreshing library…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在刷新壁纸库…"}}}
-    },
-    "Library refresh failed" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Library refresh failed"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸库刷新失败"}}}
-    },
-    "Loading your library…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Loading your library…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在加载壁纸库…"}}}
-    },
-    "Couldn’t load your library" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Couldn’t load your library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法加载壁纸库"}}}
-    },
-    "Wallpaper no longer available" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wallpaper no longer available"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸已不可用"}}}
-    },
-    "Refresh Library" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Refresh Library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "刷新壁纸库"}}}
-    },
-    "Make your desktop your own" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Make your desktop your own"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "打造你的桌面"}}}
-    },
-    "Import a video or Wallpaper Engine project, or find something new in Workshop. Your collection stays on this Mac." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Import a video or Wallpaper Engine project, or find something new in Workshop. Your collection stays on this Mac."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入视频或 Wallpaper Engine 项目，或在创意工坊中寻找新壁纸。壁纸库保存在此 Mac 上。"}}}
-    },
-    "Import Wallpapers…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Import Wallpapers…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入壁纸…"}}}
-    },
-    "Browse Workshop" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Browse Workshop"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "浏览创意工坊"}}}
-    },
-    "No matching wallpapers" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "No matching wallpapers"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "没有匹配的壁纸"}}}
-    },
-    "Try another search or clear your filters to see the rest of your collection." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Try another search or clear your filters to see the rest of your collection."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "尝试其他搜索词，或清除筛选以查看其余壁纸。"}}}
-    },
-    "Library refreshed" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Library refreshed"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸库已刷新"}}}
-    },
-    "Moved %@ to Trash" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Moved %@ to Trash"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已将 %@ 移到废纸篓"}}}
-    },
-    "Applied to %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Applied to %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已应用到 %@"}}}
-    },
-    "Scenes" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scenes"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "场景"}}}
-    },
-    "Videos" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Videos"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "视频"}}}
-    },
-    "Web Projects" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Web Projects"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "网页项目"}}}
-    },
-    "Unknown Types" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Unknown Types"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "未知类型"}}}
-    },
-    "Scene" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scene"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "场景"}}}
-    },
-    "Web" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Web"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "网页"}}}
-    },
-    "Changes take effect immediately. Audio settings affect this wallpaper on all displays." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Changes take effect immediately. Audio settings affect this wallpaper on all displays."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "修改立即生效。音频设置影响此壁纸在所有显示器上的音频。"}}}
-    },
-    "Audio response for %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Audio response for %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "%@ 的音频响应"}}}
-    },
-    "Unmute %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Unmute %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "取消 %@ 的静音"}}}
-    },
-    "Mute %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Mute %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "将 %@ 静音"}}}
-    },
-    "Muted" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Muted"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已静音"}}}
-    },
-    "Unmuted" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Unmuted"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "未静音"}}}
-    },
-    "Volume for %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Volume for %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "%@ 的音量"}}}
-    },
-    "No Displays" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "No Displays"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无显示器"}}}
-    },
-    "Check your display connections, then refresh displays in Library." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Check your display connections, then refresh displays in Library."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请检查显示器连接，然后在壁纸库中刷新显示器。"}}}
-    },
-    "Displays" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Displays"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "显示器"}}}
-    },
-    "Wallpaper settings could not be loaded." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wallpaper settings could not be loaded."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法加载壁纸设置。"}}}
-    },
-    "Retry wallpaper settings for %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Retry wallpaper settings for %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "重新加载 %@ 的壁纸设置"}}}
-    },
-    "No wallpaper assigned" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "No wallpaper assigned"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "未分配壁纸"}}}
-    },
-    "Mirrored %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Mirrored %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "镜像 %@"}}}
-    },
-    "Mirror displays use their source display’s wallpaper." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Mirror displays use their source display’s wallpaper."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "镜像显示器使用源显示器的壁纸。"}}}
-    },
-    "Choose Wallpaper" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose Wallpaper"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择壁纸"}}}
-    },
-    "Choose wallpaper for %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose wallpaper for %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "为 %@ 选择壁纸"}}}
-    },
-    "Eject wallpaper from %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Eject wallpaper from %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "停止 %@ 上的壁纸"}}}
-    },
-    "The loaded settings do not match this wallpaper. Retry." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The loaded settings do not match this wallpaper. Retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "加载的设置与此壁纸不匹配。请重试。"}}}
-    },
-    "Changes to this mirror display take effect immediately." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Changes to this mirror display take effect immediately."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "对此镜像显示器的修改立即生效。"}}}
-    },
-    "FPS" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "FPS"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "帧/秒"}}}
-    },
-    "Enter a whole number." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Enter a whole number."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请输入整数。"}}}
-    },
-    "Edit the frame rate." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Edit the frame rate."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "编辑帧率。"}}}
-    },
-    "SteamCMD" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD"}}}
-    },
-    "The previous installation is still available." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The previous installation is still available."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此前的安装仍可用。"}}}
-    },
-    "Reinstall SteamCMD…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Reinstall SteamCMD…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "重新安装 SteamCMD…"}}}
-    },
-    "Install SteamCMD" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Install SteamCMD"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "安装 SteamCMD"}}}
-    },
-    "Locate Existing…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Locate Existing…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择已有安装…"}}}
-    },
-    "Another download is running." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Another download is running."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "另一项下载正在进行。"}}}
-    },
-    "Install Valve’s download tool without signing in. Your Steam account is only needed when downloading wallpapers or scene assets." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Install Valve’s download tool without signing in. Your Steam account is only needed when downloading wallpapers or scene assets."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "安装 Valve 的下载工具无需登录。只有下载壁纸或场景资源时才需要 Steam 账号。"}}}
-    },
     "Reinstall SteamCMD?" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Reinstall SteamCMD?"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "重新安装 SteamCMD？"}}}
-    },
-    "Reinstall SteamCMD" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Reinstall SteamCMD"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "重新安装 SteamCMD"}}}
-    },
-    "Replace only WallpaperMachine’s managed SteamCMD installation. The current installation is kept until the replacement passes validation. Saved Steam sign-in and wallpapers are not removed." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Replace only WallpaperMachine’s managed SteamCMD installation. The current installation is kept until the replacement passes validation. Saved Steam sign-in and wallpapers are not removed."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "仅替换由 WallpaperMachine 管理的 SteamCMD 安装。在新安装通过验证前，会保留当前安装。不会移除已保存的 Steam 登录或壁纸。"}}}
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Reinstall SteamCMD?"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "要重新安装 SteamCMD 吗？"}}}
     },
     "Not installed" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Not installed"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "未安装"}}}
@@ -739,110 +94,17 @@
     "Checking SteamCMD…" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Checking SteamCMD…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在检查 SteamCMD…"}}}
     },
-    "Downloading SteamCMD from Valve…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Downloading SteamCMD from Valve…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在从 Valve 下载 SteamCMD…"}}}
-    },
     "Extracting SteamCMD…" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Extracting SteamCMD…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在解压 SteamCMD…"}}}
-    },
-    "Completing SteamCMD installation…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Completing SteamCMD installation…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在完成 SteamCMD 安装…"}}}
     },
     "Validating SteamCMD…" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Validating SteamCMD…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在验证 SteamCMD…"}}}
     },
-    "Saving SteamCMD installation…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Saving SteamCMD installation…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在保存 SteamCMD 安装…"}}}
-    },
     "Ready" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Ready"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已就绪"}}}
     },
-    "SteamCMD installation cancelled." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD installation cancelled."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD 安装已取消。"}}}
-    },
-    "Apple’s Rosetta installation guide" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Apple’s Rosetta installation guide"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Apple 的 Rosetta 安装指南"}}}
-    },
-    "Apple’s app security guide" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Apple’s app security guide"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Apple 的 App 安全指南"}}}
-    },
-    "WallpaperMachine does not change signatures, remove quarantine, or approve system security requests." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "WallpaperMachine does not change signatures, remove quarantine, or approve system security requests."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "WallpaperMachine 不会修改签名、移除隔离标记或批准系统安全请求。"}}}
-    },
     "Locate SteamCMD" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Locate SteamCMD"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择 SteamCMD"}}}
-    },
-    "Choose steamcmd, steamcmd.sh, or the complete macOS SteamCMD installation folder." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose steamcmd, steamcmd.sh, or the complete macOS SteamCMD installation folder."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择 steamcmd、steamcmd.sh 或完整的 macOS SteamCMD 安装文件夹。"}}}
-    },
-    "Loading results…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Loading results…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在加载结果…"}}}
-    },
-    "Discover your next desktop" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Discover your next desktop"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "发现下一张桌面壁纸"}}}
-    },
-    "Steam Workshop · Community-made wallpapers, in WallpaperMachine" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam Workshop · Community-made wallpapers, in WallpaperMachine"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 创意工坊 · 在 WallpaperMachine 中浏览社区壁纸"}}}
-    },
-    "Download setup" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Download setup"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载设置"}}}
-    },
-    "Open Steam Workshop in your browser" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Open Steam Workshop in your browser"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "在浏览器中打开 Steam 创意工坊"}}}
-    },
-    "Search Steam Workshop" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Search Steam Workshop"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "搜索 Steam 创意工坊"}}}
-    },
-    "Clear search" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Clear search"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "清除搜索"}}}
-    },
-    "Search" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Search"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "搜索"}}}
-    },
-    "Type" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Type"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "类型"}}}
-    },
-    "Sort" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Sort"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "排序"}}}
-    },
-    "Live results from Steam" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Live results from Steam"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "来自 Steam 的实时结果"}}}
-    },
-    "Dismiss search error" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Dismiss search error"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "关闭搜索错误消息"}}}
-    },
-    "Discovering wallpapers on Steam…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Discovering wallpapers on Steam…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在 Steam 上查找壁纸…"}}}
-    },
-    "No wallpapers found" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "No wallpapers found"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "未找到壁纸"}}}
-    },
-    "Explore Steam Workshop" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Explore Steam Workshop"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "探索 Steam 创意工坊"}}}
-    },
-    "Try a different search or wallpaper type." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Try a different search or wallpaper type."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请尝试其他搜索词或壁纸类型。"}}}
-    },
-    "Browse public wallpapers without a Steam API key. Download only with an account that owns Wallpaper Engine." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Browse public wallpapers without a Steam API key. Download only with an account that owns Wallpaper Engine."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "浏览公开壁纸无需 Steam API 密钥。下载时必须使用拥有 Wallpaper Engine 的账号。"}}}
-    },
-    "Browse wallpapers" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Browse wallpapers"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "浏览壁纸"}}}
-    },
-    "Open Steam Workshop" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Open Steam Workshop"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "打开 Steam 创意工坊"}}}
-    },
-    "Previous" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Previous"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "上一页"}}}
-    },
-    "Page %lld of %lld" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Page %lld of %lld"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "第 %lld 页，共 %lld 页"}}}
-    },
-    "Next" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Next"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下一页"}}}
-    },
-    "In Library" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "In Library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已在壁纸库中"}}}
     },
     "Scene assets" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scene assets"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "场景资源"}}}
@@ -857,7 +119,7 @@
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Signed in to Steam"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已登录 Steam"}}}
     },
     "Preparing a private SteamCMD sign-in…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Preparing a private SteamCMD sign-in…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在准备私有的 SteamCMD 登录…"}}}
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Preparing a private SteamCMD sign-in…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在准备 SteamCMD 登录…"}}}
     },
     "Signed in; closing SteamCMD…" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Signed in; closing SteamCMD…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已登录；正在关闭 SteamCMD…"}}}
@@ -865,38 +127,14 @@
     "Sign-in could not finish" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Sign-in could not finish"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "登录未能完成"}}}
     },
-    "Dismiss download activity" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Dismiss download activity"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "关闭下载活动"}}}
-    },
-    "Details" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Details"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "详情"}}}
-    },
-    "Download Details" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Download Details"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载详情"}}}
-    },
-    "Download progress" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Download progress"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载进度"}}}
-    },
-    "Submit" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Submit"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "提交"}}}
-    },
-    "Sent directly to SteamCMD’s private terminal; never saved by WallpaperMachine." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Sent directly to SteamCMD’s private terminal; never saved by WallpaperMachine."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "直接发送到 SteamCMD 的私有终端；WallpaperMachine 绝不保存。"}}}
-    },
-    "You can keep browsing. Open Download Details to complete Steam Guard. Downloads stop after 5 minutes without SteamCMD output or 30 minutes overall." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "You can keep browsing. Open Download Details to complete Steam Guard. Downloads stop after 5 minutes without SteamCMD output or 30 minutes overall."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "你可以继续浏览。打开“下载详情”以完成 Steam 令牌验证。SteamCMD 连续 5 分钟无输出或下载总时长达到 30 分钟时，下载会停止。"}}}
-    },
-    "Cancel download" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Cancel download"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "取消下载"}}}
-    },
     "Ready to download" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Ready to download"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "准备下载"}}}
     },
     "Validating and adding to your library…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Validating and adding to your library…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在验证并添加到你的资料库…"}}}
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Validating and adding to your library…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在验证并添加到壁纸库…"}}}
     },
     "Downloaded to your library" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Downloaded to your library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已下载到你的资料库"}}}
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Downloaded to your library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已下载到壁纸库"}}}
     },
     "Validating and installing scene assets…" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Validating and installing scene assets…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在验证并安装场景资源…"}}}
@@ -905,7 +143,7 @@
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scene assets installed"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "场景资源已安装"}}}
     },
     "Preparing a private SteamCMD download…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Preparing a private SteamCMD download…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在准备私有的 SteamCMD 下载…"}}}
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Preparing a private SteamCMD download…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在准备 SteamCMD 下载…"}}}
     },
     "Download could not finish" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Download could not finish"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载未能完成"}}}
@@ -914,7 +152,7 @@
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Waiting for Steam authentication…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在等待 Steam 验证…"}}}
     },
     "Starting SteamCMD and contacting Steam…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Starting SteamCMD and contacting Steam…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在启动 SteamCMD 并联系 Steam…"}}}
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Starting SteamCMD and contacting Steam…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在启动 SteamCMD 并连接 Steam…"}}}
     },
     "Enter your Steam password below" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Enter your Steam password below"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请在下方输入你的 Steam 密码"}}}
@@ -947,109 +185,10 @@
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Approve the sign-in in the Steam mobile app"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请在 Steam 手机应用中批准登录"}}}
     },
     "Updating the private SteamCMD runtime…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Updating the private SteamCMD runtime…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在更新私有的 SteamCMD 运行环境…"}}}
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Updating the private SteamCMD runtime…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在更新 SteamCMD 运行环境…"}}}
     },
     "Download cancelled" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Download cancelled"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载已取消"}}}
-    },
-    "Downloaded; refresh Library before applying." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Downloaded; refresh Library before applying."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已下载；应用前请刷新壁纸库。"}}}
-    },
-    "Download with your Steam account" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Download with your Steam account"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "使用你的 Steam 账号下载"}}}
-    },
-    "Steam will download the Windows version of Wallpaper Engine to a temporary folder. Only its shared assets are kept; Windows programs are never run. This can require several GB of temporary disk space." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam will download the Windows version of Wallpaper Engine to a temporary folder. Only its shared assets are kept; Windows programs are never run. This can require several GB of temporary disk space."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 会将 Windows 版 Wallpaper Engine 下载到临时文件夹。仅保留其中的共享资源，绝不运行 Windows 程序。此过程可能需要数 GB 的临时磁盘空间。"}}}
-    },
-    "Use an account that owns Wallpaper Engine. SteamCMD enforces access. This downloads one item; it does not subscribe or automatically apply it." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Use an account that owns Wallpaper Engine. SteamCMD enforces access. This downloads one item; it does not subscribe or automatically apply it."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请使用拥有 Wallpaper Engine 的账号。SteamCMD 会验证访问权限。此操作仅下载一个项目，不会订阅或自动应用。"}}}
-    },
-    "Steam account login name" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam account login name"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 账号登录名"}}}
-    },
-    "I own Wallpaper Engine on this Steam account" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "I own Wallpaper Engine on this Steam account"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此 Steam 账号拥有 Wallpaper Engine"}}}
-    },
-    "Install scene assets" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Install scene assets"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "安装场景资源"}}}
-    },
-    "Download to Library" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Download to Library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载到壁纸库"}}}
-    },
-    "SteamCMD installation and account help" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD installation and account help"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD 安装与账号帮助"}}}
-    },
-    "By %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "By %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "作者：%@"}}}
-    },
-    "Scene support is experimental. Some effects, scripts, and audio features may differ from Windows. Shared scene assets are installed separately from Workshop wallpapers." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scene support is experimental. Some effects, scripts, and audio features may differ from Windows. Shared scene assets are installed separately from Workshop wallpapers."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "场景支持仍处于实验阶段。部分效果、脚本和音频功能可能与 Windows 不同。共享场景资源与创意工坊壁纸分开安装。"}}}
-    },
-    "View full description, creator, and requirements on Steam" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "View full description, creator, and requirements on Steam"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "在 Steam 上查看完整说明、作者和所需条件"}}}
-    },
-    "Available in your local library" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Available in your local library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已在本地壁纸库中"}}}
-    },
-    "Scene assets still need setup" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scene assets still need setup"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "场景资源仍需设置"}}}
-    },
-    "The wallpaper download is complete. Install Wallpaper Engine’s shared resources once, or locate your purchased installation’s assets folder." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The wallpaper download is complete. Install Wallpaper Engine’s shared resources once, or locate your purchased installation’s assets folder."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸已下载完成。请安装一次 Wallpaper Engine 的共享资源，或选择你已购买版本安装目录中的 assets 文件夹。"}}}
-    },
-    "Install scene assets…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Install scene assets…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "安装场景资源…"}}}
-    },
-    "Show in Library" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Show in Library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "在壁纸库中显示"}}}
-    },
-    "Application wallpapers contain Windows executables. WallpaperMachine will not download or run them. Choose a Scene wallpaper instead." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Application wallpapers contain Windows executables. WallpaperMachine will not download or run them. Choose a Scene wallpaper instead."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "应用程序壁纸包含 Windows 可执行文件。WallpaperMachine 不会下载或运行它们。请选择场景壁纸。"}}}
-    },
-    "Set up scene assets" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Set up scene assets"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "设置场景资源"}}}
-    },
-    "Close this setup and apply your wallpaper. No restart or wallpaper re-download is needed." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Close this setup and apply your wallpaper. No restart or wallpaper re-download is needed."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "关闭此设置并应用壁纸即可，无需重启或重新下载壁纸。"}}}
-    },
-    "Workshop downloads do not include Wallpaper Engine’s shared shaders and materials. Install them with a Steam account that owns Wallpaper Engine, or use an existing installation." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Workshop downloads do not include Wallpaper Engine’s shared shaders and materials. Install them with a Steam account that owns Wallpaper Engine, or use an existing installation."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "创意工坊下载不包含 Wallpaper Engine 的共享着色器和材质。请使用拥有 Wallpaper Engine 的 Steam 账号安装这些资源，或使用已有安装。"}}}
-    },
-    "Locate assets…" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Locate assets…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择资源位置…"}}}
-    },
-    "Connect to Steam Workshop" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Connect to Steam Workshop"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "连接 Steam 创意工坊"}}}
-    },
-    "Browsing is public and needs no API key. Downloads require Valve’s SteamCMD and a Steam account that legitimately owns Wallpaper Engine." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Browsing is public and needs no API key. Downloads require Valve’s SteamCMD and a Steam account that legitimately owns Wallpaper Engine."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "浏览公开内容无需 API 密钥。下载需要 Valve 的 SteamCMD，以及合法拥有 Wallpaper Engine 的 Steam 账号。"}}}
-    },
-    "Install SteamCMD here, or locate a complete existing macOS installation. Installation does not require a Steam login. On Apple silicon, follow Apple’s Rosetta instructions if setup reports that it is needed." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Install SteamCMD here, or locate a complete existing macOS installation. Installation does not require a Steam login. On Apple silicon, follow Apple’s Rosetta instructions if setup reports that it is needed."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "在此安装 SteamCMD，或选择已有的完整 macOS 安装。安装无需登录 Steam。在 Apple 芯片 Mac 上，如果安装程序提示需要 Rosetta，请遵循 Apple 的 Rosetta 指引。"}}}
-    },
-    "Choose a wallpaper, enter your Steam account login name, and confirm ownership on first use or when switching accounts. Enter your password or Steam Guard code only when prompted; mobile approval is supported." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose a wallpaper, enter your Steam account login name, and confirm ownership on first use or when switching accounts. Enter your password or Steam Guard code only when prompted; mobile approval is supported."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择壁纸，输入 Steam 账号登录名，并在首次使用或切换账号时确认拥有 Wallpaper Engine。仅在出现提示时输入密码或 Steam 令牌验证码；也支持手机确认。"}}}
-    },
-    "Wallpaper Engine on Steam" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wallpaper Engine on Steam"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 上的 Wallpaper Engine"}}}
-    },
-    "Library & Steam" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Library & Steam"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸库与 Steam"}}}
-    },
-    "Wallpaper library" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wallpaper library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸库"}}}
-    },
-    "Imports are copied into WallpaperMachine. Your original files and Steam library are left untouched." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Imports are copied into WallpaperMachine. Your original files and Steam library are left untouched."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入内容会复制到 WallpaperMachine。原始文件和 Steam 库保持不变。"}}}
-    },
-    "Scene wallpapers need shared resources in addition to the Workshop download. Install them once through Steam or choose your purchased installation’s assets folder. Videos do not require it. Scene support is experimental; some effects and scripts may differ from Windows." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scene wallpapers need shared resources in addition to the Workshop download. Install them once through Steam or choose your purchased installation’s assets folder. Videos do not require it. Scene support is experimental; some effects and scripts may differ from Windows."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "场景壁纸除了创意工坊下载内容外，还需要共享资源。通过 Steam 安装一次，或选择你已购买版本安装目录中的 assets 文件夹即可。视频无需这些资源。场景支持仍处于实验阶段，部分效果和脚本可能与 Windows 不同。"}}}
-    },
-    "All types" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "All types"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "所有类型"}}}
-    },
-    "Application" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Application"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "应用程序"}}}
     },
     "Scene · experimental renderer" : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Scene · experimental renderer"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "场景 · 实验性渲染器"}}}
@@ -1156,20 +295,8 @@
     "This video cannot be decoded. Import a complete, playable video file before applying it." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This video cannot be decoded. Import a complete, playable video file before applying it."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法解码此视频。请先导入完整且可播放的视频文件，再应用。"}}}
     },
-    "This wallpaper is downloaded, but Wallpaper Engine’s shared scene assets are not installed. Use Install scene assets… in Settings or the Workshop wallpaper, or locate the assets folder from your purchased installation." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper is downloaded, but Wallpaper Engine’s shared scene assets are not installed. Use Install scene assets… in Settings or the Workshop wallpaper, or locate the assets folder from your purchased installation."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸已下载，但尚未安装 Wallpaper Engine 的共享场景资源。请使用设置或创意工坊壁纸中的“安装场景资源…”，或选择你已购买版本安装目录中的 assets 文件夹。"}}}
-    },
     "Applying was interrupted by another playback or display change. Your pending edits have been kept. Refresh and retry." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Applying was interrupted by another playback or display change. Your pending edits have been kept. Refresh and retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "应用操作被其他播放或显示器更改中断。待提交的修改已保留。请刷新后重试。"}}}
-    },
-    "Wait for SteamCMD setup to finish before downloading." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wait for SteamCMD setup to finish before downloading."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载前，请等待 SteamCMD 设置完成。"}}}
-    },
-    "Install SteamCMD or locate an existing installation before downloading." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Install SteamCMD or locate an existing installation before downloading."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载前，请安装 SteamCMD 或选择已有安装。"}}}
-    },
-    "Enter your Steam account login name and confirm that it owns Wallpaper Engine." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Enter your Steam account login name and confirm that it owns Wallpaper Engine."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请输入 Steam 账号登录名，并确认该账号拥有 Wallpaper Engine。"}}}
     },
     "Choose a local macOS SteamCMD installation." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose a local macOS SteamCMD installation."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请选择本地的 macOS SteamCMD 安装。"}}}
@@ -1206,9 +333,6 @@
     },
     "SteamCMD signature validation failed for %@. Select a valid installation or reinstall; no signatures were changed." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD signature validation failed for %@. Select a valid installation or reinstall; no signatures were changed."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "%@ 的 SteamCMD 签名验证失败。请选择有效安装或重新安装；未修改任何签名。"}}}
-    },
-    "macOS has not approved SteamCMD at %@. Follow Apple’s app security guidance, then Retry. System security settings have not been changed." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "macOS has not approved SteamCMD at %@. Follow Apple’s app security guidance, then Retry. System security settings have not been changed."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 尚未批准 %@ 中的 SteamCMD。请遵循 Apple 的 App 安全指引后重试。系统安全设置未被更改。"}}}
     },
     "This SteamCMD installation requires Rosetta. Follow Apple’s Rosetta installation guidance, then Retry." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This SteamCMD installation requires Rosetta. Follow Apple’s Rosetta installation guidance, then Retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此 SteamCMD 安装需要 Rosetta。请遵循 Apple 的 Rosetta 安装指引后重试。"}}}
@@ -1354,36 +478,6 @@
     "The SteamCMD bootstrap download is empty or truncated." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The SteamCMD bootstrap download is empty or truncated."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载的 SteamCMD 初始安装包为空或不完整。"}}}
     },
-    "%lld wallpapers in your library" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "%lld wallpapers in your library"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸库中有 %lld 张壁纸"}}}
-    },
-    "%lld imported · %lld already in your library · %lld failed" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "%lld imported · %lld already in your library · %lld failed"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已导入 %lld 项 · 库中已存在 %lld 项 · 失败 %lld 项"}}}
-    },
-    "%@ times" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "%@ times"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "%@ 倍"}}}
-    },
-    "%@ frames per second" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "%@ frames per second"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "每秒 %@ 帧"}}}
-    },
-    "%lld of %lld" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "%lld of %lld"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "%lld / %lld"}}}
-    },
-    "%lld FPS" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "%lld FPS"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "每秒 %lld 帧"}}}
-    },
-    "%@ of %@" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "%@ of %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "%@ / %@"}}}
-    },
-    "%@ results" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "%@ results"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "%@ 项结果"}}}
-    },
-    "%@ matching wallpapers" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "%@ matching wallpapers"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "%@ 张匹配的壁纸"}}}
-    },
-    "%@ subscribers" : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "%@ subscribers"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "%@ 位订阅者"}}}
-    },
     "%@ is not a macOS Mach-O SteamCMD executable." : {
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "%@ is not a macOS Mach-O SteamCMD executable."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "%@ 不是 macOS Mach-O 格式的 SteamCMD 可执行文件。"}}}
     },
@@ -1423,9 +517,6 @@
     "Saved Steam sign-in expired; waiting for fresh authentication…" : {
       "localizations" : { "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已保存的 Steam 登录已失效，等待重新验证…" } } }
     },
-    "Your saved Steam sign-in has expired or was revoked. Choose Retry Steam sign-in and complete authentication again." : {
-      "localizations" : { "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已保存的 Steam 登录已过期或被撤销。请点击“重新发起 Steam 登录”并完成验证。" } } }
-    },
     "Using your saved Steam sign-in…" : {
       "localizations" : { "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在使用已保存的 Steam 登录…" } } }
     },
@@ -1438,119 +529,6 @@
     "Steam sign-in storage contains an unsafe file." : {
       "localizations" : { "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Steam 登录保存目录包含不安全的文件。" } } }
     },
-    "About" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "About"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "关于"
-          }
-        }
-      }
-    },
-    "Active Wallpapers" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Active Wallpapers"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "活跃的壁纸"
-          }
-        }
-      }
-    },
-    "App" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "App"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "应用程序"
-          }
-        }
-      }
-    },
-    "Apply" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Apply"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "应用"
-          }
-        }
-      }
-    },
-    "Audio Response" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Audio Response"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "音频响应"
-          }
-        }
-      }
-    },
-    "Bridge" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bridge"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "桥接组件"
-          }
-        }
-      }
-    },
-    "Bridge Error" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bridge Error"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "桥接组件错误"
-          }
-        }
-      }
-    },
     "Bridge Unavailable" : {
       "localizations" : {
         "en" : {
@@ -1562,7 +540,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "桥接组件不可用"
+            "value" : "渲染组件不可用"
           }
         }
       }
@@ -1617,91 +595,6 @@
         }
       }
     },
-    "Clear" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Clear"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "清除"
-          }
-        }
-      }
-    },
-    "Clear Anyway" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Clear Anyway"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "仍要清除"
-          }
-        }
-      }
-    },
-    "Clear Shader Cache?" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Clear Shader Cache?"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "是否要清除着色器缓存？"
-          }
-        }
-      }
-    },
-    "Clearing the shader cache may temporarily reduce performance. Currently active scene wallpapers will be rebuilt to regenerate fresh shaders." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Clearing the shader cache may temporarily reduce performance. Currently active scene wallpapers will be rebuilt to regenerate fresh shaders."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "清除着色器缓存可能会暂时降低性能。当前活跃的场景壁纸将会被重新加载，以生成新的着色器。"
-          }
-        }
-      }
-    },
-    "Close" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Close"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "关闭"
-          }
-        }
-      }
-    },
     "Control Panel" : {
       "localizations" : {
         "en" : {
@@ -1718,216 +611,6 @@
         }
       }
     },
-    "Core" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Core"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "核心"
-          }
-        }
-      }
-    },
-    "Shader Pipeline" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Shader Pipeline"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "着色器管线"
-          }
-        }
-      }
-    },
-    "Current Wallpaper" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Current Wallpaper"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "当前壁纸"
-          }
-        }
-      }
-    },
-    "Default" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Default"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "默认"
-          }
-        }
-      }
-    },
-    "Disabled" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Disabled"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "禁用"
-          }
-        }
-      }
-    },
-    "Display" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Display"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示器"
-          }
-        }
-      }
-    },
-    "Display Configuration" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Display Configuration"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示器配置"
-          }
-        }
-      }
-    },
-    "Display Information" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Display Information"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示器信息"
-          }
-        }
-      }
-    },
-    "Display Mode" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Display Mode"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示器模式"
-          }
-        }
-      }
-    },
-    "Display Settings" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Display Settings"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示器设置"
-          }
-        }
-      }
-    },
-    "Eject" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Eject"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "弹出"
-          }
-        }
-      }
-    },
-    "Enable" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Enable"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "启用"
-          }
-        }
-      }
-    },
-    "Enabled" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Enabled"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "启用"
-          }
-        }
-      }
-    },
     "Exit" : {
       "localizations" : {
         "en" : {
@@ -1940,70 +623,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "退出"
-          }
-        }
-      }
-    },
-    "Fill" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fill"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "填充"
-          }
-        }
-      }
-    },
-    "Filter" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Filter"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "筛选"
-          }
-        }
-      }
-    },
-    "General Configuration" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "General Configuration"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "通用配置"
-          }
-        }
-      }
-    },
-    "Git" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Git"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Git"
           }
         }
       }
@@ -2025,334 +644,6 @@
         }
       }
     },
-    "Inspector" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Inspector"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "查看器"
-          }
-        }
-      }
-    },
-    "Launch at Login" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Launch at Login"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "登录时启动"
-          }
-        }
-      }
-    },
-    "Link" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Link"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "链接"
-          }
-        }
-      }
-    },
-    "Logs" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Logs"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "日志"
-          }
-        }
-      }
-    },
-    "Match" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Match"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "匹配"
-          }
-        }
-      }
-    },
-    "Mirror" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mirror"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "镜像"
-          }
-        }
-      }
-    },
-    "Mirror Target" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mirror Target"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "镜像目标"
-          }
-        }
-      }
-    },
-    "Mirrored" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mirrored"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "镜像"
-          }
-        }
-      }
-    },
-    "Modified" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Modified"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已被修改"
-          }
-        }
-      }
-    },
-    "Move Wallpaper Engine to Applications to enable launch at login." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Move Wallpaper Engine to Applications to enable launch at login."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "将 Wallpaper Engine 安装到应用程序文件夹以启用登录时启动功能。"
-          }
-        }
-      }
-    },
-    "Mute" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mute"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "静音"
-          }
-        }
-      }
-    },
-    "New Version Detected" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New Version Detected"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "检测到新版本"
-          }
-        }
-      }
-    },
-    "No display configuration loaded." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No display configuration loaded."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有已被加载的显示器配置"
-          }
-        }
-      }
-    },
-    "No editable properties loaded." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No editable properties loaded."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有已被加载的可编辑属性"
-          }
-        }
-      }
-    },
-    "No Wallpaper Selected" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No Wallpaper Selected"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有已选择的壁纸"
-          }
-        }
-      }
-    },
-    "No Wallpapers" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No Wallpapers"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有找到壁纸"
-          }
-        }
-      }
-    },
-    "None" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "None"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无"
-          }
-        }
-      }
-    },
-    "OK" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "OK"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "确认"
-          }
-        }
-      }
-    },
-    "Open" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开"
-          }
-        }
-      }
-    },
-    "Open Release Page" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open Release Page"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开发布页面"
-          }
-        }
-      }
-    },
     "Pause" : {
       "localizations" : {
         "en" : {
@@ -2365,23 +656,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "暂停"
-          }
-        }
-      }
-    },
-    "Pause wallpapers on battery" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pause wallpapers on battery"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "使用电池供电时自动暂停壁纸播放"
           }
         }
       }
@@ -2402,477 +676,6 @@
         }
       }
     },
-    "Playback Unavailable" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Playback Unavailable"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "播放组件不可用"
-          }
-        }
-      }
-    },
-    "Power Settings" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Power Settings"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "电源设置"
-          }
-        }
-      }
-    },
-    "Program Settings" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Program Settings"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "程序设置"
-          }
-        }
-      }
-    },
-    "Project Scene" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Project Scene"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "场景"
-          }
-        }
-      }
-    },
-    "Project URL" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Project URL"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "项目地址"
-          }
-        }
-      }
-    },
-    "Refresh" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Refresh"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "刷新"
-          }
-        }
-      }
-    },
-    "Release Notes:" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Release Notes:"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "更新日志："
-          }
-        }
-      }
-    },
-    "Restore Defaults" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Restore Defaults"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "恢复默认"
-          }
-        }
-      }
-    },
-    "Revert" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Revert"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "撤销"
-          }
-        }
-      }
-    },
-    "Scaling Factor" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Scaling Factor"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "缩放系数"
-          }
-        }
-      }
-    },
-    "Scaling Mode" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Scaling Mode"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "缩放模式"
-          }
-        }
-      }
-    },
-    "Search Wallpapers" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Search Wallpapers"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "搜索壁纸"
-          }
-        }
-      }
-    },
-    "Settings" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Settings"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "设置"
-          }
-        }
-      }
-    },
-    "Shader Cache" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Shader Cache"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "着色器缓存"
-          }
-        }
-      }
-    },
-    "Retry Steam sign-in" : {
-      "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "Retry Steam sign-in"}},
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重新发起 Steam 登录"
-          }
-        }
-      }
-    },
-    "Steam Guard sign-in help" : {
-      "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "Steam Guard sign-in help"}},
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Steam 令牌登录指引"
-          }
-        }
-      }
-    },
-    "Steam Guard · approve your sign-in" : {
-      "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "Steam Guard · approve your sign-in"}},
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Steam 令牌 · 确认本次登录"
-          }
-        }
-      }
-    },
-    "Steam Guard help" : {
-      "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "Steam Guard help"}},
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Steam 令牌官方帮助"
-          }
-        }
-      }
-    },
-    "Mobile approval: open the Steam mobile app, select the same account in the Steam Guard shield tab, and approve the request you just started. If no notification appears, open Steam Guard directly. Only approve a sign-in you recognize." : {
-      "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "Mobile approval: open the Steam mobile app, select the same account in the Steam Guard shield tab, and approve the request you just started. If no notification appears, open Steam Guard directly. Only approve a sign-in you recognize."}},
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "手机确认：打开 Steam 手机应用，在盾牌图标的 Steam 令牌页选择同一个账号，批准你刚发起的登录请求。没有收到通知时，直接打开令牌页查看。只批准你确认由自己发起的登录。"
-          }
-        }
-      }
-    },
-    "Authenticator code: in the Steam mobile app, open Steam Guard for this account and show its current code. Enter it in the Steam Guard code field here and press Submit before it changes. Check that your phone’s date and time are set automatically if codes are rejected." : {
-      "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "Authenticator code: in the Steam mobile app, open Steam Guard for this account and show its current code. Enter it in the Steam Guard code field here and press Submit before it changes. Check that your phone’s date and time are set automatically if codes are rejected."}},
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "手机验证码：在 Steam 手机应用中打开此账号的 Steam 令牌，查看当前验证码，在本应用的 Steam Guard code 输入框填写，并在代码更新前点击 Submit。若验证码被拒绝，请检查手机是否已启用自动设置日期与时间。"
-          }
-        }
-      }
-    },
-    "Email code: check the email address registered to this Steam account, including spam, then enter the latest Steam Guard code here and press Submit. Delivery can be delayed; if this login expires, use Retry Steam sign-in and use the new code." : {
-      "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "Email code: check the email address registered to this Steam account, including spam, then enter the latest Steam Guard code here and press Submit. Delivery can be delayed; if this login expires, use Retry Steam sign-in and use the new code."}},
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "邮件验证码：检查此 Steam 账号绑定的邮箱及垃圾邮件，在此填写最新的 Steam 令牌验证码并点击 Submit。邮件可能延迟；若本次登录已过期，点击“重新发起 Steam 登录”，使用新请求的验证码。"
-          }
-        }
-      }
-    },
-    "Do not disable Steam Guard or share passwords, codes, or recovery codes. If you denied this request or it expired, wait for this attempt to finish and choose Retry Steam sign-in. Steam decides which verification method is available; retrying does not bypass approval." : {
-      "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "Do not disable Steam Guard or share passwords, codes, or recovery codes. If you denied this request or it expired, wait for this attempt to finish and choose Retry Steam sign-in. Steam decides which verification method is available; retrying does not bypass approval."}},
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "不要关闭 Steam 令牌，也不要分享密码、验证码或恢复码。若误点拒绝或请求过期，等本次尝试结束后点击“重新发起 Steam 登录”。验证方式由 Steam 决定，重试不会绕过验证。"
-          }
-        }
-      }
-    },
-    "Starts a new SteamCMD login using the account name above. If prompted, enter your password, then approve the new request or enter a fresh code. The rejected request is not reused. If Steam reports too many attempts, wait before retrying." : {
-      "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "Starts a new SteamCMD login using the account name above. If prompted, enter your password, then approve the new request or enter a fresh code. The rejected request is not reused. If Steam reports too many attempts, wait before retrying."}},
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "使用上方账号重新发起 SteamCMD 登录。如有提示，请输入密码，然后批准新的登录请求或填写新的验证码，不会复用被拒绝的请求。若 Steam 提示尝试过于频繁，请先等待再重试。"
-          }
-        }
-      }
-    },
-    "Saved Steam sign-in for this account on this Mac" : {
-      "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "Saved Steam sign-in for this account on this Mac"}},
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "此账号的 Steam 登录缓存已保存在本机"
-          }
-        }
-      }
-    },
-    "Keep me signed in on this Mac" : {
-      "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "Keep me signed in on this Mac"}},
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在这台 Mac 上保持登录"
-          }
-        }
-      }
-    },
-    "When enabled, Steam-issued sign-in cache is saved privately on this Mac, not your submitted password or Steam Guard codes. Downloads still use temporary staging. Steam may request a fresh login after expiry, revocation, or security checks." : {
-      "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "When enabled, Steam-issued sign-in cache is saved privately on this Mac, not your submitted password or Steam Guard codes. Downloads still use temporary staging. Steam may request a fresh login after expiry, revocation, or security checks."}},
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "启用后，Steam 签发的登录缓存会保存在这台 Mac 的私有目录中，不会保存你输入的密码或 Steam 令牌验证码。下载仍使用临时暂存目录。缓存过期、被撤销或触发安全检查时，Steam 可能要求重新登录。"
-          }
-        }
-      }
-    },
-    "Forget saved Steam sign-in" : {
-      "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "Forget saved Steam sign-in"}},
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "清除已保存的 Steam 登录"
-          }
-        }
-      }
-    },
-    "Removes saved sign-in from this Mac only; it does not sign out other Steam devices." : {
-      "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "Removes saved sign-in from this Mac only; it does not sign out other Steam devices."}},
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "仅清除此 Mac 上保存的登录，不会退出其他设备上的 Steam 登录。"
-          }
-        }
-      }
-    },
-    "Saved sign-in warning" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "登录缓存警告"
-          }
-        }
-      }
-    },
-    "WallpaperMachine runs a private copy of SteamCMD and removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Turn it off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates." : {
-      "localizations" : {
-        "en" : {"stringUnit" : {"state" : "translated", "value" : "WallpaperMachine runs a private copy of SteamCMD and removes temporary download staging. Keep me signed in on this Mac saves Steam-issued sign-in cache in private app support storage, never submitted passwords or Steam Guard codes. Turn it off or choose Forget saved Steam sign-in to remove the local cache; other Steam devices stay signed in. Steam can request fresh authentication after expiry, revocation, or security checks. Downloads can take longer on first launch while SteamCMD updates."}},
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "WallpaperMachine 运行独立的 SteamCMD 副本，并清理临时下载目录。“在这台 Mac 上保持登录”会将 Steam 签发的登录缓存保存在私有的应用支持目录中，绝不保存你输入的密码或 Steam 令牌验证码。关闭此选项或选择“清除已保存的 Steam 登录”即可删除本地缓存，其他设备仍保持 Steam 登录。缓存过期、被撤销或触发安全检查时，Steam 可能要求重新验证。首次启动时 SteamCMD 需要更新，下载可能耗时更长。"
-          }
-        }
-      }
-    },
-    "Standalone" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Standalone"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "独立"
-          }
-        }
-      }
-    },
-    "Stretch" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Stretch"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "拉伸"
-          }
-        }
-      }
-    },
-    "Target Frame Rate" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Target Frame Rate"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "目标帧率"
-          }
-        }
-      }
-    },
-    "Target Frame Rate Value" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Target Frame Rate Value"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "目标帧率值"
-          }
-        }
-      }
-    },
     "The rendering bridge could not be started." : {
       "localizations" : {
         "en" : {
@@ -2884,55 +687,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "渲染器桥接组件启动失败"
-          }
-        }
-      }
-    },
-    "This wallpaper type is not editable." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This wallpaper type is not editable."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "壁纸类型不可编辑"
-          }
-        }
-      }
-    },
-    "Unknown" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Unknown"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "未知"
-          }
-        }
-      }
-    },
-    "Unmute" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Unmute"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "取消静音"
+            "value" : "渲染组件无法启动。"
           }
         }
       }
@@ -2954,23 +709,6 @@
         }
       }
     },
-    "Updates" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Updates"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "版本更新"
-          }
-        }
-      }
-    },
     "Updates not yet checked" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2984,119 +722,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "尚未检查更新"
-          }
-        }
-      }
-    },
-    "Video" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Video"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "视频"
-          }
-        }
-      }
-    },
-    "Volume" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Volume"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "音量"
-          }
-        }
-      }
-    },
-    "Wallpaper" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Wallpaper"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "壁纸"
-          }
-        }
-      }
-    },
-    "Wallpaper Engine" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Wallpaper Engine"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Wallpaper Engine"
-          }
-        }
-      }
-    },
-    "Wallpaper playback pauses when the device is running on battery power and resumes automatically when connected to a power source. Playback can also be resumed manually from the menu bar." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Wallpaper playback pauses when the device is running on battery power and resumes automatically when connected to a power source. Playback can also be resumed manually from the menu bar."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "使用电池供电时，应用会自动暂停壁纸播放；你可以通过菜单栏手动恢复播放。设备接入电源后，壁纸播放会自动恢复。"
-          }
-        }
-      }
-    },
-    "Wallpaper Properties" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Wallpaper Properties"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "壁纸属性"
-          }
-        }
-      }
-    },
-    "Webpage" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Webpage"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "网页"
           }
         }
       }
@@ -3175,7 +800,7 @@
       "extractionState" : "manual",
       "localizations" : {
         "en" : {"stringUnit" : {"state" : "translated", "value" : "Updates are checked against the latest published GitHub Release. Download and restart-install happen only after you confirm."}},
-        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "更新对照最新发布的 GitHub Release。下载和重启安装都只会在你确认后进行。"}}
+        "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "从 GitHub 检查最新发布的版本。确认之后才会下载并重启安装。"}}
       }
     },
     "In-app updates are available only in installed builds." : {
@@ -3296,7 +921,484 @@
       "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The system media service on this machine does not provide %@."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此设备上的系统媒体服务未提供 %@。"}}}
     },
     "macOS did not let this app read what is playing. Since macOS 15.4 only Apple-signed apps may." : {
-      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "macOS did not let this app read what is playing. Since macOS 15.4 only Apple-signed apps may."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 未允许本应用读取正在播放的内容。自 macOS 15.4 起，仅 Apple 签名的应用可读取。"}}}
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "macOS did not let this app read what is playing. Since macOS 15.4 only Apple-signed apps may."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 不允许本应用读取正在播放的内容。从 macOS 15.4 起，只有 Apple 签名的应用可以读取。"}}}
+    },
+    "Edit" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Edit"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "编辑"}}}
+    },
+    "Settings…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Settings…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "设置…"}}}
+    },
+    "Quit WallpaperMachine" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Quit WallpaperMachine"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "退出 WallpaperMachine"}}}
+    },
+    "Undo" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Undo"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "撤销"}}}
+    },
+    "Redo" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Redo"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "重做"}}}
+    },
+    "Cut" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Cut"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "剪切"}}}
+    },
+    "Copy" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Copy"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "拷贝"}}}
+    },
+    "Paste" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Paste"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "粘贴"}}}
+    },
+    "Select All" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Select All"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "全选"}}}
+    },
+    "Shared scene assets were not installed, so scene wallpapers cannot play yet." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Shared scene assets were not installed, so scene wallpapers cannot play yet."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "共享场景资源没有安装成功，场景壁纸暂时无法播放。"}}}
+    },
+    "Shared scene assets are still missing, so scene wallpapers cannot play yet: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Shared scene assets are still missing, so scene wallpapers cannot play yet: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "仍缺少共享场景资源，场景壁纸暂时无法播放：%@"}}}
+    },
+    "No update is available to download." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "No update is available to download."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "没有可下载的更新。"}}}
+    },
+    "No downloaded update is ready to install." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "No downloaded update is ready to install."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "没有已下载、可安装的更新。"}}}
+    },
+    "Install timed out: the app did not quit and relaunch." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Install timed out: the app did not quit and relaunch."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "安装超时：应用没有退出并重新打开。"}}}
+    },
+    "macOS did not accept the desktop click preference. Change “Click wallpaper to reveal desktop” in System Settings › Desktop & Dock instead." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "macOS did not accept the desktop click preference. Change “Click wallpaper to reveal desktop” in System Settings › Desktop & Dock instead."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 没有接受这项设置。请在“系统设置 › 桌面与程序坞”中直接更改“点按墙纸以显示桌面”。"}}}
+    },
+    "Steam returned status %lld for a preview image." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam returned status %lld for a preview image."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 返回预览图时出错（状态码 %lld）。"}}}
+    },
+    "The preview image is too large to use as a thumbnail." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The preview image is too large to use as a thumbnail."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "预览图太大，无法用作缩略图。"}}}
+    },
+    "The preview image could not be decoded." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The preview image could not be decoded."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法解码预览图。"}}}
+    },
+    "The preview image is a single still frame." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The preview image is a single still frame."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "预览图只有一帧静止画面。"}}}
+    },
+    "The update download redirected outside GitHub." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The update download redirected outside GitHub."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "更新下载被重定向到了 GitHub 以外的地址。"}}}
+    },
+    "The update archive exceeds the allowed size." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The update archive exceeds the allowed size."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "更新包超过了允许的大小。"}}}
+    },
+    "The update download is empty or truncated." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The update download is empty or truncated."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载的更新为空或不完整。"}}}
+    },
+    "Neither Music nor Spotify reported what is playing." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Neither Music nor Spotify reported what is playing."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "“音乐”和 Spotify 都没有提供正在播放的内容。"}}}
+    },
+    "No music player this app can read is running." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "No music player this app can read is running."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "没有正在运行的、本应用可读取的音乐播放器。"}}}
+    },
+    "Web wallpaper “%@” could not load: its entry file is outside the project folder." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Web wallpaper “%@” could not load: its entry file is outside the project folder."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "网页壁纸“%@”无法加载：入口文件不在项目文件夹内。"}}}
+    },
+    "This wallpaper has an identifier that cannot be used as a folder." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper has an identifier that cannot be used as a folder."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "这张壁纸的标识符无法用作文件夹名。"}}}
+    },
+    "%@ could not be copied into the app's asset folder." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "%@ could not be copied into the app's asset folder."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法将 %@ 复制到应用的资源文件夹。"}}}
+    },
+    "Importing %@…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Importing %@…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在导入 %@…"}}}
+    },
+    "Downloading SteamCMD…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Downloading SteamCMD…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在下载 SteamCMD…"}}}
+    },
+    "Completing installation…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Completing installation…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在完成安装…"}}}
+    },
+    "Saving installation…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Saving installation…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在保存安装…"}}}
+    },
+    "Installation cancelled" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Installation cancelled"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "安装已取消"}}}
+    },
+    "Setup needs attention" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Setup needs attention"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "设置需要处理"}}}
+    },
+    "Move %@ to Trash?" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Move %@ to Trash?"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "要将“%@”移到废纸篓吗？"}}}
+    },
+    "It is removed from your library and stops playing. The original files you imported are not affected." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "It is removed from your library and stops playing. The original files you imported are not affected."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "它会从壁纸库中移除并停止播放，导入时的原始文件不受影响。"}}}
+    },
+    "Move %lld wallpapers to Trash?" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Move %lld wallpapers to Trash?"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "要将 %lld 张壁纸移到废纸篓吗？"}}}
+    },
+    "They are removed from your library and stop playing. The original files you imported are not affected." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "They are removed from your library and stop playing. The original files you imported are not affected."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "它们会从壁纸库中移除并停止播放，导入时的原始文件不受影响。"}}}
+    },
+    "Moved %lld of %lld wallpapers to Trash. Couldn’t move %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Moved %lld of %lld wallpapers to Trash. Couldn’t move %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已将 %2$lld 张壁纸中的 %1$lld 张移到废纸篓。以下壁纸未能移动：%3$@"}}}
+    },
+    "Locate Scene Assets" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Locate Scene Assets"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择场景资源位置"}}}
+    },
+    "Clear shader cache?" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Clear shader cache?"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "要清除着色器缓存吗？"}}}
+    },
+    "Shaders are rebuilt the next time wallpapers need them." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Shaders are rebuilt the next time wallpapers need them."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸下次需要时会重新生成着色器。"}}}
+    },
+    "Clear Cache" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Clear Cache"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "清除缓存"}}}
+    },
+    "Clear logs?" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Clear logs?"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "要清除日志吗？"}}}
+    },
+    "Only diagnostic logs are removed. Wallpapers and settings are not affected." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Only diagnostic logs are removed. Wallpapers and settings are not affected."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "只删除诊断日志，不影响壁纸和设置。"}}}
+    },
+    "Clear Logs" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Clear Logs"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "清除日志"}}}
+    },
+    "Clear unused caches?" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Clear unused caches?"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "要清除未使用的缓存吗？"}}}
+    },
+    "Only caches that can be rebuilt are removed. Files you chose in wallpaper settings are kept." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Only caches that can be rebuilt are removed. Files you chose in wallpaper settings are kept."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "只删除可以重新生成的缓存，你在壁纸设置中选择的文件会保留。"}}}
+    },
+    "Clear Caches" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Clear Caches"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "清除缓存"}}}
+    },
+    "The new copy replaces the current one only after it passes validation. Wallpapers and your saved sign-in are kept." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The new copy replaces the current one only after it passes validation. Wallpapers and your saved sign-in are kept."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "新副本通过验证后才会替换当前的 SteamCMD，壁纸和已保存的登录都会保留。"}}}
+    },
+    "Reinstall" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Reinstall"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "重新安装"}}}
+    },
+    "macOS has not approved this software, and running it may put your data at risk. Only files matching this fingerprint are allowed, and the quarantine flag is removed from this copy only. Gatekeeper and signature checks stay on for everything else.\n\nPath: %@\nSHA-256: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "macOS has not approved this software, and running it may put your data at risk. Only files matching this fingerprint are allowed, and the quarantine flag is removed from this copy only. Gatekeeper and signature checks stay on for everything else.\n\nPath: %@\nSHA-256: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 尚未批准此软件，运行它可能危及你的数据。只允许与此指纹一致的文件，并且只移除这份副本的隔离标记。Gatekeeper 和签名检查对其他软件照常生效。\n\n路径：%1$@\nSHA-256：%2$@"}}}
+    },
+    "Discard downloaded SteamCMD?" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Discard downloaded SteamCMD?"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "要丢弃下载的 SteamCMD 吗？"}}}
+    },
+    "Only this downloaded copy is removed. The installed SteamCMD and your saved sign-in are kept." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Only this downloaded copy is removed. The installed SteamCMD and your saved sign-in are kept."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "只删除这份下载的副本，已安装的 SteamCMD 和已保存的登录都会保留。"}}}
+    },
+    "This wallpaper is no longer installed. Refresh your library." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper is no longer installed. Refresh your library."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "这张壁纸已不在壁纸库中，请刷新壁纸库。"}}}
+    },
+    "Some selected wallpapers are no longer installed. Refresh your library." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Some selected wallpapers are no longer installed. Refresh your library."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "部分所选壁纸已不在壁纸库中，请刷新壁纸库。"}}}
+    },
+    "Import Wallpapers" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Import Wallpapers"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入壁纸"}}}
+    },
+    "Choose videos, HTML files, project folders or a Steam library. Your original files are kept." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose videos, HTML files, project folders or a Steam library. Your original files are kept."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择视频、HTML 文件、项目文件夹或 Steam 库。原始文件会保留。"}}}
+    },
+    "Choose Folder" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose Folder"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择文件夹"}}}
+    },
+    "Choose File" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose File"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择文件"}}}
+    },
+    "Choose a folder for %@." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose a folder for %@."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "为“%@”选择文件夹。"}}}
+    },
+    "Choose a file for %@." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose a file for %@."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "为“%@”选择文件。"}}}
+    },
+    "This wallpaper’s folder is read-only, so the file cannot be prepared for it." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper’s folder is read-only, so the file cannot be prepared for it."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "这张壁纸的文件夹是只读的，无法准备所选文件。"}}}
+    },
+    "This wallpaper’s folder is missing, so the file cannot be prepared for it." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper’s folder is missing, so the file cannot be prepared for it."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "找不到这张壁纸的文件夹，无法准备所选文件。"}}}
+    },
+    "Import complete" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Import complete"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入完成"}}}
+    },
+    "Import could not finish" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Import could not finish"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "导入未能完成"}}}
+    },
+    "Off" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Off"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "关闭"}}}
+    },
+    "Waiting for committed wallpapers…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Waiting for committed wallpapers…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在等待已应用的壁纸…"}}}
+    },
+    "Recovery failed — action required" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Recovery failed — action required"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "恢复失败，需要处理"}}}
+    },
+    "Preparing committed wallpapers…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Preparing committed wallpapers…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在准备已应用的壁纸…"}}}
+    },
+    "Enabled for %lld display(s)" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Enabled for %lld display(s)"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已在 %lld 台显示器上启用"}}}
+    },
+    "Waiting for the system wallpaper renderer…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Waiting for the system wallpaper renderer…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在等待系统墙纸渲染器…"}}}
+    },
+    "Not applicable — web wallpapers have no lock-screen support" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Not applicable — web wallpapers have no lock-screen support"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "不适用：网页壁纸不支持锁定屏幕"}}}
+    },
+    "Waiting for an applied video or live scene on a connected display" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Waiting for an applied video or live scene on a connected display"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在等待已连接的显示器应用视频或动态场景壁纸"}}}
+    },
+    "Restoring system wallpapers…" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Restoring system wallpapers…"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在恢复系统墙纸…"}}}
+    },
+    "Not enabled — action required" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Not enabled — action required"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "未启用，需要处理"}}}
+    },
+    "Restoration failed — quit cancelled" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Restoration failed — quit cancelled"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "恢复失败，已取消退出"}}}
+    },
+    "An active wallpaper display is no longer connected. Refresh displays before retrying." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "An active wallpaper display is no longer connected. Refresh displays before retrying."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "一台正在播放壁纸的显示器已断开连接。请先刷新显示器再重试。"}}}
+    },
+    "Only committed video and live scene projects support Animate Lock Screen." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Only committed video and live scene projects support Animate Lock Screen."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "只有已应用的视频和动态场景壁纸支持“锁定屏幕动态壁纸”。"}}}
+    },
+    "The committed wallpaper does not declare a project type." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The committed wallpaper does not declare a project type."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已应用的壁纸没有声明项目类型。"}}}
+    },
+    "The committed wallpaper does not reference project.json." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The committed wallpaper does not reference project.json."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已应用的壁纸没有引用 project.json。"}}}
+    },
+    "The committed wallpaper contains a non-absolute source path." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The committed wallpaper contains a non-absolute source path."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已应用的壁纸包含非绝对路径的来源。"}}}
+    },
+    "macOS did not load the lock-screen renderer. The original wallpaper has been restored. Check for another wallpaper app or a conflicting system-wide wallpaper selection." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "macOS did not load the lock-screen renderer. The original wallpaper has been restored. Check for another wallpaper app or a conflicting system-wide wallpaper selection."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 没有加载锁定屏幕渲染器，已恢复原来的墙纸。请检查是否有其他墙纸应用，或冲突的全局墙纸设置。"}}}
+    },
+    "Wallpaper assets changed while preparing the lock screen. Retry after the download or edit finishes." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wallpaper assets changed while preparing the lock screen. Retry after the download or edit finishes."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "准备锁定屏幕时壁纸文件发生了变化。请等下载或编辑完成后重试。"}}}
+    },
+    "Cannot create lock-screen asset: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Cannot create lock-screen asset: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法创建锁定屏幕文件：%@"}}}
+    },
+    "Lock-screen assets cannot contain symbolic links or special files: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Lock-screen assets cannot contain symbolic links or special files: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "锁定屏幕文件不能包含符号链接或特殊文件：%@"}}}
+    },
+    "Cannot enumerate wallpaper assets: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Cannot enumerate wallpaper assets: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法读取壁纸文件列表：%@"}}}
+    },
+    "The wallpaper asset source must be a real directory: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The wallpaper asset source must be a real directory: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸文件来源必须是真实的文件夹：%@"}}}
+    },
+    "Choose a valid Workshop wallpaper. Application wallpapers execute Windows programs and cannot be used on macOS." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose a valid Workshop wallpaper. Application wallpapers execute Windows programs and cannot be used on macOS."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请选择有效的创意工坊壁纸。应用程序类壁纸需要运行 Windows 程序，无法在 macOS 上使用。"}}}
+    },
+    "Downloaded, but the library could not refresh: %@. Refresh the library before applying it." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Downloaded, but the library could not refresh: %@. Refresh the library before applying it."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已下载，但壁纸库未能刷新：%@。请先刷新壁纸库再应用。"}}}
+    },
+    "Enter your Steam account login name (not your display name). An account that owns Wallpaper Engine is required." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Enter your Steam account login name (not your display name). An account that owns Wallpaper Engine is required."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请输入 Steam 账户的登录名（不是昵称）。需要拥有 Wallpaper Engine 的账户。"}}}
+    },
+    "SteamCMD timed out. If Steam Guard was not completed, retry signing in and approve the new request or enter a fresh code. Otherwise check your connection and available disk space." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD timed out. If Steam Guard was not completed, retry signing in and approve the new request or enter a fresh code. Otherwise check your connection and available disk space."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD 超时。如果 Steam 令牌验证没有完成，请重新登录并批准新的请求或输入新的验证码；否则请检查网络连接和磁盘空间。"}}}
+    },
+    "Steam closed the session without confirming the sign-in. Check the account name and password, then retry." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam closed the session without confirming the sign-in. Check the account name and password, then retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 未确认登录就关闭了会话。请检查账户名和密码后重试。"}}}
+    },
+    "Steam exited without confirming a complete Wallpaper Engine installation. Retry installing scene assets; existing assets have not been changed." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam exited without confirming a complete Wallpaper Engine installation. Retry installing scene assets; existing assets have not been changed."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 退出时没有确认 Wallpaper Engine 已完整安装。请重新安装场景资源，现有资源没有被改动。"}}}
+    },
+    "Steam exited without confirming a complete Workshop download. Retry; no partial wallpaper has been added to your library." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam exited without confirming a complete Workshop download. Retry; no partial wallpaper has been added to your library."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 退出时没有确认创意工坊下载已完成。请重试，未完成的壁纸不会加入壁纸库。"}}}
+    },
+    "SteamCMD exited before confirming the sign-in. Check the account name and password, approve Steam Guard, and retry. On Apple silicon, SteamCMD may require Rosetta 2." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD exited before confirming the sign-in. Check the account name and password, approve Steam Guard, and retry. On Apple silicon, SteamCMD may require Rosetta 2."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD 在确认登录前就退出了。请检查账户名和密码，批准 Steam 令牌验证后重试。在 Apple 芯片的 Mac 上，SteamCMD 可能需要 Rosetta 2。"}}}
+    },
+    "SteamCMD exited before completing the download. Confirm this account owns Wallpaper Engine, approve Steam Guard, and retry. On Apple silicon, SteamCMD may require Rosetta 2." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD exited before completing the download. Confirm this account owns Wallpaper Engine, approve Steam Guard, and retry. On Apple silicon, SteamCMD may require Rosetta 2."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD 在下载完成前就退出了。请确认此账户拥有 Wallpaper Engine，批准 Steam 令牌验证后重试。在 Apple 芯片的 Mac 上，SteamCMD 可能需要 Rosetta 2。"}}}
+    },
+    "Could not read SteamCMD’s private terminal without blocking. Restart WallpaperMachine and retry." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Could not read SteamCMD’s private terminal without blocking. Restart WallpaperMachine and retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法读取 SteamCMD 的终端输出。请重新打开 WallpaperMachine 后重试。"}}}
+    },
+    "Could not create a private terminal for SteamCMD. Restart WallpaperMachine and retry." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Could not create a private terminal for SteamCMD. Restart WallpaperMachine and retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法为 SteamCMD 创建终端。请重新打开 WallpaperMachine 后重试。"}}}
+    },
+    "Cannot launch SteamCMD: %@. Install the macOS SteamCMD distribution; on Apple silicon install Rosetta 2 if requested." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Cannot launch SteamCMD: %@. Install the macOS SteamCMD distribution; on Apple silicon install Rosetta 2 if requested."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法启动 SteamCMD：%@。请安装 macOS 版 SteamCMD；在 Apple 芯片的 Mac 上，如有提示请安装 Rosetta 2。"}}}
+    },
+    "Lost the connection to SteamCMD’s login terminal. Retry signing in." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Lost the connection to SteamCMD’s login terminal. Retry signing in."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "与 SteamCMD 登录终端的连接已断开。请重新登录。"}}}
+    },
+    "SteamCMD closed its login prompt. Retry signing in to start a new session." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD closed its login prompt. Retry signing in to start a new session."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "SteamCMD 关闭了登录提示。请重新登录以开始新的会话。"}}}
+    },
+    "Steam ended this session because the account signed in somewhere else. Retry once the other sign-in is done." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam ended this session because the account signed in somewhere else. Retry once the other sign-in is done."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此账户在其他地方登录，Steam 结束了本次会话。等另一处登录结束后再重试。"}}}
+    },
+    "Steam denied this download. Sign in with an account that owns Wallpaper Engine and has access to this Workshop item." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam denied this download. Sign in with an account that owns Wallpaper Engine and has access to this Workshop item."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 拒绝了此次下载。请使用拥有 Wallpaper Engine 且可以访问此创意工坊项目的账户登录。"}}}
+    },
+    "Steam could not download this item. It may be private, removed, or unavailable to this account. Open its Workshop page and retry." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam could not download this item. It may be private, removed, or unavailable to this account. Open its Workshop page and retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 无法下载此项目，它可能已设为私密、已被删除，或此账户无法访问。请打开它的创意工坊页面查看后重试。"}}}
+    },
+    "Steam could not install Wallpaper Engine’s shared assets. Confirm ownership and check available disk space, then retry." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam could not install Wallpaper Engine’s shared assets. Confirm ownership and check available disk space, then retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 无法安装 Wallpaper Engine 的共享资源。请确认账户拥有 Wallpaper Engine 并检查磁盘空间后重试。"}}}
+    },
+    "Your saved Steam sign-in has expired or was revoked. Try again and sign in to Steam." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Your saved Steam sign-in has expired or was revoked. Try again and sign in to Steam."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "已保存的 Steam 登录已过期或被撤销。请重试并重新登录 Steam。"}}}
+    },
+    "Steam Guard was rejected, cancelled or expired. Try again, enter your password, then approve the new request or use a new code." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam Guard was rejected, cancelled or expired. Try again, enter your password, then approve the new request or use a new code."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 令牌验证被拒绝、已取消或已过期。请重试，输入密码后批准新的请求或使用新的验证码。"}}}
+    },
+    "Steam could not complete the connection or sign-in in time. Check your connection and any Steam Guard approval, then retry." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam could not complete the connection or sign-in in time. Check your connection and any Steam Guard approval, then retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 没能及时完成连接或登录。请检查网络连接和 Steam 令牌验证后重试。"}}}
+    },
+    "Steam has temporarily limited sign-in attempts. Wait before retrying." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam has temporarily limited sign-in attempts. Wait before retrying."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 暂时限制了登录尝试，请稍后再试。"}}}
+    },
+    "Steam rejected the sign-in. Check your account login name, password, and Steam Guard approval, then retry." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam rejected the sign-in. Check your account login name, password, and Steam Guard approval, then retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 拒绝了登录。请检查登录名、密码和 Steam 令牌验证后重试。"}}}
+    },
+    "Steam rejected the sign-in. Check your account login name and password, then retry." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam rejected the sign-in. Check your account login name and password, then retry."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 拒绝了登录。请检查登录名和密码后重试。"}}}
+    },
+    "Steam allows one session at a time for this account; waiting to retry" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam allows one session at a time for this account; waiting to retry"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此账户在 Steam 上同时只能有一个会话，正在等待重试"}}}
+    },
+    "Waiting for a free download slot" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Waiting for a free download slot"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在等待空闲的下载名额"}}}
+    },
+    "Waiting for the current sign-in to finish" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Waiting for the current sign-in to finish"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在等待当前登录完成"}}}
+    },
+    "Waiting for the previous download" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Waiting for the previous download"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "正在等待上一项下载"}}}
+    },
+    "Wait for active and queued downloads to finish before changing saved sign-in settings." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Wait for active and queued downloads to finish before changing saved sign-in settings."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请等进行中和排队的下载完成后，再更改已保存的登录设置。"}}}
+    },
+    "No system media provider is configured." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "No system media provider is configured."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "没有可用的系统媒体来源。"}}}
+    },
+    "Choose a video, HTML file, or Wallpaper Engine project folder. Standalone images are not supported by this renderer." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose a video, HTML file, or Wallpaper Engine project folder. Standalone images are not supported by this renderer."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请选择视频、HTML 文件或 Wallpaper Engine 项目文件夹。不支持单独的图片。"}}}
+    },
+    "The folder name cannot be used as a library identifier." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The folder name cannot be used as a library identifier."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此文件夹名称无法用作壁纸库标识符。"}}}
+    },
+    "Choose a source outside WallpaperMachine’s managed library." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose a source outside WallpaperMachine’s managed library."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请选择 WallpaperMachine 壁纸库以外的来源。"}}}
+    },
+    "Could not publish Workshop item %@: %@. Download staging and the library must be on the same volume." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Could not publish Workshop item %@: %@. Download staging and the library must be on the same volume."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法添加创意工坊项目 %1$@：%2$@。下载的临时目录和壁纸库必须在同一个磁盘卷上。"}}}
+    },
+    "Download staging must be outside the managed library." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Download staging must be outside the managed library."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载的临时目录必须位于壁纸库之外。"}}}
+    },
+    "Choose a valid numeric Workshop item identifier." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose a valid numeric Workshop item identifier."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请使用有效的数字创意工坊项目 ID。"}}}
+    },
+    "Download directories must be real folders, not symbolic links or special files: %@." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Download directories must be real folders, not symbolic links or special files: %@."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载目录必须是真实的文件夹，不能是符号链接或特殊文件：%@。"}}}
+    },
+    "Downloaded projects may contain only regular files and folders, not symbolic links or special files: %@." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Downloaded projects may contain only regular files and folders, not symbolic links or special files: %@."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "下载的项目只能包含普通文件和文件夹，不能包含符号链接或特殊文件：%@。"}}}
+    },
+    "No project.json found. Choose a wallpaper project, a folder containing projects, or a Steam library with steamapps/workshop/content/431960." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "No project.json found. Choose a wallpaper project, a folder containing projects, or a Steam library with steamapps/workshop/content/431960."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "找不到 project.json。请选择壁纸项目、包含项目的文件夹，或带有 steamapps/workshop/content/431960 的 Steam 库。"}}}
+    },
+    "Symbolic links are not imported. Choose the original folder or file instead." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Symbolic links are not imported. Choose the original folder or file instead."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "不导入符号链接。请选择原始文件夹或文件。"}}}
+    },
+    "The project’s file field must be a relative filename." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The project’s file field must be a relative filename."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "项目的 file 字段必须是相对文件名。"}}}
+    },
+    "The preview path must remain inside the wallpaper folder." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The preview path must remain inside the wallpaper folder."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "预览图路径必须位于壁纸文件夹内。"}}}
+    },
+    "Project dependency paths may not escape their folder." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Project dependency paths may not escape their folder."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "项目依赖路径不能指向其文件夹之外。"}}}
+    },
+    "Missing project content: %@. Copy the complete wallpaper folder, not just project.json." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Missing project content: %@. Copy the complete wallpaper folder, not just project.json."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "缺少项目内容：%@。请复制完整的壁纸文件夹，而不只是 project.json。"}}}
+    },
+    "The project’s file field must point inside its own folder (no absolute paths or parent traversal)." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The project’s file field must point inside its own folder (no absolute paths or parent traversal)."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "项目的 file 字段必须指向自身文件夹内的文件（不能用绝对路径或上级目录）。"}}}
+    },
+    "project.json must describe a scene, video, or web wallpaper." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "project.json must describe a scene, video, or web wallpaper."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "project.json 必须描述场景、视频或网页壁纸。"}}}
+    },
+    "project.json must use UTF-8 encoding without a byte-order mark. Convert the manifest and import it again." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "project.json must use UTF-8 encoding without a byte-order mark. Convert the manifest and import it again."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "project.json 必须使用不带 BOM 的 UTF-8 编码。请转换后重新导入。"}}}
+    },
+    "project.json must be a regular JSON file smaller than 16 MB." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "project.json must be a regular JSON file smaller than 16 MB."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "project.json 必须是小于 16 MB 的普通 JSON 文件。"}}}
+    },
+    "Could not create %@. Check available disk space and folder permissions." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Could not create %@. Check available disk space and folder permissions."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法创建 %@。请检查磁盘空间和文件夹权限。"}}}
+    },
+    "Unsupported special file: %@. Only regular files and folders can be imported." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Unsupported special file: %@. Only regular files and folders can be imported."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "不支持的特殊文件：%@。只能导入普通文件和文件夹。"}}}
+    },
+    "Symbolic links are not imported: %@. Copy the original content into the project folder first." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Symbolic links are not imported: %@. Copy the original content into the project folder first."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "不导入符号链接：%@。请先把原始内容复制到项目文件夹中。"}}}
+    },
+    "macOS refused to reload the user-owned wallpaper service (errno %d). The restoration journal was retained." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "macOS refused to reload the user-owned wallpaper service (errno %d). The restoration journal was retained."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "macOS 拒绝重新加载墙纸服务（errno %d）。恢复记录已保留。"}}}
+    },
+    "No positively verified user-owned WallpaperAgent is running. Native selection could not be activated; its restoration journal was retained." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "No positively verified user-owned WallpaperAgent is running. Native selection could not be activated; its restoration journal was retained."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "没有找到可确认属于当前用户的 WallpaperAgent 进程，无法启用锁定屏幕墙纸。恢复记录已保留。"}}}
+    },
+    "Unable to identify the wallpaper service safely." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Unable to identify the wallpaper service safely."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法安全识别墙纸服务。"}}}
+    },
+    "Unable to enumerate the wallpaper service." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Unable to enumerate the wallpaper service."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "无法列出墙纸服务进程。"}}}
+    },
+    "This macOS Space has an unsupported wallpaper configuration." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This macOS Space has an unsupported wallpaper configuration."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "这个 macOS 桌面空间的墙纸配置不受支持。"}}}
+    },
+    "The system wallpaper was changed outside WallpaperMachine. Disable Animate Lock Screen before enabling it again; external choices will be preserved." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The system wallpaper was changed outside WallpaperMachine. Disable Animate Lock Screen before enabling it again; external choices will be preserved."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "系统墙纸在 WallpaperMachine 之外被更改了。请先关闭再重新开启“锁定屏幕动态壁纸”，你在别处做的选择会保留。"}}}
+    },
+    "The native wallpaper restoration journal is invalid." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The native wallpaper restoration journal is invalid."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "墙纸恢复记录无效。"}}}
+    },
+    "A native wallpaper override was removed outside WallpaperMachine. Disable Animate Lock Screen before enabling it again." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "A native wallpaper override was removed outside WallpaperMachine. Disable Animate Lock Screen before enabling it again."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "墙纸设置在 WallpaperMachine 之外被移除了。请先关闭再重新开启“锁定屏幕动态壁纸”。"}}}
+    },
+    "The system wallpaper changed during native selection. Please retry; no concurrent changes were overwritten." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "The system wallpaper changed during native selection. Please retry; no concurrent changes were overwritten."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "设置过程中系统墙纸发生了变化。请重试，其间的更改没有被覆盖。"}}}
+    },
+    "This macOS wallpaper store format is unsupported. Native selection was not changed." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This macOS wallpaper store format is unsupported. Native selection was not changed."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "不支持这个版本的 macOS 墙纸存储格式，墙纸设置没有被更改。"}}}
+    },
+    "A system-wide linked wallpaper currently overrides individual displays. Turn off that wallpaper app or its all-displays setting before enabling Animate Lock Screen; the existing global wallpaper was not changed." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "A system-wide linked wallpaper currently overrides individual displays. Turn off that wallpaper app or its all-displays setting before enabling Animate Lock Screen; the existing global wallpaper was not changed."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "当前有一个全局墙纸覆盖了所有显示器。请先关闭那个墙纸应用或它的“所有显示器”设置，再开启“锁定屏幕动态壁纸”。现有的全局墙纸没有被更改。"}}}
+    },
+    "A native wallpaper selection has no restoration journal or surviving system fallback. Choose a system wallpaper for this display before enabling Animate Lock Screen." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "A native wallpaper selection has no restoration journal or surviving system fallback. Choose a system wallpaper for this display before enabling Animate Lock Screen."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "这台显示器的墙纸设置没有可用的恢复记录或系统备选。请先为它选择一张系统墙纸，再开启“锁定屏幕动态壁纸”。"}}}
+    },
+    "This wallpaper is downloaded, but Wallpaper Engine’s shared scene resources are not installed. Choose Get shared resources in the wallpaper’s details, or go to Settings → Library & Steam." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper is downloaded, but Wallpaper Engine’s shared scene resources are not installed. Choose Get shared resources in the wallpaper’s details, or go to Settings → Library & Steam."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸已下载，但还没有安装 Wallpaper Engine 的共享场景资源。请在壁纸详情中点击“获取共享资源”，或前往“设置 → 壁纸库与 Steam”。"}}}
+    },
+    "This folder does not contain Wallpaper Engine’s shared shaders and materials. Choose its complete assets folder, or install scene assets through Steam." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This folder does not contain Wallpaper Engine’s shared shaders and materials. Choose its complete assets folder, or install scene assets through Steam."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "此文件夹不包含 Wallpaper Engine 的共享着色器和材质。请选择完整的 assets 文件夹，或通过 Steam 安装场景资源。"}}}
+    },
+    "Steam did not produce complete scene assets. Confirm this account owns Wallpaper Engine and retry. Existing assets have not been changed." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Steam did not produce complete scene assets. Confirm this account owns Wallpaper Engine and retry. Existing assets have not been changed."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "Steam 没有提供完整的场景资源。请确认此账户拥有 Wallpaper Engine 后重试，现有资源没有被改动。"}}}
+    },
+    "Locate Wallpaper Engine assets" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Locate Wallpaper Engine assets"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "选择 Wallpaper Engine 资源文件夹"}}}
+    },
+    "Choose the assets folder inside your legitimate Wallpaper Engine installation. These shared resources are required by many scenes." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Choose the assets folder inside your legitimate Wallpaper Engine installation. These shared resources are required by many scenes."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "请选择你已购买的 Wallpaper Engine 安装目录中的 assets 文件夹。很多场景壁纸都需要这些共享资源。"}}}
+    },
+    "This wallpaper is not a folder in the managed library. Nothing was deleted." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "This wallpaper is not a folder in the managed library. Nothing was deleted."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "这张壁纸不是壁纸库中的文件夹，没有删除任何内容。"}}}
+    },
+    "Invalid wallpaper ID. Nothing was deleted." : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Invalid wallpaper ID. Nothing was deleted."}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "壁纸 ID 无效，没有删除任何内容。"}}}
+    },
+    "Restoration also failed: %@" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Restoration also failed: %@"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "恢复也失败了：%@"}}}
+    },
+    "Unavailable" : {
+      "localizations" : {"en" : {"stringUnit" : {"state" : "translated", "value" : "Unavailable"}}, "zh-Hans" : {"stringUnit" : {"state" : "translated", "value" : "不可用"}}}
     }
   },
   "version" : "1.0"

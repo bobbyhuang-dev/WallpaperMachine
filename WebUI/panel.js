@@ -436,23 +436,23 @@ function renderAudioAndMedia(options, lock) {
   // and whether anything can answer. Never collapse them into one sentence.
   const delivering = options.audioDelivering;
   const audioStatus = !options.audioResponseEnabled
-    ? t('Off. No audio is captured for this wallpaper.')
+    ? t('Off. No audio is captured.')
     : !web
-      ? t('On for this wallpaper. Scenes that declare audio-reactive layers respond; the rest are unaffected.')
+      ? t('On. Parts of the wallpaper made to react to sound will respond.')
       : delivering === true
-        ? t('On, and the wallpaper has registered an audio listener. Spectrum data is being delivered to the page.')
+        ? t('On. The wallpaper is receiving audio.')
         : delivering === false
-          ? t('On, but this wallpaper has not registered an audio listener, so it receives nothing. That is the wallpaper\u2019s choice, not a fault.')
-          : t('On for this wallpaper. Delivery starts only once the wallpaper registers an audio listener; with no desktop wallpaper running, the panel cannot tell whether it has.');
+          ? t('On, but this wallpaper doesn’t use audio.')
+          : t('On. Apply the wallpaper to see whether it uses audio.');
   const media = !(web || options.kind === 'Scene') ? '' : check('mediaIntegrationEnabled', t('Media integration'), options.mediaIntegrationEnabled)
     + note(t('Share song titles, artists and artwork from system Now Playing. Supports Spotify, Apple Music and compatible browsers and local players.'))
     + status(!options.mediaIntegrationEnabled
-      ? t('Off. The wallpaper is told media integration is disabled and receives no media events.')
+      ? t('Off. The wallpaper gets no track information.')
       : options.mediaAvailable === true
-        ? t('On, and a media source is available. Only fields the system actually reports are sent; nothing is substituted for the rest.')
+        ? t('On. The wallpaper gets the track details macOS reports.')
         : options.mediaAvailable === false
-          ? t('On, but no media source is available: {reason} The wallpaper is told nothing rather than being given a placeholder track.', { reason: options.mediaUnavailableReason || t('the system declined to report what is playing.') })
-          : t('On for this wallpaper. With no desktop wallpaper running, the panel cannot tell whether a media source is available.'));
+          ? t('On, but track information is unavailable: {reason}', { reason: options.mediaUnavailableReason || t('the system declined to report what is playing.') })
+          : t('On. Apply the wallpaper to see whether track information is available.'));
   return check('audioResponseEnabled', t('Audio response'), options.audioResponseEnabled)
     + note(t('Reactive wallpapers use sound playing in other apps. macOS may request system audio recording permission.'))
     + status(audioStatus)
@@ -556,13 +556,13 @@ function signInGuide(job, account) {
       t('Open the Steam app on your phone and tap {guard}, the shield tab at the bottom.', { guard: strong(t('Steam Guard')) }),
       t('A request to sign in as {account} is waiting there. Approve it.', { account: who }),
       t('If Steam asks {question}, choose {client}. This app signs in through Valve’s SteamCMD, which counts as the Steam client.', { question: strong(t('Where are you trying to sign in?')), client: strong(t('Steam Client')) }),
-      t('Come back here. This dialog continues by itself once Steam confirms.'),
+      t('Then come back here. The dialog continues once Steam confirms.'),
     ], note: t('Only approve a request you just started. Deny anything you do not recognise.'), phone: true },
     authenticatorCode: { icon: 'smartphone', title: t('Enter the code from the Steam app'), steps: [
       t('Open the Steam app on your phone and tap {guard}, the shield tab at the bottom.', { guard: strong(t('Steam Guard')) }),
       t('Read the five-character code shown at the top. It changes every 30 seconds.'),
       t('Type it below and submit before it changes. If it has already changed, use the new one.'),
-    ], note: t('Codes never need to be shared with anyone; enter them only in this dialog.'), phone: true },
+    ], note: t('Don’t share this code with anyone. Enter it only here.'), phone: true },
     emailCode: { icon: 'mail', title: t('Enter the code Steam emailed you'), steps: [
       t('Check the inbox of the email address registered to this Steam account. Look in spam or junk too.'),
       t('Open the newest Steam Guard message. Every sign-in attempt sends a fresh code, so older ones no longer work.'),
@@ -628,7 +628,7 @@ function queueMarkup() {
   const unresolved = downloads.filter(item => !item.pending && needsReview(item));
   const succeeded = downloads.filter(item => !item.pending && !needsReview(item));
   const rows = [...requests.map(queueRequestRow), ...active.map(queueJobRow), ...unresolved.map(queueJobRow), ...(queueExpanded ? succeeded.map(queueJobRow) : [])].join('');
-  const empty = succeeded.length ? t('Every download finished. Nothing needs you.') : t('No downloads yet. Pick a Workshop wallpaper and choose Download.');
+  const empty = succeeded.length ? t('All downloads are complete.') : t('No downloads yet. Pick a Workshop wallpaper and choose Download.');
   return `<div class="popover-heading"><h2 id="queue-popover-title">${escapeHTML(t('Downloads'))}</h2>${button('', 'closePopover', {}, { icon: 'close', title: t('Close downloads'), className: 'quiet icon-button' })}</div>${rows ? `<ul class="queue-list">${rows}</ul>` : `<p class="queue-empty">${escapeHTML(empty)}</p>`}<div class="popover-footer"><p class="queue-note">${escapeHTML(queueNote())}</p><div class="actions">${succeeded.length ? button(queueExpanded ? t('Hide completed') : t('Show completed ({count})', { count: succeeded.length }), 'toggleQueueHistory', {}, { className: 'link' }) : ''}${downloads.length > active.length ? button(t('Clear finished'), 'clearDownloads', {}, { className: 'quiet' }) : ''}${button(t('Show download logs'), 'showLogs', {}, { icon: 'folder', className: 'link' })}</div></div>`;
 }
 const queueNote = () => {
@@ -759,7 +759,7 @@ const choiceButton = (action, args, glyph, title, note, off) => `<button type="b
 function resourcesStep() {
   const settings = state.settings || {};
   const lead = settings.sceneAssetsReady ? t('Shared resources are already installed. Downloading again replaces them.') : t('Scene wallpapers need shaders and materials from Wallpaper Engine. This is a one-time setup.');
-  return `<p${settings.sceneAssetsReady ? ' class="dialog-status" role="status"' : ''}>${escapeHTML(lead)}</p>${settings.sceneAssetsWarning ? `<p class="notice warning">${escapeHTML(settings.sceneAssetsWarning)}</p>` : ''}<div class="dialog-choices">${choiceButton('consentResources', { id: dialogTarget }, 'download', t('Download from Steam'), t('Needs a Steam account that owns Wallpaper Engine and several gigabytes free while downloading.'), busy('continueDownload', { id: dialogTarget }))}${choiceButton('locateAssets', {}, 'folder', t('Use an existing installation'), t('Already have Wallpaper Engine on a drive? Choose its folder and nothing downloads.'), state.setup?.busy)}</div><div class="dialog-actions end">${button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' })}</div>`;
+  return `<p${settings.sceneAssetsReady ? ' class="dialog-status" role="status"' : ''}>${escapeHTML(lead)}</p>${settings.sceneAssetsWarning ? `<p class="notice warning">${escapeHTML(settings.sceneAssetsWarning)}</p>` : ''}<div class="dialog-choices">${choiceButton('consentResources', { id: dialogTarget }, 'download', t('Download from Steam'), t('Needs a Steam account that owns Wallpaper Engine and several gigabytes free while downloading.'), busy('continueDownload', { id: dialogTarget }))}${choiceButton('locateAssets', {}, 'folder', t('Use an existing installation'), t('Already have Wallpaper Engine installed? Choose its folder instead of downloading.'), state.setup?.busy)}</div><div class="dialog-actions end">${button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' })}</div>`;
 }
 function authStep(job) {
   const working = busy('downloadInput', { id: job.id });
@@ -767,9 +767,9 @@ function authStep(job) {
   const account = job.account || dialogAccount?.account || '';
   const guide = signInGuide(job, account);
   const identity = `<div class="dialog-identity"><p>${icon('userRound', 14)}<span>${t('Signing in as {account}', { account: `<span class="dialog-account">${escapeHTML(account || t('an unnamed account'))}</span>` })}</span></p>${button(t('Change account'), 'changeAccount', { id: job.id }, { className: 'link' })}</div>`;
-  const connecting = guideMarkup({ icon: 'logIn', title: job.status, note: t('Steam is being contacted. Any password or Steam Guard request appears here.') }, `<progress aria-label="${escapeHTML(t('Connecting to Steam'))}"></progress>`);
+  const connecting = guideMarkup({ icon: 'logIn', title: job.status, note: t('Contacting Steam. Password and Steam Guard prompts appear here.') }, `<progress aria-label="${escapeHTML(t('Connecting to Steam'))}"></progress>`);
   const help = guide?.phone ? button(t('Get the Steam mobile app'), 'openExternal', { url: 'https://store.steampowered.com/mobile' }, { icon: 'external', className: 'link' }) : guide?.mail ? button(t('Help with emailed codes'), 'openExternal', { url: 'https://help.steampowered.com/en/wizard/HelpWithSteamGuardCode' }, { icon: 'external', className: 'link' }) : '';
-  return `${identity}${waiting ? connecting : guide ? guideMarkup(guide) : ''}${job.error ? `<p class="notice error">${escapeHTML(job.error)}</p>` : ''}${job.warning ? `<p class="notice warning">${escapeHTML(job.warning)}</p>` : ''}${job.prompt ? `<form class="dialog-form" data-form="dialogAuth" data-id="${escapeHTML(job.id)}" ${keyAttr(`auth-${job.id}-${job.prompt}`)}><label class="field" for="dialog-response">${escapeHTML(job.prompt)}<input id="dialog-response" name="response" type="${job.securePrompt ? 'password' : 'text'}" autocomplete="off" spellcheck="false" autocapitalize="off" required${disabled(working)}></label><div class="dialog-actions"><button type="submit" class="primary"${disabled(working)}>${icon(job.securePrompt ? 'lock' : 'keyRound')}<span class="button-label">${escapeHTML(t('Submit'))}</span></button>${button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' })}</div></form>` : `<div class="dialog-actions">${button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' })}</div>`}<div class="dialog-actions">${button(t('Cancel this download'), 'downloadCancel', { id: job.id }, { className: 'quiet' })}${help}</div><p class="dialog-note">${escapeHTML(t('Only approve sign-ins you started yourself. Never share your password or recovery codes.'))}</p>`;
+  return `${identity}${waiting ? connecting : guide ? guideMarkup(guide) : ''}${job.error ? `<p class="notice error">${escapeHTML(job.error)}</p>` : ''}${job.warning ? `<p class="notice warning">${escapeHTML(job.warning)}</p>` : ''}${job.prompt ? `<form class="dialog-form" data-form="dialogAuth" data-id="${escapeHTML(job.id)}" ${keyAttr(`auth-${job.id}-${job.prompt}`)}><label class="field" for="dialog-response">${escapeHTML(t(job.prompt))}<input id="dialog-response" name="response" type="${job.securePrompt ? 'password' : 'text'}" autocomplete="off" spellcheck="false" autocapitalize="off" required${disabled(working)}></label><div class="dialog-actions"><button type="submit" class="primary"${disabled(working)}>${icon(job.securePrompt ? 'lock' : 'keyRound')}<span class="button-label">${escapeHTML(t('Submit'))}</span></button>${button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' })}</div></form>` : `<div class="dialog-actions">${button(t('Not now'), 'dismissDialog', {}, { className: 'quiet' })}</div>`}<div class="dialog-actions">${button(t('Cancel this download'), 'downloadCancel', { id: job.id }, { className: 'quiet' })}${help}</div><p class="dialog-note">${escapeHTML(t('Only approve sign-ins you started yourself. Never share your password or recovery codes.'))}</p>`;
 }
 // Sign-in complete: the download is already running, so the dialog says so with live progress
 // instead of vanishing, then steps aside on its own.

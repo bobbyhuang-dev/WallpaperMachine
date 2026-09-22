@@ -65,7 +65,7 @@ final class LockScreenWallpaperSelection {
     {
       throw LockScreenWallpaperFailure(
         message:
-          "A system-wide linked wallpaper currently overrides individual displays. Turn off that wallpaper app or its all-displays setting before enabling Animate Lock Screen; the existing global wallpaper was not changed."
+          String(localized: "A system-wide linked wallpaper currently overrides individual displays. Turn off that wallpaper app or its all-displays setting before enabling Animate Lock Screen; the existing global wallpaper was not changed.")
       )
     }
   }
@@ -80,14 +80,14 @@ final class LockScreenWallpaperSelection {
     else {
       throw LockScreenWallpaperFailure(
         message:
-          "This macOS wallpaper store format is unsupported. Native selection was not changed.")
+          String(localized: "This macOS wallpaper store format is unsupported. Native selection was not changed."))
     }
     var paths = displays.sorted().map { ["Displays", $0] }
     for (space, value) in (root["Spaces"] as? [String: Any] ?? [:]).sorted(by: { $0.key < $1.key })
     {
       guard let node = value as? [String: Any], node["Displays"] is [String: Any] else {
         throw LockScreenWallpaperFailure(
-          message: "This macOS Space has an unsupported wallpaper configuration.")
+          message: String(localized: "This macOS Space has an unsupported wallpaper configuration."))
       }
       paths += displays.sorted().map { ["Spaces", space, "Displays", $0] }
     }
@@ -104,7 +104,7 @@ final class LockScreenWallpaperSelection {
         if desired.contains(entry.path) {
           throw LockScreenWallpaperFailure(
             message:
-              "A native wallpaper override was removed outside WallpaperMachine. Disable Animate Lock Screen before enabling it again."
+              String(localized: "A native wallpaper override was removed outside WallpaperMachine. Disable Animate Lock Screen before enabling it again.")
           )
         }
         continue
@@ -115,7 +115,7 @@ final class LockScreenWallpaperSelection {
         guard desktopOwned && idleOwned else {
           throw LockScreenWallpaperFailure(
             message:
-              "The system wallpaper was changed outside WallpaperMachine. Disable Animate Lock Screen before enabling it again; external choices will be preserved."
+              String(localized: "The system wallpaper was changed outside WallpaperMachine. Disable Animate Lock Screen before enabling it again; external choices will be preserved.")
           )
         }
         // Reloading the extension's manifest does not invalidate WallpaperAgent's
@@ -149,7 +149,7 @@ final class LockScreenWallpaperSelection {
           as? [String: Any]
       else {
         throw LockScreenWallpaperFailure(
-          message: "The native wallpaper restoration journal is invalid.")
+          message: String(localized: "The native wallpaper restoration journal is invalid."))
       }
       if desktopOwned { node["Desktop"] = original["Desktop"] }
       if idleOwned { node["Idle"] = original["Idle"] }
@@ -199,7 +199,7 @@ final class LockScreenWallpaperSelection {
       guard try Data(contentsOf: storeURL) == bytes else {
         throw LockScreenWallpaperFailure(
           message:
-            "The system wallpaper changed during native selection. Please retry; no concurrent changes were overwritten."
+            String(localized: "The system wallpaper changed during native selection. Please retry; no concurrent changes were overwritten.")
         )
       }
       try Self.encode(root).write(to: storeURL, options: .atomic)
@@ -257,7 +257,7 @@ final class LockScreenWallpaperSelection {
       else {
         throw LockScreenWallpaperFailure(
           message:
-            "A native wallpaper selection has no restoration journal or surviving system fallback. Choose a system wallpaper for this display before enabling Animate Lock Screen."
+            String(localized: "A native wallpaper selection has no restoration journal or surviving system fallback. Choose a system wallpaper for this display before enabling Animate Lock Screen.")
         )
       }
       original[key] = replacement
@@ -319,12 +319,12 @@ final class LockScreenWallpaperSelection {
     let expected = "/System/Library/CoreServices/WallpaperAgent.app/Contents/MacOS/WallpaperAgent"
     let capacity = proc_listallpids(nil, 0)
     guard capacity > 0 else {
-      throw LockScreenWallpaperFailure(message: "Unable to enumerate the wallpaper service.")
+      throw LockScreenWallpaperFailure(message: String(localized: "Unable to enumerate the wallpaper service."))
     }
     var pids = [pid_t](repeating: 0, count: Int(capacity) + 32)
     let count = pids.withUnsafeMutableBytes { proc_listallpids($0.baseAddress, Int32($0.count)) }
     guard count > 0, Int(count) <= pids.count else {
-      throw LockScreenWallpaperFailure(message: "Unable to identify the wallpaper service safely.")
+      throw LockScreenWallpaperFailure(message: String(localized: "Unable to identify the wallpaper service safely."))
     }
     var found = false
     // PROC_PIDPATHINFO_MAXSIZE expands to 4*MAXPATHLEN and is not Swift-importable.
@@ -342,7 +342,7 @@ final class LockScreenWallpaperSelection {
       guard kill(pid, SIGTERM) == 0 || errno == ESRCH else {
         throw LockScreenWallpaperFailure(
           message:
-            "macOS refused to reload the user-owned wallpaper service (errno \(errno)). The restoration journal was retained."
+            String(localized: "macOS refused to reload the user-owned wallpaper service (errno \(errno)). The restoration journal was retained.")
         )
       }
       found = true
@@ -356,7 +356,7 @@ final class LockScreenWallpaperSelection {
     if let last = lastReloadSignal, Date().timeIntervalSince(last) < 10 { return }
     throw LockScreenWallpaperFailure(
       message:
-        "No positively verified user-owned WallpaperAgent is running. Native selection could not be activated; its restoration journal was retained."
+        String(localized: "No positively verified user-owned WallpaperAgent is running. Native selection could not be activated; its restoration journal was retained.")
     )
   }
 }

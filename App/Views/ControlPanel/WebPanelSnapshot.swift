@@ -231,19 +231,19 @@ extension WebPanelController {
     var setupProgress: Double?
     let setupStatus: String
     switch setup.state {
-    case .idle: setupStatus = "Not installed"
-    case .checking: setupStatus = "Checking SteamCMD…"
+    case .idle: setupStatus = String(localized: "Not installed")
+    case .checking: setupStatus = String(localized: "Checking SteamCMD…")
     case .downloading(let received, let expected):
-      setupStatus = "Downloading SteamCMD…"
+      setupStatus = String(localized: "Downloading SteamCMD…")
       if let expected, expected > 0 { setupProgress = min(1, Double(received) / Double(expected)) }
-    case .extracting: setupStatus = "Extracting SteamCMD…"
-    case .updating: setupStatus = "Completing installation…"
-    case .validating: setupStatus = "Validating SteamCMD…"
-    case .committing: setupStatus = "Saving installation…"
-    case .ready: setupStatus = "Ready"
-    case .cancelled: setupStatus = "Installation cancelled"
+    case .extracting: setupStatus = String(localized: "Extracting SteamCMD…")
+    case .updating: setupStatus = String(localized: "Completing installation…")
+    case .validating: setupStatus = String(localized: "Validating SteamCMD…")
+    case .committing: setupStatus = String(localized: "Saving installation…")
+    case .ready: setupStatus = String(localized: "Ready")
+    case .cancelled: setupStatus = String(localized: "Installation cancelled")
     case .failed(let issue):
-      setupStatus = "Setup needs attention"
+      setupStatus = String(localized: "Setup needs attention")
       setupError = issue.detail
       canApprove = issue.kind == .securityApprovalRequired && setup.retainedCandidateURL != nil
     }
@@ -382,7 +382,7 @@ extension WebPanelController {
         "onBatteryPower": settings.onBatteryPower,
         "keepWindowsOnWallpaperClick": !DesktopClickRevealPreference.isEnabled,
         "lockScreenEnabled": lock?.isRequested ?? false, "lockScreenAvailable": lock != nil,
-        "lockScreenBusy": lock?.isBusy ?? false, "lockScreenStatus": lock?.status ?? "Unavailable",
+        "lockScreenBusy": lock?.isBusy ?? false, "lockScreenStatus": lock?.status ?? String(localized: "Unavailable"),
         "lockScreenError": lock?.errorMessage as Any? ?? null,
         "sceneAssetsReady": workshop.sceneAssetsReady,
         "sceneAssetsWarning": workshop.sceneAssetsFailure as Any? ?? null,

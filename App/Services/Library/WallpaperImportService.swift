@@ -49,15 +49,15 @@ actor WallpaperImportService {
                     try Task.checkCancellation()
                     let canonical = candidate.resolvingSymlinksInPath().standardizedFileURL
                     guard seen.insert(canonical.path).inserted else { continue }
-                    await progress("Importing \(candidate.lastPathComponent)…")
+                    await progress(String(localized: "Importing \(candidate.lastPathComponent)…"))
                     do {
                         guard !isWithin(canonical, managedRoot), !isWithin(managedRoot, canonical) else {
-                            throw ImportError(message: "Choose a source outside WallpaperMachine’s managed library.")
+                            throw ImportError(message: String(localized: "Choose a source outside WallpaperMachine’s managed library."))
                         }
                         let isDirectory = try candidate.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true
                         let preferredID = isDirectory ? candidate.lastPathComponent : "local-" + candidate.lastPathComponent
                         guard isSafeRelativePath(preferredID), !preferredID.contains("/") else {
-                            throw ImportError(message: "The folder name cannot be used as a library identifier.")
+                            throw ImportError(message: String(localized: "The folder name cannot be used as a library identifier."))
                         }
                         var id = preferredID
                         var destination = managedRoot.appendingPathComponent(id, isDirectory: true)
@@ -78,7 +78,7 @@ actor WallpaperImportService {
                         } else {
                             let ext = candidate.pathExtension.lowercased()
                             guard Self.videoExtensions.contains(ext) || Self.webExtensions.contains(ext) else {
-                                throw ImportError(message: "Choose a video, HTML file, or Wallpaper Engine project folder. Standalone images are not supported by this renderer.")
+                                throw ImportError(message: String(localized: "Choose a video, HTML file, or Wallpaper Engine project folder. Standalone images are not supported by this renderer."))
                             }
                             try fm.createDirectory(at: staged, withIntermediateDirectories: false)
                             try copySafely(candidate, to: staged.appendingPathComponent(candidate.lastPathComponent))
@@ -118,14 +118,14 @@ actor WallpaperImportService {
         try Task.checkCancellation()
         guard !itemID.isEmpty, itemID.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
               let numericID = UInt64(itemID), numericID > 0 else {
-            throw ImportError(message: "Choose a valid numeric Workshop item identifier.")
+            throw ImportError(message: String(localized: "Choose a valid numeric Workshop item identifier."))
         }
         let fm = FileManager.default
         let stagingRoot = staging.standardizedFileURL
         let canonicalStaging = stagingRoot.resolvingSymlinksInPath().standardizedFileURL
         var managedRoot = library.resolvingSymlinksInPath().standardizedFileURL
         guard !isWithin(canonicalStaging, managedRoot), !isWithin(managedRoot, canonicalStaging) else {
-            throw ImportError(message: "Download staging must be outside the managed library.")
+            throw ImportError(message: String(localized: "Download staging must be outside the managed library."))
         }
 
         // Check each fixed ancestor before descending: resolving the final path alone would
@@ -142,7 +142,7 @@ actor WallpaperImportService {
         try fm.createDirectory(at: library, withIntermediateDirectories: true)
         managedRoot = library.resolvingSymlinksInPath().standardizedFileURL
         guard !isWithin(canonicalStaging, managedRoot), !isWithin(managedRoot, canonicalStaging) else {
-            throw ImportError(message: "Download staging must be outside the managed library.")
+            throw ImportError(message: String(localized: "Download staging must be outside the managed library."))
         }
         let destination = managedRoot.appendingPathComponent(itemID, isDirectory: true)
         try Task.checkCancellation()
@@ -162,7 +162,7 @@ actor WallpaperImportService {
             }
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [
                 NSFilePathErrorKey: destination.path,
-                NSLocalizedDescriptionKey: "Could not publish Workshop item \(itemID): \(String(cString: strerror(code))). Download staging and the library must be on the same volume."
+                NSLocalizedDescriptionKey: String(localized: "Could not publish Workshop item \(itemID): \(String(cString: strerror(code))). Download staging and the library must be on the same volume.")
             ])
         }
     }
@@ -182,7 +182,7 @@ actor WallpaperImportService {
     private func requireDownloadDirectory(_ url: URL) throws {
         let metadata = try downloadMetadata(at: url)
         guard metadata.st_mode & S_IFMT == S_IFDIR else {
-            throw ImportError(message: "Download directories must be real folders, not symbolic links or special files: \(url.lastPathComponent).")
+            throw ImportError(message: String(localized: "Download directories must be real folders, not symbolic links or special files: \(url.lastPathComponent)."))
         }
     }
 
@@ -198,7 +198,7 @@ actor WallpaperImportService {
             case S_IFREG:
                 break
             default:
-                throw ImportError(message: "Downloaded projects may contain only regular files and folders, not symbolic links or special files: \(next.lastPathComponent).")
+                throw ImportError(message: String(localized: "Downloaded projects may contain only regular files and folders, not symbolic links or special files: \(next.lastPathComponent)."))
             }
         }
         try Task.checkCancellation()
@@ -209,7 +209,7 @@ actor WallpaperImportService {
         let fm = FileManager.default
         let values = try source.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         guard values.isSymbolicLink != true else {
-            throw ImportError(message: "Symbolic links are not imported. Choose the original folder or file instead.")
+            throw ImportError(message: String(localized: "Symbolic links are not imported. Choose the original folder or file instead."))
         }
         guard values.isDirectory == true else { return [source] }
         if fm.fileExists(atPath: source.appendingPathComponent("project.json").path) { return [source] }
@@ -227,7 +227,7 @@ actor WallpaperImportService {
             }
         }
         guard !projects.isEmpty else {
-            throw ImportError(message: "No project.json found. Choose a wallpaper project, a folder containing projects, or a Steam library with steamapps/workshop/content/431960.")
+            throw ImportError(message: String(localized: "No project.json found. Choose a wallpaper project, a folder containing projects, or a Steam library with steamapps/workshop/content/431960."))
         }
         return projects.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }
@@ -237,22 +237,22 @@ actor WallpaperImportService {
         let metadata = try manifestURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
         guard metadata.isRegularFile == true, metadata.isSymbolicLink != true,
               (metadata.fileSize ?? 0) <= 16 * 1024 * 1024 else {
-            throw ImportError(message: "project.json must be a regular JSON file smaller than 16 MB.")
+            throw ImportError(message: String(localized: "project.json must be a regular JSON file smaller than 16 MB."))
         }
         let manifestData = try Data(contentsOf: manifestURL)
         guard String(data: manifestData, encoding: .utf8) != nil, !manifestData.starts(with: [0xEF, 0xBB, 0xBF]) else {
-            throw ImportError(message: "project.json must use UTF-8 encoding without a byte-order mark. Convert the manifest and import it again.")
+            throw ImportError(message: String(localized: "project.json must use UTF-8 encoding without a byte-order mark. Convert the manifest and import it again."))
         }
         guard let manifest = try JSONSerialization.jsonObject(with: manifestData) as? [String: Any],
               let type = (manifest["type"] as? String)?.lowercased(), ["scene", "video", "web"].contains(type) else {
-            throw ImportError(message: "project.json must describe a scene, video, or web wallpaper.")
+            throw ImportError(message: String(localized: "project.json must describe a scene, video, or web wallpaper."))
         }
         if let value = manifest["file"], !(value is String) {
-            throw ImportError(message: "The project’s file field must be a relative filename.")
+            throw ImportError(message: String(localized: "The project’s file field must be a relative filename."))
         }
         let file = (manifest["file"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? (type == "scene" ? "scene.json" : "")
         guard isSafeRelativePath(file) else {
-            throw ImportError(message: "The project’s file field must point inside its own folder (no absolute paths or parent traversal).")
+            throw ImportError(message: String(localized: "The project’s file field must point inside its own folder (no absolute paths or parent traversal)."))
         }
         let entry = root.appendingPathComponent(file)
         let package = entry.deletingPathExtension().appendingPathExtension("pkg")
@@ -263,13 +263,13 @@ actor WallpaperImportService {
             || (packageValues?.isRegularFile == true && packageValues?.isSymbolicLink != true
                 && (!requireNonemptyContent || (packageValues?.fileSize ?? 0) > 0))
         guard exists else {
-            throw ImportError(message: "Missing project content: \(file). Copy the complete wallpaper folder, not just project.json.")
+            throw ImportError(message: String(localized: "Missing project content: \(file). Copy the complete wallpaper folder, not just project.json."))
         }
         if let preview = manifest["preview"] as? String, !preview.isEmpty, !isSafeRelativePath(preview) {
-            throw ImportError(message: "The preview path must remain inside the wallpaper folder.")
+            throw ImportError(message: String(localized: "The preview path must remain inside the wallpaper folder."))
         }
         if let dependencies = manifest["dependencies"] as? [String], dependencies.contains(where: { !isSafeRelativePath($0) }) {
-            throw ImportError(message: "Project dependency paths may not escape their folder.")
+            throw ImportError(message: String(localized: "Project dependency paths may not escape their folder."))
         }
     }
 
@@ -287,7 +287,7 @@ actor WallpaperImportService {
         let fm = FileManager.default
         let values = try source.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey, .isRegularFileKey])
         guard values.isSymbolicLink != true else {
-            throw ImportError(message: "Symbolic links are not imported: \(source.lastPathComponent). Copy the original content into the project folder first.")
+            throw ImportError(message: String(localized: "Symbolic links are not imported: \(source.lastPathComponent). Copy the original content into the project folder first."))
         }
         if values.isDirectory == true {
             try fm.createDirectory(at: destination, withIntermediateDirectories: false)
@@ -297,7 +297,7 @@ actor WallpaperImportService {
             }
         } else if values.isRegularFile == true {
             guard fm.createFile(atPath: destination.path, contents: nil) else {
-                throw ImportError(message: "Could not create \(destination.lastPathComponent). Check available disk space and folder permissions.")
+                throw ImportError(message: String(localized: "Could not create \(destination.lastPathComponent). Check available disk space and folder permissions."))
             }
             let input = try FileHandle(forReadingFrom: source)
             defer { try? input.close() }
@@ -310,7 +310,7 @@ actor WallpaperImportService {
             }
             try output.synchronize()
         } else {
-            throw ImportError(message: "Unsupported special file: \(source.lastPathComponent). Only regular files and folders can be imported.")
+            throw ImportError(message: String(localized: "Unsupported special file: \(source.lastPathComponent). Only regular files and folders can be imported."))
         }
     }
 }

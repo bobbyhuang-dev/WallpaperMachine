@@ -33,10 +33,15 @@ enum WallpaperRuntime {
       count: MemoryLayout<UnsafeRawPointer>.size)
   }
 
-  static func failure(_ message: String) -> NSError {
+  static func failure(_ message: String.LocalizationValue) -> NSError {
+    failure(detail: String(localized: message))
+  }
+
+  /// Text that is already final, such as the renderer's own error message.
+  static func failure(detail: String) -> NSError {
     NSError(
       domain: "WallpaperMachine.LockScreen", code: 1,
-      userInfo: [NSLocalizedDescriptionKey: message])
+      userInfo: [NSLocalizedDescriptionKey: detail])
   }
 
   private static func storage(className: String, member: String, count: Int) throws -> (

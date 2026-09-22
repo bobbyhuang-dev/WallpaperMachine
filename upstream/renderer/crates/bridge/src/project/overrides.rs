@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{ProjectModel, ProjectProperty, PropertyKind, PropertyValue};
+use super::{ProjectModel, ProjectProperty, PropertyKind, PropertyMetadata, PropertyValue};
 
 pub trait OverrideMapExt {
     fn to_override_json(&self) -> String;
@@ -136,6 +136,24 @@ impl ProjectProperty {
             .unwrap_or_else(|| self.default_value())
     }
 
+    /// Restore a combo's authored scalar only at the web boundary. Editor and
+    /// persisted selections stay string keys, including numeric-looking
+    /// strings.
+    #[must_use]
+    pub fn web_value(&self, value: &PropertyValue) -> serde_json::Value {
+        if let PropertyMetadata::Combo { options } = &self.metadata
+            && let PropertyValue::String(selection) = value
+        {
+            if let Some(option) = options.iter().find(|option| option.value == *selection) {
+                return option.json_value.clone();
+            }
+            if self.value_is_default(value) {
+                return self.default_value.to_json();
+            }
+        }
+        value.to_json()
+    }
+
     #[must_use]
     pub fn value_is_default(&self, value: &PropertyValue) -> bool {
         value.matches_with_override_semantics(&self.default_value())
@@ -161,7 +179,7 @@ mod tests {
                 default_value,
                 default_is_host_supplied: false,
                 label_html: String::new(),
-                order: 0,
+                order: 0.0,
                 index: 0,
                 condition: None,
                 metadata: PropertyMetadata::Bool,
@@ -215,7 +233,7 @@ mod tests {
             default_value: PropertyValue::String(String::new()),
             default_is_host_supplied: false,
             label_html: String::new(),
-            order: 0,
+            order: 0.0,
             index: 0,
             condition: None,
             metadata: PropertyMetadata::TextInput,
@@ -235,7 +253,7 @@ mod tests {
             default_value: PropertyValue::ColorRgb(0.1, 0.2, 0.3),
             default_is_host_supplied: false,
             label_html: String::new(),
-            order: 0,
+            order: 0.0,
             index: 0,
             condition: None,
             metadata: PropertyMetadata::Combo {
@@ -279,7 +297,7 @@ mod tests {
             default_value: PropertyValue::Bool(false),
             default_is_host_supplied: false,
             label_html: String::new(),
-            order: 0,
+            order: 0.0,
             index: 0,
             condition: None,
             metadata: PropertyMetadata::Bool,
@@ -298,7 +316,7 @@ mod tests {
             default_value: PropertyValue::Bool(false),
             default_is_host_supplied: false,
             label_html: String::new(),
-            order: 0,
+            order: 0.0,
             index: 0,
             condition: None,
             metadata: PropertyMetadata::Bool,
@@ -316,7 +334,7 @@ mod tests {
             default_value: PropertyValue::ColorRgb(0.1, 0.2, 0.3),
             default_is_host_supplied: false,
             label_html: String::new(),
-            order: 0,
+            order: 0.0,
             index: 0,
             condition: None,
             metadata: PropertyMetadata::Combo {
@@ -339,7 +357,7 @@ mod tests {
             default_value: PropertyValue::Number(0.3),
             default_is_host_supplied: false,
             label_html: String::new(),
-            order: 0,
+            order: 0.0,
             index: 0,
             condition: None,
             metadata: PropertyMetadata::Slider {

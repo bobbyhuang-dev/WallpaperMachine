@@ -15,6 +15,25 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-22 — Single-background light and dark app icons
+
+- Replaced flattened AppIcon.appiconset PNGs with generated App/Resources/AppIcon.icon; white/light and black/dark native backgrounds, contrasting frame and gear, unchanged aurora panel.
+- python3 scripts/brand.py — exit 0; generated native vector layers and tray assets.
+- python3 -m unittest discover -s scripts/tests -p test_brand.py — exit 0; 3 passed, including native rendered-pixel checks for both appearances, transparent corners, uniform backgrounds and colored wallpaper panel.
+- xcrun actool — exit 0; compiled the native icon for macOS 26. Icon Composer Default/Dark exports and the small compiled ICNS fallback were visually inspected without desktop capture.
+- Debug bundle inspection confirmed CFBundleIconName AppIcon and compiled Aqua white / DarkAqua black background layers.
+- First python3 scripts/test.py run: 534 passed, 1 failed, 11 skipped; ControlPanelSyncTests.testHiddenPanelContinuesSetupAndObservesNestedDownloadChanges reported InvalidTransition idle to failed(deinit). Isolated retry passed without code changes.
+- Second python3 scripts/test.py run — exit 0; 535 passed, 0 failed, 11 skipped. Final branding-only rerun also passed after comment/docstring cleanup.
+- No Release build, app restart, desktop appearance change or live Dock/Finder verification. Cleanup dry-run included unrelated existing artifacts; broad deletion was not performed.
+
+## 2026-09-22 — Release build with transparent tray icon
+
+- Prior python3 scripts/test.py gate passed: Python checks passed; native 535 passed, 0 failed, 11 skipped.
+- python3 scripts/build.py --swift-only --configuration Release succeeded.
+- Offscreen AppKit rendering of TrayIcon loaded from the Release bundle at 16px and 32px matches source alpha within one 8-bit level; background and interior are transparent.
+- Initial bitmap-representation inspection was unsuitable for catalog-backed NSImage; verification used actual offscreen drawing instead.
+- Delivered build/Build/Products/Release/WallpaperMachine.app. App not launched or restarted; live menu bar verification left to user.
+
 ## 2026-09-22 — Transparent menu bar icon
 
 - Regenerated 1x/2x tray assets; export converts Quick Look's white matte to alpha while retaining antialiased coverage.

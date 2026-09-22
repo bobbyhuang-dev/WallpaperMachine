@@ -25,6 +25,26 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-22 — Release build for Perfect Wallpaper compatibility repair
+
+- Pre-build gate for the unchanged repair sources: cargo test --release -p wallpaper-bridge --lib --quiet passed 322 tests; python3 scripts/test.py passed 141 Python and 544 native tests, with 11 opt-in skips; python3 scripts/check_renderer.py passed its generated matrix with three private-corpus skips. These commands were completed before the requested build and not needlessly rerun.
+- python3 scripts/build.py --configuration Release: first attempt exited 65 at CodeSign because the built app directory carried com.apple.FinderInfo and com.apple.fileprovider.fpfs#P. Removed extended attributes only from build/Build/Products/Release/WallpaperMachine.app with xattr -cr, then repeated the full command: exit 0.
+- Delivered build/Build/Products/Release/WallpaperMachine.app. codesign --verify --deep --strict passed; diff -qr WebUI against the bundled Contents/Resources/WebUI returned 0.
+- The final Mach-O contains ProjectProperty::web_value and ProjectModel::parse. SHA-256 of the executable: fa0a28cfc648b42c087b72f66cc3216049f30ca724f23f9983a3257f99602fbc. Repair source hashes were unchanged throughout the build.
+- Build identity: pre-commit base 1d7f181423cf840c485e209cfb150e1316531bea plus the five repaired bridge source/test files; their sorted source-hash inventory SHA-256 is 9e9915a8c12771afc4754f8eaf7a6fecbba84726d7e83b0dbb3632caf0a10436. Workspace inspection found no untracked build source; one unrelated untracked document was excluded from the commit.
+- No version bump, release publication, installation, app launch/quit/restart, desktop interaction, or wallpaper setting change. Runtime/visual/power limits remain those of the preceding offscreen verification; the user must quit and reopen the delivered app to load it.
+
+## 2026-09-22 — Web wallpaper authored property compatibility
+
+- Implementation: preserve fractional property order and all distinct IDs at tied or missing positions; restore authored combo JSON types only at Web export, retaining existing string editor/persistence keys. Owning Web documentation and renderer provenance updated.
+- Regression proof: both new failure cases failed before the fix (discarded properties and stringified numeric modes). cargo test --release -p wallpaper-bridge --lib --quiet: 322 passed, 0 failed, 0 ignored.
+- Runtime proof: the actual installed Perfect Wallpaper project was parsed by production ProjectModel and loaded through production WebWallpaperPage in an offscreen WKWebView. Parsed properties increased from 100 to 172; exported runtime values from 73 to all 137 authored runtime properties. The saved image-12 selection changed the page background from imgs/1.jpg to imgs/12.jpg; the image decoded at 2560x1080. All combo payload types matched their authored options.
+- python3 scripts/build.py --renderer-only: exit 0; renderer archive and Swift bindings regenerated. No Release application build or delivery, installation, app launch, restart, wallpaper setting, or author-asset modification.
+- python3 scripts/test.py: exit 0; 141 Python tests passed; 544 native tests passed, 0 failed, 11 skipped (9 opt-in media tests and 2 live Workshop network tests).
+- python3 scripts/check_renderer.py: exit 0; all test/probe processes returned 0; ten generated pooled/isolated pairs were pixel-equal with expected pixels and no diagnostics; eight generated projects completed two reload cycles. Three private-corpus cases skipped: LonelyCat, Workshop3409533530, and local Metal projects.
+- Verification limits: page state/resource loading only, not desktop presentation, animation smoothness, video playback, real audio response, or power. Diagnostic network access was blocked and media playback suspended; resulting media play rejections and author-caught uninitialized timer logs were not treated as host failures.
+- Cleanup: throwaway Rust/Swift diagnostic sources and the standalone Swift executable removed. python3 scripts/clean.py --dry-run inspected successfully; broad cleanup was not run because it would remove shared verification artifacts. Published changelog remains release-generated.
+
 ## 2026-09-22 — Release system: generated notes, draft-first publishing, deleted old releases
 
 Reworked the release system end to end. scripts/release_notes.py writes the GitHub Release body and CHANGELOG.md from the commits between two tags; scripts/publish_release.py refuses a live release and cannot let Latest go backwards; build.yml gates on the test suite, verifies the unpacked archive and attests provenance; Settings -> About shows what the newest release changed. All thirteen releases through v0.5.0 were deleted at the owner's request, tags kept.
@@ -102,22 +122,3 @@ Reworked the release system end to end. scripts/release_notes.py writes the GitH
 - Verified all 11 bundled WebUI files match current WebUI source byte-for-byte; codesign --verify --deep --strict passed.
 - NSWorkspace initially resolved the previous two-background icon from cache. Touched only the rebuilt app bundle and ran lsregister -f on that bundle; a fresh NSWorkspace lookup then resolved the updated single-white-background icon, visually inspected via image export.
 - No app launch or quit, desktop capture, appearance change, Finder/Dock restart or installation performed. User must quit and reopen the delivered Release app; live post-launch presentation remains unverified.
-
-## 2026-09-22 — Single-background light and dark app icons
-
-- Replaced flattened AppIcon.appiconset PNGs with generated App/Resources/AppIcon.icon; white/light and black/dark native backgrounds, contrasting frame and gear, unchanged aurora panel.
-- python3 scripts/brand.py — exit 0; generated native vector layers and tray assets.
-- python3 -m unittest discover -s scripts/tests -p test_brand.py — exit 0; 3 passed, including native rendered-pixel checks for both appearances, transparent corners, uniform backgrounds and colored wallpaper panel.
-- xcrun actool — exit 0; compiled the native icon for macOS 26. Icon Composer Default/Dark exports and the small compiled ICNS fallback were visually inspected without desktop capture.
-- Debug bundle inspection confirmed CFBundleIconName AppIcon and compiled Aqua white / DarkAqua black background layers.
-- First python3 scripts/test.py run: 534 passed, 1 failed, 11 skipped; ControlPanelSyncTests.testHiddenPanelContinuesSetupAndObservesNestedDownloadChanges reported InvalidTransition idle to failed(deinit). Isolated retry passed without code changes.
-- Second python3 scripts/test.py run — exit 0; 535 passed, 0 failed, 11 skipped. Final branding-only rerun also passed after comment/docstring cleanup.
-- No Release build, app restart, desktop appearance change or live Dock/Finder verification. Cleanup dry-run included unrelated existing artifacts; broad deletion was not performed.
-
-## 2026-09-22 — Release build with transparent tray icon
-
-- Prior python3 scripts/test.py gate passed: Python checks passed; native 535 passed, 0 failed, 11 skipped.
-- python3 scripts/build.py --swift-only --configuration Release succeeded.
-- Offscreen AppKit rendering of TrayIcon loaded from the Release bundle at 16px and 32px matches source alpha within one 8-bit level; background and interior are transparent.
-- Initial bitmap-representation inspection was unsuitable for catalog-backed NSImage; verification used actual offscreen drawing instead.
-- Delivered build/Build/Products/Release/WallpaperMachine.app. App not launched or restarted; live menu bar verification left to user.

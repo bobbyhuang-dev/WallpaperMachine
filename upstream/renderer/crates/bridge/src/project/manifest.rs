@@ -5,10 +5,7 @@
 //! `title`, raw HTML description, `preview` filename, and every
 //! `general.properties` entry as a `ProjectProperty` for the editor panel.
 
-use std::{
-    collections::BTreeSet,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use wallpaper_core::project::WallpaperProjectType;
@@ -43,7 +40,7 @@ pub struct ProjectProperty {
     /// overrides.
     pub default_is_host_supplied: bool,
     pub label_html: String,
-    pub order: i64,
+    pub order: f64,
     pub index: i64,
     pub condition: Option<String>, // Parsed lazily when building property snapshots.
     pub metadata: PropertyMetadata,
@@ -97,7 +94,6 @@ impl ProjectModel {
             .and_then(|g| g.get("properties"))
             .and_then(Value::as_object)
             .map(|properties| {
-                let mut seen_positions = BTreeSet::new();
                 let mut parsed = Vec::new();
                 for (id, value) in properties {
                     let Some(object) = value.as_object() else {
@@ -167,16 +163,15 @@ impl ProjectModel {
                                     arr.iter()
                                         .filter_map(|value| {
                                             let option = value.as_object()?;
+                                            let json_value = option.get("value").cloned().unwrap_or(Value::Null);
                                             Some(ComboOption {
                                                 label: option
                                                     .get("label")
                                                     .and_then(Value::as_str)
                                                     .unwrap_or("")
                                                     .to_string(),
-                                                value: option.get("value").map_or_else(
-                                                    String::new,
-                                                    PropertyValue::json_scalar_to_string,
-                                                ),
+                                                value: PropertyValue::json_scalar_to_string(&json_value),
+                                                json_value,
                                             })
                                         })
                                         .collect()
@@ -208,7 +203,7 @@ impl ProjectModel {
                         .get("condition")
                         .and_then(Value::as_str)
                         .map(str::to_owned);
-                    let order = object.get("order").and_then(Value::as_i64).unwrap_or(0);
+                    let order = object.get("order").and_then(Value::as_f64).unwrap_or(0.0);
                     let index = object.get("index").and_then(Value::as_i64).unwrap_or(0);
                     let mut host_supplied = false;
                     let default_value = match (&kind, object.get("value")) {
@@ -228,6 +223,9 @@ impl ProjectModel {
                             } else {
                                 authored
                             })
+                        }
+                        (PropertyKind::Combo, Some(Value::String(value))) => {
+                            PropertyValue::String(value.clone())
                         }
                         (
                             PropertyKind::File | PropertyKind::Directory | PropertyKind::Texture,
@@ -253,12 +251,14 @@ impl ProjectModel {
                         metadata,
                     };
 
-                    if seen_positions.insert((property.order, property.index)) {
-                        parsed.push(property);
-                    }
+                    parsed.push(property);
                 }
 
-                parsed.sort_by_key(|property| (property.order, property.index));
+                // Positions control display order; property identity is its id.
+                // Stable sorting preserves declaration order when positions tie.
+                parsed.sort_by(|left, right| {
+                    left.order.total_cmp(&right.order).then_with(|| left.index.cmp(&right.index))
+                });
                 parsed
             })
             .unwrap_or_default();
@@ -469,25 +469,38 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_order_index_keeps_first_declared_property() {
-        let m = ProjectModel::parse(
+    fn web_wallpaper_property_order_preserves_fractional_and_shared_positions() {
+        let model = ProjectModel::parse(
             "1",
             r#"{
-            "type":"scene","general":{"properties":{
-                "hero":{"type":"bool","value":true,"order":100,"index":0,"text":"<img src='hero.png'>"},
-                "schemecolor":{"type":"color","value":"0.1 0.2 0.3","order":100,"index":0,"text":"ui_browse_properties_scheme_color"},
-                "next":{"type":"bool","value":true,"order":101,"index":1,"text":"Next"}
+            "type":"web","general":{"properties":{
+                "last":{"type":"bool","value":true,"order":2},
+                "fractional":{"type":"bool","value":true,"order":1.5,"index":1},
+                "first":{"type":"bool","value":true,"order":1},
+                "z_shared":{"type":"bool","value":true,"order":1.5},
+                "a_shared":{"type":"bool","value":false,"order":1.5},
+                "unordered":{"type":"bool","value":true},
+                "also_unordered":{"type":"bool","value":false}
             }}
         }"#,
         )
         .unwrap();
 
         assert_eq!(
-            m.properties
+            model
+                .properties
                 .iter()
                 .map(|property| property.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["hero", "next"]
+            [
+                "unordered",
+                "also_unordered",
+                "first",
+                "z_shared",
+                "a_shared",
+                "fractional",
+                "last"
+            ]
         );
     }
 
@@ -682,12 +695,19 @@ fn suggested_user_shortcut(id: &str) -> Option<&'static str> {
 /// the ones this host can carry out. The empty value means the wallpaper's
 /// button does nothing, which is what an unbound shortcut already did.
 fn user_shortcut_options() -> Vec<ComboOption> {
-    vec![
+    [
         // Not "None": the panel already uses that for deselecting, and this
         // is a button that does nothing rather than an empty selection.
-        ComboOption { label: "No action".to_owned(), value: String::new() },
-        ComboOption { label: "Play / Pause".to_owned(), value: "media:playpause".to_owned() },
-        ComboOption { label: "Next Track".to_owned(), value: "media:next".to_owned() },
-        ComboOption { label: "Previous Track".to_owned(), value: "media:previous".to_owned() },
+        ("No action", ""),
+        ("Play / Pause", "media:playpause"),
+        ("Next Track", "media:next"),
+        ("Previous Track", "media:previous"),
     ]
+    .into_iter()
+    .map(|(label, value)| ComboOption {
+        label: label.to_owned(),
+        value: value.to_owned(),
+        json_value: Value::String(value.to_owned()),
+    })
+    .collect()
 }

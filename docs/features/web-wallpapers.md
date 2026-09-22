@@ -39,6 +39,17 @@ and `location.protocol` is `file:`. A document-start script installs the host si
 | `wallpaperPropertyListener.setPaused(bool)` | Play/Pause, presentation suspension |
 | `wallpaperPropertyListener.userDirectoryFilesAddedOrChanged(property, files)` / `userDirectoryFilesRemoved(property, files)` | A watched `fetchall` folder gained or lost files |
 
+Combo values reach the page with the selected option's authored JSON type: a
+numeric option stays a number, a boolean stays a boolean, and a string such as
+`"3"` stays a string. The inspector and saved overrides still use string selection
+keys; conversion happens only when exporting the Web payload. This keeps strict
+JavaScript comparisons and `switch` statements working without guessing types
+from numeric-looking text.
+
+Property positions are ordering hints, not identity. Fractional `order` values
+are preserved, and distinct property IDs with the same `order`/`index` are all
+retained in declaration order, including properties with no position specified.
+
 Values are replayed to a listener that registers after the first push, so pages
 that install the listener from a deferred module still start correctly. The top
 frame cannot navigate away from the entry page; subframes and network requests are
@@ -293,7 +304,12 @@ what `Choose…` and `Clear` send, the refusal of a `texture` property by the pa
 editor, the folder measurement published to the page, and a chosen name carrying
 markup reaching the DOM as text.
 `crates/bridge/src/tests/apply_options.rs::web_wallpaper_apply_bypasses_engine_and_exports_host_inputs`
-proves the bridge contract. Desktop behavior needs an authorized manual run; see
+proves the bridge contract. The companion
+`web_wallpaper_combo_values_keep_authored_types_after_editor_changes` regression
+checks typed defaults and committed editor selections; the manifest regression
+`web_wallpaper_property_order_preserves_fractional_and_shared_positions` checks
+that fractional and shared positions do not discard settings.
+Desktop behavior needs an authorized manual run; see
 the [verification log](../testing/verification-log.md).
 
 Back to the [project README](../../README.md).

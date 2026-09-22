@@ -1017,11 +1017,13 @@ impl<E: EngineFacade + Clone> BridgeActor<E> {
                     .iter()
                     .map(|(id, value)| {
                         let mut entry = serde_json::Map::new();
-                        let _ = entry.insert("value".to_string(), value.to_json());
                         if let Some(property) = model.and_then(|model| {
                             model.properties.iter().find(|property| property.id == *id)
                         }) {
+                            let _ = entry.insert("value".to_string(), property.web_value(value));
                             describe_property_kind(property, &mut entry);
+                        } else {
+                            let _ = entry.insert("value".to_string(), value.to_json());
                         }
                         (id.clone(), serde_json::Value::Object(entry))
                     })

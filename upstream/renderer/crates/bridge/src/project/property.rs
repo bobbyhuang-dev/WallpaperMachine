@@ -82,6 +82,8 @@ pub enum PropertyMetadata {
 pub struct ComboOption {
     pub label: String,
     pub value: String,
+    /// The page consumes the authored JSON type, not the editor's string key.
+    pub json_value: serde_json::Value,
 }
 
 /// Editor value. Serde-compatible for round-trip to/from
@@ -262,19 +264,5 @@ mod tests {
             "0.1 0.2 0.3"
         );
         assert_eq!(PropertyValue::Null.to_property_string(), String::new());
-    }
-
-    #[test]
-    fn combo_option_equality() {
-        assert_eq!(
-            ComboOption {
-                label: "a".into(),
-                value: "b".into()
-            },
-            ComboOption {
-                label: "a".into(),
-                value: "b".into()
-            },
-        );
     }
 }

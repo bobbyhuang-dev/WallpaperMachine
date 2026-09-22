@@ -1241,6 +1241,85 @@ async fn web_wallpaper_apply_bypasses_engine_and_exports_host_inputs() {
 }
 
 #[tokio::test]
+async fn web_wallpaper_combo_values_keep_authored_types_after_editor_changes() {
+    let engine = FakeEngineFacade::default();
+    engine.set_snapshot(vec![display_snapshot(7, 75)]);
+    let bridge = BridgeBuilder::new(engine)
+        .with_state(crate::actor::state::BridgeActorState::default())
+        .build()
+        .unwrap();
+    bridge
+        .inject_scene_project_for_test(
+            "300",
+            "Web",
+            r#"{
+            "type":"web","file":"index.html","general":{"properties":{
+                "mode":{"type":"combo","value":1,"order":1,"options":[
+                    {"label":"Image","value":1},
+                    {"label":"Video","value":2},
+                    {"label":"String identifier","value":"3"},
+                    {"label":"Enabled","value":true},
+                    {"label":"Opaque identifier","value":"0.10 0.20 0.30"}
+                ]},
+                "legacy":{"type":"combo","value":4,"order":2},
+                "opaque":{"type":"combo","value":"0.10 0.20 0.30","order":3,
+                          "options":[{"label":"Identifier","value":"0.10 0.20 0.30"}]}
+            }}
+        }"#,
+        )
+        .await;
+    bridge
+        .set_display_config_enabled("300".into(), "7".into(), true)
+        .await
+        .unwrap();
+    bridge.apply_wallpaper_options("300".into()).await.unwrap();
+
+    let web = bridge.web_wallpapers().await.unwrap();
+    let initial: serde_json::Value = serde_json::from_str(&web[0].properties_json).unwrap();
+    assert_eq!(initial["mode"]["value"].as_f64(), Some(1.0));
+    assert_eq!(initial["legacy"]["value"].as_f64(), Some(4.0));
+    assert_eq!(initial["opaque"]["value"], "0.10 0.20 0.30");
+
+    for (selection, expected) in [
+        ("2", serde_json::json!(2)),
+        ("3", serde_json::json!("3")),
+        ("true", serde_json::json!(true)),
+        ("0.10 0.20 0.30", serde_json::json!("0.10 0.20 0.30")),
+        ("1", serde_json::json!(1)),
+    ] {
+        let edited = bridge
+            .edit_property(
+                "300".into(),
+                "mode".into(),
+                crate::BridgePropertyValue::String {
+                    value: selection.into(),
+                },
+            )
+            .await
+            .unwrap();
+        let mode = edited
+            .wallpaper_options
+            .properties
+            .iter()
+            .find(|property| property.id == "mode")
+            .unwrap();
+        assert_eq!(
+            mode.value,
+            crate::BridgePropertyValue::String {
+                value: selection.into()
+            }
+        );
+        bridge.apply_wallpaper_options("300".into()).await.unwrap();
+        let web = bridge.web_wallpapers().await.unwrap();
+        let properties: serde_json::Value = serde_json::from_str(&web[0].properties_json).unwrap();
+        assert_eq!(
+            properties["mode"]["value"], expected,
+            "selection {selection}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn lock_screen_export_ignores_presentation_suspension_but_preserves_playback_policy() {
     let engine = FakeEngineFacade::default();
     engine.set_snapshot(vec![display_snapshot(7, 75)]);

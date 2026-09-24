@@ -187,6 +187,7 @@ executable directly from the renderer check build directory.
 | Timeline events | `ScriptRuntimeCompat.*Timeline*Event*`, `*Marker*`, `GlobalAnimationListenersRunOncePerMarkerWhateverIsBound`, `GlobalOnlyAnimationListenerSeesTheCurrentTickTime` and `SceneGetAnimationFindsATimelineOnAnotherLayer` in `script_runtime_compat_test`: crossing, `event.frame`, reverse travel and exact loop wraps, delivery after `init`, one global listener run per marker with zero and two bound scene scripts, a fresh host context for a global-only listener, and scene-wide `getAnimation` (see below) |
 | Clock/text corruption | `render_target_lifetime_test`, `text_object_runtime_test`, `shader_cache_metadata_test` |
 | Continuous-playback resource reuse | `playback_gpu_test` |
+| Texture decode at preparation | `texture_prefetch_test` (CPU, in the gate): images handed over once under their own name, decoding plus untaken images held within the byte budget (an image larger than the budget alone), preparation never waiting on an image not yet admitted, a prefetch whose threads failed to start answering at once, a failed decode reported rather than retried, a throwing decoder left to the caller, and teardown joining running decodes and freeing every image. Startup timing and byte-identical output on a real scene come from `offscreen_scene_probe`, which prepares through the same prefetch (see [Startup and staging buffers](#startup-and-staging-buffers)). |
 | Render-target reuse correctness | `static_subgraph_cache_test` (reuse verdicts, copy elision, alias resolution, and `OnlyWritersOfCacheableTargetsAreSampled`: both backends sample only the passes `Plan` reads, and an unsampled pass cannot change a verdict) and, on the native backend, `MetalSceneDraw.AnUnchangedTargetIsReusedAndProducesTheSamePixels` / `.TurningTheOptimisationOffDrawsEveryPassAgain` in `metal_scene_draw_smoke`. Reuse must be provable by readback, not by a counter alone: a skipped pass has to leave byte-identical pixels, and a changed input has to redraw. |
 | Render passes on the native backend | `MetalSceneDraw.LayersSharingATargetShareOneRenderPassAndHiddenLayersCostNone`: consecutive passes into one image share one render pass, a hidden layer starts none, a hidden card draws exactly what a dropped one does, and showing it changes the picture. A pass starts a new render pass only for another image, another depth attachment, a read of its own image, or a clear — unless the open render pass began with that same clear and has drawn nothing yet. A draw sharing a render pass sets every binding the previous draw may have left, nil included. On a real scene, `WE_TEST_METAL_PROJECTS` prints render passes and blits per frame and CPU per `drawFrame`, and its PPM must stay byte-identical to the pre-change build's. |
 | Feedback copies on the native backend | `MetalSceneDraw.AFeedbackCopyTradesTexturesAndDrawsTheSamePicture`: two lenses that each sample `_rt_FullFrameBuffer` over a card, drawn with scene optimisation off (the graph's copies are made) and on (the image and its copy trade textures, and the reader's render pass opens with a texel-exact copy of the image as it stood). Every frame must be byte-identical across three frames — the trades carry over from frame to frame — with no blits when on. Removing the opening copy fails all three frames. The trade is planned only for a copy whose reader is the next pass to touch the image, draws into it without reading it, and loads it (or clears it, which needs no opening copy), with both textures private to one name, one size, `RGBA8Unorm`, one mip level, no depth and neither image reused; an abandoned frame undoes its trades. On a real scene, `WALLPAPER_MACHINE_FEEDBACK_COPIES=1` makes the copies again, and the harness PPM must match either way. |
@@ -347,6 +348,19 @@ shader cache, and 24.4 seconds on the next launch after the driver pipeline
 cache had been written beside that scene's shader cache, so the cache does
 not remove the wait. The apply wait is 90 seconds. Rollback after the wait is
 unchanged.
+
+Texture decode was the other serial startup cost. `CustomShaderPass::prepare`
+decoded an image again for every pass that bound it, only for `CreateTex` to
+return the cached upload; it now asks `TextureCache::FindTex` first.
+`TexturePrefetch` decodes the images unprepared passes will parse on up to six
+threads, ahead of the pass that binds them, with decoding and untaken images
+held under a 256 MiB budget estimated from each header and admitted in request
+order. Preparation decodes an image itself rather than wait on one not yet
+admitted. A private 943 MB puppet scene with 122 embedded PNGs (1264 Mpx) went
+from 15.6 to 3.6 seconds to its first `offscreen_scene_probe` frame with a warm
+shader cache, with a byte-identical frame and about 0.3 GB higher peak RSS.
+It contributes to lock-screen admission latency: the extension answers
+WallpaperAgent only after a first frame (see [lock screen](../features/lock-screen.md)).
 
 ### Alpha compositing
 

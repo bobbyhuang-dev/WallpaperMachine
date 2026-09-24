@@ -469,6 +469,19 @@ gtest_discover_tests(
     DISCOVERY_TIMEOUT 60
 )
 
+# Threads and a fake parser only: no device, no surface, no GPU.
+add_executable(texture_prefetch_test texture_prefetch_test.cpp)
+target_link_libraries(texture_prefetch_test PRIVATE ${PROJECT_NAME} wpVulkanRender wpVulkan wpRGraph wpScene wpAudio wpFs nlohmann_json::nlohmann_json GTest::gtest_main)
+target_include_directories(texture_prefetch_test PRIVATE
+    . ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Scene/VulkanRender)
+target_compile_features(texture_prefetch_test PRIVATE cxx_std_20)
+gtest_discover_tests(
+    texture_prefetch_test
+    TEST_PREFIX texture_prefetch_test.
+    PROPERTIES TIMEOUT 60
+    DISCOVERY_TIMEOUT 60
+)
+
 add_executable(timer_tests timer/frame_timer_test.cpp)
 target_link_libraries(timer_tests PRIVATE wpTimer GTest::gtest_main)
 target_include_directories(timer_tests PRIVATE . ${CMAKE_SOURCE_DIR}/src)

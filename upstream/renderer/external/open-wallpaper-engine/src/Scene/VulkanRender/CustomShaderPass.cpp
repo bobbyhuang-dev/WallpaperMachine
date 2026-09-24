@@ -12,6 +12,7 @@
 #include "Utils/AutoDeletor.hpp"
 #include "Resource.hpp"
 #include "PassCommon.hpp"
+#include "TexturePrefetch.hpp"
 #include "Interface/IImageParser.h"
 
 #include "Core/ArrayHelper.hpp"
@@ -318,6 +319,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
     m_desc.vk_textures.resize(m_desc.textures.size());
     m_desc.vk_texture_image_keys.resize(m_desc.textures.size());
     m_desc.video_textures.resize(m_desc.textures.size(), false);
+    auto* runtime_images = dynamic_cast<wallpaper::RuntimeImageSource*>(scene.imageParser.get());
     for (usize i = 0; i < m_desc.textures.size(); i++) {
         auto& tex_name = m_desc.textures[i];
         if (tex_name.empty()) continue;
@@ -331,13 +333,35 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
             if (! opt.has_value()) continue;
             img_slots.slots = { opt.value() };
         } else {
-            auto image = scene.imageParser->Parse(tex_name);
-            if (image) {
-                m_desc.video_textures[i] = image->header.isVideo;
-                m_desc.vk_texture_image_keys[i] = image->key;
-                img_slots                = device.tex_cache().CreateTex(*image);
+            // A package or loose image is cached under its own name, and
+            // CreateTex answers a cached key without reading the pixels it is
+            // handed, so parsing first decoded a texture again for every pass
+            // that binds it only to drop the copy. Runtime images carry a
+            // versioned key, so they always resolve through the parser.
+            std::optional<ImageSlotsRef> cached;
+            if (runtime_images == nullptr || ! runtime_images->IsRuntimeImage(tex_name)) {
+                cached = device.tex_cache().FindTex(tex_name);
+            }
+            if (cached.has_value()) {
+                m_desc.video_textures[i]        = false;
+                m_desc.vk_texture_image_keys[i] = tex_name;
+                img_slots                       = std::move(*cached);
             } else {
-                LOG_ERROR("parse tex \"%s\" failed", tex_name.c_str());
+                std::shared_ptr<wallpaper::Image> image;
+                if (auto prefetched = rr.texture_prefetch != nullptr
+                                          ? rr.texture_prefetch->Take(tex_name)
+                                          : std::nullopt) {
+                    image = std::move(*prefetched);
+                } else {
+                    image = scene.imageParser->Parse(tex_name);
+                }
+                if (image) {
+                    m_desc.video_textures[i] = image->header.isVideo;
+                    m_desc.vk_texture_image_keys[i] = image->key;
+                    img_slots                = device.tex_cache().CreateTex(*image);
+                } else {
+                    LOG_ERROR("parse tex \"%s\" failed", tex_name.c_str());
+                }
             }
         }
         m_desc.vk_textures[i] = img_slots;
@@ -690,7 +714,6 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
     auto* scene_ptr       = &scene;
     auto* device_ptr      = &device;
     auto* shader_updater  = scene.shaderValueUpdater.get();
-    auto* runtime_images  = dynamic_cast<wallpaper::RuntimeImageSource*>(scene.imageParser.get());
     auto& sprites         = m_desc.sprites_map;
     auto& textures        = m_desc.textures;
     auto& video_textures  = m_desc.video_textures;

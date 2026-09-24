@@ -923,6 +923,12 @@ ImageSlotsRef TextureCache::CreateTex(Image& image, TextureUploadSynchronization
     return ImageSlotsRef(stored);
 }
 
+std::optional<ImageSlotsRef> TextureCache::FindTex(std::string_view key) const {
+    const auto cached = m_tex_map.find(key);
+    if (cached == m_tex_map.end()) return std::nullopt;
+    return ImageSlotsRef(cached->second);
+}
+
 ImageSlotsRef TextureCache::CreateVideoTex(
     Image& image, std::shared_ptr<video::VideoTextureSource> source) {
     if (m_device_lost || !source || exists(m_video_tex_map, image.key)) {

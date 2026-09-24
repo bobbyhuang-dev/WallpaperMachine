@@ -170,6 +170,11 @@ public:
     std::optional<ExImageParameters> CreateExTex(uint32_t witdh, uint32_t height, VkFormat,
                                                  VkImageTiling);
     ImageSlotsRef CreateTex(Image&);
+    /// The slots `CreateTex` already holds for this image key, if any. For a
+    /// cached key `CreateTex` returns them without reading the pixels it was
+    /// handed, so a caller that asks first can skip decoding the image again.
+    /// Static images only: videos live in their own map and are never found.
+    std::optional<ImageSlotsRef> FindTex(std::string_view key) const;
     ImageSlotsRef ReplaceTex(Image&, std::string_view previous_key);
     void          CollectCompletedUploads();
     void          SetVideoPlaybackPaused(bool paused);

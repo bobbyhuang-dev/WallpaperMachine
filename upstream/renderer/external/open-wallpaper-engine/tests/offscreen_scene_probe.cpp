@@ -28,6 +28,7 @@
 #include "VulkanRender/StaticSubgraphCache.hpp"
 #include "VulkanRender/PassCommon.hpp"
 #include "Presentation/WallpaperScaling.hpp"
+#include "TexturePrefetch.hpp"
 #include "VulkanRender/Resource.hpp"
 #include "VulkanRender/SceneToRenderGraph.hpp"
 #include "RenderGraph/RenderGraph.hpp"
@@ -536,6 +537,15 @@ int main() {
         pre.prepare(*scene, device, rr);
         passes.push_back(&pre);
         std::ofstream trace(out / "passes.txt");
+        // Decodes ahead of the passes the way VulkanRender::preparePasses
+        // does, so the startup timing below is the production one.
+        std::vector<VulkanPass*> graph_passes;
+        graph_passes.reserve(nodes.size());
+        for (const auto& node : nodes) {
+            graph_passes.push_back(static_cast<VulkanPass*>(graph->getPass(node)));
+        }
+        auto prefetch = TexturePrefetch::ForPasses(*scene, device.tex_cache(), graph_passes);
+        rr.texture_prefetch = prefetch.get();
         for (std::size_t i = 0; i < nodes.size(); ++i) {
             auto* pass = static_cast<VulkanPass*>(graph->getPass(nodes[i]));
             if (!std::getenv("WE_TEST_NO_REUSE")) {
@@ -574,6 +584,8 @@ int main() {
                 }
             }
         }
+        rr.texture_prefetch = nullptr;
+        prefetch.reset();
         milestone("prepared");
         auto result = device.tex_cache().Query(std::string(SpecTex_Default), ToTexKey(*scene->FindRenderTarget(SpecTex_Default)), true);
         Check(result.has_value(), "result target");

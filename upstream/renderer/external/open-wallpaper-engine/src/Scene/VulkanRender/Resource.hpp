@@ -7,6 +7,7 @@ namespace wallpaper
 {
 namespace vulkan
 {
+class TexturePrefetch;
 
 struct RenderingResources {
     vvk::CommandBuffer command;
@@ -22,6 +23,9 @@ struct RenderingResources {
 
     StagingBuffer* vertex_buf { nullptr };
     StagingBuffer* dyn_buf { nullptr };
+    /// Set only while passes are being prepared: images decoded ahead of the
+    /// pass that binds them. Null means every pass parses its own.
+    TexturePrefetch* texture_prefetch { nullptr };
 
     VkViewport wallpaper_viewport {};
     VkRect2D   wallpaper_scissor {};

@@ -1,6 +1,7 @@
 #include "VulkanRender.hpp"
 
 #include "Utils/Logging.h"
+#include "Utils/AutoDeletor.hpp"
 #include "RenderGraph/RenderGraph.hpp"
 #include "Scene/Scene.h"
 #include "Interface/IShaderValueUpdater.h"
@@ -23,6 +24,7 @@
 #include "PrePass.hpp"
 #include "FinPass.hpp"
 #include "Resource.hpp"
+#include "TexturePrefetch.hpp"
 #include "SpecTexs.hpp"
 #include "PassCommon.hpp"
 
@@ -1460,9 +1462,16 @@ void VulkanRender::Impl::planStaticSkips(Scene& scene) {
 
 bool VulkanRender::Impl::preparePasses(Scene& scene) {
     glslang::InitializeProcess();
-    for (auto* p : m_passes) {
-        if (! p->prepared()) {
-            p->prepare(scene, *m_device, m_rendering_resources);
+    {
+        // Decodes ahead of the passes on other threads; joined when this
+        // block ends, before anything reads what the passes prepared.
+        const auto prefetch = TexturePrefetch::ForPasses(scene, m_device->tex_cache(), m_passes);
+        m_rendering_resources.texture_prefetch = prefetch.get();
+        AUTO_DELETER(texture_prefetch, [this]() { m_rendering_resources.texture_prefetch = nullptr; });
+        for (auto* p : m_passes) {
+            if (! p->prepared()) {
+                p->prepare(scene, *m_device, m_rendering_resources);
+            }
         }
     }
     glslang::FinalizeProcess();

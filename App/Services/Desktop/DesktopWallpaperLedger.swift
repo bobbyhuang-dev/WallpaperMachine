@@ -36,6 +36,15 @@ protocol DesktopPictureWorkspace {
 
 @MainActor
 final class DesktopWallpaperLedger {
+    /// Posters kept per display whose desktops could not all be seen or read.
+    ///
+    /// A desktop the public-API fallback cannot enumerate, one whose picture
+    /// could not be read, or one on a disconnected display may still show a
+    /// poster. It most plausibly shows one of the newest, so those stay and
+    /// older ones are deleted rather than accumulating for as long as the
+    /// display stays incomplete.
+    static let retainedPostersPerIncompleteDisplay = 4
+
     private struct Entry: Codable {
         var original: DesktopPicture
         // nil for the previous alternating-file journal, which remains readable.
@@ -77,9 +86,15 @@ final class DesktopWallpaperLedger {
                 }
             } catch { if firstError == nil { firstError = error } }
         }
+        // Pruned even when a desktop failed, or a failure that repeats on every
+        // refresh would let posters pile up without bound. A desktop that
+        // failed keeps what it shows: a readable picture is never deleted, and
+        // an unreadable one leaves its display on the bounded retention.
+        do { try removeUnreferencedPosters(targets: targets) } catch {
+            if firstError == nil { firstError = error }
+        }
         // Keep updating sibling Spaces/displays even when one native call fails.
         if let firstError { throw firstError }
-        try removeUnreferencedPosters(targets: targets)
     }
 
     func restoreAll() throws { try synchronize(posters: [:], liveDisplays: []) }
@@ -148,26 +163,65 @@ final class DesktopWallpaperLedger {
         return entries[url.lastPathComponent]
     }
 
+    /// Deletes the posters no desktop can be showing.
+    ///
+    /// A display is complete when every desktop on it is a native Space whose
+    /// picture was read; there, every poster none of them shows is unused and
+    /// goes. Anywhere else an unseen desktop may still show one, so only posters
+    /// older than the newest `retainedPostersPerIncompleteDisplay` go. A poster
+    /// a readable desktop shows is never deleted, and entries of the legacy
+    /// journal, which name no display, are left alone.
     private func removeUnreferencedPosters(targets: [DesktopPictureTarget]) throws {
-        // Only prune displays for which ALL native Space targets are available.
-        // A public-API fallback cannot see inactive Spaces, so must keep files.
-        let completeDisplays = Set(targets.filter { $0.space != nil }.map(\.display))
-            .subtracting(targets.filter { $0.space == nil }.map(\.display))
-        var referenced = Set<String>()
+        var targeted = Set<String>(), incomplete = Set<String>(), referenced = Set<String>()
         for target in targets {
-            guard let current = try workspace.currentPicture(target: target) else { return }
+            targeted.insert(target.display)
+            // The public-API fallback sees only the current Space.
+            if target.space == nil { incomplete.insert(target.display) }
+            guard let current = try? workspace.currentPicture(target: target) else {
+                incomplete.insert(target.display)
+                continue
+            }
             if entry(for: current.url) != nil { referenced.insert(current.url.lastPathComponent) }
         }
-        let obsolete = entries.filter {
-            guard let display = $0.value.display else { return false }
-            return completeDisplays.contains(display) && !referenced.contains($0.key)
-        }.map(\.key)
+        var byDisplay: [String: [String]] = [:]
+        for (name, entry) in entries {
+            guard let display = entry.display else { continue }
+            byDisplay[display, default: []].append(name)
+        }
+        var obsolete: [String] = []
+        for (display, names) in byDisplay {
+            if targeted.contains(display) && !incomplete.contains(display) {
+                obsolete += names.filter { !referenced.contains($0) }
+                continue
+            }
+            let newestFirst = names.map { ($0, modificationDate(of: $0)) }
+                .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0 < $1.0 }
+                .map(\.0)
+            obsolete += newestFirst.dropFirst(Self.retainedPostersPerIncompleteDisplay)
+                .filter { !referenced.contains($0) }
+        }
+        var removed = false
+        var firstError: Error?
         for name in obsolete {
             let url = folder.appendingPathComponent(name)
-            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+            do {
+                if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+            } catch {
+                if firstError == nil { firstError = error }
+                continue
+            }
             entries.removeValue(forKey: name)
+            removed = true
         }
-        if !obsolete.isEmpty { try save() }
+        if removed { try save() }
+        if let firstError { throw firstError }
+    }
+
+    /// When a poster file was last written; a missing file sorts oldest.
+    private func modificationDate(of name: String) -> Date {
+        let url = folder.appendingPathComponent(name)
+        return (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            ?? .distantPast
     }
 
     private func save() throws { try JSONEncoder().encode(entries).write(to: journal, options: .atomic) }

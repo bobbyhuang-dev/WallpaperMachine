@@ -139,6 +139,15 @@ public:
     /// cannot back a span.
     void Plan(std::span<const StaticPassSample> samples, std::span<uint8_t> out_skip);
 
+    /// Whether `Plan` reads this pass's sample. Only the writers of a
+    /// cacheable target fold into a signature; every other pass executes
+    /// whatever its sample says, so a caller need not take one for it.
+    bool PassSampled(std::size_t pass) const
+    {
+        return pass < m_pass_target.size() && m_pass_target[pass] != kNoTarget &&
+               m_targets[m_pass_target[pass]].cacheable;
+    }
+
     /// Drops every cached result without losing the compiled analysis. Used
     /// when the pixels behind the targets are no longer trustworthy.
     void InvalidateAll();

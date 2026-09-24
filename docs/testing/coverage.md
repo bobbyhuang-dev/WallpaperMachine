@@ -132,7 +132,11 @@ Swift tests cover, without starting the app:
   synchronous frame requests (no Apply debounce), first-frame delivery to all
   Spaces without a Space-change event, stale old-layer completion, automatic
   retry, independent display/Space originals, duplicate-frame suppression,
-  immutable frame URLs with reference-aware cleanup, legacy journal migration,
+  immutable frame URLs with reference-aware cleanup, bounded retention of the
+  newest posters on a current-Space-fallback display and on one with an
+  unreadable Space (whose failure is still reported), a Space change that
+  re-applies the existing poster without capturing a new one while a surface
+  without a poster still requests it, legacy journal migration,
   relaunch recovery, external wallpaper changes, and write failures. Topology
   and native option/path translation use fixtures, including empty
   inherited/default native selections, exact pathless-option restoration across

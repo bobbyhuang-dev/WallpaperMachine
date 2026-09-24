@@ -207,6 +207,21 @@ public:
     /// same picture.
     [[nodiscard]] uint64_t RuntimeImageUploadsForTests() const;
 
+    /// Encoders the pass loop of the last drawn frame opened: render passes,
+    /// how many of them rendered into the scene's output image, and blits.
+    ///
+    /// Test-only, and the only way to see how a frame was split into passes:
+    /// the picture is the same whether two layers share one render pass or
+    /// open one each. The final composition and a poster capture are not scene
+    /// passes and are not counted.
+    struct FrameEncodeCountsForTests
+    {
+        uint32_t render_passes { 0 };
+        uint32_t scene_output_passes { 0 };
+        uint32_t blit_passes { 0 };
+    };
+    [[nodiscard]] FrameEncodeCountsForTests LastFrameEncodeCountsForTests() const;
+
     /// How many shader sources this process has handed to the Metal compiler.
     ///
     /// Test-only, and process-wide rather than per renderer: what it exists to

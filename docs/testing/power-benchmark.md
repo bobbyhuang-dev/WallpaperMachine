@@ -1,9 +1,9 @@
 # Power benchmarking
 
-How to make a power claim about this project believable. Nothing in this
-document has been measured yet: it defines the configuration record, the
-counters, the condition matrix and the comparison rules that a measurement has
-to satisfy before it may be reported.
+How to make a power claim about this project believable: the configuration
+record, the counters, the condition matrix, the comparison rules a measurement
+has to satisfy before it may be reported, and the measurement mode that takes
+one.
 
 Test strategy and the layers around this one: [README.md](README.md).
 
@@ -19,10 +19,79 @@ macOS build, every online display's pixel geometry and refresh rate, charging
 and low-power state, recorded thermal warnings, the Homebrew library versions
 actually linked, and the pinned `upstream/` revisions.
 
-The script measures nothing. Every condition is written as
-`"measured": false`, and `measurement_tool` stays `null` until a run attaches a
-real tool to the manifest. `--print-only` emits the manifest without writing an
-artifact.
+Without `--measure` the script measures nothing. Every condition is written as
+`"measured": false`, and `measurement_tool` stays `null`. `--print-only` emits
+the document without writing an artifact.
+
+## Measuring a window
+
+`--measure SECONDS --condition ID` samples the processes a condition is about
+and the machine as a whole before and after a window of that length and writes
+`artifacts/power/measure-<timestamp>.json`: the manifest, `"measured": true`,
+the sources in `measurement_tool`, the condition marked measured, and
+`measurement` with the actual elapsed time, one row per role, the system power
+and the package power. One line per role is printed, e.g.
+`app: CPU 38.2 %, GPU 65.1 %`. The window is always the length asked for: a
+powermetrics that fails or is refused at once does not shorten it.
+
+| Role | Executable | Note |
+|---|---|---|
+| `app` | `WallpaperMachine` | |
+| `window_server` | `WindowServer` | Composites every window, the wallpaper included |
+| `core_audio` | `coreaudiod` | Runs the system audio tap an audio-reactive wallpaper asks for |
+| `web_content` | `com.apple.WebKit.WebContent` | Every such process of this user, not only this app's |
+| `extension` | `WallpaperMachineExtension` | Lock-screen extension, when running |
+
+- **CPU %** is the growth of `ps -o time` (user + system) over the window.
+- **GPU %** is the growth of `accumulatedGPUTime` summed over the process's
+  `AGXDeviceUserClient` entries in `ioreg`: how long its command queues kept the
+  GPU busy. It is utilisation, not energy. A process whose GPU client closed
+  during the window reports no GPU value instead of an undercount.
+- **System power** is the whole machine's mean draw over the window, from the
+  battery controller's own running sums in `ioreg -r -c AppleSmartBattery -a`
+  (`PowerTelemetryData`): `AccumulatedSystemLoad` over
+  `SystemLoadAccumulatorCount` for what the machine consumes on either power
+  source, and the `SystemPowerIn` pair for what the adapter delivers, charging
+  included, when there is one. It needs no privileges, it is what a menu-bar
+  watt meter shows, and it is the only figure here that includes memory, the
+  display and everything else outside the CPU and GPU cores. It includes every
+  other application too, so it is only ever compared against a paired baseline.
+- **Package power**, with `--powermetrics`, is the mean of every
+  `powermetrics --samplers cpu_power,gpu_power -i 1000 -n SECONDS` sample:
+  CPU, GPU, ANE and combined mW. powermetrics needs root. The script runs it
+  directly when it is root; with `--sudo-password-stdin` it reads one line from
+  stdin and passes it to `sudo -S` on stdin only — never in arguments, the
+  environment, the output or the artifact; otherwise it tries `sudo -n`. A
+  refusal is recorded as `package_power.measured = false` with sudo's reason,
+  and the other rows are still written.
+
+A desktop run is taken serially, with the display set and power source
+unchanged across a comparison: quit the app with an Apple Event and wait until it
+has exited (`open` can fail with `-600` for a few seconds after that), launch
+with `open --env WALLPAPER_MACHINE_DIAGNOSTICS=60 --env
+WALLPAPER_MACHINE_DIAGNOSTICS_DELAY=120`, and start a 60-second measurement 120
+seconds after launch. These independently started windows approximately overlap;
+the delay alone does not synchronize their boundaries. The diagnostics report's
+`window elapsed_ms` gives its own measured duration, and `draws_executed` divided
+by that duration is diagnostic-window draw throughput, not displayed FPS. A
+same-throughput power claim needs timestamped counter deltas aligned to the
+actual power window. Neither the configured ceiling nor timer-wakeup counts
+provide elapsed time or displayed-frame counts.
+
+The observed 45–52 draws/s at a configured 60 fps ceiling remain measurements,
+not an explanation of the shortfall. `ThreadTimer` schedules from the previous
+tick and records the next tick before invoking the callback; `FrameTimer` posts
+DRAW asynchronously. `FrameEnd` calls `WakeOnce()` only for an outstanding update
+request, not after every ordinary frame. These observations do not establish a
+period of "16.7 ms plus frame work". The app opens its
+control panel at launch, so each such run includes it; while the library page
+is visible, installed GIF previews animate. Some runs showed WebContent at
+8–13 % CPU and higher WindowServer CPU, but the recordings did not establish
+that preview animation caused the difference. With other applications running, system power with the
+app quit ranged from 10 W to 25 W over one morning and package power moved by
+about 1 W between repeats; the app's own CPU and GPU percentages were the
+steadier signal, and system power needs a baseline taken minutes from the run it
+is set against.
 
 ## Runtime counters
 
@@ -56,9 +125,12 @@ hidden, provided another consumer still presents it. Collapsing them would make
 a correctly suspended surface look busy.
 
 `RuntimeDiagnosticsSession` opens both halves for a bounded window and produces
-one aggregated report. The application starts one when
-`WALLPAPER_MACHINE_DIAGNOSTICS=<seconds>` is set in the environment; without
-that variable nothing is started, nothing counts and no timer exists.
+one aggregated report, headed by how long the window actually ran
+(`window elapsed_ms=`), measured rather than assumed. The application starts
+one when `WALLPAPER_MACHINE_DIAGNOSTICS=<seconds>` is set in the environment,
+`WALLPAPER_MACHINE_DIAGNOSTICS_DELAY=<seconds>` after launch when that is set
+too; a value that is not whole seconds starts nothing. Without the first
+variable nothing is started, nothing counts and no timer exists.
 
 The counters exist to answer one question per condition: did the work for a
 surface nobody can see actually stop? A count that keeps rising for an occluded
@@ -74,13 +146,14 @@ relabelled as displayed frames, and no frame-rate claim may be derived from it.
 
 ### A/B comparison entry points
 
-Two switches make a comparison measure one change in one binary rather than two
-builds. Both cover a strategy only: neither restores a resource-lifetime or
+Three switches make a comparison measure one change in one binary rather than
+two builds. All cover a strategy only: none restores a resource-lifetime or
 decode-correctness defect.
 
 | Switch | Off (default) | On |
 |---|---|---|
 | `WALLPAPER_MACHINE_CONTENT_PACING=1` | Tick at the configured ceiling | Pace video to its observed content rate |
+| `WALLPAPER_MACHINE_FEEDBACK_COPIES=1` | Native Metal trades textures for a copy a layer only makes to read the image it draws into | Every such copy is made as a copy; the picture is byte-identical either way |
 | `experimental.native_video_backend` in the app config | Every wallpaper on the scene engine | Eligible plain local videos on the platform player |
 
 Demand-driven pacing is off by default because its remaining exposure cannot be
@@ -148,10 +221,12 @@ saving                    = (old incremental - new incremental) / old incrementa
 
 ## Authorization boundary
 
-`scripts/power_benchmark.py` is safe to run: it only reads configuration.
-Everything that produces an actual power number is out of scope for routine
-verification and needs explicit authorization, because it requires controlling
-the desktop, changing the user's wallpaper, or elevated sampling:
+Without `--powermetrics`, `scripts/power_benchmark.py` is safe to run: it reads
+configuration and the counters of processes that are already running, and
+changes nothing. Everything else that produces an actual power number is out of
+scope for routine verification and needs explicit authorization, because it
+requires controlling the desktop, changing the user's wallpaper, or elevated
+sampling:
 
 - `powermetrics` (root), Instruments/`xctrace`, Power Profiler, external meters.
 - Setting a wallpaper, unlocking or locking the session, or driving Spaces.

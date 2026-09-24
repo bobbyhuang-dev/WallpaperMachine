@@ -259,6 +259,37 @@ TEST(StaticSubgraphCache, StatsCountEveryPassExactlyOnce)
     EXPECT_EQ(stats.skipped_passes, 1u) << "only the static target is reused, on the second frame";
 }
 
+TEST(StaticSubgraphCache, OnlyWritersOfCacheableTargetsAreSampled)
+{
+    // What `Plan` reads decides what a renderer has to measure every frame.
+    // The writers of a target that is never reused -- dynamic itself, or fed
+    // by one -- and a pass that writes nothing tracked execute whatever their
+    // sample says, so taking one is work with no reachable result.
+    StaticSubgraphCache cache;
+    cache.Compile(std::vector {
+        Pass("_rt_clock", {}, static_cast<uint32_t>(DynamicReason::TimeUniform)),
+        Pass("_rt_face", { "_rt_clock" }),
+        Pass("_rt_static"),
+        Pass(""),
+    });
+    PinAllCacheable(cache);
+    EXPECT_FALSE(cache.PassSampled(0)) << "a time-driven target is redrawn every frame";
+    EXPECT_FALSE(cache.PassSampled(1)) << "a reader of a dynamic target is redrawn with it";
+    EXPECT_TRUE(cache.PassSampled(2));
+    EXPECT_FALSE(cache.PassSampled(3)) << "a pass with no target always executes";
+    EXPECT_FALSE(cache.PassSampled(4));
+
+    // And the plan agrees: an unsampled pass may report anything without
+    // changing what is reused.
+    RunFrame(cache, { kStable, kStable, kStable, kStable });
+    const StaticPassSample untaken {};
+    const auto             skip = RunFrame(cache, { untaken, untaken, kStable, untaken });
+    EXPECT_EQ(skip[2], 1) << "reusing the static target depended on a sample nobody takes";
+    EXPECT_EQ(skip[0], 0);
+    EXPECT_EQ(skip[1], 0);
+    EXPECT_EQ(skip[3], 0);
+}
+
 TEST(CopyElisionPlan, ACopyNobodyReadsIsRemoved)
 {
     const std::vector passes {

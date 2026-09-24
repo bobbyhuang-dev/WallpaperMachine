@@ -25,6 +25,45 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-24 — Interleaved feedback-copy fix and timing-evidence corrections
+
+- `MetalSceneDraw.InterleavedFeedbackCopiesPreserveEachReadersImage` compares both A/B targets to the blit path over four frames with both blits removed; restoring single-prefix overwrite semantics fails A's pixel comparison, and the restored per-reader implementation passes.
+- `python3 scripts/check_renderer.py` — exit 0; every recorded binary exited 0, Metal scene smoke 36 passed / 1 local-project skip, generated pairs pixel-equal and 8-project x2 reload cycles passed.
+- Separate local-project harness for 3620484312 (seed 1, 3456x2234 surface): 120 frames, 47 render passes/frame (22 scene-output), 0 blits/frame; `cmp` against the original baseline PPM exited 0.
+- `python3 scripts/test.py` — exit 0; Python suites passed, native 569 passed / 0 failed / 11 skipped.
+- `python3 scripts/build.py --configuration Release` — exit 0 after both gates; delivered build/Build/Products/Release/WallpaperMachine.app. Binary newer than build start and changed from the previous delivery; linked texture-pair vector insertion/erase symbols confirm the pending-copy collection is included.
+- Correction to previous power reports: 45–52 draws/s is an observation, not proof that each frame adds its work time to 16.7 ms. ThreadTimer schedules from last_tick, set before the asynchronous DRAW callback; FrameEnd wakes only an outstanding request. No frame-clock code was changed.
+- Correction to prior “exact power window” / “matched throughput” claims: delayed diagnostics and the benchmark start independently and only approximately overlap; equal diagnostic-window draw rates do not prove equal throughput during the power window. Presented FPS remains unavailable; no new watt-saving or memory/display attribution is claimed.
+- No app launch/quit, desktop setting changes, on-screen visual checks or new power measurements in this correction. Renderer provenance and owning documentation updated; historical measurements are superseded by the corrections above.
+
+## 2026-09-24 — Power follow-up: window-aligned measurement, feedback-copy texture trade, what the wallpaper costs
+
+On battery, built-in display only, other applications in use; every app run relaunched the Release build, which opens its control panel at launch.
+
+- `power_benchmark.py` — 21 tests; a refused powermetrics now waits out the window (new mocked-clock test fails pre-fix at 0.2 s); system power from AppleSmartBattery accumulators; coreaudiod role
+- `WALLPAPER_MACHINE_DIAGNOSTICS_DELAY` + `window elapsed_ms`: draws counted over exactly the power window; `python3 scripts/test.py` — exit 0, 569 passed, 0 failed, 11 skipped
+- `python3 scripts/check_renderer.py` — exit 0 (metal_scene_draw_smoke 35); feedback trade test fails with the opening copy removed; harness: 21 → 0 blits/frame, 47 render passes, PPM identical to baseline and with `WALLPAPER_MACHINE_FEEDBACK_COPIES=1`
+- `python3 scripts/build.py --configuration Release` — built 09:39; binary contains the trade, the A/B switch and the delayed window
+- Trade vs copies at matched throughput (51.31/51.30 draws/s): app GPU 38.6 → 33.0 %, CPU 43.8 → 40.4 %, package 2.51 → 2.34 W, system 23.7/24.4 W (noise); an unmatched pair (52.1/51.0): GPU 33.1 → 24.4 %, system 28.8/28.7 W
+- Whole wallpaper: app quit 9.6–24.8 W system, 0.9–1.3 W package (busy spell 3.4 W); default 60 fps ceiling = 44.8–52.1 draws/s, 21.4–28.8 W system, 2.3–3.5 W package; 30 fps: 17.5/18.9 W, 1.7/2.6 W; 1 fps: 17.6 W, 0.9 W
+- coreaudiod 13–17 % CPU whenever this audio-reactive wallpaper runs, even at 1 fps; control panel busy in some runs (WebContent 8–13 %, WindowServer ~+20 points), inferred from its animated GIF previews
+- Not measured: a second display (configured with the same wallpaper), AC power with charging, presented frames (unavailable)
+
+## 2026-09-24 — Power hotspots: Metal render-pass sharing, per-frame CPU, poster retention
+
+Scene 3620484312 on the built-in 3456×2234 display, 60 fps cap, AC power, other applications running; every desktop run relaunched the app, which opens its control panel at launch.
+
+- `python3 -m unittest discover -s scripts/tests -p test_power_benchmark.py` — 17 passed; `power_benchmark.py --measure 5 --condition T3 --print-only` reports app/WindowServer CPU and GPU %
+- `python3 scripts/check_renderer.py` — exit 0, every binary 0 (metal_scene_draw_smoke 34, static_subgraph_cache_test 26, metal_backend_test 35), generated cases pixel-equal; the new batching test fails with sharing disabled (3 render passes, expected 1)
+- `python3 scripts/test.py --only DesktopWallpaperTests` — 27 passed; `python3 scripts/test.py` — exit 0, 566 passed, 0 failed, 11 skipped
+- Harness `WE_TEST_METAL_PROJECTS` (seed 1, 3456x2234): 179.0 → 47.0 render passes/frame (154 → 22 into the scene image), 21 blits unchanged, 1.82 → 0.75 ms CPU per drawFrame; PPM byte-identical to the baseline (two baseline runs identical)
+- Grouping scene-output passes first (plan step 5) was reverted: no change, the 21 remaining scene-image passes each follow a full-frame copy a clipping-mask effect reads
+- `python3 scripts/build.py --configuration Release` — built; app binary newer than the build start and contains the renderer change
+- Desktop `power_benchmark.py --measure 60 --powermetrics`, increments over paired B0: native Metal before app CPU 38.2/37.6 %, GPU 65.1/62.9 %, package +7.11/+6.95 W; after 27.7/27.8 %, 19.4/24.2 %, +4.85/+3.00 W; Compatibility +1.58 before, +2.64 W after. Not a same-throughput comparison: draws over the power window were not counted
+- Draws executed per 180-s diagnostics session, start-up included: 9155/7435 before, 9313/7885 after (corrected: an earlier draft of this line divided by timer wakeups, which are not elapsed time, and reported 60.0/50.6 fps). Presented frames unavailable. WindowServer CPU 44–47 % in every run including app-quit B0, not attributable; package CPU power moved ±1 W between repeats
+- DesktopPosters: 351 PNGs (3.2 GB) → 4 (50 MB) at the first launch of the new build (its display is on the bounded-retention path)
+- Not verified: on-screen visual equality beyond the harness PPM, other scenes, and a Space-change or wake on the real desktop
+
 ## 2026-09-22 — Current Release built and old build residue cleared
 
 - Requested build and cleanup. Prebuild gate: python3 scripts/test.py: 142 Python tests passed; 563 native passed, 0 failed, 11 skipped of 574. No desktop UI, network or media opt-ins enabled.
@@ -102,36 +141,3 @@ goes. Trimming is allowed; editing an entry's recorded result is not.
 - Documentation: updated control-panel, workshop-downloads and native coverage owners; local link targets checked. Published changelog remains release-generated. Removed task-owned preview scripts/raw frames; retained disposable synthetic screenshots and review evidence. clean.py --dry-run also included shared artifacts, so no blanket purge was performed.
 - Isolation: task-owned Chromium tab and localhost preview service released. No application launch/restart, desktop control, real Steam login, wallpaper changes or system permission approval. No Release build; the running app still has the old behavior.
 - Limits: Chromium source WebUI visual/runtime evidence and offscreen WKWebView behavior only. Actual desktop WKWebView presentation, system dialogs, real Steam, wallpaper presentation and power consumption remain unverified.
-
-## 2026-09-22 — Release build for Perfect Wallpaper compatibility repair
-
-- Pre-build gate for the unchanged repair sources: cargo test --release -p wallpaper-bridge --lib --quiet passed 322 tests; python3 scripts/test.py passed 141 Python and 544 native tests, with 11 opt-in skips; python3 scripts/check_renderer.py passed its generated matrix with three private-corpus skips. These commands were completed before the requested build and not needlessly rerun.
-- python3 scripts/build.py --configuration Release: first attempt exited 65 at CodeSign because the built app directory carried com.apple.FinderInfo and com.apple.fileprovider.fpfs#P. Removed extended attributes only from build/Build/Products/Release/WallpaperMachine.app with xattr -cr, then repeated the full command: exit 0.
-- Delivered build/Build/Products/Release/WallpaperMachine.app. codesign --verify --deep --strict passed; diff -qr WebUI against the bundled Contents/Resources/WebUI returned 0.
-- The final Mach-O contains ProjectProperty::web_value and ProjectModel::parse. SHA-256 of the executable: fa0a28cfc648b42c087b72f66cc3216049f30ca724f23f9983a3257f99602fbc. Repair source hashes were unchanged throughout the build.
-- Build identity: pre-commit base 1d7f181423cf840c485e209cfb150e1316531bea plus the five repaired bridge source/test files; their sorted source-hash inventory SHA-256 is 9e9915a8c12771afc4754f8eaf7a6fecbba84726d7e83b0dbb3632caf0a10436. Workspace inspection found no untracked build source; one unrelated untracked document was excluded from the commit.
-- No version bump, release publication, installation, app launch/quit/restart, desktop interaction, or wallpaper setting change. Runtime/visual/power limits remain those of the preceding offscreen verification; the user must quit and reopen the delivered app to load it.
-
-## 2026-09-22 — Web wallpaper authored property compatibility
-
-- Implementation: preserve fractional property order and all distinct IDs at tied or missing positions; restore authored combo JSON types only at Web export, retaining existing string editor/persistence keys. Owning Web documentation and renderer provenance updated.
-- Regression proof: both new failure cases failed before the fix (discarded properties and stringified numeric modes). cargo test --release -p wallpaper-bridge --lib --quiet: 322 passed, 0 failed, 0 ignored.
-- Runtime proof: the actual installed Perfect Wallpaper project was parsed by production ProjectModel and loaded through production WebWallpaperPage in an offscreen WKWebView. Parsed properties increased from 100 to 172; exported runtime values from 73 to all 137 authored runtime properties. The saved image-12 selection changed the page background from imgs/1.jpg to imgs/12.jpg; the image decoded at 2560x1080. All combo payload types matched their authored options.
-- python3 scripts/build.py --renderer-only: exit 0; renderer archive and Swift bindings regenerated. No Release application build or delivery, installation, app launch, restart, wallpaper setting, or author-asset modification.
-- python3 scripts/test.py: exit 0; 141 Python tests passed; 544 native tests passed, 0 failed, 11 skipped (9 opt-in media tests and 2 live Workshop network tests).
-- python3 scripts/check_renderer.py: exit 0; all test/probe processes returned 0; ten generated pooled/isolated pairs were pixel-equal with expected pixels and no diagnostics; eight generated projects completed two reload cycles. Three private-corpus cases skipped: LonelyCat, Workshop3409533530, and local Metal projects.
-- Verification limits: page state/resource loading only, not desktop presentation, animation smoothness, video playback, real audio response, or power. Diagnostic network access was blocked and media playback suspended; resulting media play rejections and author-caught uninitialized timer logs were not treated as host failures.
-- Cleanup: throwaway Rust/Swift diagnostic sources and the standalone Swift executable removed. python3 scripts/clean.py --dry-run inspected successfully; broad cleanup was not run because it would remove shared verification artifacts. Published changelog remains release-generated.
-
-## 2026-09-22 — Release system: generated notes, draft-first publishing, deleted old releases
-
-Reworked the release system end to end. scripts/release_notes.py writes the GitHub Release body and CHANGELOG.md from the commits between two tags; scripts/publish_release.py refuses a live release and cannot let Latest go backwards; build.yml gates on the test suite, verifies the unpacked archive and attests provenance; Settings -> About shows what the newest release changed. All thirteen releases through v0.5.0 were deleted at the owner's request, tags kept.
-
-- `python3 scripts/test.py` — exit 0; 554 tests: 543 passed, 0 failed, 11 skipped
-- `scripts/tests/test_release_notes.py` — 25 tests: classification, rendering, changelog ordering and range resolution against a throwaway git repository
-- `scripts/tests/test_publish_release.py` — 13 tests: a live release is refused before any mutation, a failed upload never reaches --draft=false, an older version finishing last gets --latest=false
-- Offscreen WebKit (ControlPanelShellTests) drives Settings -> About and asserts the What's new title, heading and lines, and that it stops at the install footer
-- Both CI invocation shapes exercised locally: `--tag vX --to HEAD --changelog --apply` (Version) and `--tag vX --release-body --built-from --output` (Build)
-- Release deletion verified: `gh release list` empty, `git ls-remote --tags origin` still 13 version tags, releases/latest 404, v0.1.0 and v0.5.0 still resolve to eb72174b0 and 66cfd6e0d
-- Provenance claim corrected against actions/toolkit packages/attest/src/provenance.ts: the SLSA predicate records claims.ref/claims.sha (the triggering push), not the bump commit the tag points at; the built revision is recorded in the release body instead
-- Not verified: no CI run (publishing remains blocked by the LICENSING.md gate), no Release build, no desktop run

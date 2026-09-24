@@ -165,6 +165,13 @@ fragment float4 owe_present_fragment(OweVarying in [[stage_in]],
                                      sampler source_sampler [[sampler(0)]]) {
     return source.sample(source_sampler, in.texcoord);
 }
+
+// Texel for texel, never filtered: the destination is the source's size and
+// format, so each fragment reads exactly the pixel it covers.
+fragment float4 owe_copy_fragment(OweVarying in [[stage_in]],
+                                  texture2d<float> source [[texture(0)]]) {
+    return source.read(uint2(in.position.xy));
+}
 )";
 
 struct PresentVertex
@@ -1084,6 +1091,19 @@ bool FoldsOnRight(std::string_view name)
     return name == G_MVPI || name == G_ETVPI;
 }
 
+/// `WALLPAPER_MACHINE_FEEDBACK_COPIES=1` makes every feedback copy as a copy,
+/// so a power comparison can measure the texture trade against it in one
+/// binary. A measurement switch only: both ways draw the same bytes. Read
+/// once, like the other A/B switches.
+bool FeedbackCopiesForcedByEnvironment()
+{
+    static const bool forced = [] {
+        const char* value = std::getenv("WALLPAPER_MACHINE_FEEDBACK_COPIES");
+        return value != nullptr && value[0] != '\0' && std::string_view(value) != "0";
+    }();
+    return forced;
+}
+
 } // namespace
 
 MetalPipelineArchiveStatus MetalPipelineArchiveStatusForDiagnostics()
@@ -1127,6 +1147,10 @@ struct MetalRender::Impl
     id<MTLBuffer>              present_vertices { nil };
     id<MTLBuffer>              present_vertices_flipped { nil };
     id<MTLSamplerState>        present_sampler { nil };
+    /// Copies a scene target into another of its size and format texel for
+    /// texel, as the first draw of a render pass. Built with the graph like
+    /// every other pipeline, and kept, like them, across surface resets.
+    id<MTLRenderPipelineState> scene_copy_pipeline { nil };
     MTLPixelFormat             drawable_format { MTLPixelFormatBGRA8Unorm };
 
     // ---- host services
@@ -1154,6 +1178,26 @@ struct MetalRender::Impl
 
     // ---- compiled graph
     using TextureSlotBinding = MetalRenderTextureSlotBinding;
+
+    /// Where one uniform write of a program lands, resolved once.
+    ///
+    /// A program's writes arrive in the same order every frame -- its defaults,
+    /// its constants, then the value updater's -- so the n-th write of a frame
+    /// is looked up by position and its name only compared, instead of hashed
+    /// into the reflection for every value of every pass of every frame. A
+    /// write whose name differs from the one remembered at its position is
+    /// resolved again, so a sequence that changes costs a lookup, never a
+    /// wrong offset. The member is a copy, so nothing here outlives the
+    /// reflection it came from.
+    struct UniformWriteSlot
+    {
+        std::string        name;
+        bool               present { false };
+        bool               bones { false };
+        /// 0: no clip-space fold, 1: folded on the left, 2: on the right.
+        uint8_t            fold { 0 };
+        MetalUniformMember member {};
+    };
 
     /// One material's second program: the same author shader translated to
     /// sample a video slot's NV12 planes instead of one pre-converted image.
@@ -1190,6 +1234,8 @@ struct MetalRender::Impl
         /// mid-session to make room would move storage the current frame is
         /// already writing into.
         std::vector<id<MTLBuffer>>      uniform_ring;
+        /// This program's writes, by position.
+        std::vector<UniformWriteSlot>   uniform_writes;
     };
 
     /// How far the optional variant of one pass has got.
@@ -1217,6 +1263,8 @@ struct MetalRender::Impl
         int                                fragment_uniform_slot { -1 };
         uint32_t                           uniform_size { 0 };
         uint32_t                           uniform_offset { 0 };
+        /// The ordinary program's writes, by position.
+        std::vector<UniformWriteSlot>      uniform_writes;
         std::vector<TextureSlotBinding>    texture_slots;
         /// The plane-sampling variant of this pass, when one was produced.
         VideoPlaneDraw                     video_planes;
@@ -1402,6 +1450,77 @@ struct MetalRender::Impl
     /// rather than waiting for the scene's graph to be compiled again.
     bool                                  optimization_applied { false };
 
+    // ---- encoder counts
+    /// Render and blit encoders the pass loop opened: this frame's while it is
+    /// being encoded, and the last finished loop's. The composition and the
+    /// poster are not scene passes and are not counted. Read by tests only;
+    /// nothing in the draw path consults them.
+    struct EncodeCounts
+    {
+        uint32_t render_passes { 0 };
+        uint32_t scene_output_passes { 0 };
+        uint32_t blit_passes { 0 };
+    };
+    EncodeCounts frame_encodes;
+    EncodeCounts last_frame_encodes;
+
+    // ---- per-pass encode inputs
+    /// Each description's colour target and, when it depth-tests, its depth
+    /// attachment: resolved whenever the target table changes rather than
+    /// looked up by name for every pass of every frame. nil where the table
+    /// has none.
+    std::vector<id<MTLTexture>> pass_targets;
+    std::vector<id<MTLTexture>> pass_depths;
+    /// Whether a pass samples the image it renders into. Such a pass starts a
+    /// render pass of its own: an image cannot be sampled by the render pass
+    /// it is attached to.
+    std::vector<uint8_t>        pass_reads_own_target;
+    id<MTLTexture>              scene_output_target { nil };
+    std::string                 scene_output_key;
+
+    // ---- feedback copies
+    /// A copy that exists only so the next pass can read the image it is
+    /// about to draw into: the graph copies the image `source_key` names into
+    /// `copy_key`, and `reader` then draws into the source while sampling the
+    /// copy. The copy's texture already holds the right pixels by the time the
+    /// reader draws, if the two names trade textures instead: the copy's name
+    /// takes the source's texture, which holds exactly what the copy would,
+    /// and the reader draws into the other one after copying those pixels in
+    /// as its render pass's first draw. That removes the copy and the load of
+    /// the image back into tile memory, which at a scene's full size is most
+    /// of what such a layer costs, and every name still reads what it did.
+    ///
+    /// Planned only where the trade is exact: both textures private to their
+    /// one name, one size and format, one mip level, no depth attachment,
+    /// neither image reused across frames, and the reader the next pass to
+    /// touch the source, loading it rather than clearing to nothing or leaving
+    /// it undefined. Nothing between the two writes the copy.
+    struct FeedbackSwap
+    {
+        bool                     valid { false };
+        std::size_t              reader { 0 };
+        /// Whether the reader's render pass begins by copying the source in.
+        /// A reader that clears needs none.
+        bool                     prefix { false };
+        std::string              source_key;
+        std::string              copy_key;
+        /// Passes that render into either name, whose cached target follows
+        /// the trade.
+        std::vector<std::size_t> source_passes;
+        std::vector<std::size_t> copy_passes;
+    };
+    /// One entry per description; meaningful only for copies.
+    std::vector<FeedbackSwap>   feedback_swaps;
+    /// The trades made while encoding this frame, undone if it is abandoned:
+    /// its command buffer never runs, so the textures still hold what they
+    /// held when the frame began.
+    std::vector<std::size_t>    frame_swaps;
+    /// Opening copies still owed in this frame: the texture a reader will
+    /// render into, and the image it opens with. More than one can be owed at
+    /// once -- the plan lets unrelated passes, other trades among them, run
+    /// between a copy and its reader -- so each reader takes its own by target.
+    std::vector<std::pair<id<MTLTexture>, id<MTLTexture>>> opening_copies;
+
     bool fail(std::string message)
     {
         last_error = std::move(message);
@@ -1425,6 +1544,24 @@ struct MetalRender::Impl
     bool prepareDepthTargets();
     id<MTLDepthStencilState> depthStencilFor(bool test, bool write);
     void planCopyElision(Scene& scene);
+    /// Fills the per-pass encode inputs from the current target tables.
+    void refreshPassTargets(Scene& scene);
+    /// Whether pass `index` draws this frame: a prepared draw whose layer is
+    /// visible, or that has to produce its image for a consumer while hidden.
+    /// The uniform write, the geometry upload and the encoder all ask this one
+    /// question, so they cannot disagree about a pass.
+    bool passDraws(std::size_t index) const;
+    /// Decides which copies are replaced by a trade of textures. Called after
+    /// the reuse table is built, because a reused image must keep its texture.
+    void planFeedbackSwaps();
+    bool ensureSceneCopyPipeline();
+    /// Whether the reader of copy `index` renders this frame. A reader that
+    /// neither draws nor clears opens no render pass, so it could not copy
+    /// the source in, and the copy is executed as a copy instead.
+    bool feedbackReaderRenders(std::size_t index) const;
+    /// Trades the textures of copy `index`'s two names, everywhere this backend
+    /// looks them up. Its own inverse.
+    void tradeFeedbackTextures(std::size_t index);
     void compileStaticCache(Scene& scene);
     void releaseSceneOptimization();
     /// Rebuilds the copy plan, the target table and the reuse table for the
@@ -1512,7 +1649,7 @@ struct MetalRender::Impl
                                            const std::vector<SceneMetalStage>& stages,
                                            MTLVertexDescriptor* vertex_descriptor);
     void computeDemandReasons(Scene& scene, rg::RenderGraph& graph);
-    void writeUniforms(Scene& scene, const ScenePassDescription& desc, const PreparedPass& pass,
+    void writeUniforms(Scene& scene, const ScenePassDescription& desc, PreparedPass& pass,
                        const MetalShaderReflection& reflection, bool planes_active,
                        uint8_t* destination);
     WallpaperScalingLayout scalingLayout(const Scene& scene, uint32_t width,
@@ -1544,6 +1681,14 @@ void MetalRender::Impl::releaseGraph()
     prepared.clear();
     targets.clear();
     depth_targets.clear();
+    pass_targets.clear();
+    pass_depths.clear();
+    pass_reads_own_target.clear();
+    scene_output_target = nil;
+    scene_output_key.clear();
+    feedback_swaps.clear();
+    frame_swaps.clear();
+    opening_copies.clear();
     images.clear();
     runtime_image_rings.clear();
     runtime_image_keys.clear();
@@ -2145,6 +2290,174 @@ bool MetalRender::Impl::prepareDepthTargets()
         depth_targets.emplace(key, texture);
     }
     return true;
+}
+
+void MetalRender::Impl::refreshPassTargets(Scene& scene)
+{
+    const auto lookup = [](const std::unordered_map<std::string, id<MTLTexture>>& table,
+                           const std::string& key) -> id<MTLTexture> {
+        if (key.empty()) return nil;
+        const auto found = table.find(key);
+        return found != table.end() ? found->second : nil;
+    };
+    pass_targets.assign(descriptions.size(), nil);
+    pass_depths.assign(descriptions.size(), nil);
+    pass_reads_own_target.assign(descriptions.size(), uint8_t { 0 });
+    for (std::size_t i = 0; i < descriptions.size(); ++i) {
+        const auto&    desc   = descriptions[i];
+        id<MTLTexture> target = lookup(targets, desc.target_key);
+        pass_targets[i]       = target;
+        if (i < prepared.size() && prepared[i].depth_test) {
+            pass_depths[i] = lookup(depth_targets, desc.target_key);
+        }
+        if (target == nil) continue;
+        // Through the table, not by name: a key the copy plan folded onto
+        // another shares that key's image.
+        for (const auto& key : desc.texture_keys) {
+            if (lookup(targets, key) != target) continue;
+            pass_reads_own_target[i] = 1;
+            break;
+        }
+    }
+    scene_output_key    = scene.ResolveRenderTargetName(SpecTex_Default);
+    scene_output_target = lookup(targets, scene_output_key);
+}
+
+bool MetalRender::Impl::passDraws(std::size_t index) const
+{
+    const auto& pass = prepared[index];
+    if (pass.kind != MetalPassKind::CustomShader || pass.pipeline == nil) return false;
+    const auto& desc = descriptions[index];
+    return desc.visibility_node == nullptr || desc.visibility_node->EffectiveVisible() ||
+           (desc.visibility_node->MustProduce() && ! desc.target_key.empty() &&
+            desc.target_key != wallpaper::SpecTex_Default);
+}
+
+bool MetalRender::Impl::ensureSceneCopyPipeline()
+{
+    if (scene_copy_pipeline != nil) return true;
+    if (present_library == nil) return false;
+    MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
+    descriptor.vertexFunction   = [present_library newFunctionWithName:@"owe_present_vertex"];
+    descriptor.fragmentFunction = [present_library newFunctionWithName:@"owe_copy_fragment"];
+    descriptor.colorAttachments[0].pixelFormat = kSceneTargetFormat;
+    NSError* error = nil;
+    scene_copy_pipeline = [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+    if (scene_copy_pipeline == nil) {
+        // Not a failed scene: the copies are simply made as copies.
+        LOG_ERROR("metal render: the scene copy pipeline failed to build: %s",
+                  error != nil ? error.localizedDescription.UTF8String : "unknown error");
+        return false;
+    }
+    return true;
+}
+
+void MetalRender::Impl::planFeedbackSwaps()
+{
+    feedback_swaps.assign(descriptions.size(), FeedbackSwap {});
+    frame_swaps.clear();
+    opening_copies.clear();
+    // Part of the copy plan, and switched with it: with scene optimisation off,
+    // every copy the graph asks for is made as a copy.
+    if (! vulkan::SceneOptimizationEnabled() || FeedbackCopiesForcedByEnvironment() ||
+        ! ensureSceneCopyPipeline()) {
+        return;
+    }
+
+    // A texture another name shares -- through an elided copy -- would carry
+    // that name along with the trade.
+    std::unordered_map<const void*, uint32_t> names_per_texture;
+    for (const auto& [key, texture] : targets) {
+        (void)key;
+        if (texture != nil) ++names_per_texture[(__bridge const void*)texture];
+    }
+    const auto exclusive = [&](const std::string& key) -> id<MTLTexture> {
+        const auto found = targets.find(key);
+        if (found == targets.end() || found->second == nil) return nil;
+        return names_per_texture[(__bridge const void*)found->second] == 1 ? found->second : nil;
+    };
+    const auto reads = [](const ScenePassDescription& desc, const std::string& key) {
+        if (desc.kind == MetalPassKind::Copy) return desc.source_key == key;
+        return std::find(desc.texture_keys.begin(), desc.texture_keys.end(), key) !=
+               desc.texture_keys.end();
+    };
+    const auto uses_depth = [this](const std::vector<std::size_t>& passes) {
+        return std::any_of(passes.begin(), passes.end(), [this](std::size_t k) {
+            return k < pass_depths.size() && pass_depths[k] != nil;
+        });
+    };
+
+    for (std::size_t i = 0; i < descriptions.size(); ++i) {
+        const auto& copy = descriptions[i];
+        if (copy.kind != MetalPassKind::Copy || copy.source_key == copy.target_key) continue;
+        if (i < copy_elision.size() && copy_elision[i] != vulkan::CopyElision::None) continue;
+        id<MTLTexture> source      = exclusive(copy.source_key);
+        id<MTLTexture> destination = exclusive(copy.target_key);
+        if (source == nil || destination == nil) continue;
+        if (source.width != destination.width || source.height != destination.height ||
+            source.pixelFormat != kSceneTargetFormat ||
+            destination.pixelFormat != kSceneTargetFormat || source.mipmapLevelCount != 1 ||
+            destination.mipmapLevelCount != 1) {
+            continue;
+        }
+
+        // The next pass to touch the source has to be the one that draws into
+        // it without reading it, and nothing before it may write the copy.
+        std::size_t reader = descriptions.size();
+        for (std::size_t j = i + 1; j < descriptions.size(); ++j) {
+            const auto& next = descriptions[j];
+            if (next.target_key == copy.target_key) break;
+            const bool writes = next.target_key == copy.source_key;
+            const bool read   = reads(next, copy.source_key);
+            if (! writes && ! read) continue;
+            if (writes && ! read) reader = j;
+            break;
+        }
+        if (reader == descriptions.size()) continue;
+        const auto& draw = descriptions[reader];
+        if (draw.kind != MetalPassKind::CustomShader ||
+            draw.load_action == MetalLoadAction::DontCare) {
+            continue;
+        }
+        // An image the reuse table keeps across frames keeps its texture too.
+        if (static_cache.PassSampled(i) || static_cache.PassSampled(reader)) continue;
+        if (reader < pass_reads_own_target.size() && pass_reads_own_target[reader] != 0) continue;
+
+        FeedbackSwap swap;
+        for (std::size_t k = 0; k < descriptions.size(); ++k) {
+            if (descriptions[k].target_key == copy.source_key) swap.source_passes.push_back(k);
+            if (descriptions[k].target_key == copy.target_key) swap.copy_passes.push_back(k);
+        }
+        // The copy that opens the reader's render pass is built for a colour
+        // attachment alone.
+        if (uses_depth(swap.source_passes) || uses_depth(swap.copy_passes)) continue;
+        swap.valid        = true;
+        swap.reader       = reader;
+        swap.prefix       = draw.load_action == MetalLoadAction::Load;
+        swap.source_key   = copy.source_key;
+        swap.copy_key     = copy.target_key;
+        feedback_swaps[i] = std::move(swap);
+    }
+}
+
+bool MetalRender::Impl::feedbackReaderRenders(std::size_t index) const
+{
+    const auto reader = feedback_swaps[index].reader;
+    if (reader < static_skip.size() && static_skip[reader] != 0) return false;
+    return passDraws(reader) || descriptions[reader].load_action == MetalLoadAction::Clear;
+}
+
+void MetalRender::Impl::tradeFeedbackTextures(std::size_t index)
+{
+    const auto& swap   = feedback_swaps[index];
+    const auto  source = targets.find(swap.source_key);
+    const auto  copy   = targets.find(swap.copy_key);
+    if (source == targets.end() || copy == targets.end()) return;
+    std::swap(source->second, copy->second);
+    for (const auto k : swap.source_passes) pass_targets[k] = source->second;
+    for (const auto k : swap.copy_passes) pass_targets[k] = copy->second;
+    if (swap.source_key == scene_output_key) scene_output_target = source->second;
+    if (swap.copy_key == scene_output_key) scene_output_target = copy->second;
 }
 
 id<MTLDepthStencilState> MetalRender::Impl::depthStencilFor(bool test, bool write)
@@ -2844,27 +3157,38 @@ bool MetalRender::Impl::uploadDynamicMesh(PreparedPass& pass, const ScenePassDes
 }
 
 void MetalRender::Impl::writeUniforms(Scene& scene, const ScenePassDescription& desc,
-                                      const PreparedPass& pass,
+                                      PreparedPass& pass,
                                       const MetalShaderReflection& reflection, bool planes_active,
                                       uint8_t* destination)
 {
     const auto* block = reflection.uniformBlock();
     if (block == nullptr || destination == nullptr) return;
 
-    const auto write = [&](std::string_view name, const ShaderValue& value) {
-        const auto* member = reflection.member(name);
-        if (member == nullptr) return;
+    auto&       writes = planes_active ? pass.video_planes.uniform_writes : pass.uniform_writes;
+    std::size_t cursor = 0;
+    const auto  write  = [&](std::string_view name, const ShaderValue& value) {
+        if (cursor == writes.size()) writes.emplace_back();
+        auto& slot = writes[cursor++];
+        if (slot.name != name) {
+            const auto* found = reflection.member(name);
+            slot.name         = name;
+            slot.present      = found != nullptr;
+            slot.member       = found != nullptr ? *found : MetalUniformMember {};
+            slot.bones        = name == G_BONES;
+            slot.fold         = FoldsOnLeft(name) ? 1 : FoldsOnRight(name) ? 2 : 0;
+        }
+        if (! slot.present) return;
+        const auto* member = &slot.member;
 
         // The fold is applied to every matrix that carries clip space, so a
         // change to either API's convention is honoured rather than ignored.
         std::array<float, 16> folded {};
         const float*          data  = value.data();
         std::size_t           count = value.size();
-        if (count == 16 && (FoldsOnLeft(name) || FoldsOnRight(name))) {
+        if (count == 16 && slot.fold != 0) {
             Eigen::Matrix4f matrix = Eigen::Map<const Eigen::Matrix4f>(value.data());
             const Eigen::Matrix4f fold = MetalClipSpaceFold().cast<float>();
-            matrix                     = FoldsOnLeft(name) ? (fold * matrix).eval()
-                                                           : (matrix * fold).eval();
+            matrix = slot.fold == 1 ? (fold * matrix).eval() : (matrix * fold).eval();
             std::memcpy(folded.data(), matrix.data(), sizeof(folded));
             data = folded.data();
         }
@@ -2875,7 +3199,7 @@ void MetalRender::Impl::writeUniforms(Scene& scene, const ScenePassDescription& 
         // `g_Bones[N]`, or a stride it does not fit, has no correct placement:
         // the contiguous copy below would spill into whatever follows the
         // array, and drawing a truncated skeleton is not a fallback.
-        if (name == G_BONES) {
+        if (slot.bones) {
             const std::size_t bone_bytes = 16 * sizeof(float);
             if (member->array_count == 0 || member->array_stride < bone_bytes ||
                 bytes != member->array_count * bone_bytes) {
@@ -2955,8 +3279,7 @@ void MetalRender::Impl::writeUniforms(Scene& scene, const ScenePassDescription& 
         desc.node->SetCamera(desc.camera_override);
         restore_camera = true;
     }
-    auto& sprites = const_cast<PreparedPass&>(pass).sprites;
-    updater->UpdateUniforms(desc.node, desc.material_slot, sprites, write);
+    updater->UpdateUniforms(desc.node, desc.material_slot, pass.sprites, write);
     if (restore_camera) desc.node->SetCamera(original_camera);
 
     // Last, so it overrides the parser's constant. The shared value updater
@@ -3231,7 +3554,9 @@ bool MetalRender::Impl::applySceneOptimizationSetting(Scene& scene, id<MTLComman
     // table has rendered nothing, so the first frame after the change redraws
     // everything instead of trusting pixels an earlier plan produced.
     if (! prepareDepthTargets()) return false;
+    refreshPassTargets(scene);
     compileStaticCache(scene);
+    planFeedbackSwaps();
     optimization_applied = enabled;
     return true;
 }
@@ -3471,11 +3796,27 @@ bool MetalRender::Impl::planStaticSkips(Scene& scene)
         static_cache.InvalidateAll();
         return false;
     }
+    // Reuse needs a target that is both cacheable and pinned, and nothing is
+    // pinned when no target is cacheable or none fitted the budget at this
+    // size. `Plan` can then only answer "execute every pass", and sampling and
+    // hashing every pass to arrive there is work with no reachable result.
+    if (static_pinned_bytes == 0) {
+        static_cache.InvalidateAll();
+        uint64_t executed = 0;
+        for (const auto& desc : descriptions) {
+            if (desc.kind != MetalPassKind::Virtual) ++executed;
+        }
+        vulkan::RecordSceneOptimizationFrame(executed, 0);
+        return false;
+    }
     if (static_samples.size() != descriptions.size()) {
         static_samples.assign(descriptions.size(), vulkan::StaticPassSample {});
     }
+    // Only the writers of a cacheable target fold into a signature; the rest
+    // execute whatever their sample would say.
     for (std::size_t i = 0; i < descriptions.size(); ++i) {
-        static_samples[i] = frameSample(scene, i);
+        static_samples[i] =
+            static_cache.PassSampled(i) ? frameSample(scene, i) : vulkan::StaticPassSample {};
     }
     static_cache.Plan(static_samples, static_skip);
 
@@ -3579,6 +3920,8 @@ bool MetalRender::Impl::compile(Scene& scene, rg::RenderGraph& graph)
             uniform_cursor      += reserved;
         }
     }
+    // After the passes are prepared: which ones depth-test is decided there.
+    refreshPassTargets(scene);
 
     uniform_ring_size = std::max<uint32_t>(uniform_cursor, 256u);
     uniform_rings.clear();
@@ -3606,6 +3949,7 @@ bool MetalRender::Impl::compile(Scene& scene, rg::RenderGraph& graph)
     // Last: it reads the prepared passes' sprite maps and the allocated
     // targets, so both have to exist before a target can be called reusable.
     compileStaticCache(scene);
+    planFeedbackSwaps();
     optimization_applied = vulkan::SceneOptimizationEnabled();
     graph_ready = true;
     last_error.clear();
@@ -3911,7 +4255,10 @@ bool MetalRender::drawFrame(Scene& scene, bool* presented)
         for (std::size_t i = 0; i < impl.prepared.size(); ++i) {
             auto&       pass = impl.prepared[i];
             const auto& desc = impl.descriptions[i];
-            if (pass.kind != MetalPassKind::CustomShader) continue;
+            // A pass that draws nothing this frame needs no uniforms: nothing
+            // reads them, the way the compatibility backend skips the update
+            // of a hidden layer.
+            if (! impl.passDraws(i)) continue;
             const bool planes_active =
                 i < impl.video_plane_active.size() && impl.video_plane_active[i] != 0;
             const auto& reflection =
@@ -3945,7 +4292,17 @@ bool MetalRender::drawFrame(Scene& scene, bool* presented)
         // A frame that fails after the plan has already recorded this frame's
         // signatures must not leave those signatures behind: the next frame
         // would reuse a target the GPU never wrote.
+        impl.frame_swaps.clear();
+        impl.opening_copies.clear();
         const auto abandon_frame = [&impl](std::string message) {
+            // Its command buffer never runs, so every texture still holds what
+            // it held when the frame began, and every name has to point back at
+            // it.
+            for (auto swap = impl.frame_swaps.rbegin(); swap != impl.frame_swaps.rend(); ++swap) {
+                impl.tradeFeedbackTextures(*swap);
+            }
+            impl.frame_swaps.clear();
+            impl.opening_copies.clear();
             impl.static_cache.InvalidateAll();
             dispatch_semaphore_signal(impl.inflight);
             return impl.fail(std::move(message));
@@ -3960,6 +4317,9 @@ bool MetalRender::drawFrame(Scene& scene, bool* presented)
             auto& pass = impl.prepared[i];
             if (! pass.dynamic_mesh) continue;
             if (i < impl.static_skip.size() && impl.static_skip[i] != 0) continue;
+            // Nothing reads this frame's slot of a pass that does not draw; the
+            // next frame that draws it uploads whatever the mesh holds then.
+            if (! impl.passDraws(i)) continue;
             std::string upload_error;
             if (! impl.uploadDynamicMesh(pass, impl.descriptions[i], &upload_error)) {
                 return abandon_frame(std::move(upload_error));
@@ -3968,14 +4328,46 @@ bool MetalRender::drawFrame(Scene& scene, bool* presented)
 
         // Encodes the smaller levels of a mip-mapped target, once its last
         // writer before a reader has finished with level 0.
-        const auto generate_mipmaps = [&command](id<MTLTexture> texture) {
+        const auto generate_mipmaps = [&command, &impl](id<MTLTexture> texture) {
             if (texture == nil || texture.mipmapLevelCount <= 1) return;
             id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
             [blit generateMipmapsForTexture:texture];
             [blit endEncoding];
+            ++impl.frame_encodes.blit_passes;
         };
 
-        std::unordered_set<std::string> depth_cleared;
+        // Consecutive passes that render into one image share one render pass,
+        // the rule the compatibility backend batches by. Every render pass
+        // stores its whole target and the next one loads it back, and at the
+        // scene's size that memory traffic, not the draws, is what a frame of
+        // many layers costs. A pass starts a new render pass when it renders
+        // elsewhere, changes the depth attachment, samples its own target, or
+        // clears a target something was already drawn into.
+        struct OpenRenderPass
+        {
+            id<MTLRenderCommandEncoder> encoder { nil };
+            id<MTLTexture>              target { nil };
+            id<MTLTexture>              depth { nil };
+            uint32_t                    width { 0 };
+            uint32_t                    height { 0 };
+            bool                        began_with_clear { false };
+            std::array<float, 4>        clear_color {};
+            bool                        drew { false };
+            // The state the previous draw left set. A draw in a shared render
+            // pass inherits it, so each draw sets what differs, nil included.
+            id<MTLRenderPipelineState>  pipeline { nil };
+            id<MTLDepthStencilState>    depth_stencil { nil };
+        };
+        OpenRenderPass open;
+        const auto close_pass = [&open]() {
+            if (open.encoder != nil) [open.encoder endEncoding];
+            open = OpenRenderPass {};
+        };
+        // Depth attachments already cleared this frame; a later render pass
+        // that uses one again loads it.
+        std::vector<id<MTLTexture>> depth_cleared;
+
+        impl.frame_encodes = {};
         for (std::size_t i = 0; i < impl.prepared.size(); ++i) {
             auto&       pass = impl.prepared[i];
             const auto& desc = impl.descriptions[i];
@@ -3985,8 +4377,8 @@ bool MetalRender::drawFrame(Scene& scene, bool* presented)
             // just decided to keep -- and its mip levels are already the ones
             // that belong to those pixels.
             if (i < impl.static_skip.size() && impl.static_skip[i] != 0) continue;
-            const auto  target = impl.targets.find(desc.target_key);
-            if (target == impl.targets.end()) continue;
+            id<MTLTexture> target = i < impl.pass_targets.size() ? impl.pass_targets[i] : nil;
+            if (target == nil) continue;
 
             if (pass.kind == MetalPassKind::Copy) {
                 // A copy the plan removed produces nothing: either its result
@@ -3998,216 +4390,298 @@ bool MetalRender::drawFrame(Scene& scene, bool* presented)
                 }
                 const auto source = impl.targets.find(desc.source_key);
                 if (source == impl.targets.end()) continue;
-                const bool identical = source->second.width == target->second.width &&
-                                       source->second.height == target->second.height &&
-                                       source->second.pixelFormat == target->second.pixelFormat;
+                close_pass();
+                if (i < impl.feedback_swaps.size() && impl.feedback_swaps[i].valid &&
+                    impl.feedbackReaderRenders(i)) {
+                    // The copy's name takes the image as it stands; the source's
+                    // name takes the texture the copy would have been made in,
+                    // which the reader fills first.
+                    id<MTLTexture> image = source->second;
+                    impl.tradeFeedbackTextures(i);
+                    impl.frame_swaps.push_back(i);
+                    if (impl.feedback_swaps[i].prefix) impl.opening_copies.emplace_back(target, image);
+                    continue;
+                }
+                const bool identical = source->second.width == target.width &&
+                                       source->second.height == target.height &&
+                                       source->second.pixelFormat == target.pixelFormat;
                 if (identical) {
                     id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
                     [blit copyFromTexture:source->second
                               sourceSlice:0
                               sourceLevel:0
-                                toTexture:target->second
+                                toTexture:target
                          destinationSlice:0
                          destinationLevel:0
                                sliceCount:1
                                levelCount:1];
                     [blit endEncoding];
-                } else if (! impl.encodeScaledCopy(command, source->second, target->second)) {
+                    ++impl.frame_encodes.blit_passes;
+                } else if (impl.encodeScaledCopy(command, source->second, target)) {
+                    ++impl.frame_encodes.render_passes;
+                    if (target == impl.scene_output_target) {
+                        ++impl.frame_encodes.scene_output_passes;
+                    }
+                } else {
                     // Skipping it would leave the destination holding the
                     // previous frame while the graph says it was refreshed.
                     return abandon_frame("an effect image could not be resampled");
                 }
-                if (desc.generate_mipmaps) generate_mipmaps(target->second);
+                if (desc.generate_mipmaps) generate_mipmaps(target);
                 continue;
             }
 
-            MTLRenderPassDescriptor* pass_descriptor = [MTLRenderPassDescriptor renderPassDescriptor];
-            pass_descriptor.colorAttachments[0].texture = target->second;
-            pass_descriptor.colorAttachments[0].loadAction =
-                static_cast<MTLLoadAction>(desc.load_action);
-            // Always stored: a later pass, the presentation blit or a poster
-            // capture reads this target after the pass ends.
-            pass_descriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
-            pass_descriptor.colorAttachments[0].clearColor  = MTLClearColorMake(
-                desc.clear_color[0], desc.clear_color[1], desc.clear_color[2],
-                desc.clear_color[3]);
-            if (pass.depth_test) {
-                const auto depth = impl.depth_targets.find(desc.target_key);
-                if (depth != impl.depth_targets.end()) {
-                    const bool first = depth_cleared.insert(desc.target_key).second;
-                    pass_descriptor.depthAttachment.texture     = depth->second;
-                    pass_descriptor.depthAttachment.loadAction  =
+            // A step whose layer is hidden draws nothing, but a clear it
+            // carries still applies, so the next writer starts from the state
+            // the graph decided. Without one it needs no render pass at all,
+            // and the target keeps what the passes before it left there.
+            const bool draws  = impl.passDraws(i);
+            const bool clears = desc.load_action == MetalLoadAction::Clear;
+            if (! draws && ! clears) {
+                if (desc.generate_mipmaps) {
+                    close_pass();
+                    generate_mipmaps(target);
+                }
+                continue;
+            }
+
+            id<MTLTexture> depth = i < impl.pass_depths.size() ? impl.pass_depths[i] : nil;
+            const bool     joins =
+                open.encoder != nil && open.target == target && open.depth == depth &&
+                impl.pass_reads_own_target[i] == 0 &&
+                (! clears ||
+                 (! open.drew && open.began_with_clear && open.clear_color == desc.clear_color));
+            if (! joins) {
+                close_pass();
+                // Every texel is written by the copy that opens it, so there is
+                // nothing to load.
+                id<MTLTexture> opening = nil;
+                for (auto owed = impl.opening_copies.begin(); owed != impl.opening_copies.end();
+                     ++owed) {
+                    if (owed->first != target) continue;
+                    opening = owed->second;
+                    impl.opening_copies.erase(owed);
+                    break;
+                }
+                const bool opens_with_copy = opening != nil;
+                MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor renderPassDescriptor];
+                descriptor.colorAttachments[0].texture    = target;
+                descriptor.colorAttachments[0].loadAction =
+                    opens_with_copy ? MTLLoadActionDontCare : static_cast<MTLLoadAction>(desc.load_action);
+                // Always stored: a later pass, the presentation blit or a poster
+                // capture reads this target after the pass ends.
+                descriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+                descriptor.colorAttachments[0].clearColor  = MTLClearColorMake(
+                    desc.clear_color[0], desc.clear_color[1], desc.clear_color[2],
+                    desc.clear_color[3]);
+                if (depth != nil) {
+                    const bool first = std::find(depth_cleared.begin(), depth_cleared.end(),
+                                                 depth) == depth_cleared.end();
+                    if (first) depth_cleared.push_back(depth);
+                    descriptor.depthAttachment.texture     = depth;
+                    descriptor.depthAttachment.loadAction  =
                         first ? MTLLoadActionClear : MTLLoadActionLoad;
-                    pass_descriptor.depthAttachment.storeAction = MTLStoreActionStore;
-                    pass_descriptor.depthAttachment.clearDepth  = 1.0;
+                    descriptor.depthAttachment.storeAction = MTLStoreActionStore;
+                    descriptor.depthAttachment.clearDepth  = 1.0;
+                }
+                open.encoder = [command renderCommandEncoderWithDescriptor:descriptor];
+                if (open.encoder == nil) return abandon_frame("a render pass could not be started");
+                open.target           = target;
+                open.depth            = depth;
+                open.began_with_clear = clears;
+                open.clear_color      = desc.clear_color;
+                ++impl.frame_encodes.render_passes;
+                if (target == impl.scene_output_target) ++impl.frame_encodes.scene_output_passes;
+                // Folding the clip-space transform into the projection also
+                // decides triangle winding, so the cull mode has to be the one
+                // the compatibility backend uses -- it renders with
+                // VK_CULL_MODE_NONE. Enabling back-face culling here would
+                // silently drop half of every scene the moment the fold stops
+                // being the identity.
+                [open.encoder setCullMode:static_cast<MTLCullMode>(kSceneCullMode)];
+                if (opens_with_copy) {
+                    [open.encoder setViewport:(MTLViewport) { 0.0, 0.0, (double)target.width,
+                                                              (double)target.height, 0.0, 1.0 }];
+                    [open.encoder setScissorRect:(MTLScissorRect) { 0, 0, target.width, target.height }];
+                    [open.encoder setRenderPipelineState:impl.scene_copy_pipeline];
+                    [open.encoder setVertexBuffer:impl.present_vertices offset:0 atIndex:0];
+                    [open.encoder setFragmentTexture:opening atIndex:0];
+                    [open.encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                                     vertexStart:0
+                                     vertexCount:4];
+                    open.pipeline = impl.scene_copy_pipeline;
+                    open.width    = static_cast<uint32_t>(target.width);
+                    open.height   = static_cast<uint32_t>(target.height);
                 }
             }
 
-            id<MTLRenderCommandEncoder> encoder =
-                [command renderCommandEncoderWithDescriptor:pass_descriptor];
-            if (pass.kind == MetalPassKind::Clear || pass.pipeline == nil) {
-                [encoder endEncoding];
-                if (desc.generate_mipmaps) generate_mipmaps(target->second);
-                continue;
-            }
-            // An effect step whose layer is hidden contributes nothing, but its
-            // load action still applies: the target is cleared or preserved
-            // exactly as the graph decided, so the next writer starts from the
-            // same state it would have started from.
-            if (desc.visibility_node != nullptr && ! desc.visibility_node->EffectiveVisible() &&
-                ! (desc.visibility_node->MustProduce() && ! desc.target_key.empty() &&
-                   desc.target_key != wallpaper::SpecTex_Default)) {
-                [encoder endEncoding];
-                if (desc.generate_mipmaps) generate_mipmaps(target->second);
-                continue;
-            }
+            if (draws) {
+                id<MTLRenderCommandEncoder> encoder = open.encoder;
+                if (open.width != desc.target_width || open.height != desc.target_height) {
+                    [encoder setViewport:(MTLViewport) { 0.0, 0.0, (double)desc.target_width,
+                                                         (double)desc.target_height, 0.0, 1.0 }];
+                    [encoder setScissorRect:(MTLScissorRect) { 0, 0, desc.target_width,
+                                                               desc.target_height }];
+                    open.width  = desc.target_width;
+                    open.height = desc.target_height;
+                }
+                // One of the material's two programs, chosen from the format the
+                // decoder produced for this frame. Both were built with the graph.
+                const bool planes_active =
+                    i < impl.video_plane_active.size() && impl.video_plane_active[i] != 0;
+                id<MTLRenderPipelineState> pipeline =
+                    planes_active ? pass.video_planes.pipeline : pass.pipeline;
+                if (pipeline != open.pipeline) {
+                    [encoder setRenderPipelineState:pipeline];
+                    open.pipeline = pipeline;
+                }
+                if (pass.depth_stencil != open.depth_stencil) {
+                    [encoder setDepthStencilState:pass.depth_stencil];
+                    open.depth_stencil = pass.depth_stencil;
+                }
 
-            [encoder setViewport:(MTLViewport) { 0.0, 0.0, (double)desc.target_width,
-                                                 (double)desc.target_height, 0.0, 1.0 }];
-            [encoder setScissorRect:(MTLScissorRect) { 0, 0, desc.target_width,
-                                                       desc.target_height }];
-            // Folding the clip-space transform into the projection also decides
-            // triangle winding, so the cull mode has to be the one the
-            // compatibility backend uses -- it renders with VK_CULL_MODE_NONE.
-            // Enabling back-face culling here would silently drop half of every
-            // scene the moment the fold stops being the identity.
-            [encoder setCullMode:static_cast<MTLCullMode>(kSceneCullMode)];
-            // One of the material's two programs, chosen from the format the
-            // decoder produced for this frame. Both were built with the graph.
-            const bool planes_active =
-                i < impl.video_plane_active.size() && impl.video_plane_active[i] != 0;
-            [encoder setRenderPipelineState:planes_active ? pass.video_planes.pipeline
-                                                          : pass.pipeline];
-            if (pass.depth_stencil != nil) {
-                [encoder setDepthStencilState:pass.depth_stencil];
-            }
-
-            const std::size_t geometry_slot =
-                static_cast<std::size_t>(impl.frame_slot) % kFramesInFlight;
-            if (pass.dynamic_mesh) {
-                for (std::size_t v = 0; v < pass.dynamic_vertex_rings.size(); ++v) {
-                    [encoder setVertexBuffer:pass.dynamic_vertex_rings[v][geometry_slot]
-                                      offset:0
-                                     atIndex:pass.vertex_buffer_slots[v]];
-                }
-            } else {
-                for (std::size_t v = 0; v < pass.vertex_buffers.size(); ++v) {
-                    [encoder setVertexBuffer:pass.vertex_buffers[v]
-                                      offset:0
-                                     atIndex:pass.vertex_buffer_slots[v]];
-                }
-            }
-            const auto& active_slots =
-                planes_active ? pass.video_planes.texture_slots : pass.texture_slots;
-            const int uniform_vertex_slot =
-                planes_active ? pass.video_planes.vertex_uniform_slot : pass.vertex_uniform_slot;
-            const int uniform_fragment_slot = planes_active
-                                                  ? pass.video_planes.fragment_uniform_slot
-                                                  : pass.fragment_uniform_slot;
-            const uint32_t uniform_size =
-                planes_active ? pass.video_planes.uniform_size : pass.uniform_size;
-            id<MTLBuffer> uniform_buffer = uniforms;
-            NSUInteger    uniform_offset  = pass.uniform_offset;
-            if (planes_active) {
-                uniform_buffer = pass.video_planes.uniform_ring.empty()
-                                     ? nil
-                                     : pass.video_planes.uniform_ring[geometry_slot];
-                uniform_offset = 0;
-            }
-            if (uniform_size > 0 && uniform_buffer != nil) {
-                if (uniform_vertex_slot >= 0) {
-                    [encoder setVertexBuffer:uniform_buffer
-                                      offset:uniform_offset
-                                     atIndex:(NSUInteger)uniform_vertex_slot];
-                }
-                if (uniform_fragment_slot >= 0) {
-                    [encoder setFragmentBuffer:uniform_buffer
-                                        offset:uniform_offset
-                                       atIndex:(NSUInteger)uniform_fragment_slot];
-                }
-            }
-            const auto bind_texture = [&encoder](const Impl::TextureSlotBinding& slot,
-                                                  id<MTLTexture>                 texture,
-                                                  id<MTLSamplerState>            sampler) {
-                if (texture == nil) return;
-                if (slot.vertex_texture >= 0) {
-                    [encoder setVertexTexture:texture atIndex:(NSUInteger)slot.vertex_texture];
-                }
-                if (slot.fragment_texture >= 0) {
-                    [encoder setFragmentTexture:texture atIndex:(NSUInteger)slot.fragment_texture];
-                }
-                if (sampler == nil) return;
-                if (slot.vertex_sampler >= 0) {
-                    [encoder setVertexSamplerState:sampler atIndex:(NSUInteger)slot.vertex_sampler];
-                }
-                if (slot.fragment_sampler >= 0) {
-                    [encoder setFragmentSamplerState:sampler
-                                             atIndex:(NSUInteger)slot.fragment_sampler];
-                }
-            };
-            for (std::size_t t = 0; t < active_slots.size(); ++t) {
-                const auto& slot = active_slots[t];
-                if (! slot.bound()) continue;
-                // The video slot on the direct path binds the decoder's own two
-                // planes, through the same binding plan reflection produced, in
-                // place of the one image the other program samples.
-                if (planes_active && t == pass.video_planes.slot) {
-                    const auto planes = impl.video.planes(desc.texture_keys[t]);
-                    if (! planes.valid()) continue;
-                    bind_texture(slot, planes.luma, pass.samplers[t]);
-                    bind_texture(pass.video_planes.chroma, planes.chroma,
-                                 pass.video_planes.chroma_sampler);
-                    continue;
-                }
-                // A sprite sheet's current frame decides which uploaded image
-                // is bound; its rectangle inside that image arrives through the
-                // rotation and translation uniforms written above.
-                int image_slot = -1;
-                if (const auto sprite = pass.sprites.find(t);
-                    sprite != pass.sprites.end() && sprite->second.numFrames() > 0) {
-                    image_slot = sprite->second.GetCurFrame().imageId;
-                }
-                bind_texture(slot,
-                             impl.resolveTexture(scene, desc.texture_keys[t], nullptr, image_slot),
-                             pass.samplers[t]);
-            }
-
-            id<MTLBuffer> index_buffer = pass.index_buffer;
-            if (pass.dynamic_mesh) {
-                index_buffer = pass.dynamic_index_ring.empty()
-                                   ? nil
-                                   : pass.dynamic_index_ring[geometry_slot];
-            }
-            if (index_buffer != nil && pass.index_count > 0) {
-                if (! pass.draw_ranges.empty()) {
-                    for (const auto& range : pass.draw_ranges) {
-                        uint64_t offset_bytes = 0;
-                        if (! CheckedMulU64(range.indexOffset, pass.index_element_size,
-                                            offset_bytes) ||
-                            offset_bytes > std::numeric_limits<NSUInteger>::max()) {
-                            continue;
-                        }
-                        [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                            indexCount:range.indexCount
-                                             indexType:pass.index_type
-                                           indexBuffer:index_buffer
-                                     indexBufferOffset:static_cast<NSUInteger>(offset_bytes)];
+                const std::size_t geometry_slot =
+                    static_cast<std::size_t>(impl.frame_slot) % kFramesInFlight;
+                if (pass.dynamic_mesh) {
+                    for (std::size_t v = 0; v < pass.dynamic_vertex_rings.size(); ++v) {
+                        [encoder setVertexBuffer:pass.dynamic_vertex_rings[v][geometry_slot]
+                                          offset:0
+                                         atIndex:pass.vertex_buffer_slots[v]];
                     }
                 } else {
-                    [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                        indexCount:pass.index_count
-                                         indexType:pass.index_type
-                                       indexBuffer:index_buffer
-                                 indexBufferOffset:0];
+                    for (std::size_t v = 0; v < pass.vertex_buffers.size(); ++v) {
+                        [encoder setVertexBuffer:pass.vertex_buffers[v]
+                                          offset:0
+                                         atIndex:pass.vertex_buffer_slots[v]];
+                    }
                 }
-            } else if (pass.vertex_count > 0) {
-                [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
-                            vertexStart:0
-                            vertexCount:pass.vertex_count];
+                const auto& active_slots =
+                    planes_active ? pass.video_planes.texture_slots : pass.texture_slots;
+                const int uniform_vertex_slot = planes_active
+                                                    ? pass.video_planes.vertex_uniform_slot
+                                                    : pass.vertex_uniform_slot;
+                const int uniform_fragment_slot = planes_active
+                                                      ? pass.video_planes.fragment_uniform_slot
+                                                      : pass.fragment_uniform_slot;
+                const uint32_t uniform_size =
+                    planes_active ? pass.video_planes.uniform_size : pass.uniform_size;
+                id<MTLBuffer> uniform_buffer = uniforms;
+                NSUInteger    uniform_offset = pass.uniform_offset;
+                if (planes_active) {
+                    uniform_buffer = pass.video_planes.uniform_ring.empty()
+                                         ? nil
+                                         : pass.video_planes.uniform_ring[geometry_slot];
+                    uniform_offset = 0;
+                }
+                if (uniform_size > 0 && uniform_buffer != nil) {
+                    if (uniform_vertex_slot >= 0) {
+                        [encoder setVertexBuffer:uniform_buffer
+                                          offset:uniform_offset
+                                         atIndex:(NSUInteger)uniform_vertex_slot];
+                    }
+                    if (uniform_fragment_slot >= 0) {
+                        [encoder setFragmentBuffer:uniform_buffer
+                                            offset:uniform_offset
+                                           atIndex:(NSUInteger)uniform_fragment_slot];
+                    }
+                }
+                // nil is bound as well: a render pass shared with the previous
+                // draw still holds that draw's images, and a slot this draw
+                // leaves empty has to read as empty, exactly as it would in a
+                // render pass of its own.
+                const auto bind_texture = [&encoder](const Impl::TextureSlotBinding& slot,
+                                                      id<MTLTexture>                 texture,
+                                                      id<MTLSamplerState>            sampler) {
+                    if (texture == nil) sampler = nil;
+                    if (slot.vertex_texture >= 0) {
+                        [encoder setVertexTexture:texture atIndex:(NSUInteger)slot.vertex_texture];
+                    }
+                    if (slot.fragment_texture >= 0) {
+                        [encoder setFragmentTexture:texture
+                                            atIndex:(NSUInteger)slot.fragment_texture];
+                    }
+                    if (slot.vertex_sampler >= 0) {
+                        [encoder setVertexSamplerState:sampler
+                                               atIndex:(NSUInteger)slot.vertex_sampler];
+                    }
+                    if (slot.fragment_sampler >= 0) {
+                        [encoder setFragmentSamplerState:sampler
+                                                 atIndex:(NSUInteger)slot.fragment_sampler];
+                    }
+                };
+                for (std::size_t t = 0; t < active_slots.size(); ++t) {
+                    const auto& slot = active_slots[t];
+                    if (! slot.bound()) continue;
+                    // The video slot on the direct path binds the decoder's own
+                    // two planes, through the same binding plan reflection
+                    // produced, in place of the one image the other program
+                    // samples.
+                    if (planes_active && t == pass.video_planes.slot) {
+                        const auto planes = impl.video.planes(desc.texture_keys[t]);
+                        const bool valid  = planes.valid();
+                        bind_texture(slot, valid ? planes.luma : nil, pass.samplers[t]);
+                        bind_texture(pass.video_planes.chroma, valid ? planes.chroma : nil,
+                                     pass.video_planes.chroma_sampler);
+                        continue;
+                    }
+                    // A sprite sheet's current frame decides which uploaded
+                    // image is bound; its rectangle inside that image arrives
+                    // through the rotation and translation uniforms written
+                    // above.
+                    int image_slot = -1;
+                    if (const auto sprite = pass.sprites.find(t);
+                        sprite != pass.sprites.end() && sprite->second.numFrames() > 0) {
+                        image_slot = sprite->second.GetCurFrame().imageId;
+                    }
+                    bind_texture(slot,
+                                 impl.resolveTexture(scene, desc.texture_keys[t], nullptr,
+                                                     image_slot),
+                                 pass.samplers[t]);
+                }
+
+                id<MTLBuffer> index_buffer = pass.index_buffer;
+                if (pass.dynamic_mesh) {
+                    index_buffer = pass.dynamic_index_ring.empty()
+                                       ? nil
+                                       : pass.dynamic_index_ring[geometry_slot];
+                }
+                if (index_buffer != nil && pass.index_count > 0) {
+                    if (! pass.draw_ranges.empty()) {
+                        for (const auto& range : pass.draw_ranges) {
+                            uint64_t offset_bytes = 0;
+                            if (! CheckedMulU64(range.indexOffset, pass.index_element_size,
+                                                offset_bytes) ||
+                                offset_bytes > std::numeric_limits<NSUInteger>::max()) {
+                                continue;
+                            }
+                            [encoder
+                                drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                           indexCount:range.indexCount
+                                            indexType:pass.index_type
+                                          indexBuffer:index_buffer
+                                    indexBufferOffset:static_cast<NSUInteger>(offset_bytes)];
+                        }
+                    } else {
+                        [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                            indexCount:pass.index_count
+                                             indexType:pass.index_type
+                                           indexBuffer:index_buffer
+                                     indexBufferOffset:0];
+                    }
+                } else if (pass.vertex_count > 0) {
+                    [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                                vertexStart:0
+                                vertexCount:pass.vertex_count];
+                }
+                open.drew = true;
             }
-            [encoder endEncoding];
-            if (desc.generate_mipmaps) generate_mipmaps(target->second);
+            if (desc.generate_mipmaps) {
+                close_pass();
+                generate_mipmaps(target);
+            }
         }
+        close_pass();
+        impl.last_frame_encodes = impl.frame_encodes;
 
         // ---- presentation
         impl.encodeComposition(command, drawable.texture, scene);
@@ -4343,6 +4817,13 @@ bool MetalRender::ReadRenderTargetForTests(const std::string& key, std::vector<u
 uint64_t MetalRender::RuntimeImageUploadsForTests() const
 {
     return pImpl == nullptr ? 0 : pImpl->runtime_image_uploads;
+}
+
+MetalRender::FrameEncodeCountsForTests MetalRender::LastFrameEncodeCountsForTests() const
+{
+    if (pImpl == nullptr) return {};
+    const auto& last = pImpl->last_frame_encodes;
+    return { last.render_passes, last.scene_output_passes, last.blit_passes };
 }
 
 uint64_t MetalRender::ProgramCompilesForTests() { return MetalProgramCache::shared().compileCount(); }

@@ -1,5 +1,35 @@
 import Foundation
 
+/// When a diagnostic window opens and how long it stays open, as the
+/// environment asks for.
+///
+/// `WALLPAPER_MACHINE_DIAGNOSTICS=<seconds>` is the window's length.
+/// `WALLPAPER_MACHINE_DIAGNOSTICS_DELAY=<seconds>` opens it that long after
+/// launch rather than at launch, so its counts cover the steady-state window a
+/// power measurement is taken over instead of the scene's start-up. A value
+/// that is not a whole number of seconds starts nothing: counting from launch
+/// instead would describe a different window without saying so.
+struct RuntimeDiagnosticsRequest: Equatable {
+    static let durationKey = "WALLPAPER_MACHINE_DIAGNOSTICS"
+    static let delayKey = "WALLPAPER_MACHINE_DIAGNOSTICS_DELAY"
+
+    let delay: Duration
+    let duration: Duration
+
+    init?(environment: [String: String]) {
+        guard let raw = environment[Self.durationKey], let seconds = Int(raw), seconds > 0 else {
+            return nil
+        }
+        var delaySeconds = 0
+        if let raw = environment[Self.delayKey] {
+            guard let parsed = Int(raw), parsed >= 0 else { return nil }
+            delaySeconds = parsed
+        }
+        delay = .seconds(delaySeconds)
+        duration = .seconds(seconds)
+    }
+}
+
 /// One bounded diagnostic window over both halves of the runtime.
 ///
 /// Two separate counter surfaces answer two different questions, and a claim
@@ -22,6 +52,8 @@ final class RuntimeDiagnosticsSession {
     private let store: BridgeStore
     private let counters: RuntimeCounters
     private var expiry: Task<Void, Never>?
+    /// When the counters started, so a report can say how long they ran.
+    private var openedAt: ContinuousClock.Instant?
 
     init(store: BridgeStore, counters: RuntimeCounters? = nil) {
         self.store = store
@@ -39,6 +71,7 @@ final class RuntimeDiagnosticsSession {
         expiry?.cancel()
         counters.startSession(duration: duration)
         try await store.setRendererCountersEnabledAsync(true)
+        openedAt = ContinuousClock.now
         guard let onExpiry else { return }
         expiry = Task { [weak self] in
             try? await Task.sleep(for: duration)
@@ -68,13 +101,22 @@ final class RuntimeDiagnosticsSession {
     /// legitimately continue while one consumer is hidden.
     func report() async -> [String] {
         var lines = counters.aggregatedReport()
+        // Measured, not taken from the requested duration: a count becomes a
+        // rate only over the time it was actually counted in.
+        let elapsed = openedAt.map { ContinuousClock.now - $0 }
         do {
             let renderer = try await store.rendererCountersAsync()
             lines.append(contentsOf: Self.rendererLines(renderer))
         } catch {
             lines.append("renderer counters unavailable: \(error.localizedDescription)")
         }
+        if let elapsed { lines.insert(Self.windowLine(elapsed), at: 0) }
         return lines
+    }
+
+    static func windowLine(_ elapsed: Duration) -> String {
+        let (seconds, attoseconds) = elapsed.components
+        return "window elapsed_ms=\(seconds * 1000 + attoseconds / 1_000_000_000_000_000)"
     }
 
     static func rendererLines(_ report: BridgeRendererCountersReport) -> [String] {

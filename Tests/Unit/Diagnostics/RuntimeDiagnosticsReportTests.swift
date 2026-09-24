@@ -233,3 +233,30 @@ final class RuntimeDiagnosticsReportTests: XCTestCase {
         XCTAssertTrue(lines.contains { $0.contains("/gen2 ") && $0.contains("present_requests=4") })
     }
 }
+
+/// When a diagnostic window covers, which is what turns its counts into rates.
+@MainActor
+final class RuntimeDiagnosticsWindowTests: XCTestCase {
+    private let duration = RuntimeDiagnosticsRequest.durationKey
+    private let delay = RuntimeDiagnosticsRequest.delayKey
+
+    func testTheWindowOpensAtLaunchUnlessADelayIsGiven() {
+        XCTAssertEqual(RuntimeDiagnosticsRequest(environment: [duration: "180"])?.delay, .zero)
+        let delayed = RuntimeDiagnosticsRequest(environment: [duration: "60", delay: "120"])
+        XCTAssertEqual(delayed?.delay, .seconds(120))
+        XCTAssertEqual(delayed?.duration, .seconds(60))
+    }
+
+    func testAMalformedDelayStartsNothingRatherThanCountingFromLaunch() {
+        for value in ["-5", "2m", "", "1.5"] {
+            XCTAssertNil(RuntimeDiagnosticsRequest(environment: [duration: "60", delay: value]), value)
+        }
+        XCTAssertNil(RuntimeDiagnosticsRequest(environment: [delay: "120"]),
+                     "a delay alone asks for no window")
+    }
+
+    func testTheReportStatesTheMillisecondsItCounted() {
+        XCTAssertEqual(RuntimeDiagnosticsSession.windowLine(.milliseconds(60_012)),
+                       "window elapsed_ms=60012")
+    }
+}

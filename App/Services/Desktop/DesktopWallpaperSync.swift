@@ -68,6 +68,9 @@ final class DesktopWallpaperSync {
     private var coalesced: Task<Void, Never>?
     private static let refreshInterval: Duration = .milliseconds(500)
     private var stopped = false
+    /// Whether the refresh that fires next reads fresh frames; coalesced calls
+    /// capture when any of them asked to.
+    private var pendingCapture = false
     var isSuspended: Bool { stopped }
 
     convenience init(folder: URL) throws {
@@ -107,13 +110,17 @@ final class DesktopWallpaperSync {
             workspaceObservers.append(workspaceCenter.addObserver(
                 forName: name, object: nil, queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refresh() }
+                MainActor.assumeIsolated { self?.refreshAfterDesktopChange() }
             })
         }
     }
 
-    func refresh() {
+    /// Brings every desktop up to date with the current poster. `capture` also
+    /// asks each surface for a fresh frame first, which is what a new or
+    /// changed wallpaper needs.
+    func refresh(capture: Bool = true) {
         guard !stopped else { return }
+        pendingCapture = pendingCapture || capture
         let now = ContinuousClock.now
         if let last = lastRefresh, now - last < Self.refreshInterval {
             guard coalesced == nil else { return }
@@ -131,14 +138,28 @@ final class DesktopWallpaperSync {
         performRefresh()
     }
 
+    /// A Space change or wake shows a desktop the poster may not be on yet, but
+    /// the wallpaper itself did not change: the poster is applied again rather
+    /// than read back from the GPU and encoded into a full-size PNG again. A
+    /// surface that has no poster yet, such as a renderer replaced meanwhile,
+    /// still asks for one.
+    private func refreshAfterDesktopChange() {
+        let missing = surfaces().contains { posters[ObjectIdentifier($0.layer)] == nil }
+        refresh(capture: missing)
+    }
+
     private func performRefresh() {
         guard !stopped else { return }
+        let capture = pendingCapture
+        pendingCapture = false
         // Request GPU pixels before potentially slow native Space enumeration
         // and journal I/O, so readback can overlap synchronization.
         // No debounce: an Apply must not wait for a 400 ms timer, another
         // snapshot, or an activeSpaceDidChange notification to request pixels.
-        for surface in surfaces() {
-            frameCenter.post(name: Notification.Name("WallpaperMachine.requestDesktopPoster"), object: surface.layer)
+        if capture {
+            for surface in surfaces() {
+                frameCenter.post(name: Notification.Name("WallpaperMachine.requestDesktopPoster"), object: surface.layer)
+            }
         }
         synchronizeAllSpaces()
     }

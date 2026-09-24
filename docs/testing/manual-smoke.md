@@ -165,7 +165,12 @@ never switches Spaces, restarts Dock or WallpaperAgent, or edits Apple's
 wallpaper plist. These are non-public APIs: if they are unavailable on a future
 macOS the app logs the limitation and falls back to `NSWorkspace`'s
 current-Space behavior. Originals and posters live under
-`~/Library/Application Support/WallpaperMachine/DesktopPosters`.
+`~/Library/Application Support/WallpaperMachine/DesktopPosters`. A Space change
+or wake re-applies the poster that already exists and captures a new frame only
+for a surface that has none. Posters no desktop shows are deleted once every
+Space of their display could be read; on a display with an unreadable Space,
+on the current-Space fallback and for a disconnected display, the four newest
+are kept.
 
 ## Animated lock screen (experimental, opt-in)
 

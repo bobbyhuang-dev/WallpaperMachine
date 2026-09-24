@@ -242,24 +242,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// no timer exists: the renderer's counters stay off and the in-process
     /// counters stay outside a session.
     ///
-    /// `WALLPAPER_MACHINE_DIAGNOSTICS` is a duration in seconds. One
+    /// `WALLPAPER_MACHINE_DIAGNOSTICS` is a duration in seconds, and
+    /// `WALLPAPER_MACHINE_DIAGNOSTICS_DELAY` optionally opens the window that
+    /// many seconds after launch (see `RuntimeDiagnosticsRequest`). One
     /// aggregated report is written to the log when it elapses; nothing is
     /// emitted per frame, and no screenshot, pixel readback or periodic disk
     /// write is involved.
     private func startDiagnosticsSessionIfRequested() {
-        guard let store,
-              let raw = ProcessInfo.processInfo.environment["WALLPAPER_MACHINE_DIAGNOSTICS"],
-              let seconds = Int(raw), seconds > 0
-        else { return }
+        let environment = ProcessInfo.processInfo.environment
+        guard let store, environment[RuntimeDiagnosticsRequest.durationKey] != nil else { return }
+        guard let request = RuntimeDiagnosticsRequest(environment: environment) else {
+            AppLog.error("""
+                diagnostics not started: \(RuntimeDiagnosticsRequest.durationKey) and \
+                \(RuntimeDiagnosticsRequest.delayKey) take whole seconds
+                """)
+            return
+        }
         let session = RuntimeDiagnosticsSession(store: store)
         diagnostics = session
         Task { [weak self] in
             do {
-                try await session.start(duration: .seconds(seconds)) { lines in
+                if request.delay > .zero {
+                    try await Task.sleep(for: request.delay)
+                    // Quit during the delay: there is nothing left to observe.
+                    guard let self, self.diagnostics === session else { return }
+                }
+                try await session.start(duration: request.duration) { lines in
                     for line in lines { AppLog.info("diagnostics \(line)") }
                     self?.diagnostics = nil
                 }
-                AppLog.info("diagnostics session open for \(seconds)s")
+                AppLog.info("diagnostics session open for \(request.duration.components.seconds)s")
             } catch {
                 AppLog.error("diagnostics session failed: \(error.localizedDescription)")
                 self?.diagnostics = nil

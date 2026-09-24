@@ -1420,13 +1420,16 @@ void VulkanRender::Impl::planStaticSkips(Scene& scene) {
         m_static_samples.assign(m_passes.size(), StaticPassSample {});
 
     for (std::size_t i = 0; i < m_passes.size(); ++i) {
-        if (auto* custom = dynamic_cast<CustomShaderPass*>(m_passes[i])) {
-            m_static_samples[i] = custom->frameSample();
-        } else {
-            // A clear or a copy contributes no varying state of its own; it is
-            // skipped exactly when the target it writes is.
+        auto* custom = dynamic_cast<CustomShaderPass*>(m_passes[i]);
+        // Only the writers of a cacheable target fold into a signature; the
+        // rest execute whatever their sample would say. A clear or a copy
+        // contributes no varying state of its own either: it is skipped exactly
+        // when the target it writes is.
+        if (custom == nullptr || ! m_static_cache.PassSampled(i)) {
             m_static_samples[i] = StaticPassSample { .hash = 0, .visible = true };
+            continue;
         }
+        m_static_samples[i] = custom->frameSample();
     }
 
     // Into the member the frame already owns. A fresh vector here was a heap

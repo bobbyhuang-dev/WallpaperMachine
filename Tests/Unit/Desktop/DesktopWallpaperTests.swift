@@ -9,14 +9,19 @@ private final class MemoryDesktopWorkspace: DesktopPictureWorkspace {
     var pictures: [DesktopPictureTarget: DesktopPicture] = [:]
     var writes: [DesktopPictureTarget] = []
     var failures: Set<DesktopPictureTarget> = []
+    /// Listed by `targets()`, but their current picture cannot be read.
+    var unreadable: Set<DesktopPictureTarget> = []
     var didWrite: (() -> Void)?
     var didEnumerate: (() -> Void)?
 
     func targets() -> [DesktopPictureTarget] {
         didEnumerate?()
-        return pictures.keys.sorted { ($0.display + ($0.space ?? "")) < ($1.display + ($1.space ?? "")) }
+        return Set(pictures.keys).union(unreadable)
+            .sorted { ($0.display + ($0.space ?? "")) < ($1.display + ($1.space ?? "")) }
     }
-    func currentPicture(target: DesktopPictureTarget) -> DesktopPicture? { pictures[target] }
+    func currentPicture(target: DesktopPictureTarget) -> DesktopPicture? {
+        unreadable.contains(target) ? nil : pictures[target]
+    }
     func setPicture(_ picture: DesktopPicture, target: DesktopPictureTarget) throws {
         if failures.contains(target) { throw CocoaError(.fileWriteNoPermission) }
         pictures[target] = picture
@@ -262,7 +267,7 @@ final class DesktopWallpaperTests: XCTestCase {
     }
 
     @MainActor
-    func testLoadingRendererKeepsPreviousWallpaperAndFallbackDoesNotPruneUnseenSpaces() throws {
+    func testLoadingRendererKeepsPreviousWallpaperAndFallbackKeepsRecentPosters() throws {
         let workspace = MemoryDesktopWorkspace()
         let target = DesktopPictureTarget(display: "1", space: nil)
         workspace.pictures = [target: original("before")]
@@ -273,6 +278,62 @@ final class DesktopWallpaperTests: XCTestCase {
         XCTAssertEqual(workspace.pictures[target], old)
         try ledger.synchronize(posters: ["1": Data([2])], liveDisplays: ["1"])
         XCTAssertTrue(FileManager.default.fileExists(atPath: old.url.path))
+    }
+
+    @MainActor
+    func testFallbackDisplayKeepsOnlyItsNewestPosters() throws {
+        let workspace = MemoryDesktopWorkspace()
+        let target = DesktopPictureTarget(display: "1", space: nil)
+        workspace.pictures = [target: original("before")]
+        let ledger = try DesktopWallpaperLedger(folder: root, workspace: workspace)
+        try synchronizeDistinctPosters(7, ledger: ledger, workspace: workspace, dating: target)
+        let posters = try posterNames()
+        XCTAssertEqual(posters.count, DesktopWallpaperLedger.retainedPostersPerIncompleteDisplay)
+        XCTAssertTrue(posters.contains(try XCTUnwrap(workspace.pictures[target]?.url.lastPathComponent)))
+        // The current poster's journal entry survived with its file.
+        try ledger.restoreAll()
+        XCTAssertEqual(workspace.pictures[target], original("before"))
+    }
+
+    @MainActor
+    func testUnreadableSpaceStillReportsFailureButBoundsItsDisplaysPosters() throws {
+        let workspace = MemoryDesktopWorkspace()
+        workspace.pictures = [one: original("before")]
+        workspace.unreadable = [two]
+        let ledger = try DesktopWallpaperLedger(folder: root, workspace: workspace)
+        try synchronizeDistinctPosters(7, ledger: ledger, workspace: workspace, dating: one,
+                                       expectFailure: true)
+        let posters = try posterNames()
+        XCTAssertEqual(posters.count, DesktopWallpaperLedger.retainedPostersPerIncompleteDisplay)
+        XCTAssertTrue(posters.contains(try XCTUnwrap(workspace.pictures[one]?.url.lastPathComponent)),
+                      "a poster a readable Space shows was deleted")
+    }
+
+    /// `count` synchronizations of distinct frames. After each one the poster
+    /// `dating` now shows is dated one second after the previous, so which
+    /// posters are newest does not depend on the file system's timestamp
+    /// resolution.
+    @MainActor
+    private func synchronizeDistinctPosters(_ count: UInt8, ledger: DesktopWallpaperLedger,
+                                            workspace: MemoryDesktopWorkspace,
+                                            dating: DesktopPictureTarget,
+                                            expectFailure: Bool = false) throws {
+        let base = Date(timeIntervalSince1970: 1_000_000)
+        for value in UInt8(0)..<count {
+            if expectFailure {
+                XCTAssertThrowsError(try ledger.synchronize(posters: ["1": Data([value])], liveDisplays: ["1"]))
+            } else {
+                try ledger.synchronize(posters: ["1": Data([value])], liveDisplays: ["1"])
+            }
+            let url = try XCTUnwrap(workspace.pictures[dating]?.url)
+            try FileManager.default.setAttributes([.modificationDate: base.addingTimeInterval(Double(value))],
+                                                  ofItemAtPath: url.path)
+        }
+    }
+
+    private func posterNames() throws -> Set<String> {
+        Set(try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "png" }.map(\.lastPathComponent))
     }
 
     @MainActor
@@ -337,6 +398,49 @@ final class DesktopWallpaperTests: XCTestCase {
         XCTAssertEqual(requests, 1, "A burst inside the throttle window must not re-read the swapchain")
         try await Task.sleep(for: .milliseconds(900))
         XCTAssertEqual(requests, 2, "The coalesced refresh must still land so the poster matches final state")
+    }
+
+    @MainActor
+    func testSpaceChangeReappliesThePosterWithoutCapturingAnother() async throws {
+        let workspace = MemoryDesktopWorkspace()
+        workspace.pictures = [one: original("one")]
+        let frames = NotificationCenter(), spaces = NotificationCenter()
+        let layer = CAMetalLayer(), replacement = CAMetalLayer()
+        var surfaces = [DesktopPosterSurface(layer: layer, display: "1")]
+        let sync = try DesktopWallpaperSync(folder: root, workspace: workspace, surfaces: { surfaces },
+                                            frameCenter: frames, workspaceCenter: spaces,
+                                            encode: { $0.pixels })
+        var requests = 0
+        let observer = frames.addObserver(forName: Notification.Name("WallpaperMachine.requestDesktopPoster"),
+                                          object: nil, queue: nil) { _ in requests += 1 }
+        defer { frames.removeObserver(observer); sync.stop() }
+        sync.start()
+        let installed = expectation(description: "Poster installed")
+        workspace.didWrite = { installed.fulfill() }
+        post(Data([1]), layer: layer, center: frames)
+        await fulfillment(of: [installed], timeout: 2)
+
+        // A Space the poster is not on yet becomes current. It gets the poster
+        // that already exists; nothing reads the GPU or encodes a PNG again.
+        workspace.pictures[two] = original("two")
+        let added = expectation(description: "New Space updated")
+        workspace.didWrite = { added.fulfill() }
+        spaces.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        await fulfillment(of: [added], timeout: 2)
+        workspace.didWrite = nil
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(workspace.pictures[two]?.url)), Data([1]))
+        XCTAssertEqual(requests, 0, "a Space change captured a poster that already existed")
+
+        // A surface without a poster -- its renderer was replaced meanwhile --
+        // still asks for one.
+        surfaces = [DesktopPosterSurface(layer: replacement, display: "1")]
+        let requested = expectation(description: "Replacement asked for a frame")
+        let replacementObserver = frames.addObserver(
+            forName: Notification.Name("WallpaperMachine.requestDesktopPoster"), object: replacement, queue: nil
+        ) { _ in requested.fulfill() }
+        defer { frames.removeObserver(replacementObserver) }
+        spaces.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        await fulfillment(of: [requested], timeout: 2)
     }
 
     @MainActor

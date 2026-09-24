@@ -253,9 +253,31 @@ failure — the pipeline is compiled exactly as it was before, and the wallpaper
 loads. All of it is regenerable and all of it is removed by **Clear shader
 cache** in Storage; nothing you imported is stored there.
 
-No power comparison has been measured between the two renderers, and none has
-been measured for any of the caching above. Choosing native Metal is not a
-documented saving, and neither is a cache hit.
+Measured so far on one scene only — Workshop 3620484312, a 3840×2160 canvas on
+the built-in 3456×2234 display, with other applications running (numbers in the
+verification log). Native Metal used to start a render pass for every pass of
+the frame, about 180 here, most of them for hidden layers. Consecutive passes
+into one image now share a render pass and a hidden layer starts none (47 here),
+and a copy a layer makes only to read the image it draws into — 21 full-frame
+copies a frame here, one per clipping-mask layer — is replaced by trading the two
+images' textures. The picture is byte-identical, and offscreen CPU per frame
+fell from 1.8 ms to about 1 ms. In one desktop pair, the two diagnostics windows
+reported approximately 51.3 draws/s; app GPU busy time was 38.6 % versus 33.0 %,
+and CPU + GPU + ANE combined power was 2.5 W versus 2.3 W. The power and counter
+windows started independently, so this is not proof of matched throughput over
+the power window. Neither these numbers nor the earlier render-pass comparison
+establish a same-quality whole-machine power saving.
+
+Battery runs on the built-in display recorded 10–25 W of system load with the
+app quit, and 21–29 W with this wallpaper at a configured 60 fps ceiling.
+Diagnostics observed 45–52 draws/s; the cause of that shortfall was not
+established. A 30 fps ceiling recorded 17.5–18.9 W, and a 1 fps run recorded
+17.6 W. Those ceilings are quality tradeoffs, not same-quality optimizations.
+Background load and independently timed windows prevent subtracting these
+ranges into a reliable wallpaper-only watt figure or attributing the difference
+to memory or display hardware. CPU + GPU + ANE combined power is not whole-Mac
+power. The audio-reactive runs also recorded coreaudiod at 13–17 % CPU, including
+at 1 fps. No isolated energy saving has been established for the caches above.
 
 ## Advanced
 

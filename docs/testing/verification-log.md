@@ -25,6 +25,33 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-24 — Release build: lock-screen texture prefetch and acquire-failure reporting
+
+- `python3 scripts/build.py --configuration Release` — exit 0; delivered `build/Build/Products/Release/WallpaperMachine.app`
+- Bundle check: app and extension binaries each contain 17 `TexturePrefetch` symbols, linked 19:43 after the last renderer edit (19:35); the extension contains the new `Acquire failed display=` diagnostic
+- After review, `TexturePrefetch` keeps the workers that started when a thread fails to start; `texture_prefetch_test` — 7 passed (new `WithoutWorkersEveryImageIsLeftToTheCallerAtOnce`), 3 runs
+- Not run: the app was not launched and the lock screen was not re-enabled; Debug and Release copies of the extension are both still registered
+
+## 2026-09-24 — Lock screen: parallel texture decode at pass preparation; extension reports acquire failures
+
+Animate Lock Screen failed for a private 943 MB puppet scene (122 embedded PNG textures). Confirmed: WallpaperAgent abandoned the extension's acquire after about 31 s with no frame. Likely contributor, not measured inside the extension: the offscreen probe needs 15.6 s to its first frame, dominated by single-threaded stb_image PNG decode. The extension sent no readiness error, so the app showed its generic 'macOS did not load' message.
+
+- `python3 scripts/check_renderer.py` — exit 0; 25 binaries including new `texture_prefetch_test` (6 tests); 10 generated cases pooled/isolated pixels equal, 0 diagnostics; reload cycles 8x2 clean; no `--project` corpus; asset checks skipped: `MetalSceneDraw.LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBackend` (no `WE_TEST_METAL_PROJECTS`), `TextObjectRuntime.LonelyCatHeadlessRegression` (no local fixture), `TextObjectRuntime.Workshop3409533530FullSceneKeepsClockRenderPassAndTexture` (package absent)
+- `python3 scripts/test.py` — exit 0; 574 passed, 0 failed, 11 skipped of 585
+- `offscreen_scene_probe` on the private scene, warm shader cache — first frame 15.6 s before, 14.7 s with the `FindTex` check, 3.6 s with `TexturePrefetch`; frame SHA-256 identical; peak RSS about 0.8 to 1.1 GB
+- Mutation: admitting past the byte budget fails `HoldsDecodingAndUntakenImagesWithinTheBudget` and `AdmitsAnImageLargerThanTheBudgetOnItsOwn`
+- `python3 scripts/build.py --renderer-only` — exit 0; `libwallpaper_bridge.a` contains `TexturePrefetch`
+- Not run: lock-screen activation through WallpaperAgent (changes the system wallpaper; not authorized) and a Release build (not requested); first-frame time inside the extension is unmeasured
+
+## 2026-09-24 — Requested full Release rebuild after equal-quality and remote integration
+
+- Requested a new build after committing/pushing the equal-quality work and integrating the remote parallax and Workshop download-concurrency changes. Used the full renderer/bridge build, not --swift-only.
+- Prebuild python3 scripts/test.py: exit 0; 152 Python cases passed, native 574 passed, 0 failed, 11 opt-in skipped of 585 (9 native media, 2 live Workshop). No desktop UI or opt-in network/audio-hardware run.
+- python3 scripts/build.py --configuration Release: exit 0; Cargo workspace rebuilt, Swift/FFI bindings regenerated, XcodeGen and Release app/extension build succeeded. Delivered build/Build/Products/Release/WallpaperMachine.app, version 0.5.0 (16).
+- Complete current source-input SHA-256 d9600b9b572197f6d1627ac05d6977be82354ed454137f0d2bbb0b56526137a0, covering 1036 source/config/test files including relevant untracked files. Before/after manifests show no source drift during the gate and build. New executable SHA-256 173c1d51889243657a5d4990bd5b6d43e176abde45abfc6d7e5127a7abca7cbf.
+- All 15 bundled Contents/Resources/WebUI files byte-match the current WebUI sources, including the new download-concurrency settings row. codesign --verify --deep --strict build/Build/Products/Release/WallpaperMachine.app: exit 0.
+- No install, ordinary app launch/quit/restart, desktop visual check or power measurement. User must quit and reopen the delivered app. Earlier power results refer to executable c03902bfae6dddf9cdd929a2dfc73056280dfbe82b7241478d4e86bf048aadbc, not this rebuilt executable.
+
 ## 2026-09-24 — Equal-quality push integrated with concurrent download settings
 
 - The first normal push was rejected because origin/main advanced to 9b07191 while integration checks ran. Rebased again without force-pushing, preserving the remote Workshop download-concurrency feature and both complete verification histories.
@@ -88,41 +115,3 @@ goes. Trimming is allowed; editing an entry's recorded result is not.
 - Correction to previous power reports: 45–52 draws/s is an observation, not proof that each frame adds its work time to 16.7 ms. ThreadTimer schedules from last_tick, set before the asynchronous DRAW callback; FrameEnd wakes only an outstanding request. No frame-clock code was changed.
 - Correction to prior “exact power window” / “matched throughput” claims: delayed diagnostics and the benchmark start independently and only approximately overlap; equal diagnostic-window draw rates do not prove equal throughput during the power window. Presented FPS remains unavailable; no new watt-saving or memory/display attribution is claimed.
 - No app launch/quit, desktop setting changes, on-screen visual checks or new power measurements in this correction. Renderer provenance and owning documentation updated; historical measurements are superseded by the corrections above.
-
-## 2026-09-24 — Power follow-up: window-aligned measurement, feedback-copy texture trade, what the wallpaper costs
-
-On battery, built-in display only, other applications in use; every app run relaunched the Release build, which opens its control panel at launch.
-
-- `power_benchmark.py` — 21 tests; a refused powermetrics now waits out the window (new mocked-clock test fails pre-fix at 0.2 s); system power from AppleSmartBattery accumulators; coreaudiod role
-- `WALLPAPER_MACHINE_DIAGNOSTICS_DELAY` + `window elapsed_ms`: draws counted over exactly the power window; `python3 scripts/test.py` — exit 0, 569 passed, 0 failed, 11 skipped
-- `python3 scripts/check_renderer.py` — exit 0 (metal_scene_draw_smoke 35); feedback trade test fails with the opening copy removed; harness: 21 → 0 blits/frame, 47 render passes, PPM identical to baseline and with `WALLPAPER_MACHINE_FEEDBACK_COPIES=1`
-- `python3 scripts/build.py --configuration Release` — built 09:39; binary contains the trade, the A/B switch and the delayed window
-- Trade vs copies at matched throughput (51.31/51.30 draws/s): app GPU 38.6 → 33.0 %, CPU 43.8 → 40.4 %, package 2.51 → 2.34 W, system 23.7/24.4 W (noise); an unmatched pair (52.1/51.0): GPU 33.1 → 24.4 %, system 28.8/28.7 W
-- Whole wallpaper: app quit 9.6–24.8 W system, 0.9–1.3 W package (busy spell 3.4 W); default 60 fps ceiling = 44.8–52.1 draws/s, 21.4–28.8 W system, 2.3–3.5 W package; 30 fps: 17.5/18.9 W, 1.7/2.6 W; 1 fps: 17.6 W, 0.9 W
-- coreaudiod 13–17 % CPU whenever this audio-reactive wallpaper runs, even at 1 fps; control panel busy in some runs (WebContent 8–13 %, WindowServer ~+20 points), inferred from its animated GIF previews
-- Not measured: a second display (configured with the same wallpaper), AC power with charging, presented frames (unavailable)
-
-## 2026-09-24 — Power hotspots: Metal render-pass sharing, per-frame CPU, poster retention
-
-Scene 3620484312 on the built-in 3456×2234 display, 60 fps cap, AC power, other applications running; every desktop run relaunched the app, which opens its control panel at launch.
-
-- `python3 -m unittest discover -s scripts/tests -p test_power_benchmark.py` — 17 passed; `power_benchmark.py --measure 5 --condition T3 --print-only` reports app/WindowServer CPU and GPU %
-- `python3 scripts/check_renderer.py` — exit 0, every binary 0 (metal_scene_draw_smoke 34, static_subgraph_cache_test 26, metal_backend_test 35), generated cases pixel-equal; the new batching test fails with sharing disabled (3 render passes, expected 1)
-- `python3 scripts/test.py --only DesktopWallpaperTests` — 27 passed; `python3 scripts/test.py` — exit 0, 566 passed, 0 failed, 11 skipped
-- Harness `WE_TEST_METAL_PROJECTS` (seed 1, 3456x2234): 179.0 → 47.0 render passes/frame (154 → 22 into the scene image), 21 blits unchanged, 1.82 → 0.75 ms CPU per drawFrame; PPM byte-identical to the baseline (two baseline runs identical)
-- Grouping scene-output passes first (plan step 5) was reverted: no change, the 21 remaining scene-image passes each follow a full-frame copy a clipping-mask effect reads
-- `python3 scripts/build.py --configuration Release` — built; app binary newer than the build start and contains the renderer change
-- Desktop `power_benchmark.py --measure 60 --powermetrics`, increments over paired B0: native Metal before app CPU 38.2/37.6 %, GPU 65.1/62.9 %, package +7.11/+6.95 W; after 27.7/27.8 %, 19.4/24.2 %, +4.85/+3.00 W; Compatibility +1.58 before, +2.64 W after. Not a same-throughput comparison: draws over the power window were not counted
-- Draws executed per 180-s diagnostics session, start-up included: 9155/7435 before, 9313/7885 after (corrected: an earlier draft of this line divided by timer wakeups, which are not elapsed time, and reported 60.0/50.6 fps). Presented frames unavailable. WindowServer CPU 44–47 % in every run including app-quit B0, not attributable; package CPU power moved ±1 W between repeats
-- DesktopPosters: 351 PNGs (3.2 GB) → 4 (50 MB) at the first launch of the new build (its display is on the bounded-retention path)
-- Not verified: on-screen visual equality beyond the harness PPM, other scenes, and a Space-change or wake on the real desktop
-
-## 2026-09-23 — Release build after pulling 5a4201f
-
-- git pull --ff-only: main fast-forwarded to 5a4201f (27 files: panel/settings/welcome WebUI, GitHub update feed, tests, docs); no project.yml, renderer, bridge or upstream changes.
-- First python3 scripts/test.py: 562 passed, 1 failed, 11 skipped. ControlPanelShellTests.testFirstRunGuideCoversTheWindowWalksFivePagesAndReturnsFromSettings still expected a pure black/white guide canvas; 5ca5ca3 moved WebUI/welcome.css to --welcome-bg: var(--bg) (library window surface).
-- Fix: the test now asserts the guide background equals the document root background and is opaque rgb(), instead of hard-coded #000/#fff.
-- python3 scripts/test.py --only ControlPanelShellTests: 18 passed. Full python3 scripts/test.py: 563 passed, 0 failed, 11 skipped.
-- python3 scripts/build.py --swift-only --configuration Release: OK, build/Build/Products/Release/WallpaperMachine.app 0.5.0 (16).
-- diff -rq WebUI vs Contents/Resources/WebUI: identical.
-- Not run: check_renderer.py (no renderer change), UI/desktop tests, launching the app; guide visuals not checked by eye.

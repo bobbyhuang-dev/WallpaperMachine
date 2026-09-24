@@ -2159,6 +2159,71 @@ TEST(ShaderValueUpdaterCompat, SlotUniformsUpdateWhenSlotZeroMaterialIsMissing) 
     scene.activeCamera = nullptr;
 }
 
+// Camera parallax moves a layer by where it sits in the scene. A layer inside a
+// group has a parent-relative origin; offsetting it by that local number pushed
+// a full-screen child of a centred group by tens of pixels and uncovered the
+// layers beneath it along two canvas edges.
+TEST(ShaderValueUpdaterCompat, CameraParallaxPlacesAChildLayerByItsScenePosition) {
+    Scene scene;
+    scene.ortho[0] = 3840;
+    scene.ortho[1] = 2160;
+    auto camera      = std::make_shared<SceneCamera>(3840, 2160, -1.0f, 1.0f);
+    auto camera_node = std::make_shared<SceneNode>();
+    camera_node->SetTranslate(Eigen::Vector3f(1920, 1080, 0));
+    camera->AttatchNode(camera_node);
+    scene.activeCamera = camera.get();
+
+    const auto layer = [] {
+        auto node = std::make_shared<SceneNode>();
+        auto mesh = std::make_shared<SceneMesh>();
+        mesh->AddMaterial(SceneMaterial {});
+        node->AddMesh(mesh);
+        return node;
+    };
+    WPShaderValueUpdater updater(&scene);
+    updater.SetCameraParallax({ .enable = true, .amount = 0.15f, .delay = 2.0f,
+                                .mouseinfluence = 0.3f });
+    WPShaderValueData depth;
+    depth.parallaxDepth = { -0.24f, -0.24f };
+    const auto model_matrix = [&](SceneNode& node) {
+        updater.SetNodeData(&node, depth);
+        updater.InitUniforms(&node, [](std::string_view name) { return name == "g_ModelMatrix"; });
+        sprite_map_t sprites;
+        ShaderValue  value;
+        updater.UpdateUniforms(&node, sprites, [&](std::string_view name, const ShaderValue& v) {
+            if (name == "g_ModelMatrix") value = v;
+        });
+        return value;
+    };
+    const auto expect_equal = [](const ShaderValue& actual, const ShaderValue& expected) {
+        ASSERT_EQ(actual.size(), expected.size());
+        for (std::size_t i = 0; i < actual.size(); ++i) EXPECT_NEAR(actual[i], expected[i], 1e-3);
+    };
+
+    // Centred on the camera with the cursor centred: nothing to offset.
+    auto centred_group = std::make_shared<SceneNode>();
+    centred_group->SetTranslate(Eigen::Vector3f(1920, 1080, 0));
+    auto centred_child = layer();
+    centred_group->AppendChild(centred_child);
+    centred_child->UpdateTrans();
+    expect_equal(model_matrix(*centred_child), ShaderValue::fromMatrix(centred_child->ModelTrans()));
+
+    // Off-centre, a nested layer moves exactly as a top-level layer at the
+    // same scene position does.
+    auto group = std::make_shared<SceneNode>();
+    group->SetTranslate(Eigen::Vector3f(1000, 500, 0));
+    auto nested = layer();
+    nested->SetTranslate(Eigen::Vector3f(500, 200, 0));
+    group->AppendChild(nested);
+    auto top_level = layer();
+    top_level->SetTranslate(Eigen::Vector3f(1500, 700, 0));
+    const auto nested_matrix = model_matrix(*nested);
+    expect_equal(nested_matrix, model_matrix(*top_level));
+    top_level->UpdateTrans();
+    EXPECT_GT(std::abs(nested_matrix[12] - static_cast<float>(top_level->ModelTrans()(0, 3))), 1.0f)
+        << "an off-centre layer must still be displaced by parallax";
+}
+
 TEST(ShaderValueUpdaterCompat, SlotRenderTargetUniformsUseSlotShaderValueData) {
     Scene scene;
     scene.runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});

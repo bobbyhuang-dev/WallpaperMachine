@@ -293,7 +293,11 @@ void WPShaderValueUpdater::UpdateUniforms(SceneNode* pNode, uint32_t material_sl
         Matrix4d modelTrans = samples_screen_background ? pNode->ModelTrans() : pNode->RenderTrans();
         if (hasNodeData && cam_name != "effect") {
             if (m_parallax.enable) {
-                Vector3f nodePos = pNode->Translate();
+                // Parallax follows where the layer sits in the scene, not its
+                // parent-relative origin: a child of a centred group has a
+                // local origin near zero and would otherwise be pushed as if it
+                // sat in the canvas corner, uncovering what lies beneath it.
+                const Vector2f nodePos = modelTrans.block<2, 1>(0, 3).cast<float>();
                 Vector2f depth(&nodeData->parallaxDepth[0]);
                 Vector2f ortho { (float)m_scene->ortho[0], (float)m_scene->ortho[1] };
                 // flip mouse y axis
@@ -302,7 +306,7 @@ void WPShaderValueUpdater::UpdateUniforms(SceneNode* pNode, uint32_t material_sl
                 mouseVec        = mouseVec.cwiseProduct(ortho) * m_parallax.mouseinfluence;
                 Vector3f camPos = camera->GetPosition().cast<float>();
                 Vector2f paraVec =
-                    (nodePos.head<2>() - camPos.head<2>() + mouseVec).cwiseProduct(depth) *
+                    (nodePos - camPos.head<2>() + mouseVec).cwiseProduct(depth) *
                     m_parallax.amount;
                 modelTrans =
                     Affine3d(Translation3d(Vector3d(paraVec.x(), paraVec.y(), 0.0f))).matrix() *

@@ -28,7 +28,8 @@ struct LockScreenScene: Codable, Equatable {
   var paused: Bool
 }
 
-/// Written only after the system has acquired a GPU-ready non-preview surface.
+/// Written once a non-preview surface has GPU-ready pixels, or with `error` when
+/// acquiring or replacing its renderer failed; never optimistically.
 struct LockScreenReadiness: Codable {
   var revision: String
   var displayID: UInt32

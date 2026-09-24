@@ -87,17 +87,31 @@ final class WallpaperController {
       configuration.scenes.contains(surface.scene)
     else { return }
     surface.whenReady { readyError in
-      let result = LockScreenReadiness(
-        revision: configuration.revision,
-        displayID: surface.scene.displayID, error: (error ?? readyError)?.localizedDescription)
-      do {
-        let data = try JSONEncoder().encode(result)
-        try data.write(
-          to: WallpaperRuntime.documents.appendingPathComponent("ready-\(result.displayID).json"),
-          options: .atomic)
-      } catch {
-        WallpaperRuntime.log("Readiness acknowledgement failed: \(error.localizedDescription)")
-      }
+      Self.record(
+        LockScreenReadiness(
+          revision: configuration.revision, displayID: surface.scene.displayID,
+          error: (error ?? readyError)?.localizedDescription))
+    }
+  }
+
+  /// A failure before any surface existed. Reported rather than left for the
+  /// app to time out on, which it could only blame on macOS.
+  private func acknowledge(scene: LockScreenScene, error: Error) {
+    guard let configuration, configuration.scenes.contains(scene) else { return }
+    Self.record(
+      LockScreenReadiness(
+        revision: configuration.revision, displayID: scene.displayID,
+        error: error.localizedDescription))
+  }
+
+  private static func record(_ readiness: LockScreenReadiness) {
+    do {
+      let data = try JSONEncoder().encode(readiness)
+      try data.write(
+        to: WallpaperRuntime.documents.appendingPathComponent("ready-\(readiness.displayID).json"),
+        options: .atomic)
+    } catch {
+      WallpaperRuntime.log("Readiness acknowledgement failed: \(error.localizedDescription)")
     }
   }
 
@@ -107,6 +121,7 @@ final class WallpaperController {
   }
 
   func acquire(id value: Any?, request: Any?, reply: @escaping (Any?, Error?) -> Void) {
+    var acquiring: LockScreenScene?
     do {
       guard let id = WallpaperRuntime.identifier(value), let request,
         let destination = WallpaperRuntime.field("destination", in: request),
@@ -123,6 +138,7 @@ final class WallpaperController {
           "No applied wallpaper is available for this display. Enable Animate Lock Screen in WallpaperMachine."
         )
       }
+      if !preview { acquiring = scene }
       if let existing = surfaces[id], existing.scene == scene, existing.size == size,
         existing.scale == scale
       {
@@ -156,11 +172,22 @@ final class WallpaperController {
           reply(try WallpaperRuntime.contextReply(surface.context.contextId), nil)
           self.acknowledge(surface: surface)
           WallpaperRuntime.log("Acquired id=\(id) display=\(scene.displayID) preview=\(preview)")
-        } catch { reply(nil, error) }
+        } catch {
+          reply(nil, error)
+          // A superseded surface is not a failure: a newer acquire owns the
+          // outcome. Anything else ends this display's activation.
+          guard !(error is CancellationError), let self, let surface,
+            self.revisions[id] == revision, self.surfaces[id] === surface
+          else { return }
+          WallpaperRuntime.log(
+            "Acquire failed display=\(scene.displayID): \(error.localizedDescription)")
+          self.acknowledge(surface: surface, error: error)
+        }
       }
     } catch {
       reply(nil, error)
       WallpaperRuntime.log("Acquire failed: \(error.localizedDescription)")
+      if let acquiring { acknowledge(scene: acquiring, error: error) }
     }
   }
 

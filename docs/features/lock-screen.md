@@ -19,7 +19,11 @@ after `apply_config`, so a desktop Scene that uses now-playing does not keep
 that feed on the lock screen.
 
 "Enabled" is not claimed optimistically: it requires the system extension to
-acknowledge a rendered frame.
+acknowledge a rendered frame. The extension answers macOS only once that frame
+exists, and WallpaperAgent abandons an extension that has not answered after
+about 31 seconds (observed on macOS 27.2), so a scene must reach its first frame
+well inside that; see
+[startup costs](../testing/renderer.md#startup-and-staging-buffers).
 
 ## Caveats
 
@@ -31,6 +35,20 @@ acknowledge a rendered frame.
 - System-wide linked wallpapers, or another wallpaper app, can prevent
   activation. The app reports the conflict instead of overwriting those choices.
 - Playback respects the pause and battery settings.
+
+## When activation fails
+
+If the renderer fails, or misses the extension's own 30-second first-frame
+deadline, the extension writes the reason to its readiness file and the status
+row shows it. The generic "macOS did not load the lock-screen renderer" message
+means no answer arrived at all. The extension's container keeps a bounded log at
+`~/Library/Containers/app.wallpapermachine.wallpaper-extension/Data/Documents/extension.log`.
+
+Every copy of the app on disk registers the same extension identifier, and
+macOS may launch any of them — including the Debug build `scripts/test.py`
+rebuilds beside the Release app.
+`pluginkit -m -A -D -v -i app.wallpapermachine.wallpaper-extension` lists every
+registered copy (without `-A -D` it shows only one); keep one while testing.
 
 ## Turning it off
 

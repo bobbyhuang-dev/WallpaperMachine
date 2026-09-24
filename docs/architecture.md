@@ -219,7 +219,8 @@ preview or lock-screen instance cannot render for nobody), and
 `LockScreenConfiguration` (version, revision, `[LockScreenScene]` with paths relative to the
 extension's Documents directory) into the extension container, then posts
 `LockScreenConfiguration.changedNotification`; the extension reloads and writes
-`LockScreenReadiness` back only after a GPU-ready non-preview surface exists. The extension
+`LockScreenReadiness` back once a GPU-ready non-preview surface exists, or with the error when
+acquiring or replacing that surface's renderer failed. The extension
 never reads draft options or the app's private configuration files, and it publishes no
 external URLs. `Extension/WallpaperExtension.entitlements` enables the App Sandbox with a single
 read-only exception for `/opt/homebrew/`, which is what lets the sandboxed process load the

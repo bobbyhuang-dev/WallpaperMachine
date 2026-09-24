@@ -64,6 +64,16 @@ Scene 3620484312 on the built-in 3456×2234 display, 60 fps cap, AC power, other
 - DesktopPosters: 351 PNGs (3.2 GB) → 4 (50 MB) at the first launch of the new build (its display is on the bounded-retention path)
 - Not verified: on-screen visual equality beyond the harness PPM, other scenes, and a Space-change or wake on the real desktop
 
+## 2026-09-23 — Release build after pulling 5a4201f
+
+- git pull --ff-only: main fast-forwarded to 5a4201f (27 files: panel/settings/welcome WebUI, GitHub update feed, tests, docs); no project.yml, renderer, bridge or upstream changes.
+- First python3 scripts/test.py: 562 passed, 1 failed, 11 skipped. ControlPanelShellTests.testFirstRunGuideCoversTheWindowWalksFivePagesAndReturnsFromSettings still expected a pure black/white guide canvas; 5ca5ca3 moved WebUI/welcome.css to --welcome-bg: var(--bg) (library window surface).
+- Fix: the test now asserts the guide background equals the document root background and is opaque rgb(), instead of hard-coded #000/#fff.
+- python3 scripts/test.py --only ControlPanelShellTests: 18 passed. Full python3 scripts/test.py: 563 passed, 0 failed, 11 skipped.
+- python3 scripts/build.py --swift-only --configuration Release: OK, build/Build/Products/Release/WallpaperMachine.app 0.5.0 (16).
+- diff -rq WebUI vs Contents/Resources/WebUI: identical.
+- Not run: check_renderer.py (no renderer change), UI/desktop tests, launching the app; guide visuals not checked by eye.
+
 ## 2026-09-22 — Current Release built and old build residue cleared
 
 - Requested build and cleanup. Prebuild gate: python3 scripts/test.py: 142 Python tests passed; 563 native passed, 0 failed, 11 skipped of 574. No desktop UI, network or media opt-ins enabled.
@@ -128,16 +138,3 @@ Scene 3620484312 on the built-in 3456×2234 display, 60 fps cap, AC power, other
 - Popover stress: with a multiline business-error banner shifting the Import trigger, the anchor-derived popover stayed inside the viewport. No fixed trigger-height assumption or periodic measurement/timer added.
 - Cleanup: owning control-panel documentation and local link targets updated; temporary preview fixture removed. Task-owned headless reference/preview tabs and localhost service released. Synthetic screenshot evidence remains disposable; no shared artifact purge.
 - Limits: offscreen WKWebView behavior and isolated Chromium source-UI visuals only. No desktop control, real Steam login, wallpaper changes, permission approval or app restart. Real desktop presentation and power remain unverified. No Release build; the running app does not automatically acquire these source changes.
-
-## 2026-09-22 — Control panel UI and UX refinement
-
-- Implementation: completed the five approved WebUI steps; existing native actions, snapshot fields, defaults, window minimum and design identity retained. No frontend dependencies or production resource files added.
-- Baseline: offscreen WebKit reproduced settings overflow, lock availability, welcome focus and revealed-password loss; isolated Chromium reproduced secondary-only playback and unrelated Reconnect. The native anonymous-account regression reproduced missing modal feedback.
-- Targeted: python3 scripts/test.py --only ControlPanelShellTests --only ControlPanelLibraryTests --only ControlPanelDiscoverTests --only ControlPanelSyncTests --only WebPanelPerformanceSettingsTests --only WebPanelSceneSettingsTests --only WebPanelAssetPropertiesTests --only WebPanelPropertyLabelTests: 66 passed, 0 failed, 0 skipped.
-- Full gate, once after integration: python3 scripts/test.py: 141 Python tests passed; 553 native passed, 0 failed, 11 skipped (2 live Workshop network and 9 NativeVideoPlayerMedia opt-ins). No --ui, network or media opt-in enabled.
-- Isolated visual evidence: 13 viewport/language/theme configurations, 582 first-round captures including supplemental welcome states; consolidated fixes followed by 78 confirmation captures. Sizes 760x560, 960x640, 1440x900; English/Chinese, light/dark, warm/cool, black/white accent and reduced motion.
-- Runtime: real browser pointer and keyboard exercised hover, adjacent selection, Tab/Shift-Tab, radio arrows/Home/End, focus isolation, pending navigation, prompt handoff, empty recovery, property Reset and retained import results. Narrow dialog Submit/Cancel and queue retry remain reachable by keyboard/scroll; six-second sign-in handoff observed at 6023ms.
-- Motion: captured 105 Chromium screencast frames and encoded a short hover GIF; observed scale interpolation 1 to 1.08 and back, reduced-motion scale 1. The standard WebM encoder was unavailable because host ffmpeg could not load libvpx.11.dylib; no tools were installed or patched.
-- Documentation: updated control-panel, workshop-downloads and native coverage owners; local link targets checked. Published changelog remains release-generated. Removed task-owned preview scripts/raw frames; retained disposable synthetic screenshots and review evidence. clean.py --dry-run also included shared artifacts, so no blanket purge was performed.
-- Isolation: task-owned Chromium tab and localhost preview service released. No application launch/restart, desktop control, real Steam login, wallpaper changes or system permission approval. No Release build; the running app still has the old behavior.
-- Limits: Chromium source WebUI visual/runtime evidence and offscreen WKWebView behavior only. Actual desktop WKWebView presentation, system dialogs, real Steam, wallpaper presentation and power consumption remain unverified.

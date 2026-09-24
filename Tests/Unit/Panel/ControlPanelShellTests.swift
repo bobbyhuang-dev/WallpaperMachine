@@ -776,7 +776,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
           step: region.querySelector('.welcome-page').dataset.step,
           covers: style.position === 'fixed' && rect.width === window.innerWidth && rect.height === window.innerHeight,
           background: style.backgroundColor,
-          theme: document.documentElement.dataset.theme,
+          windowBackground: getComputedStyle(document.documentElement).backgroundColor,
           title: region.querySelector('#welcome-title').textContent,
           languages: [...region.querySelectorAll('[data-action="language"]')].map(b => b.dataset.value),
           themes: [...region.querySelectorAll('[data-action="theme"]')].map(b => b.dataset.value),
@@ -788,9 +788,9 @@ final class ControlPanelShellTests: ControlPanelTestCase {
         """) as? [String: Any]
       XCTAssertEqual(first?["step"] as? String, "language")
       XCTAssertEqual(first?["covers"] as? Bool, true, "The guide covers the whole window, top bar included")
-      XCTAssertEqual(
-        first?["background"] as? String, first?["theme"] as? String == "dark" ? "rgb(0, 0, 0)" : "rgb(255, 255, 255)",
-        "Black or white by the resolved appearance, never translucent")
+      let background = first?["background"] as? String
+      XCTAssertEqual(background, first?["windowBackground"] as? String, "The guide sits on the library's window surface")
+      XCTAssertTrue(background?.hasPrefix("rgb(") == true, "The guide is opaque, never translucent: \(background ?? "nil")")
       XCTAssertEqual(first?["title"] as? String, "Welcome to WallpaperMachine")
       XCTAssertEqual(first?["languages"] as? [String], ["system"] + AppLanguage.supported.map(\.tag))
       XCTAssertEqual(first?["themes"] as? [String], ["system", "light", "dark"])

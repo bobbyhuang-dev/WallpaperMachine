@@ -15,6 +15,19 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-22 — Control panel UI and UX refinement
+
+- Implementation: completed the five approved WebUI steps; existing native actions, snapshot fields, defaults, window minimum and design identity retained. No frontend dependencies or production resource files added.
+- Baseline: offscreen WebKit reproduced settings overflow, lock availability, welcome focus and revealed-password loss; isolated Chromium reproduced secondary-only playback and unrelated Reconnect. The native anonymous-account regression reproduced missing modal feedback.
+- Targeted: python3 scripts/test.py --only ControlPanelShellTests --only ControlPanelLibraryTests --only ControlPanelDiscoverTests --only ControlPanelSyncTests --only WebPanelPerformanceSettingsTests --only WebPanelSceneSettingsTests --only WebPanelAssetPropertiesTests --only WebPanelPropertyLabelTests: 66 passed, 0 failed, 0 skipped.
+- Full gate, once after integration: python3 scripts/test.py: 141 Python tests passed; 553 native passed, 0 failed, 11 skipped (2 live Workshop network and 9 NativeVideoPlayerMedia opt-ins). No --ui, network or media opt-in enabled.
+- Isolated visual evidence: 13 viewport/language/theme configurations, 582 first-round captures including supplemental welcome states; consolidated fixes followed by 78 confirmation captures. Sizes 760x560, 960x640, 1440x900; English/Chinese, light/dark, warm/cool, black/white accent and reduced motion.
+- Runtime: real browser pointer and keyboard exercised hover, adjacent selection, Tab/Shift-Tab, radio arrows/Home/End, focus isolation, pending navigation, prompt handoff, empty recovery, property Reset and retained import results. Narrow dialog Submit/Cancel and queue retry remain reachable by keyboard/scroll; six-second sign-in handoff observed at 6023ms.
+- Motion: captured 105 Chromium screencast frames and encoded a short hover GIF; observed scale interpolation 1 to 1.08 and back, reduced-motion scale 1. The standard WebM encoder was unavailable because host ffmpeg could not load libvpx.11.dylib; no tools were installed or patched.
+- Documentation: updated control-panel, workshop-downloads and native coverage owners; local link targets checked. Published changelog remains release-generated. Removed task-owned preview scripts/raw frames; retained disposable synthetic screenshots and review evidence. clean.py --dry-run also included shared artifacts, so no blanket purge was performed.
+- Isolation: task-owned Chromium tab and localhost preview service released. No application launch/restart, desktop control, real Steam login, wallpaper changes or system permission approval. No Release build; the running app still has the old behavior.
+- Limits: Chromium source WebUI visual/runtime evidence and offscreen WKWebView behavior only. Actual desktop WKWebView presentation, system dialogs, real Steam, wallpaper presentation and power consumption remain unverified.
+
 ## 2026-09-22 — Release build for Perfect Wallpaper compatibility repair
 
 - Pre-build gate for the unchanged repair sources: cargo test --release -p wallpaper-bridge --lib --quiet passed 322 tests; python3 scripts/test.py passed 141 Python and 544 native tests, with 11 opt-in skips; python3 scripts/check_renderer.py passed its generated matrix with three private-corpus skips. These commands were completed before the requested build and not needlessly rerun.
@@ -34,7 +47,6 @@ renderer behaviour and known-failing tests into
 - python3 scripts/check_renderer.py: exit 0; all test/probe processes returned 0; ten generated pooled/isolated pairs were pixel-equal with expected pixels and no diagnostics; eight generated projects completed two reload cycles. Three private-corpus cases skipped: LonelyCat, Workshop3409533530, and local Metal projects.
 - Verification limits: page state/resource loading only, not desktop presentation, animation smoothness, video playback, real audio response, or power. Diagnostic network access was blocked and media playback suspended; resulting media play rejections and author-caught uninitialized timer logs were not treated as host failures.
 - Cleanup: throwaway Rust/Swift diagnostic sources and the standalone Swift executable removed. python3 scripts/clean.py --dry-run inspected successfully; broad cleanup was not run because it would remove shared verification artifacts. Published changelog remains release-generated.
-
 ## 2026-09-22 — Release system: generated notes, draft-first publishing, deleted old releases
 
 Reworked the release system end to end. scripts/release_notes.py writes the GitHub Release body and CHANGELOG.md from the commits between two tags; scripts/publish_release.py refuses a live release and cannot let Latest go backwards; build.yml gates on the test suite, verifies the unpacked archive and attests provenance; Settings -> About shows what the newest release changed. All thirteen releases through v0.5.0 were deleted at the owner's request, tags kept.

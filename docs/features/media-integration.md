@@ -62,6 +62,16 @@ and a failed helper stops without an automatic restart loop. Toggle integration
 off and on to retry. A playing timeline is interpolated from the reported
 position, timestamp and playback rate, bounded by duration.
 
+The adapter provider retains only its most recently **successfully resolved**
+`artworkData` string and thumbnail. An identical string skips base64 decoding
+and the hash-based `MediaArtwork` lookup, but the rest of every complete message
+still updates properties, playback, timestamp, rate and timeline. Failed input
+is not cached. This input cache is separate from the currently published cover:
+a new track without artwork clears that cover, and receiving the cached image
+again publishes it again. An omitted cover on the same track still leaves it
+alone. The last consumer leaving or the stream failing releases the input cache;
+old stream-generation callbacks cannot restore it.
+
 Consent is the only thing that starts a source, and presenting is the only
 thing that keeps it running. `WallpaperBridge.systemMediaSceneHandles()` names
 the applied desktop Scenes that have the setting on **and** are actually

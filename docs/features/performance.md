@@ -9,6 +9,30 @@ Experimental content pacing, shared video decode and direct video plane
 sampling are grouped in the **Advanced** disclosure. Renderer feature support
 is under **Renderer compatibility**, beside the current scene backend report.
 
+## Repeated-work reduction
+
+These internal optimizations do not change any setting, target frame rate,
+render scale, animation speed or audio-response subscription:
+
+- Metal and Compatibility passes borrow their uniform writer only for the
+  synchronous update call. Matrices still update every frame, pack column-major
+  into owned storage, and preserve the input scalar type until conversion to
+  float. Fixed 4×4 values use the existing inline storage; larger values own a
+  vector. No camera, bone, script or effect result is cached by this path.
+- The audio-analysis FIFO advances a logical read position instead of moving
+  its tail after every 200-frame hop. Appends compact only when the consumed
+  prefix is at least the retained suffix or the physical queue would exceed
+  24,000 frames. Stereo channels advance together, capacity grows geometrically
+  within that bound, and every 1,024-frame analysis window is still copied and
+  processed at the original cadence.
+- Repeated system-media artwork skips redundant input conversion while still
+  consuming every media-state message; see [media integration](media-integration.md).
+
+Fewer allocations, queue moves or conversions are workload evidence, not a
+measurement of watts. Draw-call CPU timing excludes simulation and is not
+displayed FPS; a power claim still requires the matched conditions described in
+[power benchmarking](../testing/power-benchmark.md).
+
 ## Video backend
 
 | Setting | Values | Default |

@@ -104,6 +104,7 @@ final class AdapterSystemMediaProvider: SystemMediaProvider {
     private var buffer = Data()
     private var properties = SystemMediaProperties()
     private var thumbnail: SystemMediaThumbnail?
+    private var resolvedArtwork: (encoded: String, thumbnail: SystemMediaThumbnail)?
     private var playback = SystemMediaPlaybackState.stopped
     private var timeline: SystemMediaTimeline?
     private var timestamp = Date()
@@ -146,6 +147,7 @@ final class AdapterSystemMediaProvider: SystemMediaProvider {
         buffer.removeAll()
         properties = SystemMediaProperties()
         thumbnail = nil
+        resolvedArtwork = nil
         playback = .stopped
         timeline = nil
         availability = .unavailable(reason: String(localized: "Media integration has not been started."))
@@ -180,6 +182,7 @@ final class AdapterSystemMediaProvider: SystemMediaProvider {
         stream.stop()
         ticker?.cancel()
         ticker = nil
+        resolvedArtwork = nil
         apply([:])
         availability = .unavailable(reason: String(localized: "The system media service is unavailable."))
         AppLog.warn("System media adapter stopped or could not start.")
@@ -207,7 +210,15 @@ final class AdapterSystemMediaProvider: SystemMediaProvider {
         next.albumTitle = payload["album"] as? String ?? ""
         let changed = next != properties
         if changed { properties = next; onPropertiesChanged?(next) }
-        let cover = (payload["artworkData"] as? String).flatMap { Data(base64Encoded: $0) }.flatMap { artwork.thumbnail(for: $0) }
+        var cover: SystemMediaThumbnail?
+        if let encoded = payload["artworkData"] as? String {
+            if let cached = resolvedArtwork, cached.encoded == encoded {
+                cover = cached.thumbnail
+            } else if let data = Data(base64Encoded: encoded), let parsed = artwork.thumbnail(for: data) {
+                resolvedArtwork = (encoded, parsed)
+                cover = parsed
+            }
+        }
         if let cover, cover != thumbnail {
             thumbnail = cover
             onThumbnailChanged?(cover)

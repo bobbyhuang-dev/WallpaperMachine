@@ -726,10 +726,55 @@ TEST(AudioResponseMonoTest, StereoSubmitWithIdenticalChannelsMatchesMonoAnalysis
     EXPECT_EQ(mono_snapshot.right64, mono_snapshot.average64);
 }
 
+TEST(AudioResponseMonoTest, CompactedFifoPreservesEveryStereoWindow) {
+    ResetAudioResponseServiceForTesting();
+
+    constexpr uint32_t kWindowFrames = 1024u;
+    constexpr uint32_t kFollowingChunks = 40u;
+    constexpr uint32_t kTotalFrames = kWindowFrames + kFollowingChunks * kChunkFrameCount;
+    std::vector<float> left(kTotalFrames);
+    std::vector<float> right(kTotalFrames);
+    std::vector<float> stereo(kTotalFrames * 2u);
+    for (uint32_t frame = 0; frame < kTotalFrames; ++frame) {
+        const double phase = 2.0 * 3.141592653589793 * frame / kSubmitSampleRate;
+        left[frame] = static_cast<float>(0.25 * std::sin(phase * 187.5));
+        right[frame] = static_cast<float>(0.25 * std::cos(phase * 1500.0));
+        stereo[frame * 2u] = left[frame];
+        stereo[frame * 2u + 1u] = right[frame];
+    }
+
+    AudioSpectrumSnapshot reference {};
+    AudioSpectrumSnapshot snapshot {};
+    std::string error;
+    for (uint32_t window = 0; window <= kFollowingChunks; ++window) {
+        SCOPED_TRACE(window);
+        const size_t window_start = window * kChunkFrameCount;
+        AnalyzeAudioResponseStereoBlock(
+            left.data() + window_start, right.data() + window_start, kWindowFrames, &reference);
+
+        const uint32_t submit_count = window == 0u ? kWindowFrames : kChunkFrameCount;
+        const size_t submit_start = window == 0u ? 0u : kWindowFrames + (window - 1u) * kChunkFrameCount;
+        ASSERT_TRUE(SubmitAudioFrames(
+            kSubmitSampleRate, submit_count, stereo.data() + submit_start * 2u, &error))
+            << error;
+        snapshot = WaitForGenerationAfter(window, std::chrono::milliseconds(500));
+        ASSERT_EQ(snapshot.generation, window + 1u);
+        EXPECT_TRUE(snapshot.stereo);
+        EXPECT_LE(MaxAbsDifference(snapshot.left64, reference.left64), 0.00001f);
+        EXPECT_LE(MaxAbsDifference(snapshot.right64, reference.right64), 0.00001f);
+        EXPECT_LE(MaxAbsDifference(snapshot.average64, reference.average64), 0.00001f);
+    }
+
+    EXPECT_EQ(snapshot.generation, 41u);
+    EXPECT_EQ(snapshot.accepted_frame_count, 9024u);
+    EXPECT_EQ(AudioResponseRetainedFrameCountForTesting(), 824u);
+}
+
 TEST(AudioResponseMonoTest, OversizedStereoSubmitAnalyzesOnlyRetainedFrames) {
     ResetAudioResponseServiceForTesting();
 
     constexpr uint32_t oversized_frame_count = kRetainedFrameCapacity + 400u;
+    constexpr uint64_t retained_window_count = 115u;
     std::vector<float> stereo(static_cast<std::size_t>(oversized_frame_count) * 2u, 0.0f);
     std::vector<float> retained_stereo(static_cast<std::size_t>(kRetainedFrameCapacity) * 2u, 0.0f);
 
@@ -755,13 +800,15 @@ TEST(AudioResponseMonoTest, OversizedStereoSubmitAnalyzesOnlyRetainedFrames) {
             << error;
     }
 
-    auto stereo_snapshot = WaitForGeneration();
+    EXPECT_LE(AudioResponseRetainedFrameCountForTesting(), kRetainedFrameCapacity);
+    auto stereo_snapshot = WaitForGenerationAfter(retained_window_count - 1u, std::chrono::milliseconds(500));
+    ASSERT_EQ(stereo_snapshot.generation, retained_window_count);
     EXPECT_EQ(stereo_snapshot.sample_rate, 12'000u);
     EXPECT_EQ(stereo_snapshot.last_submit_sample_rate, kSubmitSampleRate);
     EXPECT_EQ(stereo_snapshot.accepted_frame_count, oversized_frame_count);
-    EXPECT_GT(stereo_snapshot.generation, 0u);
     EXPECT_TRUE(stereo_snapshot.stereo);
     EXPECT_TRUE(HasNonZeroAverage64Bin(stereo_snapshot));
+    EXPECT_EQ(AudioResponseRetainedFrameCountForTesting(), 1000u);
     // No staging copy of the submitted interleaved buffer: the deinterleave
     // writes straight into the retained FIFOs.
     EXPECT_LT(g_largest_allocation.load(std::memory_order_relaxed), static_cast<std::size_t>(oversized_frame_count) * sizeof(float));
@@ -772,8 +819,11 @@ TEST(AudioResponseMonoTest, OversizedStereoSubmitAnalyzesOnlyRetainedFrames) {
     ASSERT_TRUE(SubmitAudioFrames(kSubmitSampleRate, kRetainedFrameCapacity, retained_stereo.data(), &error))
         << error;
 
-    auto retained_snapshot = WaitForGeneration();
-    EXPECT_GT(retained_snapshot.generation, 0u);
+    EXPECT_LE(AudioResponseRetainedFrameCountForTesting(), kRetainedFrameCapacity);
+    auto retained_snapshot = WaitForGenerationAfter(retained_window_count - 1u, std::chrono::milliseconds(500));
+    ASSERT_EQ(retained_snapshot.generation, retained_window_count);
+    EXPECT_EQ(retained_snapshot.accepted_frame_count, kRetainedFrameCapacity);
+    EXPECT_EQ(AudioResponseRetainedFrameCountForTesting(), 1000u);
     EXPECT_EQ(stereo_snapshot.left64, retained_snapshot.left64);
     EXPECT_EQ(stereo_snapshot.right64, retained_snapshot.right64);
 }

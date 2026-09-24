@@ -15,6 +15,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <iterator>
 #include <memory>
@@ -2077,6 +2078,103 @@ TEST(AudioResponseCompat, ShaderSpectrumUniformsUseVec4ArrayStride) {
     updater.UpdateUniforms(node.get(), 1, sprites, capture);
     expect_snapshot({});
     scene.activeCamera = nullptr;
+}
+
+TEST(ShaderValuePacking, FixedMatricesAndExpressionsPreserveColumnMajorValues) {
+    Eigen::Matrix4d matrix;
+    matrix << 1, 2, 0, 4,
+              0, 2, 1, 3,
+              0, 0, 4, 2,
+              0, 0, 0, 1;
+    const std::array<float, 16> expected_matrix {
+        1, 0, 0, 0,
+        2, 2, 0, 0,
+        0, 1, 4, 0,
+        4, 3, 2, 1,
+    };
+    const std::array<float, 16> expected_inverse {
+        1, 0, 0, 0,
+        -1, 0.5f, 0, 0,
+        0.25f, -0.125f, 0.25f, 0,
+        -1.5f, -1.25f, -0.5f, 1,
+    };
+    const std::array<float, 16> expected_product {
+        21, 16, 8, 4,
+        16, 14, 10, 3,
+        8, 10, 20, 2,
+        4, 3, 2, 1,
+    };
+    const auto expect_packed = [](const char* context, const ShaderValue& actual,
+                                  const std::array<float, 16>& expected) {
+        SCOPED_TRACE(context);
+        ASSERT_EQ(actual.size(), expected.size());
+        for (std::size_t i = 0; i < expected.size(); ++i) {
+            EXPECT_FLOAT_EQ(actual[i], expected[i]) << "coefficient " << i;
+        }
+    };
+    expect_packed("fixed double", ShaderValue::fromMatrix(matrix), expected_matrix);
+    expect_packed("inverse", ShaderValue::fromMatrix(matrix.inverse()), expected_inverse);
+    expect_packed("product", ShaderValue::fromMatrix(matrix * matrix.transpose()), expected_product);
+
+    const Eigen::Matrix<float, 4, 4> float_matrix = matrix.cast<float>();
+    expect_packed("fixed float", ShaderValue::fromMatrix(float_matrix), expected_matrix);
+    const Eigen::Matrix<double, 4, 4, Eigen::RowMajor> row_major = matrix;
+    expect_packed("row major", ShaderValue::fromMatrix(row_major), expected_matrix);
+    Eigen::Matrix<double, 6, 7> padded = Eigen::Matrix<double, 6, 7>::Constant(-99.0);
+    padded.block<4, 4>(1, 2) = matrix;
+    expect_packed("strided block", ShaderValue::fromMatrix(padded.block<4, 4>(1, 2)),
+                  expected_matrix);
+}
+
+TEST(ShaderValuePacking, PackedValuesOwnTheirStorageAcrossInputChanges) {
+    const auto packed = [] {
+        Eigen::Matrix4d inline_matrix;
+        Eigen::Matrix<double, 5, 5> large_matrix;
+        Eigen::MatrixXd empty_matrix(0, 0);
+        for (Eigen::Index column = 0; column < inline_matrix.cols(); ++column) {
+            for (Eigen::Index row = 0; row < inline_matrix.rows(); ++row) {
+                inline_matrix(row, column) = (10 * column + row + 1) / 10.0;
+            }
+        }
+        for (Eigen::Index column = 0; column < large_matrix.cols(); ++column) {
+            for (Eigen::Index row = 0; row < large_matrix.rows(); ++row) {
+                large_matrix(row, column) = (10 * column + row + 1) / 10.0;
+            }
+        }
+        std::array<ShaderValue, 3> values {
+            ShaderValue::fromMatrix(inline_matrix),
+            ShaderValue::fromMatrix(large_matrix),
+            ShaderValue::fromMatrix(empty_matrix),
+        };
+        inline_matrix.setConstant(-99.0);
+        large_matrix.setConstant(-99.0);
+        empty_matrix.resize(4, 4);
+        empty_matrix.setConstant(-99.0);
+        return values;
+    }();
+
+    const std::array<float, 16> expected_inline {
+        0.1f, 0.2f, 0.3f, 0.4f,
+        1.1f, 1.2f, 1.3f, 1.4f,
+        2.1f, 2.2f, 2.3f, 2.4f,
+        3.1f, 3.2f, 3.3f, 3.4f,
+    };
+    const std::array<float, 25> expected_large {
+        0.1f, 0.2f, 0.3f, 0.4f, 0.5f,
+        1.1f, 1.2f, 1.3f, 1.4f, 1.5f,
+        2.1f, 2.2f, 2.3f, 2.4f, 2.5f,
+        3.1f, 3.2f, 3.3f, 3.4f, 3.5f,
+        4.1f, 4.2f, 4.3f, 4.4f, 4.5f,
+    };
+    ASSERT_EQ(packed[0].size(), expected_inline.size());
+    for (std::size_t i = 0; i < expected_inline.size(); ++i) {
+        EXPECT_FLOAT_EQ(packed[0][i], expected_inline[i]) << "inline coefficient " << i;
+    }
+    ASSERT_EQ(packed[1].size(), expected_large.size());
+    for (std::size_t i = 0; i < expected_large.size(); ++i) {
+        EXPECT_FLOAT_EQ(packed[1][i], expected_large[i]) << "dynamic coefficient " << i;
+    }
+    EXPECT_EQ(packed[2].size(), 0u);
 }
 
 TEST(ShaderValueUpdaterCompat, UniformMetadataIsIsolatedPerMaterialSlot) {

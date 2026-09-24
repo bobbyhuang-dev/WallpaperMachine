@@ -34,6 +34,7 @@ struct AudioResponseState
     // kept the same length so a block can always be taken from both at once.
     std::vector<float> fifo;
     std::vector<float> fifo_right;
+    size_t fifo_read_offset { 0 };
     bool fifo_stereo { false };
     std::jthread worker;
     bool worker_started { false };
@@ -100,23 +101,55 @@ bool InputStreamIsStale(std::chrono::steady_clock::time_point now)
            now >= g_state.last_submit_time + kSnapshotStaleAfter;
 }
 
+size_t RetainedFramesLocked()
+{
+    return g_state.fifo.size() - g_state.fifo_read_offset;
+}
+
 void ClearFifosLocked()
 {
     g_state.fifo.clear();
     g_state.fifo_right.clear();
+    g_state.fifo_read_offset = 0;
 }
 
 void DropOldestFramesLocked(size_t frame_count)
 {
-    const auto drop = [frame_count](std::vector<float>& fifo) {
-        if (frame_count >= fifo.size()) {
-            fifo.clear();
-            return;
+    if (frame_count >= RetainedFramesLocked()) {
+        ClearFifosLocked();
+        return;
+    }
+    g_state.fifo_read_offset += frame_count;
+}
+
+void PrepareFifosForAppendLocked(size_t incoming_frames)
+{
+    const size_t retained_frames = RetainedFramesLocked();
+    if (g_state.fifo_read_offset != 0 &&
+        (g_state.fifo_read_offset >= retained_frames ||
+         g_state.fifo.size() + incoming_frames > kMaxRetainedMonoFrames)) {
+        const auto offset = static_cast<std::ptrdiff_t>(g_state.fifo_read_offset);
+        std::move(g_state.fifo.begin() + offset, g_state.fifo.end(), g_state.fifo.begin());
+        g_state.fifo.resize(retained_frames);
+        if (g_state.fifo_stereo) {
+            std::move(g_state.fifo_right.begin() + offset, g_state.fifo_right.end(), g_state.fifo_right.begin());
+            g_state.fifo_right.resize(retained_frames);
         }
-        fifo.erase(fifo.begin(), fifo.begin() + static_cast<std::ptrdiff_t>(frame_count));
+        g_state.fifo_read_offset = 0;
+    }
+
+    const size_t required_size = g_state.fifo.size() + incoming_frames;
+    const auto reserve = [required_size](std::vector<float>& fifo) {
+        if (required_size > fifo.capacity()) {
+            fifo.reserve(std::min(
+                kMaxRetainedMonoFrames,
+                std::max(required_size, std::max(fifo.capacity() * 2u, static_cast<size_t>(kFftSize)))));
+        }
     };
-    drop(g_state.fifo);
-    drop(g_state.fifo_right);
+    reserve(g_state.fifo);
+    if (g_state.fifo_stereo) {
+        reserve(g_state.fifo_right);
+    }
 }
 
 void WorkerMain(std::stop_token stop_token)
@@ -148,11 +181,12 @@ void WorkerMain(std::stop_token stop_token)
                     g_state.last_submit_time = {};
                 }
 
-                if (g_state.fifo.size() >= block.size()) {
+                if (RetainedFramesLocked() >= block.size()) {
                     block_is_stereo = g_state.fifo_stereo;
-                    std::copy_n(g_state.fifo.begin(), block.size(), block.begin());
+                    const auto offset = static_cast<std::ptrdiff_t>(g_state.fifo_read_offset);
+                    std::copy_n(g_state.fifo.begin() + offset, block.size(), block.begin());
                     if (block_is_stereo) {
-                        std::copy_n(g_state.fifo_right.begin(), right_block.size(), right_block.begin());
+                        std::copy_n(g_state.fifo_right.begin() + offset, right_block.size(), right_block.begin());
                     }
                     DropOldestFramesLocked(kHopSize);
                     next_snapshot = g_state.snapshot;
@@ -161,7 +195,7 @@ void WorkerMain(std::stop_token stop_token)
 
                 const auto submitted_at = g_state.last_submit_time;
                 const auto input_changed = [submitted_at] {
-                    return g_state.fifo.size() >= kFftSize ||
+                    return RetainedFramesLocked() >= kFftSize ||
                            g_state.last_submit_time != submitted_at;
                 };
                 if (submitted_at == std::chrono::steady_clock::time_point {}) {
@@ -234,14 +268,13 @@ bool SubmitValidatedFrames(
         ClearFifosLocked();
         skipped_frames = frame_count - kMaxRetainedMonoFrames;
         insert_count = kMaxRetainedMonoFrames;
-    } else if (g_state.fifo.size() + frame_count > kMaxRetainedMonoFrames) {
-        DropOldestFramesLocked((g_state.fifo.size() + frame_count) - kMaxRetainedMonoFrames);
+    } else if (RetainedFramesLocked() + frame_count > kMaxRetainedMonoFrames) {
+        DropOldestFramesLocked((RetainedFramesLocked() + frame_count) - kMaxRetainedMonoFrames);
     }
 
     const float* insert_begin = pcm_frames + (skipped_frames * stride);
-    g_state.fifo.reserve(g_state.fifo.size() + insert_count);
+    PrepareFifosForAppendLocked(insert_count);
     if (stereo) {
-        g_state.fifo_right.reserve(g_state.fifo_right.size() + insert_count);
         for (size_t frame = 0; frame < insert_count; ++frame) {
             const size_t sample = frame * kInterleavedChannels;
             g_state.fifo.push_back(SanitizePcmSample(insert_begin[sample]));
@@ -373,8 +406,18 @@ void SubmitStaleMonoAudioFramesToWorkerForTesting(
 
     {
         std::lock_guard<std::mutex> lock(g_state.mutex);
+        if (g_state.fifo_stereo) {
+            ClearFifosLocked();
+        }
         g_state.fifo_stereo = false;
-        g_state.fifo_right.clear();
+        if (frame_count > kMaxRetainedMonoFrames) {
+            ClearFifosLocked();
+            pcm_frames += frame_count - kMaxRetainedMonoFrames;
+            frame_count = kMaxRetainedMonoFrames;
+        } else if (RetainedFramesLocked() + frame_count > kMaxRetainedMonoFrames) {
+            DropOldestFramesLocked((RetainedFramesLocked() + frame_count) - kMaxRetainedMonoFrames);
+        }
+        PrepareFifosForAppendLocked(frame_count);
         g_state.fifo.insert(g_state.fifo.end(), pcm_frames, pcm_frames + frame_count);
         g_state.last_submit_time = std::chrono::steady_clock::now() - kSnapshotStaleAfter - std::chrono::milliseconds(1);
         g_state.snapshot.last_submit_sample_rate = sample_rate;
@@ -387,7 +430,7 @@ void SubmitStaleMonoAudioFramesToWorkerForTesting(
 size_t AudioResponseRetainedFrameCountForTesting()
 {
     std::lock_guard<std::mutex> lock(g_state.mutex);
-    return g_state.fifo.size();
+    return RetainedFramesLocked();
 }
 #endif
 

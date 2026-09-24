@@ -43,6 +43,7 @@
 #include <unordered_set>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <optional>
 #include <span>
@@ -3279,7 +3280,7 @@ void MetalRender::Impl::writeUniforms(Scene& scene, const ScenePassDescription& 
         desc.node->SetCamera(desc.camera_override);
         restore_camera = true;
     }
-    updater->UpdateUniforms(desc.node, desc.material_slot, pass.sprites, write);
+    updater->UpdateUniforms(desc.node, desc.material_slot, pass.sprites, std::cref(write));
     if (restore_camera) desc.node->SetCamera(original_camera);
 
     // Last, so it overrides the parser's constant. The shared value updater

@@ -25,6 +25,14 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-24 — Equal-quality push integrated with concurrent download settings
+
+- The first normal push was rejected because origin/main advanced to 9b07191 while integration checks ran. Rebased again without force-pushing, preserving the remote Workshop download-concurrency feature and both complete verification histories.
+- The incoming commit changes Workshop queue/store, panel bridge/settings/localization and their tests; renderer sources are unchanged from the preceding integrated renderer gate.
+- python3 scripts/test.py --only DownloadQueueTests --only WorkshopStoreTests --only ControlPanelShellTests --only AdapterSystemMediaProviderTests: 44 passed, 0 failed, 0 skipped on the final integrated tree. This is targeted follow-up, not a second full-gate claim; the preceding 5f05973 integration entry records the completed full native/renderer gates.
+- Used the existing verification-log rotation helper to retain ten active entries and preserve every retired entry in the archive. No binaries, private inputs, raw power artifacts or credentials are included in the commit.
+- No Release rebuild, desktop app restart or new power measurement. The previously delivered executable predates the remote parallax and download-concurrency changes; prior power observations are not relabeled as measurements of the final integrated source.
+
 ## 2026-09-24 — Downloads at once setting (1–6) and live SteamCMD concurrency measurement
 
 - Live, on the user's account with an isolated harness (copied saved sign-in, private staging, nothing written back): 12 Workshop items of 1–10 MB took 67.7 s with 3 sessions and 47.0 s with 6; 24/24 succeeded, no 'logged in elsewhere', no rate limit. Sign-in took 9–13 s at 3 sessions, 13–22 s at 6.
@@ -33,6 +41,42 @@ goes. Trimming is allowed; editing an entry's recorded result is not.
 - New tests: DownloadQueueTests.testChangingTheCeilingStartsQueuedWorkAndNeverStopsARunningTransfer, WorkshopStoreTests.testConcurrentDownloadsChoiceSurvivesRelaunchAndStaysInRange, ControlPanelShellTests.testDownloadsAtOnceChoiceReachesTheQueueAndSurvivesTheNextSnapshot.
 - python3 scripts/test.py: 572 passed, 0 failed, 11 skipped of 583; Python suites OK.
 - Not run: Release build, desktop/visual check of the new Settings row, a live batch through the app itself at 6 slots, and anything above 6 sessions.
+
+## 2026-09-24 — Equal-quality optimization integrated with remote parallax fix before push
+
+- Rebased the equal-quality optimization commit onto origin/main 5f05973, preserving e1e176a (first-run guide test surface) and 5f05973 (camera parallax scene-position correction). Source merged automatically; provenance retains the remote JSON values plus the local optimization note. Every remote verification-history entry and all three new local entries are preserved across the active log/archive.
+- Rebuilt script_runtime_compat_test and audio_tests in a separate Release CMake output using scripts/build.py environment. ShaderValueUpdaterCompat.*, ShaderValuePacking.* and ComposeBackgroundUsesScreenCameraAndParentTransform: 10 passed, including CameraParallaxPlacesAChildLayerByItsScenePosition. AudioResponseMonoTest.*: 22 passed.
+- python3 scripts/check_renderer.py: exit 0; 452 passed, 3 optional asset cases skipped; 10 generated pooled/isolated cases match independent pixel expectations, and 8 projects reload twice without errors.
+- python3 scripts/test.py: exit 0; 152 Python cases passed; native 571 passed, 0 failed, 11 opt-in skipped (9 native media, 2 live Workshop). This fresh gate covers the integrated sources, not just the pre-rebase tree.
+- No Release rebuild, app restart, desktop automation or additional power sampling during commit/push integration. The running/delivered app and earlier power records still identify executable c03902bfae6dddf9cdd929a2dfc73056280dfbe82b7241478d4e86bf048aadbc; they do not include or verify the newly integrated remote parallax change.
+- Commit scope excludes binaries, private wallpaper/input copies, raw power records and credentials. Historical measurements remain observations with their original source/binary identity and attribution limits; no energy-saving percentage is claimed.
+
+## 2026-09-24 — Candidate desktop power observations versus preserved old baseline
+
+- User-restarted candidate PID 68021: loaded Mach-O UUID E0DC12BC-236F-360E-9AC8-ABBFD228B6C6 matches delivered executable SHA-256 c03902bfae6dddf9cdd929a2dfc73056280dfbe82b7241478d4e86bf048aadbc; fresh process sample contains Native Metal drawFrame. Saved wallpaper/config hashes and display geometry match the baseline: one online 4112x2658 scaled-pixel display, panel label 3456x2234, 120 Hz mode. This is runtime-path evidence, not actual presentation or visual equivalence.
+- Reused scripts/power_benchmark.py --configuration Release --measure 60 --condition T3 --powermetrics --note "equal-quality candidate ..." three times after 120 seconds of quiet stabilization. Windows were 60.01, 60.01 and 60.00 seconds; no builds, source scans, GPU probes, app control or setting changes during sampling.
+- App CPU mean: old 28.833% [27.0,30.0], candidate 31.933% [28.2,34.0], +3.100 percentage points. App GPU busy: old 20.267% [18.4,22.4], candidate 22.300% [18.6,25.5], +2.033 points. These observations do not show reduced application workload.
+- WindowServer CPU mean: old 45.700% [45.2,46.0], candidate 46.333% [44.5,49.2]. GPU busy: old 18.567% [16.8,20.8], candidate 28.200% [22.2,35.6]. CoreAudio CPU: old 9.533% [9.0,9.9], candidate 18.767% [17.7,20.2]. All same-name WebContent CPU: old 0.233% [0.2,0.3], candidate 0.633% [0.3,1.3]. CoreAudio/WebContent GPU and absent extension remain unavailable, not zero.
+- Whole-machine load mean: old 46.334 W [44.045,49.293], candidate 30.721 W [26.096,37.272], observed difference -15.613 W. Adapter input: old 55.557 W [53.736,58.331], candidate 30.721 W [26.096,37.272]. Old windows were finishing charge at 99-100%; new windows were charged at 100%. Adapter input differences are not an optimization result.
+- Package power remains unmeasured: bounded sudo -n sampling required a password; no credential was passed through tools. No thermal warnings were reported. Brightness, audio content, panel visibility and other-app load were not independently fixed/observed, and the old windows were taken hours earlier. No paired app-quit reference or actual displayed-frame feedback exists.
+- Conclusion: candidate runtime and three bounded power-observation windows now verified; no causal same-quality energy-saving claim is supported. Application CPU/GPU busy means were higher, while whole-machine telemetry was lower under different conditions. Prior allocation/FIFO/artwork work-elimination evidence remains valid; desktop visual equivalence and attribution of the power difference remain unverified.
+
+## 2026-09-24 — Equal-quality verification: test-host launch boundary
+
+- Clarification of the preceding equal-quality entry: python3 scripts/test.py launched its isolated unit-test host processes, as expected. No ordinary desktop playback app was launched, quit or restarted by the agent; no desktop automation, screenshot or audio-hardware test was performed. All recorded verification results and the explicit candidate desktop/power gaps are unchanged.
+
+## 2026-09-24 — Equal-quality uniform, audio FIFO and artwork optimization
+
+- Baseline: compiled Release CMake check executables from the complete current source tree before product edits; source/input and executable SHA-256 manifests include relevant untracked files. Preserved the existing desktop bundle separately; its source correspondence remains unconfirmed.
+- Uniform probes: real warmed Metal and Vulkan UpdateUniforms boundaries each performed 64 writes; callback-construction allocations fell 64 -> 0, body allocations stayed 0, and alternating GPU colors remained correct. 4,329 float bit patterns match the old Ref algorithm; fixed direct/product/inverse packing passes 1,024 repetitions under EIGEN_RUNTIME_NO_MALLOC; the old algorithm aborts as expected.
+- Audio probes: every one of 41 stereo windows matched all reference spectra (maximum difference 0); generation 41, accepted 9,024, retained 824. Tail movement per channel fell 135,136 -> 26,368 bytes, with FFT copies unchanged at 167,936 bytes. Oversized/latest-only input each drains 115 windows; tail movement per channel fell 5,704,000 -> 0 bytes.
+- python3 scripts/test.py --only AdapterSystemMediaProviderTests: 6 passed, 0 failed/skipped. Identical 100-message artwork replay: base64 decoding and thumbnail/hash queries 100 -> 1; timeline events remain 100, final position 99. Clear/restore, re-subscription, failed input and old stream callbacks covered.
+- Explicit renderer behavior filters: 35 passed (9 matrix/updater/camera, 22 audio, 1 Vulkan live-update and 3 Native Metal perspective/puppet/sprite cases). python3 scripts/check_renderer.py: exit 0, 452 passed/3 optional asset cases skipped; 10 generated pooled/isolated pixel cases agree with independent expectations, 8 projects reload twice. The optional local Native Metal case passed separately below; two text asset cases remain untested.
+- python3 scripts/test.py: exit 0; 152 Python tests passed, native 571 passed/0 failed/11 skipped (9 opt-in native media, 2 live Workshop network cases). No desktop automation, app launch or audio hardware test requested or performed.
+- Final five serial baseline/candidate pairs after one warmup each: synthetic silence, 4112x2658, 100% internal quality, same private input hashes and property override. Each run draws 120 Native Metal frames; 47 render passes/frame, 22 on scene output, 0 blits. Median of mean drawFrame thread-CPU times: baseline 0.89 ms [0.81,0.99], candidate 0.91 ms [0.85,1.00]. No stable timing gain measured; not whole-frame time, p95 or displayed FPS.
+- Old desktop only: 120-second stabilization plus three 60.00-second windows through scripts/power_benchmark.py --configuration Release --measure 60 --condition T3 --powermetrics. App CPU/GPU busy means 28.833%/20.267%, WindowServer 45.700%/18.567%, CoreAudio CPU 9.533%, all same-name WebContent CPU 0.233%. CoreAudio/WebContent GPU and absent extension are unavailable, not zero. Whole-machine load 46.334 W [44.045,49.293]; adapter input including charging 55.557 W [53.736,58.331]. Package power unavailable; no secure credential-input channel used.
+- python3 scripts/build.py --configuration Release: exit 0, full renderer/bridge and application rebuild. Delivered build/Build/Products/Release/WallpaperMachine.app; executable SHA-256 c03902bfae6dddf9cdd929a2dfc73056280dfbe82b7241478d4e86bf048aadbc; complete source-input SHA-256 fca0cce8ee498439abc2b731c759b958f1f578784b694be8523db71ed86cb465. No source input changed during the build. All 15 bundled WebUI files byte-match sources; new MatrixBase template and artwork-cache field are linked; temporary probe markers absent.
+- Implementation, automated gates and bounded offscreen workload proof complete. Existing old PID remains running: candidate desktop runtime/visual/power verification is unmeasured until the user quits and reopens the delivered app. No app-quit power reference, aligned actual-presentation feedback, wallpaper-exclusive watts, savings percentage, whole-software compatibility or private-particle pixel equivalence claimed. Persisted wallpaper settings and upstream revisions unchanged.
 
 ## 2026-09-24 — Interleaved feedback-copy fix and timing-evidence corrections
 
@@ -82,55 +126,3 @@ Scene 3620484312 on the built-in 3456×2234 display, 60 fps cap, AC power, other
 - python3 scripts/build.py --swift-only --configuration Release: OK, build/Build/Products/Release/WallpaperMachine.app 0.5.0 (16).
 - diff -rq WebUI vs Contents/Resources/WebUI: identical.
 - Not run: check_renderer.py (no renderer change), UI/desktop tests, launching the app; guide visuals not checked by eye.
-
-## 2026-09-22 — Current Release built and old build residue cleared
-
-- Requested build and cleanup. Prebuild gate: python3 scripts/test.py: 142 Python tests passed; 563 native passed, 0 failed, 11 skipped of 574. No desktop UI, network or media opt-ins enabled.
-- Build: python3 scripts/build.py --swift-only --configuration Release: exit 0; reused the existing renderer archive and generated bindings. Delivered build/Build/Products/Release/WallpaperMachine.app, version 0.5.0 (16).
-- Bundle identity: all 15 WebUI source files, including property-label.js, match Contents/Resources/WebUI byte-for-byte via diff -rq. Sorted relative-path/file-digest manifest SHA-256: a4afba8dc4ef327abbb53118a2f5658861aa82ccd7f66dbe4c4bf88abd49d2bc.
-- Compiled Chinese localization verified with plutil: the normal no-update message is 暂无可用更新，可继续使用当前版本。 The Release now includes the updater feedback correction and integrated remote UI/property-label changes.
-- Cleanup previewed with scripts/clean.py --dry-run and --derived --dry-run. python3 scripts/clean.py --derived removed old artifacts, Python caches and Xcode module/index/compilation/SDK/log caches; script reported 1.38 GB reclaimed.
-- Also removed the inspected build/Build/Intermediates.noindex compiler tree (308168 KiB by du before deletion) and obsolete MacWallpaperEngine_macosx27.0-arm64.xctestrun. Combined cleanup approximately 1.7 GB; accounting is logical/script-estimated size, not a filesystem free-space benchmark.
-- Kept build/Build/Products/Release and Debug, the renderer release outputs and generated bindings. Did not use --all, --user-assets or --managed-user-assets; wallpapers, managed imports, settings and unrelated source/document work were not cleanup targets.
-- After cleanup: python3 -B scripts/clean.py --derived --dry-run reported Nothing to remove; WebUI diff and codesign --verify --deep --strict both exited 0. Release executable SHA-256 stayed 5b98ef7bb3de794d47df2aa0bd3edf2e9dd2daaeb123e2ffa45046cf338e16b0.
-- No package/install step, application launch/quit/restart or desktop control performed. User must quit the old running copy and reopen the delivered Release. Actual desktop presentation and power remain unverified.
-
-## 2026-09-22 — Safe integration of remote UI and property-label changes
-
-- Push of local commit 2dd31b0 was rejected because origin/main advanced from 80f191b to 30e2ac7. Fetched the remote and rebased without force-pushing or dropping the upstream commit.
-- Merged upstream PropertyImageCache, inert rich-label rendering and allowlisted image routes, independent inspector scrolling/fixed footer, settings navigation/disclosures and branding work with local macOS-oriented styling, accessible Modified flags, recovery/focus fixes and noRelease updater handling.
-- Pre-integration full gate on the local change: python3 scripts/test.py: 141 Python passed; 557 native passed, 0 failed, 11 skipped. That result predates the fetched upstream changes; integration coverage below is scoped to affected domains.
-- Integrated native regression run: python3 scripts/test.py --only AppUpdateTests --only ControlPanelShellTests --only ControlPanelLibraryTests --only ControlPanelDiscoverTests --only ControlPanelSyncTests --only ControlPanelWindowSizingTests --only PropertyImageCacheTests --only WebPanelAssetsTests --only WebPanelPerformanceSettingsTests --only WebPanelSceneSettingsTests --only WebPanelAssetPropertiesTests --only WebPanelPropertyLabelTests --only WebPanelDeliveryStatusTests: 106 passed, 0 failed, 0 skipped.
-- Incoming script changes/catalog integration: python3 scripts/tests/test_brand.py and python3 scripts/tests/test_panel_localization.py: 5 passed each.
-- After final merged-label wrapping and popup-menu spacing adjustments: python3 scripts/test.py --only ControlPanelShellTests --only WebPanelPropertyLabelTests --only AppUpdateTests: 44 passed, 0 failed, 0 skipped.
-- Isolated source UI: 760x560 and 960x640 retained three columns, one activation control, safe author presentation without author controls/scripts, separate localized Modified flags, non-overlapping fixed editor footer, Advanced disclosure and no-release Check Again. Final 760px menu padding is 26px; Modified wraps without splitting Movement.
-- Verification histories from both branches preserved, exact duplicates removed and ten active entries retained. Only existing recorded sections were reconciled; this record is appended through log_verification.py. The unrelated untracked power-regression document is retained outside this commit.
-- No live GitHub update probe, author-image CDN traffic, real Steam, desktop control, app restart or Release build. Integration preview tab/service released; current desktop presentation and power remain unverified.
-
-## 2026-09-22 — Integrated settings and inspector commit with remote main
-
-- Rebased the approved UI, branding and property image changes onto origin/main, preserving remote release-note UI and authored property compatibility changes. Resolved the settings CSS overlap by retaining readable disclosure text and the release-note rules; preserved both verification histories.
-- python3 scripts/test.py passed on the integrated tree: 142 Python tests; 550 native passed, 0 failed, 11 opt-in skipped of 561.
-- No new renderer changes authored during integration. No Release rebuild, installation, app launch, restart, screenshots or desktop changes as part of commit and push. The earlier built app predates this remote integration.
-
-## 2026-09-22 — Normal no-release update feedback before commit
-
-- Fixed missing latest-release handling: fetchLatestRelease returns an optional result; a GitHub latest-release 404 is normal only after the repository endpoint returns successful valid metadata. Inaccessible repositories, failed lookups and malformed metadata remain failures.
-- State/presentation: noRelease uses neutral localized feedback and Check Again without manual-install recovery. Existing equal/older latest releases remain upToDate. No normal absence is represented as an update error, and no transport/configuration error is relabeled as upToDate.
-- Regression baseline: python3 scripts/test.py --only AppUpdateTests: 22 passed, 2 failed of 24, reproducing the missing-release error state and incorrect classification of the repository-lookup failure.
-- Targeted after fix: python3 scripts/test.py --only AppUpdateTests --only ControlPanelShellTests: 41 passed, 0 failed, 0 skipped. Real URLSession requests use per-fixture URLProtocol responses; no GitHub connection. About is exercised through offscreen WKWebView, including checking again after an empty result.
-- Final gate once: python3 scripts/test.py: 141 Python tests passed; 557 native passed, 0 failed, 11 skipped of 568. No desktop UI, network or media opt-ins enabled.
-- Isolated source-UI smoke: English and Simplified Chinese no-release, up-to-date and network-error states rendered with real WebUI modules; actual Check Again click and accessibility snapshot verified. Normal states show only Check Again; failures retain Retry and Open GitHub Releases.
-- SourceKit reported no references/definitions for known updater symbols despite a ready server; reported to tool QA, used scoped source discovery, migrated every conformer and relied on the full compiler/test gate.
-- Cleanup/limits: updater preview tab and task-owned localhost service released; temporary message fixture removed. Native action/payload shapes, download validation and install confirmation unchanged. No Release rebuild for this fix; the previously delivered app still contains the earlier updater behavior.
-
-## 2026-09-22 — Release rebuilt with macOS and Wallpaper Engine UI blend
-
-- Requested delivery build; production changes are WebUI presentation with existing renderer/bindings. Confirmed cached libwallpaper_bridge.a and all generated Swift/FFI binding files exist.
-- Prebuild gate: python3 scripts/test.py: 141 Python tests passed; 553 native passed, 0 failed, 11 skipped. No --ui, network or media opt-ins enabled.
-- Build: python3 scripts/build.py --swift-only --configuration Release: exit 0. Delivered build/Build/Products/Release/WallpaperMachine.app, version 0.5.0 (16).
-- Bundle verification: diff -rq WebUI build/Build/Products/Release/WallpaperMachine.app/Contents/Resources/WebUI: exit 0; all 14 current source files, including any untracked files, match the bundle byte-for-byte.
-- WebUI identity: SHA-256 of the sorted relative-path/file-digest manifest is 60d34fccb1a33e37a35c3572070c686fd8bfef383cd8b52c5de2a2e9420d6696; no mismatches. Identity was computed from actual filesystem contents, not only Git revision/diff.
-- Signing: codesign --verify --deep --strict build/Build/Products/Release/WallpaperMachine.app: exit 0.
-- No packaging/install step and no application launch, quit or restart performed. User must quit the running copy and reopen the delivered app to load the changes.
-- Limits: this proves the Release build and bundled source identity, not actual desktop presentation, live Steam, wallpaper rendering or power consumption.

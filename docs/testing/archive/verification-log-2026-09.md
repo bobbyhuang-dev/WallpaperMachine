@@ -15,6 +15,58 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-22 — Current Release built and old build residue cleared
+
+- Requested build and cleanup. Prebuild gate: python3 scripts/test.py: 142 Python tests passed; 563 native passed, 0 failed, 11 skipped of 574. No desktop UI, network or media opt-ins enabled.
+- Build: python3 scripts/build.py --swift-only --configuration Release: exit 0; reused the existing renderer archive and generated bindings. Delivered build/Build/Products/Release/WallpaperMachine.app, version 0.5.0 (16).
+- Bundle identity: all 15 WebUI source files, including property-label.js, match Contents/Resources/WebUI byte-for-byte via diff -rq. Sorted relative-path/file-digest manifest SHA-256: a4afba8dc4ef327abbb53118a2f5658861aa82ccd7f66dbe4c4bf88abd49d2bc.
+- Compiled Chinese localization verified with plutil: the normal no-update message is 暂无可用更新，可继续使用当前版本。 The Release now includes the updater feedback correction and integrated remote UI/property-label changes.
+- Cleanup previewed with scripts/clean.py --dry-run and --derived --dry-run. python3 scripts/clean.py --derived removed old artifacts, Python caches and Xcode module/index/compilation/SDK/log caches; script reported 1.38 GB reclaimed.
+- Also removed the inspected build/Build/Intermediates.noindex compiler tree (308168 KiB by du before deletion) and obsolete MacWallpaperEngine_macosx27.0-arm64.xctestrun. Combined cleanup approximately 1.7 GB; accounting is logical/script-estimated size, not a filesystem free-space benchmark.
+- Kept build/Build/Products/Release and Debug, the renderer release outputs and generated bindings. Did not use --all, --user-assets or --managed-user-assets; wallpapers, managed imports, settings and unrelated source/document work were not cleanup targets.
+- After cleanup: python3 -B scripts/clean.py --derived --dry-run reported Nothing to remove; WebUI diff and codesign --verify --deep --strict both exited 0. Release executable SHA-256 stayed 5b98ef7bb3de794d47df2aa0bd3edf2e9dd2daaeb123e2ffa45046cf338e16b0.
+- No package/install step, application launch/quit/restart or desktop control performed. User must quit the old running copy and reopen the delivered Release. Actual desktop presentation and power remain unverified.
+
+## 2026-09-22 — Safe integration of remote UI and property-label changes
+
+- Push of local commit 2dd31b0 was rejected because origin/main advanced from 80f191b to 30e2ac7. Fetched the remote and rebased without force-pushing or dropping the upstream commit.
+- Merged upstream PropertyImageCache, inert rich-label rendering and allowlisted image routes, independent inspector scrolling/fixed footer, settings navigation/disclosures and branding work with local macOS-oriented styling, accessible Modified flags, recovery/focus fixes and noRelease updater handling.
+- Pre-integration full gate on the local change: python3 scripts/test.py: 141 Python passed; 557 native passed, 0 failed, 11 skipped. That result predates the fetched upstream changes; integration coverage below is scoped to affected domains.
+- Integrated native regression run: python3 scripts/test.py --only AppUpdateTests --only ControlPanelShellTests --only ControlPanelLibraryTests --only ControlPanelDiscoverTests --only ControlPanelSyncTests --only ControlPanelWindowSizingTests --only PropertyImageCacheTests --only WebPanelAssetsTests --only WebPanelPerformanceSettingsTests --only WebPanelSceneSettingsTests --only WebPanelAssetPropertiesTests --only WebPanelPropertyLabelTests --only WebPanelDeliveryStatusTests: 106 passed, 0 failed, 0 skipped.
+- Incoming script changes/catalog integration: python3 scripts/tests/test_brand.py and python3 scripts/tests/test_panel_localization.py: 5 passed each.
+- After final merged-label wrapping and popup-menu spacing adjustments: python3 scripts/test.py --only ControlPanelShellTests --only WebPanelPropertyLabelTests --only AppUpdateTests: 44 passed, 0 failed, 0 skipped.
+- Isolated source UI: 760x560 and 960x640 retained three columns, one activation control, safe author presentation without author controls/scripts, separate localized Modified flags, non-overlapping fixed editor footer, Advanced disclosure and no-release Check Again. Final 760px menu padding is 26px; Modified wraps without splitting Movement.
+- Verification histories from both branches preserved, exact duplicates removed and ten active entries retained. Only existing recorded sections were reconciled; this record is appended through log_verification.py. The unrelated untracked power-regression document is retained outside this commit.
+- No live GitHub update probe, author-image CDN traffic, real Steam, desktop control, app restart or Release build. Integration preview tab/service released; current desktop presentation and power remain unverified.
+
+## 2026-09-22 — Integrated settings and inspector commit with remote main
+
+- Rebased the approved UI, branding and property image changes onto origin/main, preserving remote release-note UI and authored property compatibility changes. Resolved the settings CSS overlap by retaining readable disclosure text and the release-note rules; preserved both verification histories.
+- python3 scripts/test.py passed on the integrated tree: 142 Python tests; 550 native passed, 0 failed, 11 opt-in skipped of 561.
+- No new renderer changes authored during integration. No Release rebuild, installation, app launch, restart, screenshots or desktop changes as part of commit and push. The earlier built app predates this remote integration.
+
+## 2026-09-22 — Normal no-release update feedback before commit
+
+- Fixed missing latest-release handling: fetchLatestRelease returns an optional result; a GitHub latest-release 404 is normal only after the repository endpoint returns successful valid metadata. Inaccessible repositories, failed lookups and malformed metadata remain failures.
+- State/presentation: noRelease uses neutral localized feedback and Check Again without manual-install recovery. Existing equal/older latest releases remain upToDate. No normal absence is represented as an update error, and no transport/configuration error is relabeled as upToDate.
+- Regression baseline: python3 scripts/test.py --only AppUpdateTests: 22 passed, 2 failed of 24, reproducing the missing-release error state and incorrect classification of the repository-lookup failure.
+- Targeted after fix: python3 scripts/test.py --only AppUpdateTests --only ControlPanelShellTests: 41 passed, 0 failed, 0 skipped. Real URLSession requests use per-fixture URLProtocol responses; no GitHub connection. About is exercised through offscreen WKWebView, including checking again after an empty result.
+- Final gate once: python3 scripts/test.py: 141 Python tests passed; 557 native passed, 0 failed, 11 skipped of 568. No desktop UI, network or media opt-ins enabled.
+- Isolated source-UI smoke: English and Simplified Chinese no-release, up-to-date and network-error states rendered with real WebUI modules; actual Check Again click and accessibility snapshot verified. Normal states show only Check Again; failures retain Retry and Open GitHub Releases.
+- SourceKit reported no references/definitions for known updater symbols despite a ready server; reported to tool QA, used scoped source discovery, migrated every conformer and relied on the full compiler/test gate.
+- Cleanup/limits: updater preview tab and task-owned localhost service released; temporary message fixture removed. Native action/payload shapes, download validation and install confirmation unchanged. No Release rebuild for this fix; the previously delivered app still contains the earlier updater behavior.
+
+## 2026-09-22 — Release rebuilt with macOS and Wallpaper Engine UI blend
+
+- Requested delivery build; production changes are WebUI presentation with existing renderer/bindings. Confirmed cached libwallpaper_bridge.a and all generated Swift/FFI binding files exist.
+- Prebuild gate: python3 scripts/test.py: 141 Python tests passed; 553 native passed, 0 failed, 11 skipped. No --ui, network or media opt-ins enabled.
+- Build: python3 scripts/build.py --swift-only --configuration Release: exit 0. Delivered build/Build/Products/Release/WallpaperMachine.app, version 0.5.0 (16).
+- Bundle verification: diff -rq WebUI build/Build/Products/Release/WallpaperMachine.app/Contents/Resources/WebUI: exit 0; all 14 current source files, including any untracked files, match the bundle byte-for-byte.
+- WebUI identity: SHA-256 of the sorted relative-path/file-digest manifest is 60d34fccb1a33e37a35c3572070c686fd8bfef383cd8b52c5de2a2e9420d6696; no mismatches. Identity was computed from actual filesystem contents, not only Git revision/diff.
+- Signing: codesign --verify --deep --strict build/Build/Products/Release/WallpaperMachine.app: exit 0.
+- No packaging/install step and no application launch, quit or restart performed. User must quit the running copy and reopen the delivered app to load the changes.
+- Limits: this proves the Release build and bundled source identity, not actual desktop presentation, live Steam, wallpaper rendering or power consumption.
+
 ## 2026-09-22 — Wallpaper Engine workflow with macOS visual treatment
 
 - Direction: Wallpaper Engine image-first gallery/filter/inspector structure with macOS-oriented system typography, neutral selected navigation, restrained accent use, grouped settings and setup-assistant surfaces. Not a Windows window/control skin.

@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <string>
 
@@ -732,7 +733,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
             AUTO_DELETER(camera_override, [&]() {
                 if (restore_camera) node->SetCamera(original_camera);
             });
-            shader_updater->UpdateUniforms(node, material_slot, sprites, update_unf_op);
+            shader_updater->UpdateUniforms(node, material_slot, sprites, std::cref(update_unf_op));
         }
         if (uniform_block != nullptr && node != nullptr && node->Mesh() != nullptr) {
             const auto* material = node->Mesh()->MaterialForSlot(material_slot);

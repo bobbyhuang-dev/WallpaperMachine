@@ -15,6 +15,17 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-24 — Interleaved feedback-copy fix and timing-evidence corrections
+
+- `MetalSceneDraw.InterleavedFeedbackCopiesPreserveEachReadersImage` compares both A/B targets to the blit path over four frames with both blits removed; restoring single-prefix overwrite semantics fails A's pixel comparison, and the restored per-reader implementation passes.
+- `python3 scripts/check_renderer.py` — exit 0; every recorded binary exited 0, Metal scene smoke 36 passed / 1 local-project skip, generated pairs pixel-equal and 8-project x2 reload cycles passed.
+- Separate local-project harness for 3620484312 (seed 1, 3456x2234 surface): 120 frames, 47 render passes/frame (22 scene-output), 0 blits/frame; `cmp` against the original baseline PPM exited 0.
+- `python3 scripts/test.py` — exit 0; Python suites passed, native 569 passed / 0 failed / 11 skipped.
+- `python3 scripts/build.py --configuration Release` — exit 0 after both gates; delivered build/Build/Products/Release/WallpaperMachine.app. Binary newer than build start and changed from the previous delivery; linked texture-pair vector insertion/erase symbols confirm the pending-copy collection is included.
+- Correction to previous power reports: 45–52 draws/s is an observation, not proof that each frame adds its work time to 16.7 ms. ThreadTimer schedules from last_tick, set before the asynchronous DRAW callback; FrameEnd wakes only an outstanding request. No frame-clock code was changed.
+- Correction to prior “exact power window” / “matched throughput” claims: delayed diagnostics and the benchmark start independently and only approximately overlap; equal diagnostic-window draw rates do not prove equal throughput during the power window. Presented FPS remains unavailable; no new watt-saving or memory/display attribution is claimed.
+- No app launch/quit, desktop setting changes, on-screen visual checks or new power measurements in this correction. Renderer provenance and owning documentation updated; historical measurements are superseded by the corrections above.
+
 ## 2026-09-24 — Power follow-up: window-aligned measurement, feedback-copy texture trade, what the wallpaper costs
 
 On battery, built-in display only, other applications in use; every app run relaunched the Release build, which opens its control panel at launch.

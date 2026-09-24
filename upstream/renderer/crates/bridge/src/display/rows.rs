@@ -40,7 +40,13 @@ impl AppConfig {
                 .iter()
                 .find(|monitor| monitor.selector == selector)
                 .cloned()
-                .unwrap_or_else(|| MonitorCfg::for_connected_display(selector.clone(), display));
+                .unwrap_or_else(|| {
+                    MonitorCfg::for_connected_display(
+                        selector.clone(),
+                        display,
+                        self.primary_wallpaper(),
+                    )
+                });
 
             rows.push(MonitorRow {
                 selector,
@@ -138,6 +144,7 @@ impl AppConfig {
             }
         }
 
+        let primary_wallpaper = self.primary_wallpaper().map(str::to_owned);
         for (index, display) in displays.iter().enumerate() {
             if index == 0 {
                 continue;
@@ -148,8 +155,11 @@ impl AppConfig {
 
             let selector = display.connected_selector();
             if self.monitor_index(&selector).is_none() {
-                self.monitors
-                    .push(MonitorCfg::for_connected_display(selector, display));
+                self.monitors.push(MonitorCfg::for_connected_display(
+                    selector,
+                    display,
+                    primary_wallpaper.as_deref(),
+                ));
             }
         }
 
@@ -173,6 +183,13 @@ impl AppConfig {
         self.monitors
             .iter()
             .position(|monitor| &monitor.selector == selector)
+    }
+
+    fn primary_wallpaper(&self) -> Option<&str> {
+        self.monitors
+            .iter()
+            .find(|monitor| monitor.selector == SerializedSelector::Primary)
+            .and_then(|monitor| monitor.wallpaper.as_deref())
     }
 }
 
@@ -200,16 +217,26 @@ impl SerializedSelector {
 }
 
 impl MonitorCfg {
+    /// Configuration for a display seen for the first time. It starts enabled
+    /// so plugging in a monitor needs no trip to Settings: a display the
+    /// renderer already mirrors keeps that mirror, any other shows the primary
+    /// display's wallpaper. Turning it off saves `enabled = false` under its
+    /// selector, which outlives reconnection.
     #[must_use]
-    fn for_connected_display(selector: SerializedSelector, display: &DisplaySnapshotEntry) -> Self {
+    fn for_connected_display(
+        selector: SerializedSelector,
+        display: &DisplaySnapshotEntry,
+        primary_wallpaper: Option<&str>,
+    ) -> Self {
         let mut monitor = Self {
             selector,
-            enabled: display.window_active,
             ..Self::default()
         };
         if let Some(WallpaperAssignment::Mirror(target)) = display.assignment.as_ref() {
             monitor.mode = "mirror".to_string();
             monitor.mirror_target = Some(SerializedSelector::from_selector(target));
+        } else {
+            monitor.wallpaper = primary_wallpaper.map(str::to_owned);
         }
         monitor
     }

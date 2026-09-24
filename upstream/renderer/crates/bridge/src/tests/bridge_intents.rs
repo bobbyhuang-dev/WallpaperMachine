@@ -216,7 +216,7 @@ async fn display_snapshots_are_built_from_engine_state() {
     assert_eq!(settings.displays[0].display_id, "primary");
     assert!(settings.displays[0].enabled);
     assert_eq!(settings.displays[0].mode, BridgeDisplayMode::Standalone);
-    assert!(!settings.displays[1].enabled);
+    assert!(settings.displays[1].enabled);
     assert_eq!(settings.displays[1].mode, BridgeDisplayMode::Mirror);
     assert_eq!(
         settings.displays[1].selected_mirror_target.as_deref(),
@@ -235,13 +235,24 @@ async fn monitor_information_lists_only_active_wallpaper_displays_with_metadata(
     let store = ConfigStore::open(root.path().to_path_buf());
     store
         .save_app_config(&AppConfig {
-            monitors: vec![MonitorCfg {
-                selector: SerializedSelector::Primary,
-                enabled: true,
-                mode: "independent".to_string(),
-                wallpaper: Some("100".to_string()),
-                mirror_target: None,
-            }],
+            monitors: vec![
+                MonitorCfg {
+                    selector: SerializedSelector::Primary,
+                    enabled: true,
+                    mode: "independent".to_string(),
+                    wallpaper: Some("100".to_string()),
+                    mirror_target: None,
+                },
+                MonitorCfg {
+                    selector: SerializedSelector::from_selector(&DisplaySelector::Identity(
+                        secondary.identity.clone(),
+                    )),
+                    enabled: true,
+                    mode: "independent".to_string(),
+                    wallpaper: None,
+                    mirror_target: None,
+                },
+            ],
             ..AppConfig::default()
         })
         .unwrap();

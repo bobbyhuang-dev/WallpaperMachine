@@ -25,6 +25,17 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-24 — First-seen displays start enabled with the primary wallpaper
+
+- Change: bridge MonitorCfg::for_connected_display enables never-configured displays with the primary's wallpaper (mirror kept); enabled_selectors skips mirror monitors.
+- cargo test --release -p wallpaper-bridge --lib: 323 passed (baseline 322).
+- New test first_seen_display_starts_with_primary_wallpaper_and_keeps_opt_out_after_reconnect fails on HEAD rows.rs (enabled=false), passes after.
+- native_video_routing mirror-group tests failed with only the default change (apply flipped mirror back to independent); pass after the enabled_selectors mirror filter.
+- python3 scripts/test.py: 572 passed, 0 failed, 11 skipped (Swift links the previously built bridge lib; no Swift change).
+- python3 scripts/check_renderer.py: 10 generated cases pooled/isolated exit 0, pixels_equal, reload cycles 0.
+- Not run: wallpaper-core suite (core unchanged); Release build not requested, running app unchanged.
+- Gap: configs saved by 0.5.0 with enabled=false for auto-added displays are not migrated.
+
 ## 2026-09-24 — Release build: lock-screen texture prefetch and acquire-failure reporting
 
 - `python3 scripts/build.py --configuration Release` — exit 0; delivered `build/Build/Products/Release/WallpaperMachine.app`
@@ -104,14 +115,3 @@ Animate Lock Screen failed for a private 943 MB puppet scene (122 embedded PNG t
 - Old desktop only: 120-second stabilization plus three 60.00-second windows through scripts/power_benchmark.py --configuration Release --measure 60 --condition T3 --powermetrics. App CPU/GPU busy means 28.833%/20.267%, WindowServer 45.700%/18.567%, CoreAudio CPU 9.533%, all same-name WebContent CPU 0.233%. CoreAudio/WebContent GPU and absent extension are unavailable, not zero. Whole-machine load 46.334 W [44.045,49.293]; adapter input including charging 55.557 W [53.736,58.331]. Package power unavailable; no secure credential-input channel used.
 - python3 scripts/build.py --configuration Release: exit 0, full renderer/bridge and application rebuild. Delivered build/Build/Products/Release/WallpaperMachine.app; executable SHA-256 c03902bfae6dddf9cdd929a2dfc73056280dfbe82b7241478d4e86bf048aadbc; complete source-input SHA-256 fca0cce8ee498439abc2b731c759b958f1f578784b694be8523db71ed86cb465. No source input changed during the build. All 15 bundled WebUI files byte-match sources; new MatrixBase template and artwork-cache field are linked; temporary probe markers absent.
 - Implementation, automated gates and bounded offscreen workload proof complete. Existing old PID remains running: candidate desktop runtime/visual/power verification is unmeasured until the user quits and reopens the delivered app. No app-quit power reference, aligned actual-presentation feedback, wallpaper-exclusive watts, savings percentage, whole-software compatibility or private-particle pixel equivalence claimed. Persisted wallpaper settings and upstream revisions unchanged.
-
-## 2026-09-24 — Interleaved feedback-copy fix and timing-evidence corrections
-
-- `MetalSceneDraw.InterleavedFeedbackCopiesPreserveEachReadersImage` compares both A/B targets to the blit path over four frames with both blits removed; restoring single-prefix overwrite semantics fails A's pixel comparison, and the restored per-reader implementation passes.
-- `python3 scripts/check_renderer.py` — exit 0; every recorded binary exited 0, Metal scene smoke 36 passed / 1 local-project skip, generated pairs pixel-equal and 8-project x2 reload cycles passed.
-- Separate local-project harness for 3620484312 (seed 1, 3456x2234 surface): 120 frames, 47 render passes/frame (22 scene-output), 0 blits/frame; `cmp` against the original baseline PPM exited 0.
-- `python3 scripts/test.py` — exit 0; Python suites passed, native 569 passed / 0 failed / 11 skipped.
-- `python3 scripts/build.py --configuration Release` — exit 0 after both gates; delivered build/Build/Products/Release/WallpaperMachine.app. Binary newer than build start and changed from the previous delivery; linked texture-pair vector insertion/erase symbols confirm the pending-copy collection is included.
-- Correction to previous power reports: 45–52 draws/s is an observation, not proof that each frame adds its work time to 16.7 ms. ThreadTimer schedules from last_tick, set before the asynchronous DRAW callback; FrameEnd wakes only an outstanding request. No frame-clock code was changed.
-- Correction to prior “exact power window” / “matched throughput” claims: delayed diagnostics and the benchmark start independently and only approximately overlap; equal diagnostic-window draw rates do not prove equal throughput during the power window. Presented FPS remains unavailable; no new watt-saving or memory/display attribution is claimed.
-- No app launch/quit, desktop setting changes, on-screen visual checks or new power measurements in this correction. Renderer provenance and owning documentation updated; historical measurements are superseded by the corrections above.

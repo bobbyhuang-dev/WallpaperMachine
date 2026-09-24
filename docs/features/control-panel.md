@@ -270,6 +270,15 @@ displays are listed but not selectable, annotated `(disabled)` or `(mirrored)`.
 Per-display enablement, independent/mirror mode, mirror source, scaling, scale
 factor, frame rate, mute and volume live in **Settings -> Displays**.
 
+A display the app has never configured starts enabled with the primary
+display's wallpaper, so a newly connected monitor shows a wallpaper without a
+trip to Settings. Turning **Enable wallpaper** off saves that choice under the
+display's identity, and it stays off when the display reconnects. A display
+switched to mirroring shows its source even if it kept an earlier wallpaper;
+applying that wallpaper again does not make it independent. Configuration
+written before this default (0.5.0 and earlier saved new displays as disabled)
+is not rewritten.
+
 Display titles come from the renderer as `Vendor 1552 - Model 41055 (1 - Primary)`
 because the vendored renderer only reads CoreGraphics vendor/model numbers.
 `DisplayTitleResolver` (App/Services/Desktop) replaces that label with

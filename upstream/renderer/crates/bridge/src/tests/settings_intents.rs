@@ -1133,6 +1133,77 @@ async fn enabling_secondary_display_updates_identity_backed_settings_row() {
 }
 
 #[tokio::test]
+async fn first_seen_display_starts_with_primary_wallpaper_and_keeps_opt_out_after_reconnect() {
+    let primary = identified_display("primary", 1);
+    let mut external = identified_display("external", 3);
+    // The engine has never shown this display, so it reports no window.
+    external.window_active = false;
+    let external_selector =
+        SerializedSelector::from_selector(&DisplaySelector::Identity(external.identity.clone()));
+    let root = tempfile::tempdir().unwrap();
+    let store = ConfigStore::open(root.path().to_path_buf());
+    store
+        .save_app_config(&AppConfig {
+            monitors: vec![MonitorCfg {
+                selector: SerializedSelector::Primary,
+                enabled: true,
+                mode: "independent".to_string(),
+                wallpaper: Some("100".to_string()),
+                mirror_target: None,
+            }],
+            ..AppConfig::default()
+        })
+        .unwrap();
+    store
+        .save_wallpaper(&WallpaperConfig::new_for("100", "scene"))
+        .unwrap();
+
+    let engine = FakeEngineFacade::default();
+    engine.set_snapshot(vec![primary.clone()]);
+    let bridge = BridgeBuilder::new(engine.clone())
+        .with_config_store(ConfigStore::open(root.path().to_path_buf()))
+        .build()
+        .expect("tokio runtime and config load for wallpaper bridge");
+    bridge.bootstrap().await.unwrap();
+
+    engine.set_snapshot_after_refresh(vec![primary.clone(), external.clone()]);
+    bridge.refresh_displays().await.unwrap();
+
+    let external_id = settings_row_id_by_title(&bridge, "external").await;
+    assert_display_enabled(&bridge, &external_id, true).await;
+    assert_latest_scene(&engine, 1, "100");
+    assert_latest_scene(&engine, 3, "100");
+
+    bridge
+        .set_display_enabled(external_id.clone(), false)
+        .await
+        .expect("external display should be disabled");
+    engine.set_snapshot_after_refresh(vec![primary.clone()]);
+    bridge.refresh_displays().await.unwrap();
+    engine.set_snapshot_after_refresh(vec![primary, external]);
+    bridge.refresh_displays().await.unwrap();
+
+    assert_display_enabled(&bridge, &external_id, false).await;
+    assert!(
+        engine
+            .calls()
+            .last()
+            .expect("reconcile call")
+            .iter()
+            .all(|scene| scene.display.display_id != 3),
+        "a display the user turned off must stay dark when it reconnects"
+    );
+    let saved = store.load().unwrap().config;
+    assert!(
+        saved
+            .monitors
+            .iter()
+            .any(|monitor| monitor.selector == external_selector && !monitor.enabled),
+        "the opt-out must be saved under the display's identity"
+    );
+}
+
+#[tokio::test]
 async fn wallpaper_options_hide_disabled_global_displays() {
     let primary = identified_display("primary", 1);
     let secondary = identified_display("secondary", 3);
@@ -1483,11 +1554,9 @@ async fn primary_wallpaper_stays_on_primary_after_primary_display_switch() {
     bridge.refresh_displays().await.unwrap();
 
     assert_latest_scene(&engine, 3, "300");
-    assert_eq!(
-        engine.calls().last().expect("reconcile call").len(),
-        1,
-        "primary-only wallpaper should not be duplicated onto the old primary"
-    );
+    // The old primary was never configured under its own identity, so it is a
+    // first-seen display and keeps showing the primary's wallpaper.
+    assert_latest_scene(&engine, 1, "300");
 }
 
 #[tokio::test]

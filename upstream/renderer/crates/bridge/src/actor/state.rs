@@ -369,11 +369,19 @@ impl BridgeActorState {
             .expect("draft exists after insertion"))
     }
 
+    /// Displays showing `wallpaper_id` as their own wallpaper. A mirror keeps
+    /// whatever wallpaper it had before it started mirroring, but it shows its
+    /// source instead; counting it here would let the next Apply of that
+    /// wallpaper quietly turn the mirror back into an independent display.
     pub fn enabled_selectors(&self, wallpaper_id: &str) -> Vec<SerializedSelector> {
         self.app_config
             .monitors
             .iter()
-            .filter(|monitor| monitor.enabled && monitor.wallpaper.as_deref() == Some(wallpaper_id))
+            .filter(|monitor| {
+                monitor.enabled
+                    && monitor.mode != "mirror"
+                    && monitor.wallpaper.as_deref() == Some(wallpaper_id)
+            })
             .map(|monitor| monitor.selector.clone())
             .collect()
     }

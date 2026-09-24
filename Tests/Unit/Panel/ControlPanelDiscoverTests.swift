@@ -579,6 +579,17 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
       "b": try XCTUnwrap(URL(string: "https://images.steamusercontent.com/ugc/b/preview/")),
       "c": try XCTUnwrap(URL(string: "https://images.steamusercontent.com/ugc/c/preview/")),
     ]
+    // `a` is also installed; the library serves its own preview for the Installed tile.
+    let previousHome = ProcessInfo.processInfo.environment["WALLPAPER_MACHINE_HOME"]
+    setenv("WALLPAPER_MACHINE_HOME", root.path, 1)
+    defer {
+      if let previousHome { setenv("WALLPAPER_MACHINE_HOME", previousHome, 1) } else { unsetenv("WALLPAPER_MACHINE_HOME") }
+    }
+    let installedPreview = ClientPaths.libraryURL.appendingPathComponent("a/preview.gif")
+    try FileManager.default.createDirectory(
+      at: installedPreview.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try still.write(to: installedPreview)
+    assets.previews = ["a": installedPreview]
 
     let result =
       try await web.callAsyncJavaScript(
@@ -612,13 +623,23 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
           await waitFor(() => liveOf('b')?.complete && liveOf('b').naturalWidth > 0, 'the black animation to arrive');
         } catch (error) { return { error: `${error.message} — ${diagnose()}` }; }
         await new Promise(resolve => setTimeout(resolve, 700));
-        return {
+        const discover = {
           stillsFirst: insertions.length >= 2 && insertions.every(Boolean),
           eagerStills: ['a', 'b', 'c'].every(id => stillOf(id).loading !== 'lazy'),
           aPlaying: tile('a').classList.contains('playing'), aStillKept: !!stillOf('a'),
           bLoaded: !!liveOf('b'), bPlaying: tile('b').classList.contains('playing'),
           cLive: !!liveOf('c'), cStill: !!stillOf('c'),
         };
+        // Leaving Discover while `a` plays: its Installed tile must show the library still.
+        window.wallpaperUI.receive(Object.assign({}, base, { page: 'installed',
+          wallpapers: [{ id: 'a', title: 'Tile a', kind: 'Scene', preview: 'mwe-ui://preview/a', active: false, supported: true, tags: [] }] }));
+        try {
+          await waitFor(() => stillOf('a')?.getAttribute('src') === 'mwe-ui://preview/a' && stillOf('a').complete && stillOf('a').naturalWidth > 0, 'the installed still to load');
+        } catch (error) { return { error: `${error.message} — ${diagnose()}` }; }
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return Object.assign(discover, {
+          installedStillOpacity: getComputedStyle(stillOf('a')).opacity, installedLive: !!liveOf('a'),
+        });
         """, arguments: ["base": base], in: nil, contentWorld: .page) as? [String: Any]
     XCTAssertNil(result?["error"], (result?["error"] as? String) ?? "")
     XCTAssertEqual(
@@ -632,6 +653,10 @@ final class ControlPanelDiscoverTests: ControlPanelTestCase {
       result?["bPlaying"] as? Bool, false, "A black animation never replaces a bright still")
     XCTAssertEqual(result?["cLive"] as? Bool, false, "A single-frame preview gets no animation layer")
     XCTAssertEqual(result?["cStill"] as? Bool, true)
+    XCTAssertEqual(
+      result?["installedStillOpacity"] as? String, "1",
+      "A wallpaper whose animation played on Discover shows its still on the Installed page")
+    XCTAssertEqual(result?["installedLive"] as? Bool, false, "Installed tiles carry no animation layer")
     XCTAssertEqual(
       Set(fetcher.requests).count, fetcher.requests.count,
       "Each preview is downloaded once: its still and its animation share the bytes")

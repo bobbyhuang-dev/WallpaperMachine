@@ -64,7 +64,9 @@ Wallpapers appear as square, image-first tiles with a transparent title overlay.
 Discover tiles show cached still thumbnails first and then, for tiles on
 screen, play Steam's animated preview beneath the still, which only fades out
 while the animation is bright (see
-[Workshop downloads](workshop-downloads.md#tile-thumbnails)).
+[Workshop downloads](workshop-downloads.md#tile-thumbnails)). Animations stop
+when the grid leaves Discover, so an installed copy of the same wallpaper shows
+its library preview on Installed.
 The whole tile, including its controls and marks, enlarges by 8% over 220ms on
 hover or visible keyboard focus. Selection alone does not enlarge it. Reduced
 Motion keeps the tile size fixed and retains border/shadow feedback.

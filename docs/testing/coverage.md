@@ -37,7 +37,10 @@ Swift tests cover, without starting the app:
   silently while it still transfers), the queue waiting behind a job that is
   still authenticating or renewing a stale sign-in, serial order without a
   saved sign-in, a Steam "logged in elsewhere" kick re-queuing the ended job
-  and turning the queue serial, per-job secrets,
+  and turning the queue serial, the downloads-at-once ceiling changing mid-queue
+  (raising starts waiting jobs, lowering never stops a running one), persisting
+  across relaunch clamped to 1–6 and reaching Swift from the Settings select as a
+  number, per-job secrets,
   saved-sign-in handoff to the next job, cancellation, duplicate-click
   suppression, FIFO handoff after failure/cancel, shutdown without launching
   queued work, staging reclaim limited to directories nothing is writing to,

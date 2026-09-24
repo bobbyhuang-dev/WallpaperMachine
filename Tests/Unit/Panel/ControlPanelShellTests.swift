@@ -1033,6 +1033,30 @@ final class ControlPanelShellTests: ControlPanelTestCase {
     }
   }
 
+  /// A <select> yields a string, and Swift accepts only an integer in range, so the choice must
+  /// cross the bridge as a number to reach the queue at all.
+  func testDownloadsAtOnceChoiceReachesTheQueueAndSurvivesTheNextSnapshot() async throws {
+    try await withPanel { panel in
+      try await panel.finishWelcome()
+      _ = try await panel.js("""
+        const base = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+        window.wallpaperUI.receive({...base, page:'settings'});
+        document.querySelector('[data-section="library"]').click();
+        const select = document.querySelector('[data-setting="concurrentDownloads"]');
+        select.value = '5';
+        select.dispatchEvent(new Event('change', {bubbles:true}));
+        """)
+      try await panel.waitUntil { panel.workshop.downloader.maximumConcurrentDownloads == 5 }
+      XCTAssertEqual(panel.workshop.downloader.slotLimit, 5)
+      try await panel.expectJS("""
+        const base = await window.webkit.messageHandlers.native.postMessage({action:'ready'});
+        window.wallpaperUI.receive({...base, page:'settings'});
+        const select = document.querySelector('[data-setting="concurrentDownloads"]');
+        return `${select.value}/${select.options.length}`;
+        """, equals: "5/\(WorkshopDownloadManager.concurrentDownloadRange.upperBound)")
+    }
+  }
+
   func testSamePageSnapshotPreservesSearchDraftAndCaret() async throws {
     try await withPanel { panel in
       try await panel.finishWelcome()

@@ -15,6 +15,19 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-22 — Wallpaper Engine workflow with macOS visual treatment
+
+- Direction: Wallpaper Engine image-first gallery/filter/inspector structure with macOS-oriented system typography, neutral selected navigation, restrained accent use, grouped settings and setup-assistant surfaces. Not a Windows window/control skin.
+- Implementation: existing panel/settings/welcome CSS updated; presentation-only JS adjusts anchor-aware popover sizing, real DOM order for trailing default dialog actions, and secondary styling for already-installed resource re-download. Native action names, payloads, persistence, theme contrast algorithm and existing state/security fixes unchanged.
+- Initial targeted iteration: python3 scripts/test.py --only ControlPanelShellTests --only ControlPanelLibraryTests --only ControlPanelDiscoverTests --only ControlPanelSyncTests: 40 passed, 0 failed, 0 skipped.
+- Final gate after corrections, once: python3 scripts/test.py: 141 Python tests passed; 553 native passed, 0 failed, 11 skipped (2 live Workshop network and 9 NativeVideoPlayerMedia opt-ins). No --ui, network or media opt-in enabled.
+- Isolated visual pass: 152 captures across eight viewport/language/theme configurations; 760x560, 960x640, 1440x900 en-light/zh-dark plus 960 zh-light/en-dark. One consolidated correction batch and 56 confirmation captures; two independent reviewers scored their five library/settings and three flow findings resolved.
+- Observed: settings menu indicators and left-aligned category labels, artwork-independent selection ring, single-line 12px captions at narrow widths, complete import failure feedback, visible trailing Submit and matching DOM/Tab order. Three square columns and no horizontal overflow retained at 760px.
+- Real browser input: hover reached scale 1.08, reduced motion stayed 1; arrow-key tile navigation and keyboard icon focus ring worked; selection did not apply; welcome radio navigation/inert background remained intact. Enter still routed downloadInput and cleared the synthetic response; rejected actions remained visible in the dialog.
+- Popover stress: with a multiline business-error banner shifting the Import trigger, the anchor-derived popover stayed inside the viewport. No fixed trigger-height assumption or periodic measurement/timer added.
+- Cleanup: owning control-panel documentation and local link targets updated; temporary preview fixture removed. Task-owned headless reference/preview tabs and localhost service released. Synthetic screenshot evidence remains disposable; no shared artifact purge.
+- Limits: offscreen WKWebView behavior and isolated Chromium source-UI visuals only. No desktop control, real Steam login, wallpaper changes, permission approval or app restart. Real desktop presentation and power remain unverified. No Release build; the running app does not automatically acquire these source changes.
+
 ## 2026-09-22 — Control panel UI and UX refinement
 
 - Implementation: completed the five approved WebUI steps; existing native actions, snapshot fields, defaults, window minimum and design identity retained. No frontend dependencies or production resource files added.
@@ -47,6 +60,7 @@ renderer behaviour and known-failing tests into
 - python3 scripts/check_renderer.py: exit 0; all test/probe processes returned 0; ten generated pooled/isolated pairs were pixel-equal with expected pixels and no diagnostics; eight generated projects completed two reload cycles. Three private-corpus cases skipped: LonelyCat, Workshop3409533530, and local Metal projects.
 - Verification limits: page state/resource loading only, not desktop presentation, animation smoothness, video playback, real audio response, or power. Diagnostic network access was blocked and media playback suspended; resulting media play rejections and author-caught uninitialized timer logs were not treated as host failures.
 - Cleanup: throwaway Rust/Swift diagnostic sources and the standalone Swift executable removed. python3 scripts/clean.py --dry-run inspected successfully; broad cleanup was not run because it would remove shared verification artifacts. Published changelog remains release-generated.
+
 ## 2026-09-22 — Release system: generated notes, draft-first publishing, deleted old releases
 
 Reworked the release system end to end. scripts/release_notes.py writes the GitHub Release body and CHANGELOG.md from the commits between two tags; scripts/publish_release.py refuses a live release and cannot let Latest go backwards; build.yml gates on the test suite, verifies the unpacked archive and attests provenance; Settings -> About shows what the newest release changed. All thirteen releases through v0.5.0 were deleted at the owner's request, tags kept.

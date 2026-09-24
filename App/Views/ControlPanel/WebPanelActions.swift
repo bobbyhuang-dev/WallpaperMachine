@@ -241,6 +241,12 @@ extension WebPanelController {
         try await store.setPauseOnBatteryPowerAsync(enabled: try request.boolean("value"))
       case "keepWindowsOnWallpaperClick":
         try DesktopClickRevealPreference.setEnabled(!(try request.boolean("value")))
+      case "concurrentDownloads":
+        let range = WorkshopDownloadManager.concurrentDownloadRange
+        let value = try request.number(
+          "value", range: Double(range.lowerBound)...Double(range.upperBound))
+        guard let count = Int(exactly: value) else { throw WebPanelRequest.invalid }
+        workshop.setConcurrentDownloads(count)
       case "lockScreenEnabled":
         guard let lock = store.lockScreenWallpaper else {
           throw WallpaperActionError(

@@ -223,8 +223,11 @@ and from the top-bar downloads button that is shown while there is download
 activity. Each transfer uses a private SteamCMD session and an account that
 owns Wallpaper Engine.
 
-- Up to three downloads run at once (`WorkshopDownloadManager`, default
-  `maximumConcurrentDownloads`), each in its own private SteamCMD session and
+- Up to three downloads run at once by default; **Settings → Library & Steam →
+  Downloads at once** chooses 1–6 (`WorkshopDownloadManager.concurrentDownloadRange`,
+  stored under `WallpaperMachine.concurrentDownloads`). Raising it starts queued
+  jobs immediately; lowering it lets running transfers finish and only holds back
+  jobs that have not started. Each job runs in its own private SteamCMD session and
   staging directory with its own copy of the saved sign-in; clicking several
   tiles queues them and they fill the free slots in order without another
   click. With a saved sign-in for the account on disk every job restores it
@@ -247,6 +250,15 @@ owns Wallpaper Engine.
   running one and the queue stays serial for the rest of the app's run
   (`sessionConflictDetected`). A session Steam ends while no sibling is running
   is reported as an ordinary failure with a retry.
+- Every job signs in separately (about 10–13 s from launch to "Waiting for user
+  info...OK" on a saved sign-in), so parallel slots mainly hide that fixed cost for
+  batches of small items; large items share the link. Measured on a real account
+  (2026-09-24): 12 items of 1–10 MB took 67.7 s with 3 sessions and 47.0 s with 6,
+  all 24 succeeded, and Steam neither ended a session nor rate-limited the sign-ins;
+  with 6 sessions each sign-in took 13–22 s, so the gain is sublinear. SteamCMD's
+  `@cMaxInitialDownloadSources` (default -1) showed no consistent effect on one
+  150 MB item (9.3/14.4 MB/s off, 4.3/16.3 MB/s on) and is not set. Settings says
+  when Steam has ended a session and the queue is running one at a time.
 - The activity bar carries the running job's status, percentage and speed, or
   the batch's count, mean percentage and summed speed while several run. The
   queue footer states the slot rule.

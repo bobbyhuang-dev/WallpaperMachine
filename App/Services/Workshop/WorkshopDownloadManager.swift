@@ -82,6 +82,9 @@ final class WorkshopDownload: Identifiable {
 @Observable
 final class WorkshopDownloadManager: SteamCMDDownloadActivity {
   static let defaultConcurrentDownloads = 3
+  /// The choices Settings offers. More sessions mean more Steam sign-ins per minute, so the
+  /// ceiling stays at what a real account has been seen to sustain.
+  static let concurrentDownloadRange = 1...6
   /// Id of the sign-in-only job; there is at most one, like the shared-assets job.
   static let signInID = "steam-sign-in"
 
@@ -90,7 +93,8 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
   private(set) var errorMessage: String?
   /// Steam refused to keep two of our sessions signed in at once, so the queue is serial.
   private(set) var sessionConflictDetected = false
-  let maximumConcurrentDownloads: Int
+  /// The user's ceiling; `slotLimit` is what applies right now.
+  private(set) var maximumConcurrentDownloads: Int
   @ObservationIgnored private let sessionDirectory: URL
   @ObservationIgnored private let runtimeProvider: any SteamCMDRuntimeProviding
   @ObservationIgnored private var isShuttingDown = false
@@ -113,12 +117,26 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
   ) {
     self.sessionDirectory = sessionDirectory
     self.runtimeProvider = runtimeProvider
-    self.maximumConcurrentDownloads = max(1, maximumConcurrentDownloads)
+    self.maximumConcurrentDownloads = Self.clampedConcurrentDownloads(maximumConcurrentDownloads)
     savedAccount = WorkshopDownloader.readSavedAccount(at: sessionDirectory)
   }
 
   func download(for itemID: String?) -> WorkshopDownload? {
     downloads.first { $0.id == (itemID ?? "scene-assets") }
+  }
+
+  /// Raising the ceiling starts queued work at once; lowering it lets running transfers finish
+  /// and only holds back what has not started yet.
+  func setMaximumConcurrentDownloads(_ count: Int) {
+    let next = Self.clampedConcurrentDownloads(count)
+    guard next != maximumConcurrentDownloads else { return }
+    maximumConcurrentDownloads = next
+    AppLog.info("Workshop downloads may now run \(next) at a time")
+    startQueuedDownloads()
+  }
+
+  private static func clampedConcurrentDownloads(_ count: Int) -> Int {
+    min(max(count, concurrentDownloadRange.lowerBound), concurrentDownloadRange.upperBound)
   }
 
   var signIn: WorkshopDownload? { downloads.first { $0.id == Self.signInID } }

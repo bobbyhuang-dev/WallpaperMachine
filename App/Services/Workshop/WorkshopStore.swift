@@ -74,6 +74,8 @@ final class WorkshopStore {
   let downloader: WorkshopDownloadManager
   let steamCMDSetup: SteamCMDSetupStore
   @ObservationIgnored private let service: WorkshopService
+  @ObservationIgnored private let defaults: UserDefaults
+  static let concurrentDownloadsKey = "WallpaperMachine.concurrentDownloads"
   var username = ""
   var selectedDownloadID: String?
   var showsDownloadDetails = false
@@ -120,8 +122,12 @@ final class WorkshopStore {
   ) {
     self.service = service
     self.downloader = downloader
+    self.defaults = defaults
     self.sceneAssetsAvailable = sceneAssetsAvailable
     sceneAssetsReady = sceneAssetsAvailable()
+    if let saved = defaults.object(forKey: Self.concurrentDownloadsKey) as? Int {
+      downloader.setMaximumConcurrentDownloads(saved)
+    }
     self.steamCMDSetup = SteamCMDSetupStore(
       downloader: downloader, supportDirectory: supportDirectory,
       defaults: defaults, runtimeProvider: runtimeProvider)
@@ -131,6 +137,12 @@ final class WorkshopStore {
     guard downloader.downloads.contains(where: { $0 === job }) else { return }
     selectedDownloadID = job.id
     showsDownloadDetails = true
+  }
+
+  /// How many Workshop downloads may run at once; kept across launches.
+  func setConcurrentDownloads(_ count: Int) {
+    downloader.setMaximumConcurrentDownloads(count)
+    defaults.set(downloader.maximumConcurrentDownloads, forKey: Self.concurrentDownloadsKey)
   }
 
   /// The entry point for a single click: start immediately when every prerequisite is met,

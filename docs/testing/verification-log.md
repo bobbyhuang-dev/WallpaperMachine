@@ -25,6 +25,15 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-24 — Downloads at once setting (1–6) and live SteamCMD concurrency measurement
+
+- Live, on the user's account with an isolated harness (copied saved sign-in, private staging, nothing written back): 12 Workshop items of 1–10 MB took 67.7 s with 3 sessions and 47.0 s with 6; 24/24 succeeded, no 'logged in elsewhere', no rate limit. Sign-in took 9–13 s at 3 sessions, 13–22 s at 6.
+- D (+@cMaxInitialDownloadSources 15, default -1): one 150 MB item gave 9.3/14.4 MB/s off and 4.3/16.3 MB/s on, which is network noise, so the convar is not set. Two 342 MB attempts failed with Steam 'No Connection' on this network (a system proxy is active); a small item succeeded right after.
+- WorkshopDownloadManager.setMaximumConcurrentDownloads (clamped 1...6); WorkshopStore persists WallpaperMachine.concurrentDownloads; Settings → Library & Steam → Downloads at once; zh-Hans strings added.
+- New tests: DownloadQueueTests.testChangingTheCeilingStartsQueuedWorkAndNeverStopsARunningTransfer, WorkshopStoreTests.testConcurrentDownloadsChoiceSurvivesRelaunchAndStaysInRange, ControlPanelShellTests.testDownloadsAtOnceChoiceReachesTheQueueAndSurvivesTheNextSnapshot.
+- python3 scripts/test.py: 572 passed, 0 failed, 11 skipped of 583; Python suites OK.
+- Not run: Release build, desktop/visual check of the new Settings row, a live batch through the app itself at 6 slots, and anything above 6 sessions.
+
 ## 2026-09-24 — Interleaved feedback-copy fix and timing-evidence corrections
 
 - `MetalSceneDraw.InterleavedFeedbackCopiesPreserveEachReadersImage` compares both A/B targets to the blit path over four frames with both blits removed; restoring single-prefix overwrite semantics fails A's pixel comparison, and the restored per-reader implementation passes.
@@ -125,16 +134,3 @@ Scene 3620484312 on the built-in 3456×2234 display, 60 fps cap, AC power, other
 - Signing: codesign --verify --deep --strict build/Build/Products/Release/WallpaperMachine.app: exit 0.
 - No packaging/install step and no application launch, quit or restart performed. User must quit the running copy and reopen the delivered app to load the changes.
 - Limits: this proves the Release build and bundled source identity, not actual desktop presentation, live Steam, wallpaper rendering or power consumption.
-
-## 2026-09-22 — Wallpaper Engine workflow with macOS visual treatment
-
-- Direction: Wallpaper Engine image-first gallery/filter/inspector structure with macOS-oriented system typography, neutral selected navigation, restrained accent use, grouped settings and setup-assistant surfaces. Not a Windows window/control skin.
-- Implementation: existing panel/settings/welcome CSS updated; presentation-only JS adjusts anchor-aware popover sizing, real DOM order for trailing default dialog actions, and secondary styling for already-installed resource re-download. Native action names, payloads, persistence, theme contrast algorithm and existing state/security fixes unchanged.
-- Initial targeted iteration: python3 scripts/test.py --only ControlPanelShellTests --only ControlPanelLibraryTests --only ControlPanelDiscoverTests --only ControlPanelSyncTests: 40 passed, 0 failed, 0 skipped.
-- Final gate after corrections, once: python3 scripts/test.py: 141 Python tests passed; 553 native passed, 0 failed, 11 skipped (2 live Workshop network and 9 NativeVideoPlayerMedia opt-ins). No --ui, network or media opt-in enabled.
-- Isolated visual pass: 152 captures across eight viewport/language/theme configurations; 760x560, 960x640, 1440x900 en-light/zh-dark plus 960 zh-light/en-dark. One consolidated correction batch and 56 confirmation captures; two independent reviewers scored their five library/settings and three flow findings resolved.
-- Observed: settings menu indicators and left-aligned category labels, artwork-independent selection ring, single-line 12px captions at narrow widths, complete import failure feedback, visible trailing Submit and matching DOM/Tab order. Three square columns and no horizontal overflow retained at 760px.
-- Real browser input: hover reached scale 1.08, reduced motion stayed 1; arrow-key tile navigation and keyboard icon focus ring worked; selection did not apply; welcome radio navigation/inert background remained intact. Enter still routed downloadInput and cleared the synthetic response; rejected actions remained visible in the dialog.
-- Popover stress: with a multiline business-error banner shifting the Import trigger, the anchor-derived popover stayed inside the viewport. No fixed trigger-height assumption or periodic measurement/timer added.
-- Cleanup: owning control-panel documentation and local link targets updated; temporary preview fixture removed. Task-owned headless reference/preview tabs and localhost service released. Synthetic screenshot evidence remains disposable; no shared artifact purge.
-- Limits: offscreen WKWebView behavior and isolated Chromium source-UI visuals only. No desktop control, real Steam login, wallpaper changes, permission approval or app restart. Real desktop presentation and power remain unverified. No Release build; the running app does not automatically acquire these source changes.

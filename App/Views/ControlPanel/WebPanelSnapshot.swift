@@ -393,6 +393,8 @@ extension WebPanelController {
         "lockScreenError": lock?.errorMessage as Any? ?? null,
         "sceneAssetsReady": workshop.sceneAssetsReady,
         "sceneAssetsWarning": workshop.sceneAssetsFailure as Any? ?? null,
+        "concurrentDownloads": workshop.downloader.maximumConcurrentDownloads,
+        "concurrentDownloadsMax": WorkshopDownloadManager.concurrentDownloadRange.upperBound,
         "assetsPath": ClientPaths.assetsURL.path, "libraryPath": ClientPaths.libraryURL.path,
         "shaderCacheBytes": settings.storage.shaderCacheSizeBytes,
         "logBytes": settings.storage.logs.activeFileSizeBytes,

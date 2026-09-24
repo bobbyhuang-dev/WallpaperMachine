@@ -238,6 +238,69 @@ final class DownloadQueueTests: DownloaderTestCase {
     }
   }
 
+  /// The ceiling can change while work is queued: raising it starts waiting jobs at once, and
+  /// lowering it never stops a running transfer, it only holds back what has not started.
+  func testChangingTheCeilingStartsQueuedWorkAndNeverStopsARunningTransfer() async throws {
+    let root = try makeParallelRuntime()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let manager = WorkshopDownloadManager(
+      sessionDirectory: root.appendingPathComponent("SteamSession"),
+      runtimeProvider: ShellRuntimeProvider(), maximumConcurrentDownloads: 1)
+    var imported = Set<String>()
+    func enqueue(_ id: String) throws -> WorkshopDownload {
+      manager.start(
+        item: WorkshopItem(
+          id: id, title: "Ceiling \(id)", creator: "Test", summary: "", previewURL: nil,
+          tags: ["Video"], size: 0, subscriptions: 0),
+        username: "localtest", executable: root.appendingPathComponent("runtime/steamcmd"),
+        library: root.appendingPathComponent("Library")
+      ) { imported.insert(id) }
+      return try XCTUnwrap(manager.download(for: id))
+    }
+    let started = { (id: String) in
+      FileManager.default.fileExists(atPath: root.appendingPathComponent("running-\(id)").path)
+    }
+    do {
+      let first = try enqueue("1")
+      try await authenticate(first.worker, guardCode: false)
+      try Data().write(to: root.appendingPathComponent("release-1"))
+      try await waitUntil { !manager.isRunning }
+
+      let batch = try ["2", "3", "4", "5"].map(enqueue)
+      try await waitUntil { started("2") }
+      XCTAssertEqual(manager.activeCount, 1)
+      XCTAssertTrue(batch[1...].allSatisfy { $0.isQueued && $0.hold == .slot })
+
+      manager.setMaximumConcurrentDownloads(3)
+      try await waitUntil { started("3") && started("4") }
+      XCTAssertEqual(manager.activeCount, 3)
+      XCTAssertTrue(batch[3].isQueued)
+
+      manager.setMaximumConcurrentDownloads(1)
+      XCTAssertEqual(manager.activeCount, 3, "Lowering the ceiling must not stop running transfers")
+      try Data().write(to: root.appendingPathComponent("release-2"))
+      try await waitUntil { manager.activeCount == 2 }
+      XCTAssertTrue(batch[3].isQueued, "Queued work waits until the running count drops below the new ceiling")
+      XCTAssertFalse(started("5"))
+      for id in ["3", "4"] { try Data().write(to: root.appendingPathComponent("release-\(id)")) }
+      try await waitUntil { started("5") }
+      try Data().write(to: root.appendingPathComponent("release-5"))
+      try await waitUntil { !manager.isRunning }
+      XCTAssertEqual(imported, ["1", "2", "3", "4", "5"])
+
+      manager.setMaximumConcurrentDownloads(99)
+      XCTAssertEqual(
+        manager.maximumConcurrentDownloads, WorkshopDownloadManager.concurrentDownloadRange.upperBound)
+      manager.setMaximumConcurrentDownloads(0)
+      XCTAssertEqual(
+        manager.maximumConcurrentDownloads, WorkshopDownloadManager.concurrentDownloadRange.lowerBound)
+      try assertNoStaging(in: root)
+    } catch {
+      await manager.shutdown()
+      throw error
+    }
+  }
+
   /// Steam ending a session for another of our own sign-ins means the account cannot run two
   /// at once: the ended job goes back in line behind the running one and the queue turns serial.
   func testSessionConflictSerialisesTheQueueAndRetriesTheEndedJob() async throws {

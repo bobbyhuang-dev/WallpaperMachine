@@ -79,6 +79,29 @@ final class WorkshopStoreTests: XCTestCase {
       excludedTags: committed)
   }
 
+  /// The downloads-at-once choice outlives a relaunch, and a stored value outside what this
+  /// build offers lands on the nearest choice instead of running unbounded.
+  func testConcurrentDownloadsChoiceSurvivesRelaunchAndStaysInRange() throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    let relaunch = {
+      WorkshopStore(
+        downloader: WorkshopDownloadManager(
+          sessionDirectory: fixture.root.appendingPathComponent("SteamSession")),
+        supportDirectory: fixture.root, defaults: fixture.defaults)
+    }
+    XCTAssertEqual(
+      fixture.store.downloader.maximumConcurrentDownloads,
+      WorkshopDownloadManager.defaultConcurrentDownloads)
+    fixture.store.setConcurrentDownloads(5)
+    XCTAssertEqual(fixture.store.downloader.slotLimit, 5)
+    XCTAssertEqual(relaunch().downloader.maximumConcurrentDownloads, 5)
+    fixture.defaults.set(40, forKey: WorkshopStore.concurrentDownloadsKey)
+    XCTAssertEqual(
+      relaunch().downloader.maximumConcurrentDownloads,
+      WorkshopDownloadManager.concurrentDownloadRange.upperBound)
+  }
+
   func testFailedPageAndFailedSubmissionRetryTheirOwnQueryWithoutChangingDraft() async throws {
     let fixture = try Fixture()
     defer { fixture.remove() }

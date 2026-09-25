@@ -100,6 +100,19 @@ impl NarrowVectorAssignments {
                     .map(|swizzle| swizzle.width)
             {
                 Some(width)
+            } else if rhs.start() == rhs_end
+                && let TypedToken::Identifier(name) = tokens[rhs_end].kind()
+            {
+                // A whole vector assigned to a narrower one. HLSL, which the
+                // authored shaders are written against, keeps the leading
+                // components; GLSL rejects the assignment and the effect is lost.
+                if let Some(ty) = state.declarations.stage_interface_ty(name) {
+                    VectorWidth::classify_constructor(LegacyTypeName::new(ty).glsl())
+                } else if let Some(BindingType::Vector(width)) = facts.lookup(name, rhs_end) {
+                    Some(width)
+                } else {
+                    None
+                }
             } else if let TypedToken::Identifier(name) = tokens[rhs.start()].kind() {
                 VectorWidth::classify_constructor(name).and_then(|width| {
                     let open = tokens.next_non_comment(rhs.start() + 1)?;

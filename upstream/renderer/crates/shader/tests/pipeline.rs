@@ -2405,6 +2405,53 @@ fn pipeline_narrows_plain_vertex_output_assignment_to_fragment_varying_width() {
         .expect("narrowed vertex output assignment should compile through Naga");
 }
 
+// The shipped `cloudmotion` effect assigns its whole `vec4 v_TexCoord` to the
+// `vec2 v_NoiseCoord` varying. HLSL keeps the leading components; GLSL refuses
+// the assignment, and the whole effect used to fail to load. A local vector
+// assigned from a wider one takes the same path through declaration facts.
+#[test]
+fn pipeline_narrows_whole_vector_identifier_assigned_to_narrower_target() {
+    let capture_pipeline = source_capture_pipeline();
+    let request = interface_request(
+        concat!(
+            "attribute vec3 a_Position;\n",
+            "attribute vec2 a_TexCoord;\n",
+            "uniform mat4 g_ModelViewProjectionMatrix;\n",
+            "varying vec4 v_TexCoord;\n",
+            "varying vec2 v_NoiseCoord;\n",
+            "void main() {\n",
+            "  gl_Position = g_ModelViewProjectionMatrix * vec4(a_Position, 1.0);\n",
+            "  v_TexCoord.xyzw = a_TexCoord.xyxy;\n",
+            "  v_NoiseCoord = v_TexCoord;\n",
+            "  vec3 wide = vec3(v_NoiseCoord, 1.0);\n",
+            "  vec2 shift = vec2(0.0, 0.0);\n",
+            "  shift = wide;\n",
+            "  v_NoiseCoord += shift;\n",
+            "}\n",
+        ),
+        concat!(
+            "varying vec4 v_TexCoord;\n",
+            "varying vec2 v_NoiseCoord;\n",
+            "uniform sampler2D g_Texture0;\n",
+            "void main() {\n",
+            "  gl_FragColor = texSample2D(g_Texture0, v_TexCoord.xy + v_NoiseCoord);\n",
+            "}\n",
+        ),
+    );
+
+    let program = capture_pipeline
+        .compile(&request)
+        .expect("a whole vector assigned to a narrower target should narrow");
+    let vertex_source = legalized_stage_source(&program, ShaderStageKind::Vertex);
+
+    assert!(vertex_source.contains("v_NoiseCoord = v_TexCoord.xy;"), "{vertex_source}");
+    assert!(vertex_source.contains("shift = wide.xy;"), "{vertex_source}");
+
+    let _compiled = pipeline()
+        .compile(&request)
+        .expect("the narrowed assignments should compile through Naga");
+}
+
 #[test]
 fn pipeline_compiles_vec4_varying_assigned_from_repeated_vec2_swizzle() {
     let request = interface_request(

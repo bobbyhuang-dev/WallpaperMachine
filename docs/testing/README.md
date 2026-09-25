@@ -61,7 +61,7 @@ scheme excludes UI tests.
 | Media/device integration | `Tests/Unit/NativeVideo/` | `WALLPAPER_MACHINE_MEDIA_TESTS=1 python3 scripts/test.py` — opt-in only |
 | Live Steam pages | `Tests/Unit/Workshop/WorkshopTests.swift` | `WALLPAPER_MACHINE_NETWORK_TESTS=1 python3 scripts/test.py` — opt-in only |
 | Rust crates | `upstream/renderer/crates/` | `cargo test --release -p wallpaper-core --lib`, `cargo test --release -p wallpaper-bridge --lib`, `cargo test -p shader --test pipeline -- --nocapture` |
-| C++ renderer tests | `upstream/renderer/external/open-wallpaper-engine` | `python3 scripts/check_renderer.py` builds and runs them; see [renderer.md](renderer.md) |
+| C++ renderer tests | `upstream/renderer/external/open-wallpaper-engine` | `python3 scripts/check_renderer.py` builds and runs a fixed list: the script's `cmake --build … --target` build list and its `for binary in` run list. `scene_schema_tests`, `script_runtime_compat_test`, `mouse_input_test` and `audio_tests` are not in that list: build them in `artifacts/renderer/bin` with `cmake --build artifacts/renderer/bin --target <name>` and run `artifacts/renderer/bin/tests/<name>`; see [renderer.md](renderer.md#ccmake-test-binaries) |
 | Headless GPU probes | same CMake tree | explicitly invoked executables (`offscreen_scene_probe`, `scene_reload_cycle_probe`, `playback_gpu_test`, `wpdump`); see [renderer.md](renderer.md) |
 
 `python3 scripts/test.py` is the routine gate: it runs the Python script tests,

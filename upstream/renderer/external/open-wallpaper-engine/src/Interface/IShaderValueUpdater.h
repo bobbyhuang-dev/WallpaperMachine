@@ -4,6 +4,7 @@
 #include "Core/MapSet.hpp"
 
 #include <functional>
+#include <string>
 #include <string_view>
 
 namespace wallpaper
@@ -55,13 +56,17 @@ public:
         UpdateUniforms(node, sprites, update_op);
     }
 
-    /// Which self-advancing uniforms this node's material actually binds.
+    /// Which self-advancing uniforms this node's material actually binds, drawn
+    /// through `camera_override` when the pass sets one and through the node's
+    /// own camera when it is empty, as the backends draw it.
     ///
     /// The default reports all of them, so an updater that does not track
     /// reflection can never make a pass look reusable by omission.
-    virtual uint32_t FrameVaryingUniforms(SceneNode* node, uint32_t material_slot) const {
+    virtual uint32_t FrameVaryingUniforms(SceneNode* node, uint32_t material_slot,
+                                          const std::string& camera_override) const {
         (void)node;
         (void)material_slot;
+        (void)camera_override;
         return frame_varying_uniform::kAll;
     }
     virtual void FrameEnd()                                                        = 0;

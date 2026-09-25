@@ -84,7 +84,7 @@ void SceneImageEffectLayer::ResolveEffect(const SceneMesh& default_mesh,
         auto& material      = *mesh.Material();
         {
             material.blenmode = m_final_blend;
-            last_output->sceneNode->SetCamera(std::string());
+            last_output->sceneNode->SetCamera(m_final_camera);
             last_output->sceneNode->CopyTrans(*m_final_node);
             mesh.ChangeMeshDataFrom(*m_final_mesh);
         }

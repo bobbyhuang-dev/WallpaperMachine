@@ -123,5 +123,12 @@ inline std::string GenLinkTex(idx id) { return std::string(SpecTex_Link) + std::
 inline std::string LayerCompositeTargetKey(idx id) {
     return std::string(WE_IMAGE_LAYER_COMPOSITE_PREFIX) + std::to_string(id);
 }
+/// The layer-local camera layer `id` is drawn through into its composite target.
+inline std::string LayerCompositeCameraKey(idx id) {
+    return "layer_composite_camera_" + std::to_string(id);
+}
+/// The camera a fullscreen layer's result is drawn through: the whole canvas,
+/// whatever a camera layer does to the view of the scene.
+constexpr std::string_view FullscreenLayerCamera { "fullscreen" };
 
 } // namespace wallpaper

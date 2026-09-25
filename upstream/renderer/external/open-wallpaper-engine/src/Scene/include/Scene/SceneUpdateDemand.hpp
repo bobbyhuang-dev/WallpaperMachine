@@ -19,7 +19,7 @@ enum class SceneDemandReason : uint32_t
     /// A SceneScript or a scripted property value runs on every tick.
     Script = 1u << 0,
     /// A scalar animation, a scene zoom animation or a material alpha
-    /// animation is registered.
+    /// animation is playing.
     Animation = 1u << 1,
     /// A particle emitter exists.
     Particles = 1u << 2,

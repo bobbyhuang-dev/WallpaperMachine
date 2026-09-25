@@ -3334,7 +3334,8 @@ void MetalRender::Impl::computeDemandReasons(Scene& scene, rg::RenderGraph& grap
             // untracked pass cannot look still by omission.
             const uint32_t varying =
                 updater != nullptr
-                    ? updater->FrameVaryingUniforms(desc.node, desc.material_slot)
+                    ? updater->FrameVaryingUniforms(desc.node, desc.material_slot,
+                                                    desc.camera_override)
                     : frame_varying_uniform::kAll;
             if ((varying & (frame_varying_uniform::kTime | frame_varying_uniform::kDayTime)) != 0)
                 reasons |= vulkan::DynamicReason::TimeUniform;
@@ -3613,7 +3614,8 @@ void MetalRender::Impl::compileStaticCache(Scene& scene)
             uint32_t reasons = 0;
             const uint32_t varying =
                 updater != nullptr
-                    ? updater->FrameVaryingUniforms(desc.node, desc.material_slot)
+                    ? updater->FrameVaryingUniforms(desc.node, desc.material_slot,
+                                                    desc.camera_override)
                     : frame_varying_uniform::kAll;
             if ((varying & (frame_varying_uniform::kTime | frame_varying_uniform::kDayTime)) != 0)
                 reasons |= vulkan::DynamicReason::TimeUniform;
@@ -3726,23 +3728,7 @@ vulkan::StaticPassSample MetalRender::Impl::frameSample(Scene& scene, std::size_
         }
     }
 
-    // The camera this pass draws through, and the one a compose layer samples
-    // the screen with. Neither is covered by the node transform, and both move
-    // without any graph rebuild -- a fill-mode change, a user zoom or a script.
-    const auto fold_camera = [&hash](const SceneCamera* camera) {
-        if (camera == nullptr) return;
-        const Eigen::Matrix4d matrix = camera->GetViewProjectionMatrix();
-        hash = vulkan::StaticHashBytes(hash, matrix.data(), sizeof(double) * 16);
-    };
-    const std::string& camera_name =
-        ! desc.camera_override.empty()
-            ? desc.camera_override
-            : (desc.node != nullptr ? desc.node->Camera() : std::string {});
-    if (! camera_name.empty()) {
-        const auto found = scene.cameras.find(camera_name);
-        fold_camera(found != scene.cameras.end() ? found->second.get() : nullptr);
-    }
-    fold_camera(scene.activeCamera);
+    hash = vulkan::FoldPassCameras(hash, scene, desc.camera_override, desc.node);
 
     // What a replaceable image currently holds. Its geometry can be unchanged
     // while its pixels are not -- a clock redrawing the same number of glyphs,

@@ -1,4 +1,5 @@
 #include "Scripting/ScriptEngine.hpp"
+#include "Scripting/ScriptModuleSyntax.hpp"
 
 #include "Runtime/SceneRuntimeContext.hpp"
 #include "Utils/Sha.hpp"
@@ -929,8 +930,10 @@ ScriptFrontEndResult RunScriptFrontEnd(std::string_view source) {
             continue;
         }
 
-        if (StartsWith(trimmed, "export ")) {
-            output << trimmed.substr(std::strlen("export ")) << '\n';
+        // Only the keyword goes; the separator after it is whitespace to the
+        // language and stays.
+        if (ExportKeywordAt(trimmed, 0)) {
+            output << trimmed.substr(std::strlen("export")) << '\n';
             continue;
         }
 
@@ -939,22 +942,18 @@ ScriptFrontEndResult RunScriptFrontEnd(std::string_view source) {
 
     result.transformed_body = output.str();
     result.transformed_body = TransformInlineImportDeclarations(result.transformed_body);
-    std::size_t export_pos  = 0;
-    while ((export_pos = result.transformed_body.find("export ", export_pos)) !=
-           std::string::npos) {
-        const bool boundary_before =
-            export_pos == 0 ||
-            std::isspace(static_cast<unsigned char>(result.transformed_body[export_pos - 1])) !=
-                0 ||
-            result.transformed_body[export_pos - 1] == ';' ||
-            result.transformed_body[export_pos - 1] == '{' ||
-            result.transformed_body[export_pos - 1] == '}';
-        if (! boundary_before) {
-            export_pos += std::strlen("export ");
+    auto&       body       = result.transformed_body;
+    std::size_t export_pos = 0;
+    while ((export_pos = body.find("export", export_pos)) != std::string::npos) {
+        if (! ExportKeywordAt(body, export_pos)) {
+            export_pos += std::strlen("export");
             continue;
         }
 
-        result.transformed_body.erase(export_pos, std::strlen("export "));
+        // Only the keyword: a line break after it may end a comment that
+        // happens to finish with the word, and erasing the break would pull
+        // the next line into that comment.
+        body.erase(export_pos, std::strlen("export"));
     }
     g_script_startup_metrics.module_strip_ms += MeasureElapsedMs(started);
     return result;

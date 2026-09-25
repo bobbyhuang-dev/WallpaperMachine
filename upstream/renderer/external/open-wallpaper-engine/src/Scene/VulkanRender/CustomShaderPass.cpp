@@ -915,7 +915,8 @@ StaticPassDesc CustomShaderPass::staticPassDesc(const Scene& scene) const {
     const auto* updater = scene.shaderValueUpdater.get();
     const uint32_t varying =
         updater != nullptr
-            ? updater->FrameVaryingUniforms(m_desc.node, m_desc.material_slot)
+            ? updater->FrameVaryingUniforms(m_desc.node, m_desc.material_slot,
+                                            m_desc.camera_override)
             : frame_varying_uniform::kAll;
     if ((varying & (frame_varying_uniform::kTime | frame_varying_uniform::kDayTime)) != 0)
         reasons |= DynamicReason::TimeUniform;
@@ -954,7 +955,7 @@ StaticPassDesc CustomShaderPass::staticPassDesc(const Scene& scene) const {
     return desc;
 }
 
-StaticPassSample CustomShaderPass::frameSample() const {
+StaticPassSample CustomShaderPass::frameSample(const Scene& scene) const {
     StaticPassSample sample;
     sample.visible = m_desc.visibility_node == nullptr ||
                     m_desc.visibility_node->EffectiveVisible() ||
@@ -980,6 +981,7 @@ StaticPassSample CustomShaderPass::frameSample() const {
             }
         }
     }
+    hash = FoldPassCameras(hash, scene, m_desc.camera_override, node);
     for (const auto& [index, sprite] : m_desc.sprites_map) {
         hash = StaticHashMix(hash, index);
         hash = StaticHashMix(hash, static_cast<uint64_t>(sprite.GetCurFrame().imageId));

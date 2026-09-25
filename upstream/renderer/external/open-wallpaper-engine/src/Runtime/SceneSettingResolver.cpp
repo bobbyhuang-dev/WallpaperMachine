@@ -3,6 +3,7 @@
 #include "Runtime/DynamicValue.hpp"
 #include "Runtime/SceneRuntimeContext.hpp"
 #include "Runtime/ScriptedDynamicValue.hpp"
+#include "Scripting/ScriptModuleSyntax.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -173,7 +174,7 @@ DynamicValueUniquePtr wrap_script_if_needed(
     const bool scene_events = script_source.find("engine.on(") != std::string::npos ||
                               script_source.find("scene.on(") != std::string::npos ||
                               script_source.find("thisScene.on(") != std::string::npos;
-    if (scene_events && script_source.find("export function update") == std::string::npos) {
+    if (scene_events && ! ExportsFunction(script_source, "update")) {
         return value;
     }
 

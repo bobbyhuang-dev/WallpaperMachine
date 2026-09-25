@@ -25,6 +25,7 @@
 
 #include <cmath>
 #include "Scene/SceneCamera.h"
+#include "Scene/SceneUpdateDemand.hpp"
 #include "Scene/SceneNode.h"
 #include "SpecTexs.hpp"
 #include "Type.hpp"
@@ -645,7 +646,7 @@ std::string PuppetParallaxSceneJson() {
         "ambientcolor":[0.2,0.2,0.2], "skylightcolor":[0.3,0.3,0.3],
         "clearcolor":[0,0,0], "cameraparallax":true,
         "cameraparallaxamount":2, "cameraparallaxdelay":0.25,
-        "cameraparallaxmouseinfluence":0,
+        "cameraparallaxmouseinfluence":1,
         "orthogonalprojection":{"width":640,"height":360}
       },
       "objects": [
@@ -1516,6 +1517,162 @@ TEST(SceneSchema, CameraObjectZoomThatIsNotPositiveFramesTheWholeCanvas) {
         EXPECT_NEAR(clip.x() / clip.w(), 1.0, 1e-6);
         EXPECT_NEAR(clip.y() / clip.w(), 1.0, 1e-6);
     }
+}
+
+// Parsed with project properties, as the app always does, so the scene has the
+// runtime that plays camera layers.
+std::shared_ptr<Scene> ParseOrthoShotScene(fs::VFS& vfs, audio::SoundManager& sound_manager,
+                                           std::string_view shots,
+                                           ProjectProperties properties = {}) {
+    return WPSceneParser().Parse(SceneParseRequest {
+                                     .scene_id           = "ortho-camera-shots",
+                                     .project_properties = &properties,
+                                 },
+                                 std::string(R"({
+      "camera": {"center":[0,0,-1], "eye":[0,0,0], "up":[0,1,0]},
+      "general": {
+        "ambientcolor":[0.2,0.2,0.2], "skylightcolor":[0.3,0.3,0.3],
+        "clearcolor":[0,0,0], "cameraparallax":false,
+        "cameraparallaxamount":0, "cameraparallaxdelay":0,
+        "cameraparallaxmouseinfluence":0,
+        "orthogonalprojection":{"width":640,"height":360}
+      },
+      "objects": [)") + std::string(shots) + R"(,
+        {"id":310,"name":"canvas image","image":"image.json",
+         "alignment":"bottomleft","scale":[1,1,1],"angles":[0,0,0],"visible":true}
+      ]
+    })",
+                                 vfs,
+                                 sound_manager);
+}
+
+/// Where the canvas-plane point `canvas` lands in normalised device coordinates
+/// when seen through `camera`.
+Eigen::Vector2d CanvasToNdc(const SceneCamera& camera, Eigen::Vector2d canvas) {
+    const Eigen::Matrix4d projection = camera.GetViewProjectionMatrix();
+    const Eigen::Vector4d clip = projection * Eigen::Vector4d(canvas.x(), canvas.y(), 0.0, 1.0);
+    return { clip.x() / clip.w(), clip.y() / clip.w() };
+}
+
+Eigen::Vector2d CanvasToNdc(const Scene& scene, Eigen::Vector2d canvas) {
+    return CanvasToNdc(*scene.activeCamera, canvas);
+}
+
+/// The 640x360 canvas is shown `zoom` times closer about the scene point
+/// `centre`, by the orthographic camera 2D layers draw through and by the
+/// perspective one perspective layers draw through alike.
+void ExpectViewFrames(const Scene& scene, Eigen::Vector2d centre, double zoom) {
+    ASSERT_NE(scene.activeCamera, nullptr);
+    EXPECT_FALSE(scene.activeCamera->IsPerspective());
+    const auto perspective = scene.cameras.find("global_perspective");
+    ASSERT_NE(perspective, scene.cameras.end());
+    for (const SceneCamera* camera : { scene.activeCamera, perspective->second.get() }) {
+        SCOPED_TRACE(camera->IsPerspective() ? "perspective camera" : "orthographic camera");
+        const auto middle = CanvasToNdc(*camera, centre);
+        EXPECT_NEAR(middle.x(), 0.0, 1e-4);
+        EXPECT_NEAR(middle.y(), 0.0, 1e-4);
+        const auto corner = CanvasToNdc(*camera, centre + Eigen::Vector2d(320.0, 180.0) / zoom);
+        EXPECT_NEAR(corner.x(), 1.0, 1e-4);
+        EXPECT_NEAR(corner.y(), 1.0, 1e-4);
+    }
+}
+
+// A camera layer's timeline is how a 2D intro moves the view. The editor keys
+// the shot's zoom and, linked to it, an origin that is an offset from the
+// canvas centre; one playhead drives both, and a relative origin curve offsets
+// the authored origin. Held at the whole canvas, the intro of a wallpaper that
+// opens close on a planet and pulls back to its rest shot never played.
+TEST(SceneSchema, CameraObjectTimelineGlidesFromItsFirstShotToWhereItRests) {
+    fs::VFS vfs;
+    MountSceneFiles(vfs);
+    audio::SoundManager sound_manager;
+    auto parsed = ParseOrthoShotScene(vfs, sound_manager, R"(
+        {"id":9,"name":"shot","camera":"default","angles":[0,0,0],"fov":50,
+         "origin":{"value":"-40 20 500","animation":{"relative":true,
+           "options":{"fps":12,"length":24,"mode":"single","parent":{"key":"zoom"}},
+           "c0":[{"frame":0,"value":100},{"frame":12,"value":40}],
+           "c1":[{"frame":0,"value":50},{"frame":12,"value":-20}],
+           "c2":[{"frame":0,"value":0},{"frame":12,"value":0}]}},
+         "zoom":{"value":1,"animation":{
+           "options":{"fps":12,"length":24,"mode":"single","children":[{"key":"origin"}]},
+           "c0":[{"frame":0,"value":2},{"frame":12,"value":1}]}}})");
+    ASSERT_NE(parsed, nullptr);
+    ASSERT_NE(parsed->runtime, nullptr);
+
+    // The first key: twice as close, centred 60 right of and 70 above the
+    // canvas centre (the authored origin plus the curve's first offset).
+    ExpectViewFrames(*parsed, { 380.0, 250.0 }, 2.0);
+
+    parsed->runtime->Tick(0.5);
+    const double moving = CanvasToNdc(*parsed, { 320.0, 180.0 }).x();
+    EXPECT_GT(moving, -0.375 + 1e-3) << "half way through, the shot has not moved";
+    EXPECT_LT(moving, -1e-3) << "half way through, the shot has already arrived";
+    EXPECT_TRUE(parsed->runtime->DescribeTimeAdvancingWork() & SceneDemandReason::Animation)
+        << "a playing intro needs frames";
+
+    // Past the last key it rests where the authored origin and the curve's
+    // last offset cancel: the whole canvas. A single-play intro that has ended
+    // moves nothing, and a scene whose only motion it was may sleep.
+    parsed->runtime->Tick(2.0);
+    ExpectViewFrames(*parsed, { 320.0, 180.0 }, 1.0);
+    EXPECT_FALSE(parsed->runtime->DescribeTimeAdvancingWork() & SceneDemandReason::Animation)
+        << "the intro ended and still keeps the scene awake";
+}
+
+// A script writes this shot's origin. Until a tick has run it the layer holds
+// whatever the editor last saved, which need not be where the shot is, so the
+// view stays centred on the canvas until the script's value arrives: anything
+// that reads the camera before the first tick -- the first frame's cursor
+// mapping -- must not see the stale one.
+TEST(SceneSchema, AScriptedShotOriginFramesTheViewOnceATickHasAppliedIt) {
+    fs::VFS vfs;
+    MountSceneFiles(vfs);
+    audio::SoundManager sound_manager;
+    auto parsed = ParseOrthoShotScene(vfs, sound_manager, R"(
+        {"id":9,"name":"lens","camera":"default","angles":[0,0,0],"fov":50,"zoom":2,
+         "origin":{"value":"300 100 500",
+                   "script":"export function update(value) { value.x = 20; value.y = -10; return value; }"}})");
+    ASSERT_NE(parsed, nullptr);
+    ASSERT_NE(parsed->runtime, nullptr);
+
+    ExpectViewFrames(*parsed, { 320.0, 180.0 }, 2.0);
+    parsed->runtime->Tick(1.0 / 60.0);
+    ExpectViewFrames(*parsed, { 340.0, 170.0 }, 2.0);
+}
+
+// Wallpapers offer several shots and pick one with a user property that shows
+// it. The last visible camera layer in authored order frames the view,
+// decided again every tick; with none visible the whole canvas is shown.
+TEST(SceneSchema, TheLastVisibleCameraObjectFramesTheCanvas) {
+    fs::VFS vfs;
+    MountSceneFiles(vfs);
+    audio::SoundManager sound_manager;
+    auto parsed = ParseOrthoShotScene(vfs, sound_manager, R"(
+        {"id":9,"name":"wide shot","camera":"default","origin":[0,0,500],
+         "angles":[0,0,0],"fov":50,"zoom":2,
+         "visible":{"user":"wide","value":true}},
+        {"id":10,"name":"close shot","camera":"default","origin":[100,-40,500],
+         "angles":[0,0,0],"fov":50,"zoom":4,
+         "visible":{"user":"closeup","value":false}})",
+                                      {
+                                          { "wide", RuntimeScalarValue::Bool(true) },
+                                          { "closeup", RuntimeScalarValue::Bool(false) },
+                                      });
+    ASSERT_NE(parsed, nullptr);
+    ASSERT_NE(parsed->runtime, nullptr);
+
+    ExpectViewFrames(*parsed, { 320.0, 180.0 }, 2.0);
+
+    parsed->runtime->ApplyProjectPropertyOverride({ { "closeup", RuntimeScalarValue::Bool(true) } });
+    parsed->runtime->Tick(1.0 / 60.0);
+    ExpectViewFrames(*parsed, { 420.0, 140.0 }, 4.0);
+
+    parsed->runtime->ApplyProjectPropertyOverride({
+        { "wide", RuntimeScalarValue::Bool(false) },
+        { "closeup", RuntimeScalarValue::Bool(false) },
+    });
+    parsed->runtime->Tick(1.0 / 60.0);
+    ExpectViewFrames(*parsed, { 320.0, 180.0 }, 1.0);
 }
 
 TEST(SceneSchema, ParserKeepsSceneLightsAndUpdatesViewUniforms) {
@@ -3194,6 +3351,11 @@ TEST(SceneSchema, ParserCopiesImageParallaxDepthToPuppetMaterialSlots) {
     updater->InitUniforms(node.get(), 1, [](std::string_view name) {
         return name == "g_ModelMatrix";
     });
+    // Parallax follows the cursor, so it is moved off the centre and given the
+    // whole delay to arrive; only a slot that has the layer's depth moves.
+    updater->MouseInput(1.0, 0.0);
+    parsed->frameTime = 0.25;
+    updater->FrameBegin();
 
     sprite_map_t sprites;
     std::unordered_map<std::string, ShaderValue> updates;
@@ -3202,8 +3364,9 @@ TEST(SceneSchema, ParserCopiesImageParallaxDepthToPuppetMaterialSlots) {
     });
 
     ASSERT_TRUE(updates.contains("g_ModelMatrix"));
-    EXPECT_NE(updates.at("g_ModelMatrix")[12], 0.0f);
-    EXPECT_NE(updates.at("g_ModelMatrix")[13], 0.0f);
+    const auto placed = node->ModelTrans();
+    EXPECT_NE(updates.at("g_ModelMatrix")[12], static_cast<float>(placed(0, 3)));
+    EXPECT_NE(updates.at("g_ModelMatrix")[13], static_cast<float>(placed(1, 3)));
 }
 
 TEST(SceneSchema, ParserKeepsLegacyEmptyPuppetMeshSingleMaterialSlotFallback) {

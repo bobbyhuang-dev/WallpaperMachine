@@ -10,6 +10,7 @@
 #include "Scene/Scene.h"
 #include "Scene/SceneRenderTarget.h"
 #include "Utils/Algorism.h"
+#include "VulkanRender/StaticSubgraphCache.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -417,12 +418,41 @@ inline void ApplyCameraFillMode(wallpaper::Scene& scene, wallpaper::FillMode fil
         gPerCam.SetAspect(fboAspect);
         break;
     }
+    // The extent the orthographic camera actually shows, so a camera layer's
+    // zoom narrows perspective layers exactly as it does the rest.
     if (! gPerCam.FovLocked()) {
-        gPerCam.SetFov(algorism::CalculatePersperctiveFov(1000.0f, gCam.Height()));
+        gPerCam.SetFov(algorism::CalculatePersperctiveFov(1000.0f, gCam.VisibleHeight()));
     }
     gCam.Update();
     gPerCam.Update();
     scene.UpdateLinkedCamera("global");
+}
+
+/// Folds into a static-reuse sample the cameras a pass depends on: the one it
+/// draws through -- `camera_override` when the graph set one, else its node's --
+/// and the scene's active camera, which a compose layer samples the screen with.
+/// Neither is covered by the node transform, and both move without a graph
+/// rebuild: a fill-mode change, a camera layer's zoom or pan, a script. The
+/// view-projection matrix carries the camera's position and visible extent
+/// alike. Both backends call this one definition, so their caches invalidate on
+/// the same camera changes.
+inline uint64_t FoldPassCameras(uint64_t hash, const wallpaper::Scene& scene,
+                                const std::string& camera_override,
+                                const wallpaper::SceneNode* node) {
+    const auto fold = [&hash](const wallpaper::SceneCamera* camera) {
+        if (camera == nullptr) return;
+        const Eigen::Matrix4d matrix = camera->GetViewProjectionMatrix();
+        hash = StaticHashBytes(hash, matrix.data(), sizeof(double) * 16);
+    };
+    const std::string& camera_name =
+        ! camera_override.empty() ? camera_override
+                                  : (node != nullptr ? node->Camera() : std::string {});
+    if (! camera_name.empty()) {
+        const auto found = scene.cameras.find(camera_name);
+        fold(found != scene.cameras.end() ? found->second.get() : nullptr);
+    }
+    fold(scene.activeCamera);
+    return hash;
 }
 
 inline void SetAttachmentLoadOp(BlendMode bm, VkAttachmentLoadOp& load_op) {

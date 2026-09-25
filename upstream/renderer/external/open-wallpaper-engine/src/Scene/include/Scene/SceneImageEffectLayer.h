@@ -50,6 +50,11 @@ public:
     SceneNode*  ResolvedFinalRenderNode() const { return m_resolved_final_render_node; }
     void        SetFinalMeshDynamic(MeshUpdate update);
     void        SetFinalBlend(BlendMode m) { m_final_blend = m; }
+    /// The camera the chain's last pass draws its result through. Empty is the
+    /// scene's active camera, which is right for a layer that sits in the
+    /// scene; a fullscreen layer's result is the screen and must cover it
+    /// however a camera layer frames the scene.
+    void        SetFinalCamera(std::string camera) { m_final_camera = std::move(camera); }
 
     void ResolveEffect(const SceneMesh& defualt_mesh, std::string_view effect_cam);
 
@@ -58,7 +63,7 @@ private:
     std::string m_pingpong_a;
     std::string m_pingpong_b;
 
-    bool fullscreen { false };
+    std::string m_final_camera;
     //    std::vector<float> m_size;
     std::unique_ptr<SceneMesh> m_final_mesh;
     std::unique_ptr<SceneNode> m_final_node;

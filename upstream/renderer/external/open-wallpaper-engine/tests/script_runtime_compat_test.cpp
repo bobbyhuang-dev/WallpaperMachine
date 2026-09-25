@@ -10,6 +10,7 @@
 #include "WPShaderValueUpdater.hpp"
 #include "Scene/include/Scene/SceneMesh.h"
 #include "Scripting/ScriptEngine.hpp"
+#include "Scripting/ScriptModuleSyntax.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -572,6 +573,24 @@ TEST(ScriptRuntimeCompat, ComposeBackgroundUsesScreenCameraAndParentTransform) {
     for (std::size_t i = 0; i < actual.size(); ++i) {
         EXPECT_NEAR(actual[i], second_expected[i], 1e-5);
     }
+
+    // Drawn into its own composite for another layer to sample, the compose
+    // layer still samples the screen behind where it sits: that is what its
+    // card holds.
+    auto composite = std::make_shared<SceneCamera>(64, 32, -1, 1);
+    composite->SetLayerLocal(true);
+    scene.cameras["composite-test"] = composite;
+    node->SetCamera("composite-test");
+    actual = ShaderValue {};
+    updater.UpdateUniforms(node.get(), sprites, [&](std::string_view n, const ShaderValue& v) {
+        if (n == "g_ModelViewProjectionMatrix") actual = v;
+    });
+    const auto composite_expected =
+        ShaderValue::fromMatrix(screen->GetViewProjectionMatrix() * node->ModelTrans());
+    ASSERT_EQ(actual.size(), composite_expected.size());
+    for (std::size_t i = 0; i < actual.size(); ++i) {
+        EXPECT_NEAR(actual[i], composite_expected[i], 1e-5);
+    }
 }
 
 TEST(ScriptRuntimeCompat, ThisLayerAndThisSceneResolveCurrentLayer) {
@@ -898,6 +917,61 @@ export function update(value) {
 }
 )JS");
     EXPECT_FLOAT_EQ(result.getFloat(), 111.0f);
+}
+
+// Scripts pasted from a rich-text editor carry U+00A0 where a space was typed.
+// JavaScript reads that as whitespace, so `export` has to be stripped after it
+// as after a space: left in place, the program does not compile and the layer
+// keeps its authored value for good. One export starts its line and the other
+// follows a statement: those are the two places the rewrite looks. Only the
+// keyword goes: a comment that ends with the word keeps its line break, or the
+// next line would become part of the comment.
+TEST(ScriptRuntimeCompat, ExportFollowedByUnicodeWhitespaceStillCompiles) {
+    ScriptEngine engine;
+    const auto   result = EvaluateScalar(engine,
+                                       "// values we export\n"
+                                       "var scale = 2;\n"
+                                       "export\u00a0var\u00a0factor = 3;\n"
+                                       "var unused = 0; export\u00a0function\u00a0update (value) {\n"
+                                       "  return factor * 7 * scale;\n"
+                                       "}\n");
+    EXPECT_FLOAT_EQ(result.getFloat(), 42.0f);
+}
+
+// A property script that also listens for scene events is run as a property
+// only when it declares `update`. The declaration has to be found whatever the
+// author put between the tokens: missed, the script runs as a scene script and
+// the property never moves.
+TEST(ScriptRuntimeCompat, AnUpdateSeparatedByUnicodeWhitespaceStillDrivesItsProperty) {
+    auto runtime = CreateSceneRuntimeContext(SceneRuntimeBootstrap {});
+    auto value   = ResolveFloatSetting(
+        *runtime,
+        { { "value", 1.0f },
+          { "script", "engine.on('resizeScreen', function() {});\n"
+                      "export\u00a0function\u00a0update(value) {\n"
+                      "  return 5;\n"
+                      "}\n" } });
+    ASSERT_NE(value, nullptr);
+    runtime->Tick(1.0 / 60.0);
+    EXPECT_FLOAT_EQ(value->getFloat(), 5.0f);
+}
+
+// The rarer separators are matched here, where no JavaScript is compiled.
+TEST(ScriptModuleSyntax, AnExportedFunctionIsFoundAcrossEverySeparatorAndNowhereElse) {
+    EXPECT_TRUE(ExportsFunction("export function update(value) {}", "update"));
+    // U+FEFF is whitespace to JavaScript but not Unicode White_Space.
+    EXPECT_TRUE(ExportsFunction("export\ufefffunction\u3000update (value) {}", "update"));
+    EXPECT_TRUE(ExportsFunction("export\n  function\tupdate\u00a0(value) {}", "update"));
+    // Wherever a statement can start.
+    EXPECT_TRUE(ExportsFunction("var a = 1;export function update(value) {}", "update"));
+    EXPECT_TRUE(ExportsFunction("function a() {}export function update(value) {}", "update"));
+    EXPECT_TRUE(ExportsFunction("var a = 1;\u3000export function update(value) {}", "update"));
+    EXPECT_FALSE(ExportsFunction("reexport function update(value) {}", "update"));
+    EXPECT_FALSE(ExportsFunction("module.export function update(value) {}", "update"));
+    EXPECT_FALSE(ExportsFunction("export function updateAll(value) {}", "update"));
+    EXPECT_FALSE(ExportsFunction("export functionupdate(value) {}", "update"));
+    EXPECT_FALSE(ExportsFunction("exportfunction update(value) {}", "update"));
+    EXPECT_FALSE(ExportsFunction("function update(value) {}", "update"));
 }
 
 TEST(ScriptRuntimeCompat, Vec3SupportsCopyAndScalarSplat) {
@@ -2257,11 +2331,12 @@ TEST(ShaderValueUpdaterCompat, SlotUniformsUpdateWhenSlotZeroMaterialIsMissing) 
     scene.activeCamera = nullptr;
 }
 
-// Camera parallax moves a layer by where it sits in the scene. A layer inside a
-// group has a parent-relative origin; offsetting it by that local number pushed
-// a full-screen child of a centred group by tens of pixels and uncovered the
-// layers beneath it along two canvas edges.
-TEST(ShaderValueUpdaterCompat, CameraParallaxPlacesAChildLayerByItsScenePosition) {
+// Camera parallax moves a layer by the cursor and the layer's depth alone. With
+// the cursor centred every layer rests where it was authored; offsetting a deep
+// layer by its distance from the camera as well pushed a planet near the top of
+// a 4K canvas out of the frame. Away from the centre, layers of one depth move
+// together wherever they sit, nested in a group or not, and depth scales it.
+TEST(ShaderValueUpdaterCompat, CameraParallaxFollowsTheCursorAndDepthNotThePosition) {
     Scene scene;
     scene.ortho[0] = 3840;
     scene.ortho[1] = 2160;
@@ -2279,47 +2354,102 @@ TEST(ShaderValueUpdaterCompat, CameraParallaxPlacesAChildLayerByItsScenePosition
         return node;
     };
     WPShaderValueUpdater updater(&scene);
-    updater.SetCameraParallax({ .enable = true, .amount = 0.15f, .delay = 2.0f,
-                                .mouseinfluence = 0.3f });
-    WPShaderValueData depth;
-    depth.parallaxDepth = { -0.24f, -0.24f };
-    const auto model_matrix = [&](SceneNode& node) {
-        updater.SetNodeData(&node, depth);
+    updater.SetCameraParallax({ .enable = true, .amount = 0.5f, .delay = 0.5f,
+                                .mouseinfluence = 0.5f });
+    // How far the drawn layer sits from where its node places it.
+    const auto displacement = [&](SceneNode& node, float depth) {
+        WPShaderValueData data;
+        data.parallaxDepth = { depth, depth };
+        updater.SetNodeData(&node, data);
         updater.InitUniforms(&node, [](std::string_view name) { return name == "g_ModelMatrix"; });
         sprite_map_t sprites;
         ShaderValue  value;
         updater.UpdateUniforms(&node, sprites, [&](std::string_view name, const ShaderValue& v) {
             if (name == "g_ModelMatrix") value = v;
         });
-        return value;
-    };
-    const auto expect_equal = [](const ShaderValue& actual, const ShaderValue& expected) {
-        ASSERT_EQ(actual.size(), expected.size());
-        for (std::size_t i = 0; i < actual.size(); ++i) EXPECT_NEAR(actual[i], expected[i], 1e-3);
+        node.UpdateTrans();
+        const auto model = node.ModelTrans();
+        return Eigen::Vector2f(value[12] - static_cast<float>(model(0, 3)),
+                               value[13] - static_cast<float>(model(1, 3)));
     };
 
-    // Centred on the camera with the cursor centred: nothing to offset.
-    auto centred_group = std::make_shared<SceneNode>();
-    centred_group->SetTranslate(Eigen::Vector3f(1920, 1080, 0));
-    auto centred_child = layer();
-    centred_group->AppendChild(centred_child);
-    centred_child->UpdateTrans();
-    expect_equal(model_matrix(*centred_child), ShaderValue::fromMatrix(centred_child->ModelTrans()));
-
-    // Off-centre, a nested layer moves exactly as a top-level layer at the
-    // same scene position does.
+    auto planet = layer();
+    planet->SetTranslate(Eigen::Vector3f(1907, 2647, 0));
     auto group = std::make_shared<SceneNode>();
     group->SetTranslate(Eigen::Vector3f(1000, 500, 0));
     auto nested = layer();
     nested->SetTranslate(Eigen::Vector3f(500, 200, 0));
     group->AppendChild(nested);
-    auto top_level = layer();
-    top_level->SetTranslate(Eigen::Vector3f(1500, 700, 0));
-    const auto nested_matrix = model_matrix(*nested);
-    expect_equal(nested_matrix, model_matrix(*top_level));
-    top_level->UpdateTrans();
-    EXPECT_GT(std::abs(nested_matrix[12] - static_cast<float>(top_level->ModelTrans()(0, 3))), 1.0f)
-        << "an off-centre layer must still be displaced by parallax";
+    auto centred = layer();
+    centred->SetTranslate(Eigen::Vector3f(1920, 1080, 0));
+
+    EXPECT_LT(displacement(*planet, 0.5f).norm(), 1e-3f) << "an off-centre layer left its place";
+    EXPECT_LT(displacement(*nested, 0.5f).norm(), 1e-3f) << "a nested layer left its place";
+
+    updater.MouseInput(1.0, 0.0);
+    scene.frameTime = 0.5; // the whole delay: the smoothed cursor has arrived
+    updater.FrameBegin();
+    const Eigen::Vector2f moved = displacement(*centred, 0.5f);
+    EXPECT_GT(moved.norm(), 1.0f) << "a cursor away from the centre must move the layer";
+    EXPECT_LT((displacement(*planet, 0.5f) - moved).norm(), 1e-3f);
+    EXPECT_LT((displacement(*nested, 0.5f) - moved).norm(), 1e-3f);
+    EXPECT_LT((displacement(*centred, 1.0f) - 2.0f * moved).norm(), 1e-3f);
+    EXPECT_LT(displacement(*centred, 0.0f).norm(), 1e-3f) << "depth zero stays put";
+}
+
+// Camera parallax moves a layer through its model matrix, which neither the
+// uniforms its shader declares nor the node transform the static cache hashes
+// reveal. Such a pass has to be reported as following the cursor, or it is
+// reused while the cursor moves and a still scene never wakes for it. The
+// camera the pass draws through decides: the effect camera and a layer-local
+// one, which draws a layer into a composite another layer samples, move nothing.
+TEST(ShaderValueUpdaterCompat, ParallaxLayersAreReportedAsFollowingTheCursor) {
+    Scene scene;
+    scene.ortho[0] = 1920;
+    scene.ortho[1] = 1080;
+    auto camera        = std::make_shared<SceneCamera>(1920, 1080, -1.0f, 1.0f);
+    scene.activeCamera = camera.get();
+    scene.cameras["effect"] = std::make_shared<SceneCamera>(64, 32, -1.0f, 1.0f);
+    auto composite = std::make_shared<SceneCamera>(64, 32, -1.0f, 1.0f);
+    composite->SetLayerLocal(true);
+    scene.cameras["composite"] = composite;
+    WPShaderValueUpdater updater(&scene);
+    updater.SetCameraParallax({ .enable = true, .amount = 0.5f, .delay = 0.5f,
+                                .mouseinfluence = 0.5f });
+
+    std::vector<std::shared_ptr<SceneNode>> nodes;
+    const auto layer = [&](float depth, const char* camera_name) {
+        auto node = std::make_shared<SceneNode>();
+        auto mesh = std::make_shared<SceneMesh>();
+        mesh->AddMaterial(SceneMaterial {});
+        node->AddMesh(mesh);
+        node->SetCamera(camera_name);
+        WPShaderValueData data;
+        data.parallaxDepth = { depth, depth };
+        updater.SetNodeData(node.get(), data);
+        updater.InitUniforms(node.get(), [](std::string_view name) {
+            return name == "g_ModelViewProjectionMatrix";
+        });
+        nodes.push_back(node);
+        return node.get();
+    };
+    const auto follows_cursor = [&](SceneNode* node, const std::string& camera_override) {
+        return (updater.FrameVaryingUniforms(node, 0, camera_override) &
+                frame_varying_uniform::kParallax) != 0;
+    };
+
+    auto* deep   = layer(0.5f, "");
+    auto* flat   = layer(0.0f, "");
+    auto* effect = layer(0.5f, "effect");
+    EXPECT_TRUE(follows_cursor(deep, ""));
+    EXPECT_FALSE(follows_cursor(flat, "")) << "depth zero never moves";
+    EXPECT_FALSE(follows_cursor(effect, "")) << "effect passes draw through the effect camera";
+    EXPECT_FALSE(follows_cursor(deep, "composite"))
+        << "drawn into its composite through a layer-local camera, the layer does not move";
+
+    updater.SetCameraParallax({ .enable = true, .amount = 0.5f, .delay = 0.5f,
+                                .mouseinfluence = 0.0f });
+    EXPECT_FALSE(follows_cursor(deep, "")) << "without mouse influence the cursor moves nothing";
 }
 
 TEST(ShaderValueUpdaterCompat, SlotRenderTargetUniformsUseSlotShaderValueData) {

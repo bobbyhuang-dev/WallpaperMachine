@@ -533,6 +533,11 @@ void SceneRuntimeContext::Tick(double frame_time) {
         if (script.script != nullptr) script.script->Tick(*m_host_context);
     }
     ApplySceneZoomAnimation();
+    // After every visibility and origin writer of this tick, scripts included,
+    // so the shot shown is the one this tick left visible, at the origin this
+    // tick gave it.
+    for (auto& shot : m_camera_shots) shot.origin_pending = false;
+    ApplyCameraShots();
     for (auto& binding : m_material_alpha) {
         auto material = binding.material.lock();
         if (material == nullptr) continue;
@@ -1245,10 +1250,65 @@ void SceneRuntimeContext::ApplySceneZoomAnimation() {
     auto& perspective = *m_scene->cameras.at("global_perspective");
     perspective.SetAspect(camera.Aspect());
     if (! perspective.FovLocked()) {
-        perspective.SetFov(algorism::CalculatePersperctiveFov(1000.0, camera.Height()));
+        perspective.SetFov(algorism::CalculatePersperctiveFov(1000.0, camera.VisibleHeight()));
     }
     perspective.Update();
     m_scene->UpdateLinkedCamera("global");
+}
+
+void SceneRuntimeContext::RegisterCameraShot(SceneNode* node, std::unique_ptr<DynamicValue> zoom,
+                                             CameraShotTimeline timeline, bool origin_bound) {
+    if (node == nullptr || zoom == nullptr) return;
+    auto* raw = zoom.get();
+    m_owned_values.push_back(std::move(zoom));
+    m_camera_shots.push_back(CameraShotBinding {
+        .node           = node,
+        .zoom           = raw,
+        .timeline       = std::move(timeline),
+        .origin_pending = origin_bound,
+    });
+    ApplyCameraShots();
+}
+
+void SceneRuntimeContext::ApplyCameraShots() {
+    if (m_scene == nullptr || m_camera_shots.empty()) return;
+
+    double          zoom   = 1.0;
+    Eigen::Vector2f offset = Eigen::Vector2f::Zero();
+    for (auto& shot : m_camera_shots) {
+        const auto& timeline = shot.timeline;
+        const auto  sample   = [&timeline](const ScalarAnimation& curve) {
+            const double frame = timeline.clock->frame;
+            return curve.Evaluate(curve.fps > 0.0 ? frame / curve.fps : 0.0);
+        };
+        // The timeline moves the layer whether or not it is the shot shown, so
+        // a shot revealed later picks up where its playhead stands, and a
+        // script reading the layer's origin sees where the view is going.
+        if (timeline.clock != nullptr &&
+            std::any_of(timeline.origin.begin(), timeline.origin.end(),
+                        [](const auto& curve) { return curve.has_value(); })) {
+            Eigen::Vector3f origin = timeline.origin_base;
+            for (std::size_t index = 0; index < timeline.origin.size(); ++index) {
+                const auto& curve = timeline.origin[index];
+                if (! curve.has_value()) continue;
+                origin[index] = (timeline.origin_relative ? timeline.origin_base[index] : 0.0f) +
+                                sample(*curve);
+            }
+            shot.node->SetTranslate(origin);
+        }
+        if (! shot.node->EffectiveVisible()) continue;
+        zoom = timeline.clock != nullptr && timeline.zoom.has_value() ? sample(*timeline.zoom)
+                                                                      : shot.zoom->getFloat();
+        offset = shot.origin_pending ? Eigen::Vector2f(Eigen::Vector2f::Zero())
+                                     : Eigen::Vector2f(shot.node->Translate().head<2>());
+    }
+
+    if (m_framed_camera_shot.has_value() && m_framed_camera_shot->first == zoom &&
+        m_framed_camera_shot->second == offset) {
+        return;
+    }
+    m_framed_camera_shot = std::make_pair(zoom, offset);
+    m_scene->FrameCanvas(zoom, offset);
 }
 
 void SceneRuntimeContext::RegisterSceneClearColor(std::unique_ptr<DynamicValue> value) {
@@ -1395,8 +1455,24 @@ uint32_t SceneRuntimeContext::DescribeTimeAdvancingWork() const {
         break;
     }
 
-    if (! m_scalar_animations.empty() || m_scene_zoom_animation != nullptr ||
-        ! m_material_alpha.empty()) {
+    // A playback that has stopped -- a single-play timeline past its end, one
+    // that starts paused, one a script paused -- holds its value:
+    // `ScalarAnimationPlayback::Advance` does nothing until something plays it
+    // again, and only a script command does (`play`, `setFrame`), which keeps
+    // its own reason. Counting every registered playback kept a scene whose
+    // only motion was a camera intro awake for good after the intro ended.
+    const auto advances = [](const std::shared_ptr<ScalarAnimationPlayback>& playback) {
+        return playback != nullptr && playback->playing && playback->rate != 0.0;
+    };
+    if (std::any_of(m_scalar_animations.begin(), m_scalar_animations.end(),
+                    [&advances](const ScalarAnimationBinding& binding) {
+                        return advances(binding.playback);
+                    }) ||
+        advances(m_scene_zoom_animation) ||
+        std::any_of(m_material_alpha.begin(), m_material_alpha.end(),
+                    [&advances](const MaterialAlphaBinding& binding) {
+                        return advances(binding.animation);
+                    })) {
         reasons |= SceneDemandReason::Animation;
     }
 

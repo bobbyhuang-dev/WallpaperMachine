@@ -661,7 +661,7 @@ int main() {
                 for (std::size_t i = 0; i < passes.size(); ++i) {
                     auto* custom = dynamic_cast<CustomShaderPass*>(passes[i]);
                     static_samples[i] = custom != nullptr
-                                            ? custom->frameSample()
+                                            ? custom->frameSample(*scene)
                                             : StaticPassSample { .hash = 0, .visible = true };
                 }
                 static_cache.Plan(static_samples, static_skip);

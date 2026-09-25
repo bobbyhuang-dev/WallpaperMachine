@@ -1431,7 +1431,7 @@ void VulkanRender::Impl::planStaticSkips(Scene& scene) {
             m_static_samples[i] = StaticPassSample { .hash = 0, .visible = true };
             continue;
         }
-        m_static_samples[i] = custom->frameSample();
+        m_static_samples[i] = custom->frameSample(scene);
     }
 
     // Into the member the frame already owns. A fresh vector here was a heap

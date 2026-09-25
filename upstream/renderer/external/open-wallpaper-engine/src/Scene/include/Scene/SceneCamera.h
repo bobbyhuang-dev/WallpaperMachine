@@ -65,6 +65,12 @@ public:
     auto& GetImgEffect() { return m_imgEffect; }
     void  SetComposeLayer(bool compose) { m_isComposeLayer = compose; }
     bool  IsComposeLayer() const { return m_isComposeLayer; }
+    /// A camera that frames one layer's card in that layer's own texture space:
+    /// the card fills the target and nothing about where the layer sits in the
+    /// scene -- its transform, the scene camera, parallax -- reaches the image.
+    /// This is what another layer samples as `_rt_imageLayerComposite_<id>`.
+    void  SetLayerLocal(bool layer_local) { m_layerLocal = layer_local; }
+    bool  IsLayerLocal() const { return m_layerLocal; }
 
     Eigen::Vector3d GetPosition() const;
     Eigen::Vector3d GetDirection() const;
@@ -100,6 +106,7 @@ public:
         m_fovLocked   = cam.m_fovLocked;
         m_zoom        = cam.m_zoom;
         m_isComposeLayer = cam.m_isComposeLayer;
+        m_layerLocal     = cam.m_layerLocal;
     }
 
 private:
@@ -126,6 +133,7 @@ private:
     std::shared_ptr<SceneNode>             m_node;
     std::shared_ptr<SceneImageEffectLayer> m_imgEffect { nullptr };
     bool                                   m_isComposeLayer { false };
+    bool                                   m_layerLocal { false };
 };
 
 /// Intersects the camera ray through NDC `(ndc_x, ndc_y)` with `node`'s local

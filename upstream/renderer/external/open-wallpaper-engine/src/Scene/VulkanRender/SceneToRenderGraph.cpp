@@ -420,8 +420,17 @@ static void ToGraphPass(
             draw_output != SpecTex_Default &&
             (resolved_final ||
              sstart_with(draw_output, WE_IMAGE_LAYER_COMPOSITE_PREFIX));
+        // Drawn into its own composite, a referenced layer is its card in its
+        // own texture space, which is what another layer samples; drawn on
+        // screen, it is wherever the scene puts it.
+        std::string composite_camera = camera_override;
+        if (draw_output != output) {
+            auto key = LayerCompositeCameraKey(imgId);
+            if (scene.cameras.contains(key)) composite_camera = std::move(key);
+        }
         const auto& submeshes = mesh->Submeshes();
-        auto add_draws = [&](const std::string& target, bool register_base, bool capture) {
+        auto add_draws = [&](const std::string& target, const std::string& camera,
+                             bool register_base, bool capture) {
             if (submeshes.size() > 1) {
                 for (std::size_t submesh_index = 0; submesh_index < submeshes.size(); ++submesh_index) {
                     const auto material_slot = submeshes[submesh_index].material_slot;
@@ -438,7 +447,7 @@ static void ToGraphPass(
                         target,
                         submeshes[submesh_index].output_override,
                         imgId,
-                        camera_override,
+                        camera,
                         submesh_index,
                         material_slot,
                         register_base,
@@ -458,7 +467,7 @@ static void ToGraphPass(
                         target,
                         {},
                         imgId,
-                        camera_override,
+                        camera,
                         0,
                         0,
                         register_base,
@@ -466,11 +475,11 @@ static void ToGraphPass(
                 }
             }
         };
-        add_draws(draw_output, imgeff != nullptr, capture_link);
+        add_draws(draw_output, composite_camera, imgeff != nullptr, capture_link);
         if (draw_output != output && output == SpecTex_Default) {
             auto* vis = visibility_node != nullptr ? visibility_node : node;
             if (vis == nullptr || vis->EffectiveVisible()) {
-                add_draws(output, false, false);
+                add_draws(output, camera_override, false, false);
             }
         }
     }

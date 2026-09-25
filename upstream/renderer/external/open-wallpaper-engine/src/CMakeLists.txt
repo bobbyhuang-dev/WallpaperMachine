@@ -80,6 +80,7 @@ add_library(
   Text/SystemFontResolver.cpp
   Text/TextLayer.cpp
   Scripting/ScriptEngine.cpp
+  Scripting/ScriptModuleSyntax.cpp
   Scene/Parse/wpscene/WPImageObject.cpp
   Scene/Parse/wpscene/WPParticleObject.cpp
   Scene/Parse/wpscene/WPMaterial.cpp

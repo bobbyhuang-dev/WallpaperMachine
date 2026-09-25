@@ -78,6 +78,9 @@ struct WPCameraParallax {
     float amount;
     float delay;
     float mouseinfluence;
+    /// The scene is projected by its authored canvas (`orthogonalprojection`),
+    /// the 2D case Wallpaper Engine's documentation of parallax describes.
+    bool canvas_scene { true };
 };
 
 class WPShaderValueUpdater : public IShaderValueUpdater {
@@ -93,7 +96,8 @@ public:
     void UpdateUniforms(SceneNode*, uint32_t material_slot, sprite_map_t&,
                         const UpdateUniformOp&) override;
     void FrameEnd() override;
-    uint32_t FrameVaryingUniforms(SceneNode*, uint32_t material_slot) const override;
+    uint32_t FrameVaryingUniforms(SceneNode*, uint32_t material_slot,
+                                  const std::string& camera_override) const override;
     void MouseInput(double, double) override;
     void SetTexelSize(float x, float y) override;
 

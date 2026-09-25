@@ -17,7 +17,7 @@ pub struct SceneDemandReasons(u32);
 impl SceneDemandReasons {
     /// A SceneScript or scripted property value runs every tick.
     pub const SCRIPT: Self = Self(1 << 0);
-    /// A scalar, zoom or material-alpha animation is registered.
+    /// A scalar, zoom or material-alpha animation is playing.
     pub const ANIMATION: Self = Self(1 << 1);
     /// A particle emitter exists.
     pub const PARTICLES: Self = Self(1 << 2);

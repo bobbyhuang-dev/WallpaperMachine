@@ -143,6 +143,20 @@ and render dimensions and discovers text nodes instead of using fixed layer IDs.
 It tests scene rendering only — not video or web projects, and not AppKit
 presentation.
 
+The probe keeps two clocks, and a frame's time is not `N * WE_TEST_FRAME_STEP`.
+The runtime clock (timelines, camera shots, scripts) takes 40 warm-up ticks of
+1/60 s before frame 0, then one `Tick(step)` before each frame, so frame N is at
+about `0.667 + (N + 1) * step` seconds. The scene clock (`elapsingTime`: puppet
+poses, shader `g_Time`, effects such as Earth's spin) skips the warm-up and
+advances `step` after each frame, so frame N draws at `N * step`.
+`metal_scene_draw_smoke` ticks and advances both clocks by 1/60 s for 120 frames
+and writes the last frame at 119/60 s on both. Comparing the two harnesses, or
+one render with a crop of another, therefore needs matched scene time: the Vulkan
+run with `WE_TEST_FRAMES=4` and `WE_TEST_FRAME_STEP=0.6611111` (119/180) draws
+frame 3 at the Metal frame's scene time. A puppet posed at a different scene time
+reads as a camera or backend fault, and more than once did so here. Seed both
+with the same `WE_TEST_RANDOM_SEED`.
+
 `scene_reload_cycle_probe` parses every selected project twice in one process,
 each parse on a fresh thread with fresh VFS mounts, the way a wallpaper switch
 builds a new `SceneWallpaper`. It catches per-process state that survives a
@@ -160,12 +174,13 @@ executable directly from the renderer check build directory.
 | Area | Coverage |
 | --- | --- |
 | Camera zoom | `scene_schema_tests --gtest_filter='SceneSchema.*CameraZoom*'`. Scene `general.zoom` may contain an authored scalar animation, not just a fixed camera scale. |
-| Camera layers in 2D scenes | `SceneSchema.CameraObjectKeepsAnOrthographicSceneOnItsCanvas` next to `SceneSchema.DefaultCameraObjectBecomesActivePerspective` in `scene_schema_tests`. A scene with `orthogonalprojection` is projected by that canvas; a `camera` layer in one must not become the active perspective camera (see below). |
-| Camera-object zoom in 2D scenes | `SceneSchema.CameraObjectZoomTightensTheOrthographicFrustum` and `.CameraObjectZoomThatIsNotPositiveFramesTheWholeCanvas` in `scene_schema_tests`, plus `MouseInput.HitTestingFollowsACameraObjectZoomAcrossAResize` in `mouse_input_test`. A shot that does not own the projection still frames it: `zoom` is applied when the ortho projection is built, not by writing camera width and height, because `ApplyCameraFillMode` rewrites those from the authored canvas on every output resize. Pointer mapping reads `SceneCamera::VisibleWidth/VisibleHeight`, the same extent the projection uses — passing `Width()`/`Height()` leaves clicks and mouse-linked particles on the unzoomed image, right at the centre and wrong everywhere else. The authored extent the render targets are sized from must not move with it. |
-| Camera parallax for nested layers | `ShaderValueUpdaterCompat.CameraParallaxPlacesAChildLayerByItsScenePosition` in `script_runtime_compat_test`. Parallax offsets a layer by its scene position, taken from the matrix it is drawn with, not by `Translate()`: a child's origin is relative to its group, so a full-screen child of a centred group would move as if it sat in the canvas corner and uncover the layers beneath it along two edges. A layer drawn through an effect chain reaches the offset on its final node, whose render matrix is the source layer's world matrix. |
+| Camera layers in 2D scenes | `SceneSchema.CameraObjectKeepsAnOrthographicSceneOnItsCanvas` next to `SceneSchema.DefaultCameraObjectBecomesActivePerspective`, plus `SceneSchema.CameraObjectTimelineGlidesFromItsFirstShotToWhereItRests`, `.TheLastVisibleCameraObjectFramesTheCanvas` and `.AScriptedShotOriginFramesTheViewOnceATickHasAppliedIt`, in `scene_schema_tests`. A scene with `orthogonalprojection` is projected by that canvas; a `camera` layer in one must not become the active perspective camera, but it does frame the canvas. Its zoom narrows the view, its origin moves the view centre away from the canvas centre, a timeline plays both on one clock, and the last visible shot wins. The perspective camera follows it. A single-play timeline that has ended no longer asks for frames, and a script-bound origin frames the view only once a tick has applied it (see below). |
+| Camera-object zoom in 2D scenes | `SceneSchema.CameraObjectZoomTightensTheOrthographicFrustum` and `.CameraObjectZoomThatIsNotPositiveFramesTheWholeCanvas` in `scene_schema_tests`, plus `MouseInput.HitTestingFollowsACameraObjectZoomAcrossAResize` in `mouse_input_test`. A shot that does not own the projection still frames it: `zoom` is applied when the ortho projection is built, not by writing camera width and height, because `ApplyCameraFillMode` rewrites those from the authored canvas whenever a fill mode is applied. Production applies one only after a `PROPERTY_FILLMODE` message, and the app sends none today; `metal_scene_draw_smoke` is the only caller. Pointer mapping reads `SceneCamera::VisibleWidth/VisibleHeight`, the same extent the projection uses — passing `Width()`/`Height()` leaves clicks and mouse-linked particles on the unzoomed image, right at the centre and wrong everywhere else. The authored extent the render targets are sized from must not move with it. |
+| Camera parallax | `ShaderValueUpdaterCompat.CameraParallaxFollowsTheCursorAndDepthNotThePosition` and `.ParallaxLayersAreReportedAsFollowingTheCursor` in `script_runtime_compat_test`, and `SceneSchema.ParserCopiesImageParallaxDepthToPuppetMaterialSlots` in `scene_schema_tests`. In a 2D scene parallax moves a layer by the cursor's offset from the view centre times the layer's `parallaxDepth`, scaled by `cameraparallaxamount` and `cameraparallaxmouseinfluence`. Where the layer sits, nested in a group or not, plays no part, so with the cursor centred every layer rests where it was authored. Adding the layer's distance from the camera, as an earlier revision did, pushed a depth-0.5 planet near the top of a 4K canvas out of the frame (Workshop 3521337568). 3D scenes keep that distance term, since no 3D parallax scene has been checked. A pass parallax moves is reported as following the cursor (`kParallax`), judged for the camera the pass draws through: static reuse redraws its target, and an on-demand scene wakes for the pointer. A layer drawn into a composite through its layer-local camera is not moved, so that composite stays reusable (`LayerTextureReference.AReferencedLayerIsItsCardWhereverTheSceneShowsIt`). What that costs, and the easing on-demand rendering misses, are under Known limitations. |
 | User-chosen scene textures | `MediaThumbnailTextureSmoke.TextureProperty*`, `.UnsetTexturePropertyKeepsTheAuthoredTexture` and `.AnUnreadableUserFileKeepsTheAuthoredTexture` in `media_thumbnail_texture_smoke`; `TexSchema.AbsolutePath*`, `.PackagedLooseImageStillLoadsFromTheMount` and `.OnlyAReadableHostPictureCountsAsOne` in `tex_schema_tests`. A `usertextures` entry is either a cover slot the runtime supplies or the name of a `scenetexture` property. The property stores a path, not a copy, so a slot is only replaced when that file opens now; unset, moved and unreadable all keep the authored texture. Origin travels on `LooseAssetCandidate`, never re-derived from the path: a mounted `/assets/materials/foo.png` is absolute too, and deciding by `is_absolute()` sends every packaged loose picture and video to the host filesystem, where none of them exist. |
 | Layer parents and scripted alpha | `ScriptRuntimeCompat.LayerGetParent*` and `.LayerAlpha*` in `script_runtime_compat_test`. `getParent()` is how an icon script reads its group; without it the whole `update` throws once a frame. `layer.alpha` has to reach `g_UserAlpha`, and only for layers whose authored alpha is not already owned by a timeline, an update script or a user property — two writers per frame fight. |
 | Callback-only property scripts | `*CallbackOnly*` in `scene_schema_tests` and `script_runtime_compat_test` |
+| Module syntax in scene scripts | `ScriptRuntimeCompat.ExportFollowedByUnicodeWhitespaceStillCompiles`, `.AnUpdateSeparatedByUnicodeWhitespaceStillDrivesItsProperty` and `ScriptModuleSyntax.*` in `script_runtime_compat_test`. `Scripting/ScriptModuleSyntax` is the one matcher for `export` and `export function update`: ECMAScript whitespace between the tokens counts, including the U+00A0 that text pasted from a rich-text editor carries and U+FEFF, which is not Unicode White_Space, and only where a statement can start, so `reexport` and `module.export` are not the keyword. Only the pure `ScriptModuleSyntax` test uses the rarer separators; the two that compile JavaScript through the linked QuickJS use U+00A0. The module rewrite and both update detections (`HasUpdateScript` in the parser, `wrap_script_if_needed` in the resolver) use it. The rewrite erases only the keyword, so a comment ending in the word keeps its line break. |
 | Property-script feedback / hover easing | `ScriptRuntimeCompat.HoverScaleInterpolatesAcrossFramesAndReversesWithoutSnapping` and `ScriptRuntimeCompat.PropertyFeedbackResumesFromExplicitUserValueChanges` in `script_runtime_compat_test` |
 | Script-driven layer visibility | `SceneSchema.HiddenByDefaultVisibilityScriptDrivesVisibilityAndOrigin` in `scene_schema_tests`. The authored `visible.value` is the script's initial value, never a permission to run it (see below). |
 | Alignment anchors under dynamic transforms | `SceneSchema.ImageAlignmentAnchorSurvivesScriptedOriginAndScale` in `scene_schema_tests`, plus `nodes.txt` translate diffs from `offscreen_scene_probe` |
@@ -196,7 +211,8 @@ executable directly from the renderer check build directory.
 | Per-frame geometry upload | `MetalSceneDraw.GeometryRebuiltEveryFrameIsUploadedAndDrawnFromItsOwnSlot`, across more frames than there are in-flight slots. Zero live particles must draw nothing rather than fail. |
 | Native backend admission | `metal_backend_test`: every refused construct keeps its own distinct reason; plain sheets, sprite particles, sprite trails, thin and thick ropes, rope trails and a skinned mesh under a `g_Bones` shader are accepted by their actual layout; a sprite trail without velocity, a rope-marked sprite layout, a thin rope trail, a skinning shader on a mesh without bone weights and a bone stride that cannot hold a 4x4 matrix are refused; a puppet under an effect chain is judged by the chain's final mesh, and only on the chain's last node. An unused perspective camera does not reject; a supported layer that names a perspective camera, or an active perspective camera with supported layers, is accepted. |
 | Perspective cameras on Metal | `MetalProjection.PerspectiveUsesFovAspectNearFarAndAHomogeneousDivide`, `.UnprojectingNdcHitsTheLayerPlane`, `.CameraAxesFollowTheAttachedNode` in `metal_backend_test`; `MetalSceneDraw.APerspectiveCameraDrawsThroughTheAuthoredShader` in `metal_scene_draw_smoke`. Projection is the scene camera's own FOV/aspect/near/far, not an orthographic scale; a rotated card must foreshorten. |
-| Layer as texture | `layer_texture_reference_test` (CPU, in the gate): `_rt_imageLayerComposite_<id>[_a|_b]` forward refs, duplicate names, missing targets, cycles, history `_b`, file names vs layer names, invisible sources kept, producer-before-consumer graph order, and an effect-chain source linking from its composite rather than `_rt_default`. |
+| Layer as texture | `layer_texture_reference_test` (CPU, in the gate): `_rt_imageLayerComposite_<id>[_a|_b]` forward refs, duplicate names, missing targets, cycles, history `_b`, file names vs layer names, invisible sources kept, producer-before-consumer graph order, and an effect-chain source linking from its composite rather than `_rt_default`. A composite is the source layer's card in its own texture space, whatever its placement, the scene camera or parallax do (`AReferencedLayerIsItsCardWhereverTheSceneShowsIt`). A compose layer's camera is not layer-local: its children keep their place inside it (`ComposeChildrenKeepTheirPlaceInsideTheLayer`), and a `composelayer` drawn into its own composite still samples the screen behind it (`ScriptRuntimeCompat.ComposeBackgroundUsesScreenCameraAndParentTransform`). A linked composite's size is never folded into the material as a zero at parse time: the card padding divided by it and every texture coordinate of the consumer's card became `NaN`. Nothing stale is folded in its place either, so the shader reads the target's real size whichever the backend uploads last, constants or live values (`AReferencedCompositeIsSampledAtItsRealSize` checks both orders). |
+| Camera framing of fullscreen layers and reuse | `CameraFraming.AFullscreenLayerCoversTheScreenWhateverTheShot` and `.MovingTheCameraChangesTheStaticSampleOfAPassItDraws` in `layer_texture_reference_test`. In a 2D scene a fullscreen layer's last pass is drawn through the `fullscreen` camera, which always frames the canvas, so a zoomed shot does not shrink a post-process to a window on the screen. A 3D scene keeps its active camera for it: no 3D scene with a fullscreen layer has been checked. Every static pass sample folds in the pass's camera and the active camera through `vulkan::FoldPassCameras`, which both backends call, because a shot moving the view changes no node and rebuilds no graph. |
 | Rope and rope-trail geometry | `particle_rope_geometry_test` (CPU, in the gate): pieces per instance and never across instances, dead particles skipped and neighbours joined, subdivision through the particles, coincident points without `NaN`, the rope-trail head, tail shrink and per-slot separation, and the simulation's history — birth point, growth to capacity, zero time step, respawn reset. Index width: packed 16-bit up to 16 384 quads, 32-bit past that, overflow-safe capacity math, and draw order across instances on a 32-bit mesh. |
 | Skinning on the native backend | `MetalSceneDraw.APuppetIsSkinnedByItsOwnShaderFromThePoseTheRuntimeProduces`: a 64-byte reflected bone stride, the skinned quad translating by the distance its bone did with its width unchanged (what rules out a transposed matrix), the unskinned quad still, no reuse while the pose moves, `pause()` freezing and `play()` resuming. `.TheShippedImageShaderSkinsAPuppetThroughTheNativeBackend` repeats the translation and draw with the author's `genericimage2`, and skips without the shipped shaders. |
 | Trail and rope layouts on the native backend | `MetalSceneDraw.ARopeLayoutMeshReachesTheTarget`, `.ASpriteTrailMeshReachesTheTarget`, and `.TheShippedRopeAndTrailPreviewScenesAreParsedTranslatedAndDrawnNatively`, which runs the editor's own preview projects through the real parser and shaders and skips without the shipped assets. |
@@ -265,17 +281,58 @@ one magnified sliver of a corner, `general.clearcolor` everywhere else. Layers
 with an effect chain render through their own effect camera and were unaffected,
 which is why the symptom reads as "most of the wallpaper is missing" rather than
 as a camera bug. Workshop 3605722997 and 3292361861 are both scenes of that
-shape; their shot layers even disagree about whether the origin is a canvas
-coordinate or an offset from its centre, which is the other reason not to honour
-it.
+shape.
 
 So in an orthographic scene the shot layer is parsed, registered and bound like
 any other node — scripts can still read and move it — but it does not touch
-`scene.cameras` or `scene.activeCamera`. Panning and zooming a 2D scene from a
-shot layer is not implemented; the canvas the wallpaper was authored against is
-what gets projected. Scenes with `orthogonalprojection: null` keep the old
+`scene.activeCamera`. Scenes with `orthogonalprojection: null` keep the old
 behaviour exactly, which is what `SceneSchema.DefaultCameraObjectBecomesActivePerspective`
-holds down next to the new test.
+holds down.
+
+The shot still frames the canvas it does not own. `ParseCameraObj` registers
+every shot with `SceneRuntimeContext::RegisterCameraShot`. At the end of each
+tick, after scripts and every visibility and origin writer,
+`ApplyCameraShots` passes the last visible shot, in authored order, to
+`Scene::FrameCanvas`. Its `zoom` narrows the orthographic view about the view
+centre, and its origin `x`/`y` is that centre's offset from the canvas centre.
+The perspective camera keeps its distance but takes the same centre, and a
+field of view that spans the same visible height, so perspective layers and
+particles are framed the same way. With no visible shot, the whole canvas is
+shown. Nothing is reframed while the zoom and offset stay the same.
+
+The offset reading comes from the wallpapers. In 3605722997 the default shot is
+`0 0 5` at zoom 1 and shows the whole canvas, and the close-up `5.5 344.2` at
+zoom 2.87 frames the character's face; read as a canvas coordinate, both would
+be centred on the bottom-left corner. The custom lens in 3605722997 and the only
+shot in 3292361861 set the origin by script to `slider * engine.canvasSize`, with
+sliders from -1 to 1 that default to 0 (the `scriptproperties` bind `user`
+properties, so 3292361861's in-script default of 0.5 is never read). The default
+is therefore the whole canvas, and a slider pans it. The editor's static `value` next to such
+a script (3292361861's `2434 725`) is never drawn. The shot registers its origin
+as pending until the first tick, and the view stays on the canvas centre until
+then. The app ticks before every draw, and a tick applies scripted origins before
+it frames the view. At defaults 3292361861 frames the same view as before this
+change; 3605722997's preview is a zoomed crop taken with non-default settings,
+so it cannot be matched without guessing the author's property values.
+3521337568's intro keys `zoom` from 3 to 1 and a relative origin from
+`+159.2/+1.6` to `+244.7/−1468.7` on one 12 fps playhead (`options.parent`),
+which ends at offset zero: the whole canvas the wallpaper's preview shows. A
+relative origin curve offsets the authored origin, and zoom and origin keyed
+together share the zoom's clock. The intro's opening framing has no reference;
+only where it ends is checked against the preview. Once a single-play timeline
+has ended it no longer counts as animation demand, so an otherwise still scene
+can go idle after its intro.
+
+Framing the view moves no node and rebuilds no graph, so three things that
+used to depend on the view being the whole canvas no longer do. In a 2D scene a
+fullscreen layer's last pass is drawn through the `fullscreen` camera, which
+always frames the canvas. A layer another layer samples as
+`_rt_imageLayerComposite_<id>` is drawn into that target through a layer-local
+camera (`LayerCompositeCameraKey`) that spans the card and ignores the layer's
+placement, the view and parallax. Compose cameras are not layer-local, because
+a compose layer's children draw through them at their place inside it. The
+static-result cache folds each pass's camera and the active camera into its
+sample (`vulkan::FoldPassCameras`, shared by both backends).
 
 ### Property bindings and alignment anchors
 
@@ -847,10 +904,68 @@ SceneScript views.
   `cutout_vignette` and `effects/refract` were listed here until the shader
   pipeline absorbed the three idioms they relied on; they compile now, and the
   Shader pipeline section above owns that list.
-- `thisLayer.getParent()` is unimplemented in SceneScript. A layer whose script
-  uses it logs `cannot read property … of undefined` once per update and keeps
-  its authored value, so the picture is usually unaffected and the errors are
-  not a regression.
+- **Native admission accepts a scene with a failed effect.** Before
+  `cloudmotion` compiled, `metal_scene_draw_smoke` reported Workshop 3521337568
+  as `Native Metal, 120 frames drawn` while the same run logged `metal
+  translation of 'effects/cloudmotion' failed`: `SelectSceneBackend` does not
+  reject a scene one of whose author effects failed to translate, and the
+  layer is drawn without it. The project rule is that Native Metal must not
+  report success while an effect is skipped. Not fixed here; when reading a
+  local-project Metal run, require zero `metal translation … failed` lines.
+- The `perspective` flag of an image layer is read by no parser
+  (`WPTextObject` and `WPModelObject` read theirs); image layers always draw
+  through the orthographic camera.
+- **Intermittent frame in 3632513108, predating the 2026-09-25 work.** Run with
+  `scripts/check_renderer.py`'s environment (default frames and step), this
+  scene's `frame-2` occasionally comes out as a second image that differs
+  everywhere by at most 12 levels (3,737,738 px at 3840x2160, mean 0.8): no
+  clock, label or single layer. An unmodified HEAD build produced it in one of
+  two pooled runs and in neither isolated run; ten later renders, five per
+  mode, produced none. It has only been confirmed in a pooled run, so
+  allocation reuse is not ruled out. A lone `pixels_equal=false` for this scene
+  is not by itself a new regression: re-run it, and investigate if it repeats.
+- **A target a parallax layer draws into is never reused.** Neither backend's
+  static pass sample (`CustomShaderPass::frameSample`,
+  `MetalRender::Impl::frameSample`) includes the parallax offset
+  `WPShaderValueUpdater::UpdateUniforms` adds to a layer's model matrix, so
+  `FrameVaryingUniforms` reports such a pass as `kParallax`, which becomes
+  `PointerUniform` and keeps the whole target out of the cache
+  (`StaticSubgraphCache::Compile`), whether or not the cursor moves. With
+  on-demand rendering off, a scene whose only motion is parallax redraws its
+  whole frame at the frame cap, as it would with scene optimisation off.
+  Without the report the cache reused those targets while the cursor moved,
+  and parallax stopped following it. Folding the offset itself into the sample
+  would allow reuse while the cursor is still.
+- **On-demand rendering stops parallax partway.** A scene that sleeps wakes
+  for one frame per pointer event (`wakeForPointer`), but nothing asks for
+  frames while the layers are still easing toward the cursor, so after the
+  pointer stops they rest partway and catch up at its next movement.
+  `m_mouseDelayedTime` is no end condition: `SceneWallpaper` calls `MouseInput`
+  every frame, and that subtracts the real frame interval `FrameBegin` has just
+  added as the ideal one, so `cameraparallaxdelay` acts as an exponential time
+  constant and the eased cursor approaches the pointer without reaching it. A
+  demand of `m_mouseDelayedTime < delay` would never clear and would keep the
+  scene awake for good; a correct one needs a threshold on the offset still to
+  travel.
+- **Compatibility uploads parse-time constants over live values.**
+  `CustomShaderPass::prepare` writes a material's `constValues` after the value
+  updater's `UpdateUniforms`; the Metal backend writes them first. Every
+  material's constants carry the parser's scene defaults (`InitContext` fills
+  `global_base_uniforms`: `g_TexelSize` and `g_TexelSizeHalf` for a 1920x1080
+  frame, a zero `g_EyePosition`, fixed view axes), so on Compatibility a shader
+  reads those instead of the updater's live values, including the
+  render-scale-aware texel size `VulkanRender` sets from the raster extent. A
+  link texture's size, unknown at parse time, is not folded, so its live value
+  stands under either order. Reversing the Vulkan order changes every
+  Compatibility wallpaper that reads these uniforms, 3D lighting included, and
+  needs a visual check across the corpus first.
+- **An animated material constant keeps a scene awake after its timeline
+  ends.** `DescribeTimeAdvancingWork` reports `NodeBinding` for every
+  material-constant binding that has an animation, playing or not. The
+  timeline's clock is a registered playback (`RegisterScalarAnimation` in the
+  parser), which the `Animation` reason already counts while it plays, so with
+  on-demand rendering on, a scene whose only motion was such a single-play
+  timeline keeps ticking after it ends.
 - **Perspective models with more than 65535 vertices** are stored with 32-bit
   indices. Reading that blob as uint16 triples rejects the mesh (Saturn's body,
   `3589454154`) or draws scrambled triangles (Live Solar System bodies over

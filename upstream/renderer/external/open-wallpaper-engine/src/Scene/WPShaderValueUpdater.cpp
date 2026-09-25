@@ -51,8 +51,9 @@ void WPShaderValueUpdater::FrameBegin() {
 
 void WPShaderValueUpdater::FrameEnd() {}
 
-uint32_t WPShaderValueUpdater::FrameVaryingUniforms(SceneNode* node,
-                                                    uint32_t    material_slot) const {
+uint32_t WPShaderValueUpdater::FrameVaryingUniforms(SceneNode*          node,
+                                                    uint32_t            material_slot,
+                                                    const std::string& camera_override) const {
     // Reflection captured at InitUniforms is the authority. A node the updater
     // never saw is reported as varying in every way, because absence of a
     // record is not evidence that nothing advances.
@@ -73,6 +74,32 @@ uint32_t WPShaderValueUpdater::FrameVaryingUniforms(SceneNode* node,
         info.has_AudioSpectrum32Left || info.has_AudioSpectrum32Right ||
         info.has_AudioSpectrum64Left || info.has_AudioSpectrum64Right)
         flags |= frame_varying_uniform::kAudio;
+    // Camera parallax moves a layer with the cursor through its model matrix.
+    // No uniform the shader declares reveals that, and the static cache hashes
+    // the node's transform without it: unreported, the pass is reused while the
+    // cursor moves, and a still scene never wakes for the pointer. Decided for
+    // the camera the pass draws through, as UpdateUniforms decides it: the
+    // effect camera and a layer-local one never move a layer, so a composite
+    // another layer samples stays reusable.
+    if (m_parallax.enable && m_parallax.amount != 0.0f && m_parallax.mouseinfluence != 0.0f &&
+        (info.has_M || info.has_MVP || info.has_MI || info.has_MVPI)) {
+        const std::string& cam_name = camera_override.empty() ? node->Camera() : camera_override;
+        const SceneCamera* camera   = m_scene->activeCamera;
+        if (! cam_name.empty()) {
+            const auto found = m_scene->cameras.find(cam_name);
+            camera = found != m_scene->cameras.end() ? found->second.get() : nullptr;
+        }
+        const auto data_slots = m_nodeDataMap.find(node);
+        if (camera != nullptr && cam_name != "effect" && ! camera->IsLayerLocal() &&
+            data_slots != m_nodeDataMap.end()) {
+            auto data = data_slots->second.find(material_slot);
+            if (data == data_slots->second.end()) data = data_slots->second.find(0);
+            if (data != data_slots->second.end() &&
+                (data->second.parallaxDepth[0] != 0.0f || data->second.parallaxDepth[1] != 0.0f)) {
+                flags |= frame_varying_uniform::kParallax;
+            }
+        }
+    }
     return flags;
 }
 
@@ -260,7 +287,13 @@ void WPShaderValueUpdater::UpdateUniforms(SceneNode* pNode, uint32_t material_sl
 
     // composelayer.vert draws a full local target using UVs, but its MVP is
     // used to sample the *screen* behind the layer. The effect camera and
-    // identity render override lose the parent's translation/scale here.
+    // identity render override lose the parent's translation/scale here. That
+    // holds wherever the layer is drawn to, its own composite included: the
+    // screen behind it is what its card holds.
+    // A layer-local camera frames the card in the layer's own texture space,
+    // so where the layer sits in the scene -- transform, scene camera and
+    // parallax alike -- must not reach the image another layer samples.
+    const bool layer_local = camera->IsLayerLocal();
     const bool samples_screen_background = material->name == "composelayer";
     SceneCamera* matrix_camera =
         samples_screen_background && m_scene->activeCamera != nullptr ? m_scene->activeCamera : camera;
@@ -290,24 +323,34 @@ void WPShaderValueUpdater::UpdateUniforms(SceneNode* pNode, uint32_t material_sl
         }
     }
     if (reqM || reqMVP || reqMI || reqMVPI) {
-        Matrix4d modelTrans = samples_screen_background ? pNode->ModelTrans() : pNode->RenderTrans();
-        if (hasNodeData && cam_name != "effect") {
+        Matrix4d modelTrans = samples_screen_background ? pNode->ModelTrans()
+                              : layer_local             ? Matrix4d::Identity()
+                                                        : pNode->RenderTrans();
+        if (hasNodeData && cam_name != "effect" && ! layer_local) {
             if (m_parallax.enable) {
-                // Parallax follows where the layer sits in the scene, not its
-                // parent-relative origin: a child of a centred group has a
-                // local origin near zero and would otherwise be pushed as if it
-                // sat in the canvas corner, uncovering what lies beneath it.
-                const Vector2f nodePos = modelTrans.block<2, 1>(0, 3).cast<float>();
                 Vector2f depth(&nodeData->parallaxDepth[0]);
                 Vector2f ortho { (float)m_scene->ortho[0], (float)m_scene->ortho[1] };
                 // flip mouse y axis
                 Vector2f mouseVec =
                     Scaling(1.0f, -1.0f) * (Vector2f { 0.5f, 0.5f } - Vector2f(&m_mousePos[0]));
-                mouseVec        = mouseVec.cwiseProduct(ortho) * m_parallax.mouseinfluence;
-                Vector3f camPos = camera->GetPosition().cast<float>();
-                Vector2f paraVec =
-                    (nodePos - camPos.head<2>() + mouseVec).cwiseProduct(depth) *
-                    m_parallax.amount;
+                mouseVec = mouseVec.cwiseProduct(ortho) * m_parallax.mouseinfluence;
+                // In a 2D scene parallax moves a layer by the cursor's offset
+                // from the centre of the view, scaled by the layer's depth.
+                // Where the layer sits plays no part: with the cursor centred
+                // every layer rests where it was authored, as Wallpaper
+                // Engine's own previews show. Offsetting by the layer's
+                // distance from the camera as well pushed a deep layer near the
+                // canvas edge -- a planet at the top of a 4K scene -- out of
+                // the frame. A 3D scene keeps that distance term: nothing
+                // checked so far says how its layers move.
+                Vector2f offset = mouseVec;
+                if (! m_parallax.canvas_scene) {
+                    // Where the layer sits in the scene, not its parent-relative
+                    // origin, which is near zero for the child of a centred group.
+                    const Vector2f nodePos = modelTrans.block<2, 1>(0, 3).cast<float>();
+                    offset += nodePos - camera->GetPosition().cast<float>().head<2>();
+                }
+                const Vector2f paraVec = offset.cwiseProduct(depth) * m_parallax.amount;
                 modelTrans =
                     Affine3d(Translation3d(Vector3d(paraVec.x(), paraVec.y(), 0.0f))).matrix() *
                     modelTrans;

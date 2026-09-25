@@ -25,6 +25,7 @@
 #include "Runtime/RuntimeImageSource.hpp"
 #include "Runtime/SceneRuntimeContext.hpp"
 #include "Runtime/SceneSettingResolver.hpp"
+#include "Scripting/ScriptModuleSyntax.hpp"
 #include "Text/SystemFontResolver.hpp"
 #include "Text/TextLayer.hpp"
 #include "wpscene/WPImageObject.h"
@@ -348,8 +349,7 @@ bool HasUpdateScript(const nlohmann::json& value) {
         return false;
     }
 
-    return value.at("script").get<std::string>().find("export function update") !=
-           std::string::npos;
+    return ExportsFunction(value.at("script").get<std::string>(), "update");
 }
 
 bool HasRuntimeTextValueBinding(const nlohmann::json& value) {
@@ -1149,7 +1149,13 @@ void RegisterMaterialTexture(Scene& scene, fs::VFS& vfs, SceneMaterial& material
         return;
     }
 
-    std::array<i32, 4> resolution {};
+    const std::string gResolution = WE_GLTEX_RESOLUTION_NAMES[slot];
+    // Only a size known now is folded in. Another layer's composite is copied
+    // into its link texture while the graph is built, and the value updater
+    // reports that size every frame. A zero folded here is not a size: the
+    // card padding in ParseImageObj divides by it, and so does
+    // `uv * size.z / size.x` in every shader that maps coordinates through it.
+    std::optional<std::array<i32, 4>> resolution;
     if (IsSpecTex(name)) {
         if (IsSpecLinkTex(name)) {
             svData.renderTargets.push_back({ slot, name });
@@ -1192,8 +1198,8 @@ void RegisterMaterialTexture(Scene& scene, fs::VFS& vfs, SceneMaterial& material
                 if (algorism::IsPowOfTwo((u32)texh.width) &&
                     algorism::IsPowOfTwo((u32)texh.height)) {
                     shader_info.combos["SPRITESHEETBLENDNPOT"] = "1";
-                    resolution[2] = resolution[0] - resolution[0] % (int)f1.width;
-                    resolution[3] = resolution[1] - resolution[1] % (int)f1.height;
+                    (*resolution)[2] = (*resolution)[0] - (*resolution)[0] % (int)f1.width;
+                    (*resolution)[3] = (*resolution)[1] - (*resolution)[1] % (int)f1.height;
                 }
                 materialShader.constValues["g_RenderVar1"] = std::array {
                     f1.xAxis[0], f1.yAxis[1], (float)(texh.spriteAnim.numFrames()), f1.rate
@@ -1201,10 +1207,10 @@ void RegisterMaterialTexture(Scene& scene, fs::VFS& vfs, SceneMaterial& material
             }
         }
     }
-    if (! resolution.empty()) {
-        const std::string gResolution = WE_GLTEX_RESOLUTION_NAMES[slot];
-
-        materialShader.constValues[gResolution] = array_cast<float>(resolution);
+    if (resolution.has_value()) {
+        materialShader.constValues[gResolution] = array_cast<float>(*resolution);
+    } else {
+        materialShader.constValues.erase(gResolution);
     }
 }
 
@@ -2705,6 +2711,18 @@ void ParseCamera(ParseContext& context, wpscene::WPScene& sc) {
                         : authored_fov);
 
     if (general.isOrtho) {
+        // A fullscreen layer post-processes the screen: its card is the canvas
+        // and its result has to land back on all of it. The global camera
+        // cannot draw that once a camera layer zooms or pans the scene, so the
+        // layer's last pass is drawn through this one, which always frames
+        // exactly the canvas. A 3D scene keeps drawing it through its active
+        // camera: no 3D scene with such a layer has been checked.
+        scene.cameras[std::string(FullscreenLayerCamera)] =
+            std::make_shared<SceneCamera>(context.ortho_w, context.ortho_h, -5000.0f, 5000.0f);
+        auto fullscreen_node = std::make_shared<SceneNode>(cori, cscale, cangle);
+        scene.cameras.at(std::string(FullscreenLayerCamera))->AttatchNode(fullscreen_node);
+        scene.sceneGraph->AppendChild(fullscreen_node);
+
         Vector3f cperori                       = cori;
         cperori[2]                             = 1000.0f;
         context.global_perspective_camera_node = std::make_shared<SceneNode>(cperori, cscale, cangle);
@@ -2968,6 +2986,7 @@ void InitContext(ParseContext& context, fs::VFS& vfs, wpscene::WPScene& sc) {
         cam_para.amount         = sc.general.cameraparallaxamount;
         cam_para.delay          = sc.general.cameraparallaxdelay;
         cam_para.mouseinfluence = sc.general.cameraparallaxmouseinfluence;
+        cam_para.canvas_scene   = context.is_ortho;
         context.shader_updater->SetCameraParallax(cam_para);
     }
 }
@@ -3160,6 +3179,13 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
                 .allowReuse = true,
             };
         }
+        // Another layer samples this one as its card in its own texture space,
+        // whatever its placement in the scene: the camera the composite is drawn
+        // through sits where the effect cameras do and spans the card.
+        auto camera = std::make_shared<SceneCamera>(extent[0], extent[1], -1.0f, 1.0f);
+        camera->SetLayerLocal(true);
+        camera->AttatchNode(context.effect_camera_node);
+        context.scene->cameras[LayerCompositeCameraKey(wpimgobj.id)] = std::move(camera);
     }
 
     const bool skipComposeRender = isCompose && ! hasEffect;
@@ -3337,6 +3363,9 @@ void ParseImageObj(ParseContext& context, wpscene::WPImageObject& img_obj) {
             effect_ppong_b);
         {
             imgEffectLayer->SetFinalBlend(imgBlendMode);
+            if (wpimgobj.fullscreen && context.is_ortho) {
+                imgEffectLayer->SetFinalCamera(std::string(FullscreenLayerCamera));
+            }
             imgEffectLayer->FinalMesh().ChangeMeshDataFrom(effct_final_mesh);
             imgEffectLayer->FinalNode().CopyTrans(*spImgNode);
             if (! render_as_compose) {
@@ -4179,6 +4208,47 @@ void ParseModelObj(ParseContext& context, wpscene::WPModelObject& obj) {
     context.uses_models              = true;
 }
 
+// A camera layer's authored timeline. The editor links a shot's origin to its
+// zoom (`options.parent`), and one playhead drives both, so the shot keeps a
+// single clock: the zoom's when that is animated, else the first origin curve's.
+// A relative origin timeline is an offset from the authored origin, which is
+// how an intro can glide back to exactly where the shot rests.
+SceneRuntimeContext::CameraShotTimeline ResolveCameraShotTimeline(
+    SceneRuntimeContext& runtime, const wpscene::WPCameraObject& obj, std::string_view runtime_name) {
+    SceneRuntimeContext::CameraShotTimeline timeline;
+    timeline.zoom = ResolveScalarAnimation(obj.zoom_setting);
+    // A scripted or user-bound origin already moves the layer every tick.
+    if (! obj.dynamic_origin && obj.origin_setting.is_object()) {
+        if (const auto animation = obj.origin_setting.find("animation");
+            animation != obj.origin_setting.end() && animation->is_object()) {
+            const auto relative      = animation->find("relative");
+            timeline.origin_relative = relative != animation->end() && relative->is_boolean() &&
+                                       relative->get<bool>();
+            timeline.origin_base     = Vector3f(obj.origin.data());
+            for (std::size_t index = 0; index < timeline.origin.size(); ++index) {
+                auto curve = ResolveScalarAnimation(obj.origin_setting, index);
+                // Before its first key a relative curve offsets by nothing.
+                if (curve.has_value() && timeline.origin_relative) curve->initial_value = 0.0f;
+                timeline.origin[index] = std::move(curve);
+            }
+        }
+    }
+
+    const ScalarAnimation* source     = timeline.zoom.has_value() ? &*timeline.zoom : nullptr;
+    double                 last_frame = source != nullptr ? source->keyframes.back().frame : 0.0;
+    for (const auto& curve : timeline.origin) {
+        if (! curve.has_value()) continue;
+        if (source == nullptr) source = &*curve;
+        last_frame = std::max(last_frame, curve->keyframes.back().frame);
+    }
+    if (source != nullptr) {
+        ScalarAnimation clock = *source;
+        if (! (clock.length_frames > 0.0)) clock.length_frames = last_frame;
+        timeline.clock = runtime.RegisterScalarAnimation(runtime_name, std::move(clock));
+    }
+    return timeline;
+}
+
 void ParseCameraObj(ParseContext& context, wpscene::WPCameraObject& obj) {
     const auto runtime_name = LayerRuntimeName(context, obj);
     auto       node         = ReuseOrCreateLayerNode(context, obj.id);
@@ -4245,34 +4315,25 @@ void ParseCameraObj(ParseContext& context, wpscene::WPCameraObject& obj) {
     QueueSceneScriptIfNeeded(context, runtime_name, obj.scale_setting);
     QueueSceneScriptIfNeeded(context, runtime_name, obj.angles_setting);
 
-    // The shot does not take over the projection on a 2D canvas, but its zoom
-    // still frames it: the wallpaper's own "camera size" slider is this field.
-    // A perspective scene already spends it on the fov above.
+    // A 2D scene keeps the projection its canvas defines, and a camera layer
+    // frames that canvas instead: its zoom narrows the view about its centre
+    // and its origin, an offset from the canvas centre, moves that centre. The
+    // last visible shot in authored order is the one shown, so a shot a user
+    // property reveals overrides one that is always there. A perspective scene
+    // already spends the layer on the camera above.
     if (context.is_ortho) {
-        const auto global = context.scene->cameras.find("global");
-        if (global != context.scene->cameras.end() && global->second != nullptr) {
-            // The runtime holding a listener is owned by the scene, so a raw
-            // pointer here outlives it and does not close a reference cycle.
-            auto* scene  = context.scene.get();
-            auto  camera = global->second;
-            const auto apply = [scene, camera](double zoom) {
-                camera->SetZoom(zoom);
-                camera->Update();
-                scene->UpdateLinkedCamera("global");
-            };
-            if (context.scene->runtime != nullptr) {
-                // The slider form keeps naming its property only in the raw
-                // setting; the unwrapped float is just its authored default.
-                const auto setting =
-                    obj.zoom_setting.is_null() ? nlohmann::json(obj.zoom) : obj.zoom_setting;
-                context.scene->runtime->RegisterDynamicValueListener(
-                    ResolveFloatSetting(*context.scene->runtime, setting, runtime_name),
-                    [apply](const DynamicValue& value) {
-                        apply(value.getFloat());
-                    });
-            } else {
-                apply(obj.zoom);
-            }
+        if (context.scene->runtime != nullptr) {
+            auto& runtime = *context.scene->runtime;
+            // The slider form keeps naming its property only in the raw
+            // setting; the unwrapped float is just its authored default.
+            const auto zoom_setting =
+                obj.zoom_setting.is_null() ? nlohmann::json(obj.zoom) : obj.zoom_setting;
+            auto timeline = ResolveCameraShotTimeline(runtime, obj, runtime_name);
+            runtime.RegisterCameraShot(node.get(),
+                                       ResolveFloatSetting(runtime, zoom_setting, runtime_name),
+                                       std::move(timeline), obj.dynamic_origin);
+        } else if (obj.visible) {
+            context.scene->FrameCanvas(obj.zoom, Eigen::Vector2f(obj.origin[0], obj.origin[1]));
         }
     }
 

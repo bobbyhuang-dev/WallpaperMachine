@@ -11,6 +11,7 @@
 
 #include <Eigen/Dense>
 
+#include <array>
 #include <condition_variable>
 #include <functional>
 #include <memory>
@@ -21,6 +22,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace wallpaper
@@ -152,6 +154,26 @@ public:
                                   std::shared_ptr<const MaterialConstantAnimation> animation = {});
     void RegisterSceneClearColor(std::unique_ptr<DynamicValue> value);
     void RegisterSceneZoomAnimation(std::shared_ptr<ScalarAnimationPlayback> animation);
+    /// A camera layer's timeline: one clock, and the zoom and origin curves it
+    /// plays. `origin_base` is the authored origin a relative timeline offsets.
+    struct CameraShotTimeline {
+        std::shared_ptr<ScalarAnimationPlayback>      clock;
+        std::optional<ScalarAnimation>                zoom;
+        std::array<std::optional<ScalarAnimation>, 3> origin;
+        bool                                          origin_relative { false };
+        Eigen::Vector3f                               origin_base { Eigen::Vector3f::Zero() };
+    };
+    /// A camera layer of a scene projected by its canvas. Shots are kept in
+    /// authored order and the last visible one frames the view -- its zoom
+    /// about the view's centre, its origin as that centre's offset from the
+    /// canvas centre -- re-decided every tick; with none visible the whole
+    /// canvas is shown. `zoom` is the static, user-bound or scripted zoom a
+    /// zoom curve in `timeline` replaces. `origin_bound` says a script or a user
+    /// property writes the origin: until a tick has applied it the layer holds
+    /// the editor's last value, which need not be where the shot is, so the
+    /// canvas centre stands in for it.
+    void RegisterCameraShot(SceneNode* node, std::unique_ptr<DynamicValue> zoom,
+                            CameraShotTimeline timeline, bool origin_bound);
     void RegisterDynamicValueListener(std::unique_ptr<DynamicValue> value,
                                       std::function<void(const DynamicValue&)> callback);
     void RegisterNodeEffectFinal(std::string name, SceneNode* node, SceneImageEffectLayer* layer,
@@ -424,6 +446,7 @@ private:
     void ApplyNodeTransform(SceneNode& node, NodeAlignmentBinding& binding, const Eigen::Vector2f& size);
     void ApplyMaterialConstantBinding(MaterialConstantBinding& binding);
     void ApplySceneZoomAnimation();
+    void ApplyCameraShots();
     void DispatchPendingAnimationEvents();
     bool                           CursorInsidePresentedContent() const;
     bool CursorHitsLayer(std::string_view name) const;
@@ -469,6 +492,16 @@ private:
     };
     std::vector<ScalarAnimationBinding> m_scalar_animations;
     std::shared_ptr<ScalarAnimationPlayback> m_scene_zoom_animation;
+    struct CameraShotBinding {
+        SceneNode*         node { nullptr };
+        DynamicValue*      zoom { nullptr };
+        CameraShotTimeline timeline;
+        /// The origin is bound and no tick has applied it yet.
+        bool               origin_pending { false };
+    };
+    std::vector<CameraShotBinding> m_camera_shots;
+    /// What the view was last framed with, so an unchanged shot costs nothing.
+    std::optional<std::pair<double, Eigen::Vector2f>> m_framed_camera_shot;
     std::vector<MaterialConstantBinding>                           m_material_constants;
     std::vector<TextValueBinding>                                  m_text_values;
     std::vector<DynamicValueListenerBinding>                       m_dynamic_value_listeners;

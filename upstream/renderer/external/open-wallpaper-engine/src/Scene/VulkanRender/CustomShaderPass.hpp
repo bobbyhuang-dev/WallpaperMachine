@@ -111,7 +111,7 @@ public:
     StaticPassDesc staticPassDesc(const Scene&) const;
     /// Everything that can change this pass's output without changing the
     /// graph, folded into one value.
-    StaticPassSample frameSample() const;
+    StaticPassSample frameSample(const Scene&) const;
     /// Suppresses this frame's draw and its uniform update. The previous
     /// frame's pixels stay in the target, so the caller must have proved the
     /// target still owns them.

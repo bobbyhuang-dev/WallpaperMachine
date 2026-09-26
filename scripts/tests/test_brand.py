@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Brand export contracts: native appearances, template alpha and ICO interoperability."""
+import functools
 import json
 from pathlib import Path
 import struct
@@ -14,6 +15,30 @@ import brand
 from lib import dmg
 
 
+@functools.cache
+def ictool_skip_reason():
+    """Why Icon Composer cannot export here, or None; headless CI runners exit 255."""
+    if sys.platform != 'darwin':
+        return 'Requires macOS Icon Composer'
+    developer = Path(subprocess.check_output(['xcode-select', '-p'], text=True).strip())
+    tool = developer.parent / 'Applications/Icon Composer.app/Contents/Executables/ictool'
+    if not tool.exists():
+        return f'Icon Composer not found at {tool}'
+    with tempfile.TemporaryDirectory() as scratch:
+        work = Path(scratch)
+        icon = work / 'AppIcon.icon'
+        with patch.object(brand, 'APP_ICON', icon), patch.object(brand, 'TRAY_ICON_SET', work / 'tray'):
+            brand.write_app_icons(work)
+        probe = subprocess.run([str(tool), str(icon), '--export-image', '--output-file', str(work / 'probe.png'),
+                                '--platform', 'macOS', '--rendition', 'Default',
+                                '--width', '16', '--height', '16', '--scale', '1',
+                                '--design-generation', '26'], capture_output=True, text=True)
+    if probe.returncode:
+        detail = (probe.stderr or probe.stdout).strip().splitlines()
+        return f'ictool cannot export in this session (exit {probe.returncode}): {detail[-1] if detail else "no output"}'
+    return None
+
+
 class BrandTests(unittest.TestCase):
     def test_ico_entries_locate_images_including_256_pixel_encoding(self):
         images = [(16, b'first-image'), (32, b'second-longer-image'), (256, b'largest-image')]
@@ -25,8 +50,9 @@ class BrandTests(unittest.TestCase):
             self.assertEqual((planes, bits), (1, 32))
             self.assertEqual(data[offset:offset + length], payload)
 
-    @unittest.skipUnless(sys.platform == 'darwin', 'Requires macOS Icon Composer')
     def test_app_icon_renders_one_background_per_appearance(self):
+        if reason := ictool_skip_reason():
+            self.skipTest(reason)
         developer = Path(subprocess.check_output(['xcode-select', '-p'], text=True).strip())
         tool = developer.parent / 'Applications/Icon Composer.app/Contents/Executables/ictool'
         with tempfile.TemporaryDirectory() as scratch:
@@ -92,8 +118,9 @@ print(String(data: try JSONSerialization.data(withJSONObject: [colors, joins, ed
                         self.assertGreater(max(abs(c - background) for c in color[:3]), 0.2,
                                            'Enlarged screen/frame joins must not expose a background seam')
 
-    @unittest.skipUnless(sys.platform == 'darwin', 'Requires macOS Icon Composer')
     def test_dock_variants_preserve_transparent_margin_and_distinct_artwork(self):
+        if reason := ictool_skip_reason():
+            self.skipTest(reason)
         with tempfile.TemporaryDirectory() as scratch:
             work = Path(scratch)
             with patch.object(brand, 'APP_ICON', work / 'AppIcon.icon'), \

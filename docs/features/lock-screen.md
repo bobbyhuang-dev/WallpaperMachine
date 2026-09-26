@@ -5,8 +5,10 @@ The app can animate the macOS lock screen. The feature is off by default.
 ## Enabling it
 
 Apply a video or live scene to a display, then enable **Settings -> General ->
-Animate lock screen**. A status row next to the switch reports the current
-state, and a **Retry** action appears when activation failed.
+Animate lock screen**, or the same switch on the welcome guide's Preferences
+page (it applies at once there too; the guide's **Skip** turns it back to what it
+was when the guide opened). A status row next to the Settings switch reports the
+current state, and a **Retry** action appears when activation failed.
 
 This uses a sandboxed native wallpaper extension — the
 [`Extension/`](../../Extension) ExtensionKit target — rather than drawing an

@@ -99,8 +99,8 @@ unrelated job. Background app regions are inert while the guide is open; closing
 it restores their prior availability. The body scrolls independently of the
 footer, which stays reachable at the 760×560 minimum. All five step buttons keep
 accessible names even when their visible labels are hidden. They allow free
-jumping except while language, appearance or preferences are being committed;
-later pages have **Back**, and decision pages have **Skip**:
+jumping except while language, appearance, the lock screen or preferences are
+being committed; later pages have **Back**, and decision pages have **Skip**:
 
 1. **Language & appearance.** Radio tiles for the language (**System (Auto)**
    plus every shipped language under its own name) and the appearance mode
@@ -141,12 +141,20 @@ later pages have **Back**, and decision pages have **Skip**:
    login is disabled with its reason while the app is outside Applications;
    when renderer settings are unavailable the page says so and disables the
    switches.
-   During a preference commit, Back, step navigation, Skip and Continue are all
-   disabled so the guide cannot leave a partially submitted operation.
-4. **Tips.** Five short usage tips (Discover, download then apply, one
-   wallpaper per display, import, pause) and the open-source pointer with
-   **Open on GitHub** and **Report an issue** (`state.repositoryURL` and its
-   `/issues` page).
+   The last row, **Animate lock screen** (off by default, marked experimental),
+   is not a draft: like Settings it sends `setting` / `lockScreenEnabled` at
+   once, shows the native status while busy, is disabled when the integration
+   is unavailable, and a refusal leaves the switch off with the reason on the
+   page. **Skip** puts it back to the value it had when the guide opened.
+   During a preference or lock-screen commit, Back, step navigation, Skip and
+   Continue are all disabled so the guide cannot leave a partially submitted operation.
+4. **Tips.** Three one-line tips (Discover, download then double-click to
+   apply, one wallpaper per display) on one card, then a compatibility card:
+   not every wallpaper works (videos usually play, scenes are experimental,
+   Application wallpapers cannot run), failures are reported with the
+   inspector's report button (shown inline by its glyph), and pull requests are
+   welcome, with **Report an issue** (`state.repositoryURL` + `/issues`) and
+   **Contribute on GitHub** (the repository) links.
 5. **Start.** A recap of language, appearance and the actual Steam sign-in state.
    Pending jobs/setup requests offer **Finish sign-in**. Unsaved preference
    drafts add a fourth cell with their count and **Review**, which returns to

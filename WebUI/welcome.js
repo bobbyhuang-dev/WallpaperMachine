@@ -1,11 +1,11 @@
 import { t } from './i18n.js';
 
 // First-run guide: five full-window pages shown once per Mac, and again on request from
-// Settings → Library & Steam. Language and appearance apply the moment they are chosen (Skip
-// puts back what was there when the guide opened); preferences are drafts committed by Continue;
-// the Steam page runs a sign-in-only SteamCMD session through the same job pipeline as a
-// download, so Steam's own password and Steam Guard prompts are answered right here.
-// The password never leaves this module except as the answer to Steam's password prompt.
+// Settings → Library & Steam. Language, appearance and the lock screen apply the moment they
+// are chosen (Skip puts back what was there when the guide opened); the other preferences are
+// drafts committed by Continue; the Steam page runs a sign-in-only SteamCMD session through the
+// same job pipeline as a download, so Steam's own password and Steam Guard prompts are answered
+// right here. The password never leaves this module except as the answer to Steam's password prompt.
 export const SIGN_IN_ID = 'steam-sign-in';
 const STEPS = [
   ['language', 'Language & appearance'],
@@ -21,11 +21,9 @@ const PREFERENCES = [
   ['keepWindowsOnWallpaperClick', 'mousePointerClick', 'Keep windows in place when clicking the wallpaper', 'Turns off macOS’s “Click wallpaper to reveal desktop” so clicks reach interactive wallpapers.'],
 ];
 const TIPS = [
-  ['search', 'Browse the Workshop in Discover', 'Search, sort and filter by type, resolution and tags. No account needed.'],
-  ['download', 'Download, then apply', 'Downloaded wallpapers appear in Installed. Select one and click Apply wallpaper, or double-click it, to show it on the chosen display.'],
-  ['monitor', 'One wallpaper per display', 'Pick the target display in the top bar. Settings → Displays sets scaling, frame rate and audio per screen.'],
-  ['plus', 'Import your own', 'Installed → Import copies wallpaper folders or files into your library and leaves the originals untouched.'],
-  ['pause', 'Pause any time', 'The button at the bottom pauses playback. Pause on battery does this automatically.'],
+  ['search', 'Browse wallpapers in Discover. No account needed.'],
+  ['download', 'Download one, then double-click it to apply.'],
+  ['monitor', 'Each display plays its own wallpaper. Pick the display in the top bar.'],
 ];
 const STEAM_JOIN_URL = 'https://store.steampowered.com/join/';
 const STEAM_STORE_URL = 'https://store.steampowered.com/app/431960/Wallpaper_Engine/';
@@ -37,7 +35,7 @@ export function createWelcome(helpers) {
   let decided = false;
   let step = 0;
   let state = null;
-  // What the guide found when it opened, so Skip on the first page can put it back.
+  // What the guide found when it opened, so Skip can put back the choices that apply at once.
   let initial = null;
   // Sign-in draft. `secret` is held only between Sign in and Steam's password prompt.
   const signIn = { account: '', remember: true, secret: null, reveal: false };
@@ -61,7 +59,9 @@ export function createWelcome(helpers) {
   const languageOptions = () => [['system', t('System (Auto)'), t('Follows the macOS language')], ...((state?.language?.options || []).map(option => [option.id, option.name, '']))];
   const themeMode = () => state?.theme?.mode || window.__appTheme?.mode || 'system';
   const languageValue = () => state?.language?.preference || 'system';
-  const navigationBusy = () => pending.has('language') || pending.has('theme') || pending.has('preferences');
+  const lockScreenValue = () => Boolean(state?.settings?.lockScreenEnabled);
+  const snapshotInitial = () => ({ mode: themeMode(), language: languageValue(), lockScreen: lockScreenValue() });
+  const navigationBusy = () => pending.has('language') || pending.has('theme') || pending.has('preferences') || pending.has('lockScreen');
 
   function isOpen() { return open; }
   function openGuide() {
@@ -77,7 +77,7 @@ export function createWelcome(helpers) {
     signIn.remember = state?.rememberSession ?? true;
     if (!signIn.account) signIn.account = state?.account || '';
     setupRequested = false;
-    initial = state ? { mode: themeMode(), language: languageValue() } : null;
+    initial = state ? snapshotInitial() : null;
     helpers.closePopover?.(false);
     render(state);
   }
@@ -120,7 +120,7 @@ export function createWelcome(helpers) {
     container.hidden = !open;
     helpers.setBackgroundInert(open);
     if (!open || !state) return;
-    if (!initial) initial = { mode: themeMode(), language: languageValue() };
+    if (!initial) initial = snapshotInitial();
     driveSignIn();
     const focused = document.activeElement;
     const previousTitle = container.querySelector('#welcome-title');
@@ -183,7 +183,7 @@ export function createWelcome(helpers) {
         const running = Boolean(job?.pending || signInRequest());
         return `${back}<span class="welcome-footer-actions">${done ? next(t('Continue'), 'continue') : button(running ? t('Skip and cancel sign-in') : t('Skip for now'), 'skipSteam', {}, { className: 'quiet' })}</span>`;
       }
-      case 2: return `${back}<span class="welcome-footer-actions">${button(t('Skip'), 'skipPreferences', {}, { className: 'quiet', disabled: pending.has('preferences') })}${next(t('Continue'), 'savePreferences', { disabled: pending.has('preferences') })}</span>`;
+      case 2: return `${back}<span class="welcome-footer-actions">${button(t('Skip'), 'skipPreferences', {}, { className: 'quiet', disabled: navigationBusy() })}${next(t('Continue'), 'savePreferences', { disabled: navigationBusy() })}</span>`;
       case 3: return `${back}<span class="welcome-footer-actions">${next(t('Continue'), 'continue')}</span>`;
       default: return `${back}<span class="welcome-footer-actions">${button(t('Start using the app'), 'finish', {}, { icon: 'check', className: 'primary welcome-continue' })}</span>`;
     }
@@ -282,14 +282,27 @@ export function createWelcome(helpers) {
       const extra = key === 'launchAtLogin' && settings && !settings.launchAtLoginAvailable ? ` ${t('Move the app to Applications to enable.')}` : '';
       return `<label class="welcome-pref" data-key="pref-${key}"><span class="dialog-guide-icon">${icon(glyph, 18)}</span><span class="welcome-pref-body"><span class="welcome-pref-title">${e(t(title))}</span><span class="welcome-pref-note">${e(t(note))}${e(extra)}</span></span><span class="settings-switch"><input type="checkbox" role="switch" data-pref="${key}" aria-label="${e(t(title))}"${value ? ' checked' : ''}${off ? ' disabled' : ''}><span aria-hidden="true"></span></span></label>`;
     }).join('');
-    return `${head(t('A few preferences'), t('You can change these later in Settings.'))}${unavailable ? `<p class="notice">${e(t('Settings are unavailable right now. You can set these later in Settings.'))}</p>` : ''}<div class="welcome-prefs">${rows}</div>${error ? `<p class="notice error" role="alert">${e(error)}</p>` : ''}`;
+    return `${head(t('A few preferences'), t('You can change these later in Settings.'))}${unavailable ? `<p class="notice">${e(t('Settings are unavailable right now. You can set these later in Settings.'))}</p>` : ''}<div class="welcome-prefs">${rows}${lockScreenRow(settings)}</div>${settings?.lockScreenError ? `<p class="notice error" role="alert">${e(settings.lockScreenError)}</p>` : ''}${error ? `<p class="notice error" role="alert">${e(error)}</p>` : ''}`;
+  }
+
+  // Unlike the rows above, the lock screen is not a draft: it applies at once, like Settings.
+  function lockScreenRow(settings) {
+    const unavailable = !settings || settings.lockScreenAvailable === false || settings.lockScreenStatus == null;
+    const working = pending.has('lockScreen') || Boolean(settings?.lockScreenBusy);
+    const status = settings?.lockScreenStatus || t('Updating');
+    const note = unavailable ? t('Unavailable') : working ? (status.endsWith('…') ? status : `${status}…`) : t('Experimental. Applies right away.');
+    const off = unavailable || working || pending.has('preferences');
+    return `<label class="welcome-pref" data-key="pref-lockScreen"><span class="dialog-guide-icon">${icon('lock', 18)}</span><span class="welcome-pref-body"><span class="welcome-pref-title">${e(t('Animate lock screen'))}</span><span class="welcome-pref-note">${e(note)}</span></span><span class="settings-switch"><input type="checkbox" role="switch" data-lock-screen aria-label="${e(t('Animate lock screen'))}"${lockScreenValue() ? ' checked' : ''}${off ? ' disabled' : ''}><span aria-hidden="true"></span></span></label>`;
   }
 
   function pageTips() {
     const repository = helpers.safeLink(state.repositoryURL);
-    const tips = TIPS.map(([glyph, title, text]) => `<li><span class="dialog-guide-icon">${icon(glyph, 18)}</span><div class="welcome-tip-body"><p class="welcome-tip-title">${e(t(title))}</p><p class="welcome-tip-text">${e(t(text))}</p></div></li>`).join('');
-    const github = repository ? `<section class="welcome-github" aria-label="GitHub"><span class="welcome-github-mark">${icon('github', 22)}</span><div class="welcome-github-body"><p class="welcome-tip-title">${e(t('WallpaperMachine is open source'))}</p><p class="welcome-tip-text">${e(t('Source code, releases and issue reports are on GitHub.'))}</p><div class="welcome-status-actions">${button(t('Open on GitHub'), 'openExternal', { url: repository }, { icon: 'external' })}${button(t('Report an issue'), 'openExternal', { url: `${repository.replace(/\/$/, '')}/issues` }, { icon: 'external', className: 'quiet' })}</div></div></section>` : '';
-    return `${head(t('The basics'), t('Where things are and how to put a wallpaper on your desktop.'))}<ol class="welcome-tips">${tips}</ol>${github}`;
+    const tips = TIPS.map(([glyph, text]) => `<li><span class="dialog-guide-icon">${icon(glyph, 18)}</span><p>${e(t(text))}</p></li>`).join('');
+    // The inspector's report button pre-fills the issue with the wallpaper, so the page points at it by its glyph.
+    const report = e(t('Videos usually play. Scenes are experimental, and Application wallpapers can’t run on macOS. If one fails, report it with {icon} in its details. Pull requests are welcome too.')).replace('{icon}', `<span class="welcome-inline-icon" role="img" aria-label="${e(t('Report a problem on GitHub'))}">${icon('triangleAlert', 13)}</span>`);
+    const links = repository ? `<div class="welcome-status-actions">${button(t('Report an issue'), 'openExternal', { url: `${repository.replace(/\/$/, '')}/issues` }, { icon: 'external', className: 'link' })}${button(t('Contribute on GitHub'), 'openExternal', { url: repository }, { icon: 'external', className: 'link' })}</div>` : '';
+    const support = `<section class="welcome-support" aria-labelledby="welcome-support-title"><span class="dialog-guide-icon">${icon('github', 18)}</span><div class="welcome-status-body"><p class="welcome-status-title" id="welcome-support-title">${e(t('Not every wallpaper works yet'))}</p><p class="welcome-status-text">${report}</p>${links}</div></section>`;
+    return `${head(t('The basics'))}<ol class="welcome-tips">${tips}</ol>${support}`;
   }
 
   function pageStart(done) {
@@ -368,6 +381,16 @@ export function createWelcome(helpers) {
     }
     if (job?.pending) await perform('cancel', 'downloadCancel', { id: job.id });
   }
+  async function setLockScreen(input) {
+    await perform('lockScreen', 'setting', { key: 'lockScreenEnabled', value: input.checked });
+    // A refused change must not leave the switch showing it; a focused input keeps its own state across renders.
+    if (input.isConnected) input.checked = lockScreenValue();
+  }
+  async function skipPreferences() {
+    prefs.clear();
+    if (initial && lockScreenValue() !== initial.lockScreen) await perform('lockScreen', 'setting', { key: 'lockScreenEnabled', value: initial.lockScreen });
+    go(step + 1);
+  }
   async function savePreferences() {
     const changed = [...prefs].filter(([key, value]) => Boolean(state.settings?.[key]) !== value);
     if (!changed.length) { go(step + 1); return; }
@@ -395,7 +418,7 @@ export function createWelcome(helpers) {
       case 'back': go(step - 1); return;
       case 'continue': go(step + 1); return;
       case 'skipLanguage': run(skipLanguage()); return;
-      case 'skipPreferences': prefs.clear(); go(step + 1); return;
+      case 'skipPreferences': run(skipPreferences()); return;
       case 'savePreferences': run(savePreferences()); return;
       case 'skipSteam': run(cancelSignIn().then(() => go(step + 1))); return;
       case 'language': run(chooseLanguage(control.dataset.value)); return;
@@ -423,6 +446,7 @@ export function createWelcome(helpers) {
     const element = event.target;
     if (element.name === 'remember') signIn.remember = element.checked;
     if (element.dataset.pref) { prefs.set(element.dataset.pref, element.checked); render(state); }
+    if (element.hasAttribute('data-lock-screen')) run(setLockScreen(element));
   });
   container.addEventListener('submit', event => {
     event.preventDefault();

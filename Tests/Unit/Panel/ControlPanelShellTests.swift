@@ -888,14 +888,32 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       XCTAssertEqual(preferences?["prefs"] as? Int, 4)
       XCTAssertEqual(preferences?["checked"] as? Bool, true)
       XCTAssertEqual(panel.bridge.pauseOnBatteryCalls, [], "Toggling a switch is a draft")
+
+      // The lock screen is off by default and, unlike the drafts, applies at once. This fixture
+      // has no lock-screen service, so native refuses: the switch stays off and the reason shows.
+      let lock = try await panel.js("""
+        const region = document.getElementById('welcome');
+        const input = () => region.querySelector('input[data-lock-screen]');
+        const unavailable = { checked: input().checked, disabled: input().disabled };
+        const base = window.powerProbe.received.at(-1);
+        window.wallpaperUI.receive({...base, settings: {...base.settings, lockScreenAvailable: true, lockScreenStatus: 'Off', lockScreenEnabled: false, lockScreenBusy: false}});
+        input().click();
+        const deadline = Date.now() + 5000;
+        while (!region.querySelector('.notice.error') && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+        return { unavailable, checked: input().checked, error: region.querySelector('.notice.error')?.textContent || '' };
+        """) as? [String: Any]
+      XCTAssertEqual(lock?["unavailable"] as? [String: Bool], ["checked": false, "disabled": true])
+      XCTAssertEqual(lock?["checked"] as? Bool, false, "A refused change does not leave the switch on")
+      XCTAssertFalse((lock?["error"] as? String ?? "").isEmpty, "The refusal is shown on the page")
+      XCTAssertEqual(panel.bridge.pauseOnBatteryCalls, [], "Applying the lock screen does not commit the drafts")
       _ = try await panel.js("document.querySelector('#welcome [data-action=\"savePreferences\"]').click();")
       try await panel.waitUntil { panel.bridge.pauseOnBatteryCalls == [true] }
       try await panel.waitJS("document.querySelector('#welcome .welcome-page')?.dataset.step === 'tips'")
 
-      // Tips point at GitHub through the same allowlist as every other link.
+      // Tips: three lines, then the compatibility note with its GitHub links through the same allowlist as every other link.
       let tips = try await panel.js("""
         const region = document.getElementById('welcome');
-        const github = [...region.querySelectorAll('.welcome-github [data-action="openExternal"]')].map(link => link.dataset.url);
+        const github = [...region.querySelectorAll('.welcome-support [data-action="openExternal"]')].map(link => link.dataset.url);
         return { tips: region.querySelectorAll('.welcome-tips li').length, github };
         """) as? [String: Any]
       _ = try await panel.js("document.querySelector('#welcome [data-action=\"continue\"]').click();")
@@ -904,9 +922,9 @@ final class ControlPanelShellTests: ControlPanelTestCase {
         const region = document.getElementById('welcome');
         return { step: region.querySelector('.welcome-page').dataset.step, recap: [...region.querySelectorAll('.welcome-recap dd')].map(node => node.textContent) };
         """) as? [String: Any]
-      XCTAssertEqual(tips?["tips"] as? Int, 5)
+      XCTAssertEqual(tips?["tips"] as? Int, 3)
       let github = try XCTUnwrap(tips?["github"] as? [String])
-      XCTAssertEqual(github.count, 2, "Repository and issue tracker")
+      XCTAssertEqual(github.count, 2, "Issue tracker and repository")
       for link in github {
         let url = try XCTUnwrap(URL(string: link))
         XCTAssertEqual(url.host, "github.com", link)

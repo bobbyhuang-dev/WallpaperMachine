@@ -161,6 +161,8 @@ latency cannot be guaranteed. The app uses dynamically resolved
 `CGSCopyManagedDisplaySpaces` and `DesktopPictureSetDisplayForSpace` to target
 all normal desktop Spaces directly, including inactive ones. It restores them on
 eject and quit, preserves full native options and the old journal format, and
+restores an inherited (pathless) Space, or one left on an unjournaled poster, to
+its display's real wallpaper rather than leaving a poster behind. It
 never switches Spaces, restarts Dock or WallpaperAgent, or edits Apple's
 wallpaper plist. These are non-public APIs: if they are unavailable on a future
 macOS the app logs the limitation and falls back to `NSWorkspace`'s

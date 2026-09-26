@@ -75,14 +75,15 @@ final class DesktopWallpaperLedger {
         // Cache only within this pass: external edits/missing files must still
         // be detected on the next refresh. Retain no extra image buffers.
         var comparisons: [URL: Bool] = [:]
+        var fallbacks: [String: DesktopPicture?] = [:]
         let digests = posters.mapValues { Data(SHA256.hash(data: $0)) }
         for target in targets {
             do {
                 if let png = posters[target.display], liveDisplays.contains(target.display) {
                     try apply(png: png, digest: digests[target.display]!, target: target,
-                              comparisons: &comparisons)
+                              targets: targets, comparisons: &comparisons, fallbacks: &fallbacks)
                 } else if !liveDisplays.contains(target.display) {
-                    try restore(target: target)
+                    try restore(target: target, targets: targets, fallbacks: &fallbacks)
                 }
             } catch { if firstError == nil { firstError = error } }
         }
@@ -101,11 +102,14 @@ final class DesktopWallpaperLedger {
 
     func apply(png: Data, target: DesktopPictureTarget) throws {
         var comparisons: [URL: Bool] = [:]
-        try apply(png: png, digest: Data(SHA256.hash(data: png)), target: target, comparisons: &comparisons)
+        var fallbacks: [String: DesktopPicture?] = [:]
+        try apply(png: png, digest: Data(SHA256.hash(data: png)), target: target, targets: [target],
+                  comparisons: &comparisons, fallbacks: &fallbacks)
     }
 
     private func apply(png: Data, digest: Data, target: DesktopPictureTarget,
-                       comparisons: inout [URL: Bool]) throws {
+                       targets: [DesktopPictureTarget], comparisons: inout [URL: Bool],
+                       fallbacks: inout [String: DesktopPicture?]) throws {
         guard let current = try workspace.currentPicture(target: target) else {
             throw NSError(domain: "DesktopWallpaperSync", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "Cannot read the original wallpaper for display \(target.display), desktop \(target.space ?? "current"); poster synchronization was not applied."
@@ -121,7 +125,11 @@ final class DesktopWallpaperLedger {
             }
             if matches { return }
         } else if owned != nil, (try? Data(contentsOf: current.url)) == png { return }
-        let original = owned?.original ?? current
+        var original = owned?.original ?? current
+        if !Self.isUserWallpaper(original, folder: folder),
+           let chosen = userWallpaper(display: target.display, targets: targets, cache: &fallbacks) {
+            original = chosen
+        }
         // Never reuse a filename for different pixels: WallpaperAgent can cache
         // inactive-Space thumbnails by URL even after the file is overwritten.
         // Identical originals/frames may share an immutable file safely.
@@ -151,16 +159,63 @@ final class DesktopWallpaperLedger {
         try workspace.setPicture(.poster(url), target: target)
     }
 
-    func restore(target: DesktopPictureTarget) throws {
+    /// Puts back the wallpaper a desktop showed before its first poster. A
+    /// desktop showing anything but a poster was changed outside this app and
+    /// keeps that choice.
+    private func restore(target: DesktopPictureTarget, targets: [DesktopPictureTarget],
+                         fallbacks: inout [String: DesktopPicture?]) throws {
         guard let current = try workspace.currentPicture(target: target),
-              let entry = entry(for: current.url) else { return }
-        // Do not overwrite a wallpaper the user changed outside this app.
-        try workspace.setPicture(entry.original, target: target)
+              Self.isPoster(current.url, folder: folder) else { return }
+        // A poster whose journal entry is gone is still ours, never the user's.
+        var original = entry(for: current.url)?.original
+        if original.map({ Self.isUserWallpaper($0, folder: folder) }) != true,
+           let chosen = userWallpaper(display: target.display, targets: targets, cache: &fallbacks) {
+            original = chosen
+        }
+        guard let original else { return }
+        try workspace.setPicture(original, target: target)
     }
 
     private func entry(for url: URL) -> Entry? {
-        guard url.deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL else { return nil }
+        guard Self.isPoster(url, folder: folder) else { return nil }
         return entries[url.lastPathComponent]
+    }
+
+    private static func isPoster(_ url: URL, folder: URL) -> Bool {
+        url.deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL
+    }
+
+    /// Whether writing `picture` back shows a wallpaper the user chose. A
+    /// poster does not, and neither does a pathless (inherited) selection:
+    /// what it inherits from is replaced along with the desktop's own picture,
+    /// so after quitting that desktop would keep showing a poster.
+    private static func isUserWallpaper(_ picture: DesktopPicture, folder: URL) -> Bool {
+        picture.url.isFileURL && !isPoster(picture.url, folder: folder)
+    }
+
+    /// The wallpaper the user chose for `display`, for a desktop whose own
+    /// original cannot bring it back: the first of its desktops, in Space
+    /// order, that shows or journaled one, then a journaled original of the
+    /// display, then of any display. Nil keeps the desktop's own original.
+    private func userWallpaper(display: String, targets: [DesktopPictureTarget],
+                               cache: inout [String: DesktopPicture?]) -> DesktopPicture? {
+        if let cached = cache[display] { return cached }
+        var found: DesktopPicture?
+        for target in targets where target.display == display {
+            guard let current = try? workspace.currentPicture(target: target) else { continue }
+            let candidate = entry(for: current.url)?.original ?? current
+            if Self.isUserWallpaper(candidate, folder: folder) {
+                found = candidate
+                break
+            }
+        }
+        if found == nil {
+            let journaled = entries.sorted { $0.key < $1.key }.map(\.value)
+                .filter { Self.isUserWallpaper($0.original, folder: folder) }
+            found = (journaled.first { $0.display == display } ?? journaled.first)?.original
+        }
+        cache[display] = found
+        return found
     }
 
     /// Deletes the posters no desktop can be showing.

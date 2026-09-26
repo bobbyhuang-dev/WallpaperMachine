@@ -137,7 +137,10 @@ Swift keeps the *system* wallpaper consistent with that window:
   caller falls back to the public `NSWorkspace` API, which is scoped to the visible Space.
 - `DesktopWallpaperLedger` journals the user's original per-Space `DesktopPicture` (including the
   opaque native options blob) before anything is replaced, so the original wallpaper can be
-  restored. It deletes posters no readable desktop shows, keeping only the newest few on a
+  restored. A pathless (inherited) selection or a poster cannot bring the user's wallpaper back,
+  because what it inherits from shows posters too; such a desktop, and one showing a poster with
+  no journal entry, gets the display's first real original in Space order instead (then any
+  display's). It deletes posters no readable desktop shows, keeping only the newest few on a
   display where some desktop could not be seen or read.
 - `DesktopWallpaperSync` encodes real renderer output into a PNG poster
   (`DesktopPosterEncoder`) under `<support>/DesktopPosters`, so the static system wallpaper

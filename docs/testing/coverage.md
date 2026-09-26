@@ -147,8 +147,10 @@ Swift tests cover, without starting the app:
   and native option/path translation use fixtures, including empty
   inherited/default native selections, exact pathless-option restoration across
   relaunch, rejected native acknowledgements, and unreadable-original errors.
-  Empty native dictionaries are retained verbatim rather than replaced with a
-  guessed static default image. Coordinator tests use unattached
+  Empty native dictionaries are retained verbatim only when no desktop has a
+  real wallpaper; otherwise an inherited desktop, one journaled as inherited by
+  an older build and an unjournaled poster restore the display's (else any
+  display's) real original. Coordinator tests use unattached
   `CAMetalLayer`s and injected notification/encoding services.
 - **Lock screen** — per-display ownership, independent originals, external
   Desktop changes, journal recovery after service-reload failure, inherited

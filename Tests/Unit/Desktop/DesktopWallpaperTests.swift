@@ -51,8 +51,9 @@ final class DesktopWallpaperTests: XCTestCase {
     }
     override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
 
+    /// A user wallpaper; never inside the ledger's own poster folder.
     private func original(_ name: String) -> DesktopPicture {
-        DesktopPicture(url: root.appendingPathComponent(name + ".heic"),
+        DesktopPicture(url: root.appendingPathComponent("User Pictures/" + name + ".heic"),
                        scaling: Int(NSImageScaling.scaleProportionallyDown.rawValue),
                        allowClipping: true, fill: [0.1, 0.2, 0.3, 1])
     }
@@ -196,6 +197,51 @@ final class DesktopWallpaperTests: XCTestCase {
         XCTAssertEqual(workspace.pictures[one], before)
         XCTAssertEqual(workspace.pictures[two], before)
         XCTAssertTrue(try DesktopSpaceWallpaperAPI.configuration(XCTUnwrap(workspace.pictures[one])).isEmpty)
+    }
+
+    @MainActor
+    func testInheritedSpaceGetsTheUsersWallpaperBackInsteadOfAPoster() throws {
+        let workspace = MemoryDesktopWorkspace()
+        let inherited = try DesktopSpaceWallpaperAPI.decodePicture([:])
+        workspace.pictures = [one: original("before"), two: inherited, external: inherited]
+        let ledger = try DesktopWallpaperLedger(folder: root, workspace: workspace)
+        try ledger.synchronize(posters: ["1": Data([1]), "2": Data([2])], liveDisplays: ["1", "2"])
+        let reloaded = try DesktopWallpaperLedger(folder: root, workspace: workspace)
+        try reloaded.restoreAll()
+        XCTAssertEqual(workspace.pictures[one], original("before"))
+        XCTAssertEqual(workspace.pictures[two], original("before"))
+        // A display with no wallpaper of its own gets another display's.
+        XCTAssertEqual(workspace.pictures[external], original("before"))
+    }
+
+    @MainActor
+    func testPostersJournaledAsInheritedOrUnjournaledRestoreTheDisplaysWallpaper() throws {
+        let encode = { (picture: DesktopPicture) in
+            try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(picture)) as? [String: Any])
+        }
+        // Written by a build that journaled pathless originals verbatim.
+        try JSONSerialization.data(withJSONObject: [
+            "poster-real.png": ["original": try encode(original("before")), "display": "1"],
+            "poster-inherited.png": ["original": try encode(DesktopSpaceWallpaperAPI.decodePicture([:])), "display": "1"]
+        ]).write(to: root.appendingPathComponent("originals.json"))
+        for name in ["poster-real.png", "poster-inherited.png", "poster-orphan.png"] {
+            try Data([1]).write(to: root.appendingPathComponent(name))
+        }
+        let three = DesktopPictureTarget(display: "1", space: "three")
+        let workspace = MemoryDesktopWorkspace()
+        workspace.pictures = [
+            one: .poster(root.appendingPathComponent("poster-real.png")),
+            two: .poster(root.appendingPathComponent("poster-inherited.png")),
+            three: .poster(root.appendingPathComponent("poster-orphan.png")),
+            external: original("user-choice")
+        ]
+        let ledger = try DesktopWallpaperLedger(folder: root, workspace: workspace)
+        try ledger.restoreAll()
+        XCTAssertEqual(workspace.pictures[one], original("before"))
+        XCTAssertEqual(workspace.pictures[two], original("before"))
+        XCTAssertEqual(workspace.pictures[three], original("before"))
+        XCTAssertEqual(workspace.pictures[external], original("user-choice"))
+        XCTAssertFalse(workspace.writes.contains(external))
     }
 
     @MainActor

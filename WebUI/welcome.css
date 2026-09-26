@@ -97,15 +97,15 @@
 .welcome-pref-note { font-size: 12px; color: var(--muted); line-height: 1.45; }
 .welcome-start-option:first-child { border-color: var(--primary); }
 
-/* Tips and the GitHub pointer. */
-.welcome-tips { margin: 0; padding: 0; list-style: none; display: grid; gap: 14px; }
-.welcome-tips li { display: flex; gap: 12px; }
-.welcome-tip-body { flex: 1; min-width: 0; display: grid; gap: 3px; }
-.welcome-tip-title { font-size: 13px; font-weight: 600; line-height: 1.3; }
-.welcome-tip-text { font-size: 12px; color: var(--muted); line-height: 1.5; max-width: 66ch; }
-.welcome-github { display: flex; gap: 12px; padding: 16px 0 0; border-top: 1px solid var(--divider); }
-.welcome-github-mark { flex: 0 0 24px; width: 24px; height: 24px; display: grid; place-items: center; color: var(--muted); }
-.welcome-github-body { flex: 1; min-width: 0; display: grid; gap: 8px; }
+/* Tips: three one-line rows on the same card as the preferences, then the support card. */
+.welcome-tips { margin: 0; padding: 0; list-style: none; display: grid; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.welcome-tips li { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--divider); }
+.welcome-tips li:last-child { border-bottom: 0; }
+.welcome-tips p { flex: 1; min-width: 0; font-size: 13px; line-height: 1.4; color: var(--text); }
+.welcome-support { display: flex; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.welcome-support > .dialog-guide-icon { color: var(--text); }
+.welcome-support .welcome-status-actions { gap: 4px 18px; }
+.welcome-inline-icon { display: inline-flex; vertical-align: -2px; color: var(--text); }
 
 /* Recap of what the guide set, before the closing choices. */
 .welcome-recap { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }

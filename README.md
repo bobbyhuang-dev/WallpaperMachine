@@ -189,6 +189,10 @@ component's license, the open blockers and what would resolve them. Workshop
 wallpapers belong to their creators, and scene resources come from a Wallpaper
 Engine you own; the app bundles neither.
 
+## Friend Link
+
+- [linux.do](https://linux.do) —— Where possible begins
+
 <br>
 
 <p align="center">

@@ -79,8 +79,8 @@ targets:
         PRODUCT_NAME: WallpaperMachine
         INFOPLIST_FILE: App/Resources/Info.plist
         GENERATE_INFOPLIST_FILE: NO
-        MARKETING_VERSION: "0.5.0"
-        CURRENT_PROJECT_VERSION: "16"
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "17"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_INCLUDE_PATHS: "$(SRCROOT)/App/Bridge/Generated"
         HEADER_SEARCH_PATHS: "$(SRCROOT)/App/Bridge/Generated"
@@ -148,8 +148,8 @@ targets:
         INFOPLIST_FILE: Extension/Info.plist
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: WallpaperMachine Lock Screen
-        MARKETING_VERSION: "0.5.0"
-        CURRENT_PROJECT_VERSION: "16"
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "17"
         ENABLE_APP_SANDBOX: YES
         CODE_SIGN_ENTITLEMENTS: Extension/WallpaperExtension.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES

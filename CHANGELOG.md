@@ -7,6 +7,67 @@ sections list the commits. The GitHub Release body and the app's What's new card
 repeat the section, so the three always say the same thing. See
 [docs/release.md](docs/release.md) for how a version is cut.
 
+## 1.0.0 — 2026-09-26
+
+WallpaperMachine 1.0 ships as a drag-to-install disk image and adds a first-run guide with Steam sign-in, optional now-playing support for music wallpapers and many scene rendering fixes.
+
+### New
+
+- Downloads and in-app updates now come as a drag-to-install disk image with first-launch steps under System Settings → Privacy & Security → Open Anyway
+- A first-run welcome guide sets language and appearance, signs in to Steam and shares tips, and can be reopened from Settings → Library & Steam
+- Music wallpapers can optionally show the current track, cover art and playback state from your Mac's now-playing information once you allow media access
+- Play, pause, next and previous buttons inside music wallpapers can now control the player you are using, starting on the action the button's name suggests
+- Choose how many Workshop downloads run at once in Settings → Library & Steam → Downloads at once, from 1 to 6
+- Settings → General has a Language picker for System (Auto), English and Simplified Chinese that switches the panel in place
+- The control panel has a Wallpaper Engine-style filter sidebar with Workshop filters for type, age rating, resolution and tags, plus more Discover sort orders
+- Installed can be filtered with the same sidebar boxes as Discover and sorted by name, type, favorites, file size or date added
+- Wallpapers that let you choose your own picture now show the picture you pick instead of the packaged artwork
+- Tiles show corner marks for staff-approved items, favorites and wallpapers already in your library
+- Report a problem on GitHub now opens with the wallpaper's details filled in
+- Choose between new branded app icons
+- Settings → About shows what changed in the newest release
+- The optional Native Metal renderer now draws effects, video, text layers, puppets, particle trails and sprite sheets
+
+### Improved
+
+- Scenes with many large images open much faster because their images are decoded once and in parallel
+- Newly connected displays start enabled with the main display's wallpaper, and turning one off is remembered across reconnections
+- The Discover download ring names the current step, such as Connecting or Signing in, and shows Finishing while files are checked and imported
+- Discover previews download once, are kept on disk and play sooner, and resizing the window no longer reloads the page
+- The frame rate limit you set is now respected by wallpapers that react to the pointer
+- Changing tracks on a music wallpaper no longer reloads the whole wallpaper or restarts its videos
+- Heavy 3D wallpapers get more time to show their first frame, and later launches reach it faster
+- Scene wallpapers do less redundant drawing work while playing
+- Control panel text is rewritten in plain language and every message, menu and error is now translated into Simplified Chinese
+- Checking for updates no longer reports an error when no release has been published yet
+
+### Fixed
+
+- Wallpapers no longer disappear when you hide the app with Cmd-H or after activating a wallpaper
+- The app restores your own wallpapers at launch instead of posters or selections inherited from another display
+- Scene video textures no longer freeze after half a second, and 4K video scenes no longer fail with no first frame
+- The internal render scale setting now takes effect on scene wallpapers
+- Wallpaper buttons no longer stay stuck shrunk after being pressed
+- Sounds bound to a wallpaper's volume slider now follow the slider
+- Camera intros in 2D scenes play, and masked or parallax layers stay in place instead of sliding out of view
+- 2D wallpapers with a camera layer no longer show only a small patch in one corner
+- Blurred layers no longer flatten into a grey wash in the Compatibility renderer
+- Effects written for Wallpaper Engine that were silently dropped now appear on their layers
+- Audio-responsive elements react to sound on the Native Metal renderer instead of turning black
+- Heavy 3D scenes no longer collapse to a column or lose skies, rings and large meshes
+- Mouse trails follow the cursor near screen edges instead of drifting away from it
+- Parallax no longer pushes grouped layers aside and uncovers what is beneath them
+- Scripted dock icons in wallpapers now scale, fade and open as intended
+- Album covers keep their authored shape instead of turning into circles
+- Music wallpapers no longer go blank after changing a setting until playback is paused and resumed
+- The lock screen status row now shows the real reason the experimental animated lock screen failed to start
+- Applying a wallpaper no longer turns a mirrored display back into an independent one
+- Installed tiles no longer show a leftover Discover preview animation
+- Web wallpaper options keep their types and authored order
+- Some control panel error messages no longer appear in English when the panel is in Chinese
+
+**Full changelog**: https://github.com/WallpaperMachine/WallpaperMachine/compare/v0.5.0...v1.0.0
+
 ## 0.5.0 — 2026-09-18
 
 ### New

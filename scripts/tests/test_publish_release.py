@@ -16,7 +16,7 @@ publish_release = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(publish_release)
 
-ASSETS = ["WallpaperMachine-0.6.0-arm64.zip", "WallpaperMachine-0.6.0-arm64.zip.sha256"]
+ASSETS = ["WallpaperMachine-0.6.0-arm64.dmg", "WallpaperMachine-0.6.0-arm64.dmg.sha256"]
 
 
 def completed(stdout="", returncode=0):

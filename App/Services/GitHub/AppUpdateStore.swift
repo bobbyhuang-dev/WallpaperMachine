@@ -183,8 +183,9 @@ final class AppUpdateStore {
             }
             if Task.isCancelled { return state }
             downloadedArchive = destination
-            if !(asset.isZip && installer.canInstallInPlace) {
-                workspace.reveal(destination)
+            if !installer.canInstallInPlace {
+                // Finder mounts the disk image and shows its drag-to-Applications window.
+                workspace.open(destination)
             }
             state = .ready(currentVersion: currentVersion, availableVersion: release.version.display)
             return state
@@ -250,7 +251,7 @@ struct AppUpdateWorkspace: Sendable {
         AppUpdateWorkspace(
             archiveURL: { version, name in
                 let folder = ClientPaths.supportURL.appendingPathComponent("Updates", isDirectory: true)
-                let sanitized = name.isEmpty ? "WallpaperMachine-\(version).zip" : name
+                let sanitized = name.isEmpty ? "WallpaperMachine-\(version).dmg" : name
                 return folder.appendingPathComponent(sanitized)
             },
             reveal: { url in

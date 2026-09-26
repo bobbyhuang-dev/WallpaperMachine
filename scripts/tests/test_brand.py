@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import brand
+from lib import dmg
 
 
 class BrandTests(unittest.TestCase):
@@ -211,6 +212,51 @@ for path in CommandLine.arguments.dropFirst() {
                     self.assertEqual(max(alpha), 255, 'Glyph must remain opaque')
                     self.assertTrue(any(0 < a < 255 for a in alpha),
                                     'Preserve antialiased edges')
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'Requires macOS image tools')
+    def test_dmg_background_pair_matches_window_geometry_and_keeps_icon_slots_light(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            work = Path(scratch)
+            with patch.object(brand, 'DMG_BACKGROUND', work / 'out/background.png'):
+                paths = brand.write_dmg_background(work)
+            self.assertEqual([p.name for p in paths], ['background.png', 'background@2x.png'])
+            for scale, path in enumerate(paths, start=1):
+                with self.subTest(scale=scale):
+                    probe = subprocess.run(['sips', '-g', 'pixelWidth', '-g', 'pixelHeight', '-g', 'dpiWidth',
+                                            '-g', 'hasAlpha', str(path)], check=True, capture_output=True, text=True)
+                    values = dict(line.strip().split(': ') for line in probe.stdout.splitlines()[1:])
+                    self.assertEqual((int(values['pixelWidth']), int(values['pixelHeight'])),
+                                     (dmg.WINDOW[0] * scale, dmg.WINDOW[1] * scale),
+                                     'Finder tiles a background whose size differs from the window')
+                    self.assertEqual(float(values['dpiWidth']), 72 * scale, 'Retina pairing needs 72/144 dpi')
+                    self.assertEqual(values['hasAlpha'], 'no')
+            # Finder draws 13 pt black labels below the icons and may leave the Applications
+            # slot empty: both slots and both label bands must stay plain, light field.
+            half = dmg.ICON_SIZE // 2
+            zones = [(cx - half, cy - half, cx + half, cy + half + 2 * dmg.LABEL_SIZE + 6)
+                     for cx, cy in (dmg.APP_ICON_CENTER, dmg.APPLICATIONS_ICON_CENTER)]
+            result = subprocess.run(['swift', '-e', r'''
+import AppKit
+let image = NSBitmapImageRep(data: try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))!
+let zones = CommandLine.arguments.dropFirst(2).map { $0.split(separator: ",").map { Int($0)! } }
+var report: [[Double]] = []
+for zone in zones {
+    var low = 1.0, high = 0.0
+    for y in zone[1]..<zone[3] {
+        for x in zone[0]..<zone[2] {
+            let c = image.colorAt(x: x, y: y)!.usingColorSpace(.sRGB)!
+            let l = 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
+            low = min(low, l); high = max(high, l)
+        }
+    }
+    report.append([low, high])
+}
+print(String(data: try JSONSerialization.data(withJSONObject: report), encoding: .utf8)!)
+''', str(paths[0]), *(','.join(map(str, zone)) for zone in zones)], check=True, capture_output=True, text=True)
+            for zone, (low, high) in zip(zones, json.loads(result.stdout), strict=True):
+                with self.subTest(zone=zone):
+                    self.assertGreater(low, 0.85, 'Black Finder labels need a light field')
+                    self.assertLess(high - low, 0.08, 'Icon slots must stay free of plates, rings or drop zones')
 
 if __name__ == '__main__':
     unittest.main()

@@ -67,14 +67,17 @@ Swift tests cover, without starting the app:
   manifest and media bytes. Fixtures do not prove that Valve's current
   distribution passes this Mac's policy.
 - **GitHub updates** — fixture JSON, a fake client and isolated URLSession
-  responses: version comparison, asset selection, host allowlisting, progress
-  clamping, classified errors and install retry/timeout. A missing latest release
-  is normal only after the repository is confirmed reachable; missing repositories,
-  failed lookups and malformed metadata remain errors. Rechecking clears stale
-  release notes/availability and can discover a later release. The offscreen About
-  flow also checks again from the no-release state before downloading a fixture
-  update. These tests never contact GitHub, download a real archive, or replace
-  the running app.
+  responses: version comparison, disk-image asset selection, host allowlisting,
+  progress clamping, classified errors and install retry/timeout. A missing latest
+  release is normal only after the repository is confirmed reachable; missing
+  repositories, failed lookups and malformed metadata remain errors. Rechecking
+  clears stale release notes/availability and can discover a later release. The
+  offscreen About flow also checks again from the no-release state before
+  downloading a fixture update. The installer is exercised against real disk
+  images made with `hdiutil`: the app is copied out without following the
+  `Applications` link, a foreign bundle is refused, and the image is detached
+  either way; an app that cannot install in place opens the downloaded image. These
+  tests never contact GitHub, download a real release, or replace the running app.
 - **Panel** — the offscreen `WKWebView` suites share `ControlPanelTestCase`
   (`Tests/Unit/Panel/`) and split by page: `ControlPanelShellTests` (window,
   language, appearance, About/update, top bar), `ControlPanelLibraryTests`
@@ -155,7 +158,7 @@ Swift tests cover, without starting the app:
   after suspension. No test selects a real wallpaper.
 
 What native tests do **not** establish: macOS acceptance/restoration of native
-wallpaper selections, live GitHub release install, archive extraction and
-Applications replacement, Steam CDN throughput, live-account session reuse,
+wallpaper selections, live GitHub release install and Applications replacement,
+how Finder draws the disk-image window, Steam CDN throughput, live-account session reuse,
 Mission Control cache refresh, and any visual timing. Those stay on
 [manual-smoke.md](manual-smoke.md).

@@ -204,9 +204,13 @@ verification.
 
 - [ ] Settings → About shows **Check for Updates**. The application menu item
       **Check for Updates…** opens that same section.
-- [ ] A live GitHub release check, archive extraction and replacement of the app
-      in Applications. Update tests use fixture JSON and a fake client, so this
-      path is manual only.
+- [ ] A live GitHub release check, the published disk image mounting and the
+      replacement of the app in Applications. Update tests use fixture JSON, a
+      fake client and locally made images, so this path is manual only.
+- [ ] Opening the disk image shows one window without toolbar or sidebar: the
+      app and Applications at their places over the background, labels readable,
+      the volume icon. Dragging installs; the first launch is refused and opens
+      from System Settings → Privacy & Security → **Open Anyway**.
 
 ## Cross-cutting
 

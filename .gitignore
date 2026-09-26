@@ -11,8 +11,9 @@ artifacts/
 *.trace
 *.log
 
-# Release archives produced by scripts/package.py
-WallpaperMachine-*.zip
+# Disk images and checksums produced by scripts/package.py
+WallpaperMachine-*.dmg
+WallpaperMachine-*.dmg.sha256
 
 # Local private wallpaper corpus and its notes; see docs/testing/wallpaper-corpus.md
 wallpaper-corpus/

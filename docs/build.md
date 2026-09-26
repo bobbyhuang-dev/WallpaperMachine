@@ -8,7 +8,7 @@ Authoritative build document. Everything here is driven by `scripts/build.py` an
 
 | Requirement | Detail |
 |---|---|
-| Hardware | Apple Silicon only. `project.yml` sets `ARCHS: arm64`, and release archives are named `-arm64`. |
+| Hardware | Apple Silicon only. `project.yml` sets `ARCHS: arm64`, and release disk images are named `-arm64`. |
 | macOS | 26 or later. `project.yml` pins `deploymentTarget.macOS` and `MACOSX_DEPLOYMENT_TARGET` to `26.0`; `scripts/build.py` passes the same value to the renderer as `OWE_MACOSX_DEPLOYMENT_TARGET`. |
 | Xcode | A full Xcode selected with `xcode-select`. The build reads `xcode-select -p` for the toolchain and `xcrun --sdk macosx --show-sdk-path` for the SDK. Command Line Tools alone are not enough. |
 | Homebrew | Provides every renderer dependency; `brew --prefix` is queried at build time. |
@@ -148,9 +148,11 @@ python3 scripts/package.py --configuration Release --install
 ```
 
 `scripts/package.py` takes the already-built bundle at
-`build/Build/Products/<configuration>/WallpaperMachine.app` and makes it
-self-contained. It exits with `Build the application first using
-scripts/build.py` when that bundle is absent.
+`build/Build/Products/<configuration>/WallpaperMachine.app`, makes it
+self-contained, and wraps it in the drag-to-install disk image
+`WallpaperMachine-<version>-arm64.dmg` with its `.sha256` sidecar beside the app.
+It exits with `Build the application first using scripts/build.py` when that
+bundle is absent.
 
 0. **Preflight**, before anything is modified (`--check` runs only this step
    and leaves the bundle unchanged):
@@ -179,6 +181,11 @@ scripts/build.py` when that bundle is absent.
      `COPYRIGHT*`/`NOTICE*` file in every Homebrew keg the link closure
      reaches. Otherwise `MISSING Missing license payload:` lists what is
      absent.
+   - The disk image's inputs must be usable: `Packaging/dmg/background.png`, its
+     `@2x` twin at exactly twice its pixel size, and the bundle's
+     `Resources/AppIcon.icns`. Otherwise `Missing disk image input:` or
+     `… not twice …` names the file, and since nothing has been touched yet,
+     regenerating the art and rerunning is enough.
 1. **Dylib relocation.** Starting from `libMoltenVK.dylib` and the app and
    extension binaries, it walks `otool -L` transitively. Every dependency under
    the Homebrew prefix is copied into `Contents/Frameworks`, given an
@@ -208,15 +215,47 @@ scripts/build.py` when that bundle is absent.
    load command fails with `Unbundled dependency: …`; an `@rpath` dependency with
    no matching file in `Contents/Frameworks` fails with `Missing bundled
    dependency: …` (Swift runtime libraries are exempt).
-6. **Archive.** The version is read from the bundle's
-   `CFBundleShortVersionString` with `PlistBuddy`, and `ditto -c -k --keepParent`
-   writes `WallpaperMachine-<version>-arm64.zip` beside the app. The in-app
-   updater depends on that name; see [release.md](release.md). The archive is
-   labelled as not cleared for distribution: it is for local use until
-   [../LICENSING.md](../LICENSING.md) records the blockers as resolved.
-7. **`--install`.** Copies the bundle to `~/Applications/WallpaperMachine.app`.
+6. **Disk image.** The version is read from the bundle's
+   `CFBundleShortVersionString` with `PlistBuddy`, and
+   [`scripts/lib/dmg.py`](../scripts/lib/dmg.py) writes
+   `WallpaperMachine-<version>-arm64.dmg`: an HFS+ volume named
+   `WallpaperMachine <version>` holding the bundle (copied with `ditto`, so its
+   signatures survive; its extended attributes and resource forks stay behind, so
+   the File Provider attributes described under Troubleshooting never reach the
+   image) and an `Applications` link, compressed with LZFSE
+   (`ULFO`). The window a user sees is laid out without Finder: the script writes
+   the volume's `.DS_Store` itself, record for record what dmgbuild 1.6.7 writes,
+   so packaging runs headless in CI and never needs Automation permission. The
+   window is 660 × 440 points without toolbar, sidebar or status bar; the app
+   and Applications icons, 128 points with 13-point labels, sit at (180, 205) and
+   (480, 205) over `Packaging/dmg/background.png` and its `@2x` twin, joined into
+   one HiDPI TIFF; the volume icon is the app's `AppIcon.icns`. The background is
+   referenced by a version 2 alias record only, because from macOS 26.2 Finder
+   draws no background for a `.DS_Store` that also carries a bookmark (`pBBk`).
+7. **Verification and checksum.** The image is mounted read-only and out of
+   sight: the bundle in it must be `app.wallpapermachine` at the version the name
+   claims and pass `codesign --verify --deep --strict`, and the `Applications`
+   link and the window layout must be there. Only then is
+   `WallpaperMachine-<version>-arm64.dmg.sha256` written, in the format
+   `shasum -a 256 -c` reads. The in-app updater depends on the image name; see
+   [release.md](release.md). The image is labelled as not cleared for
+   distribution: it is for local use until [../LICENSING.md](../LICENSING.md)
+   records the blockers as resolved.
+8. **`--install`.** Copies the bundle to `~/Applications/WallpaperMachine.app`.
    It refuses to overwrite an existing installation: quit and remove the old copy
    first.
+
+The background art is generated, not drawn by hand: `python3 scripts/brand.py
+--dmg` renders both PNGs with CoreGraphics from `scripts/lib/dmg.py`'s window
+geometry and the brand palette, and changes nothing else. Regenerate it whenever
+that geometry or the palette changes. Finder draws icon labels in black on a
+custom background whatever the appearance, so the art stays light.
+`scripts/tests/test_dmg.py` holds the `.DS_Store` and alias writers to the bytes
+ds_store 1.3.3 and mac_alias 2.2.3 produce for fixed inputs (recorded once, since
+no test can run Finder), and builds an image of a small signed bundle that carries
+Finder info, then opens it the way a Mac does: its layout records, the background
+alias resolving to the file on the volume, the volume icon, the link, and
+verification passing for its version only.
 
 After a successful Release build, quit and reopen the app to load it.
 
@@ -247,10 +286,12 @@ whole tree, which is how tests stay isolated from your real library.
 | `An installation already exists: …` | `--install` will not replace `~/Applications/WallpaperMachine.app` | Quit and remove the installed copy, then rerun. |
 | `CodeSign` fails with `resource fork, Finder information, or similar detritus not allowed in object file` | The built `.app`/`.appex` **directory** in `build/` picked up `com.apple.FinderInfo` or File Provider xattrs (`com.apple.fileprovider.fpfs#P`). It comes from the file provider syncing the checkout's parent directory, not from anything committed: source files carry only `com.apple.provenance`, which codesign accepts | `xattr -cr build/Build/Products/<configuration>` and rerun the same command. It recurs on synced checkouts; clearing the products directory is the fix, not a rebuild |
 | `codesign --verify --deep --strict` fails | A dylib or the extension was modified after signing | Rerun packaging on a fresh build rather than re-signing pieces by hand. |
+| `Missing disk image input:` or `… not twice …` during the preflight | The DMG background under `Packaging/dmg/` or the bundle's `AppIcon.icns` is missing, or the 1x and 2x PNGs no longer pair up | `python3 scripts/brand.py --dmg`, then rerun packaging; the preflight stopped before the bundle was touched. |
+| `Could not detach …` while packaging | Something kept the volume busy past the retries (a Finder window on a leftover mount, an indexer), or a mount from an interrupted run is still attached | `hdiutil info` lists attached images; `hdiutil detach -force <device>` the leftover, then rerun packaging on a fresh build. |
 
 ## Related documents
 
 - [testing/README.md](testing/README.md) — how to verify a build.
 - [testing/renderer.md](testing/renderer.md) — headless renderer and GPU checks.
-- [release.md](release.md) — versioning, CI, and published archives.
+- [release.md](release.md) — versioning, CI, notes, and the published disk image.
 - [repository-layout.md](repository-layout.md) — where each source tree lives.

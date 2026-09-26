@@ -16,6 +16,9 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       tag: ${{ github.ref_name }}
+    # A hand-pushed tag may have no CHANGELOG.md section; Build then asks the
+    # release-notes model, which needs RELEASE_NOTES_API_KEY.
+    secrets: inherit
     permissions:
       contents: write
       id-token: write

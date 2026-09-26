@@ -289,8 +289,9 @@ Homebrew and source-tree `LC_RPATH` entries and adds `@executable_path/../Framew
 next to both the app and each extension pointing at the bundled driver; writes the license
 payload; ad-hoc signs the dylibs, each extension (preserving entitlements) and the app (no
 Developer ID, no notarization); verifies with `codesign --verify --deep --strict`; fails if any
-dependency is still unbundled; and zips `WallpaperMachine-<version>-arm64.zip`, labelled as
-not cleared for distribution.
+dependency is still unbundled; and wraps the bundle in the drag-to-install disk image
+`WallpaperMachine-<version>-arm64.dmg` (`scripts/lib/dmg.py`: an `Applications` link, a laid-out
+window and a background, verified by mounting it), labelled as not cleared for distribution.
 
 ## Targets
 

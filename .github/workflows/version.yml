@@ -3,7 +3,8 @@
 # Commit subject (or any line in a pushed commit, including a squash title):
 #   release: patch | minor | major | x.y.z | vx.y.z
 #
-# CI updates project.yml, WallpaperMachine.xcodeproj and CHANGELOG.md, commits
+# CI updates project.yml, WallpaperMachine.xcodeproj and CHANGELOG.md, whose new section
+# the release-notes model writes from the commits (secret RELEASE_NOTES_API_KEY), commits
 # `chore: bump version to x.y.z`, tags `vx.y.z`, and calls Build for that tag.
 # The call is required: a tag pushed with GITHUB_TOKEN never starts Release itself.
 name: Version
@@ -46,11 +47,16 @@ jobs:
 
       - name: Write the changelog section
         if: steps.bump.outputs.changed == 'true'
+        # The job holds the branch's version lock; the script gives the model 600 s,
+        # and this bounds the step even if something else hangs.
+        timeout-minutes: 15
         env:
           TAG: ${{ steps.bump.outputs.tag }}
+          RELEASE_NOTES_API_KEY: ${{ secrets.RELEASE_NOTES_API_KEY }}
         # The tag does not exist yet, so the range ends at HEAD. The bump commit
-        # itself is never part of the notes it describes.
-        run: python3 scripts/release_notes.py --tag "$TAG" --to HEAD --changelog --apply
+        # itself is never part of the notes it describes. Without the key, or when the
+        # model fails, nothing is committed or tagged; re-run the job.
+        run: python3 scripts/release_notes.py --tag "$TAG" --to HEAD --ai --changelog --apply
 
       - name: Commit, tag, and push
         id: push
@@ -79,6 +85,8 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       tag: ${{ needs.bump.outputs.tag }}
+    # Build reads RELEASE_NOTES_API_KEY for a tag that has no CHANGELOG.md section.
+    secrets: inherit
     permissions:
       contents: write
       id-token: write

@@ -336,7 +336,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
     let updater = AppUpdateStore(
       currentVersion: "1.0.0", client: client, installer: installer,
       workspace: AppUpdateWorkspace(
-        archiveURL: { _, _ in root.appendingPathComponent("update.zip") },
+        archiveURL: { _, _ in root.appendingPathComponent("update.dmg") },
         reveal: { _ in }, open: { _ in }),
       scheduleInstall: { _ in }, terminate: {})
     let navigation = ControlPanelNavigation()
@@ -389,7 +389,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
     let updater = AppUpdateStore(
       currentVersion: "1.0.0", client: client, installer: installer,
       workspace: AppUpdateWorkspace(
-        archiveURL: { _, _ in root.appendingPathComponent("update.zip") },
+        archiveURL: { _, _ in root.appendingPathComponent("update.dmg") },
         reveal: { _ in }, open: { _ in }),
       scheduleInstall: { _ in }, terminate: {})
     let navigation = ControlPanelNavigation()

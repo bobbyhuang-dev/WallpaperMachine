@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Bundle Homebrew dylibs, configure MoltenVK, collect license notices, and ad-hoc sign the local application.
+"""Bundle Homebrew dylibs, configure MoltenVK, collect license notices, ad-hoc sign the local application, and wrap it in a disk image.
 
 Nothing in the bundle is touched until the preflight passes: the FFmpeg libraries
 the binaries actually link must be an LGPL build (Formula/mwe-ffmpeg.rb), never a
 `--enable-gpl` / `--enable-version3` / `--enable-nonfree` one, and every bundled
-Homebrew keg must carry license files to ship. The archive this produces is for
-local use; LICENSING.md records why it is not cleared for distribution.
+Homebrew keg must carry license files to ship. The signed bundle then goes into
+`WallpaperMachine-<version>-arm64.dmg`, the drag-to-install image laid out by
+scripts/lib/dmg.py, which is mounted and verified before its `.sha256` sidecar is
+written. The image is for local use; LICENSING.md records why it is not cleared for
+distribution.
 
 `--check` runs the preflight against the built bundle and exits without changing it.
 """
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -17,6 +21,7 @@ import shutil
 import subprocess
 import sys
 
+from lib import dmg
 from lib.glyphs import markers
 from lib.paths import RENDERER, ROOT, app_bundle
 
@@ -212,6 +217,9 @@ def package(args):
     for extension in extensions:
         notices[extension / "Contents/Resources/Phosphene-LICENSE.txt"] = ROOT / "Extension/Phosphene-LICENSE.txt"
     licenses = preflight(notices, libraries)
+    # The image's art and volume icon are inputs too: a missing or mismatched one must
+    # stop packaging while the bundle is untouched, not after it is relocated and signed.
+    dmg.check_inputs(icon=resources / "AppIcon.icns")
     for keg in licenses:
         print(f"{MARK.ok} {keg.parent.name} {keg.name}: {', '.join(name for name, source in sorted(libraries.items()) if keg_of(source) == keg)}")
     if args.check:
@@ -249,9 +257,12 @@ def package(args):
                 raise PackagingError(f"Missing bundled dependency: {dependency}")
     info = app / "Contents/Info.plist"
     version = output(["/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", info]).strip()
-    archive = app.parent / f"WallpaperMachine-{version}-arm64.zip"
-    archive.unlink(missing_ok=True)
-    run(["ditto", "-c", "-k", "--keepParent", app, archive])
+    image = dmg.build(app, app.parent / dmg.image_name(version), dmg.volume_name(version), icon=resources / "AppIcon.icns")
+    # Prove the image, not the build tree: users and the in-app updater install
+    # exactly this file, and a bundle that does not survive the round trip is not one.
+    dmg.verify(image, version)
+    checksum = image.with_name(image.name + ".sha256")
+    checksum.write_text(f"{sha256(image)}  {image.name}\n")
     if args.install:
         destination = Path.home() / "Applications/WallpaperMachine.app"
         destination.parent.mkdir(exist_ok=True)
@@ -260,7 +271,16 @@ def package(args):
         shutil.copytree(app, destination)
         print(f"{MARK.ok} Installed {destination}")
     print(f"{MARK.ok} Verified bundle: {app}")
-    print(f"{MARK.ok} Local archive (not cleared for distribution, see LICENSING.md): {archive}")
+    print(f"{MARK.ok} Verified disk image (not cleared for distribution, see LICENSING.md): {image}")
+    print(f"{MARK.ok} Checksum: {checksum}")
+
+
+def sha256(file):
+    digest = hashlib.sha256()
+    with open(file, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def main():
@@ -271,7 +291,7 @@ def main():
     args = parser.parse_args()
     try:
         package(args)
-    except PackagingError as error:
+    except (PackagingError, dmg.DiskImageError) as error:
         print(f"{MARK.missing} {error}", file=sys.stderr)
         return 1
     return 0

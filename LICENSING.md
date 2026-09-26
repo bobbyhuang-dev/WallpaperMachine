@@ -301,9 +301,9 @@ As implemented by `scripts/package.py` and `.github/workflows/build.yml`
   refuses when any notice it must bundle is missing. `--check` runs only the
   preflight.
 - `.github/workflows/build.yml` fails unconditionally at its first step,
-  citing this file, so CI cannot publish a release archive while distribution
+  citing this file, so CI cannot publish a release disk image while distribution
   is blocked. The remaining steps are kept for when that step is deleted.
-- Local archives produced by `scripts/package.py` are labelled as not cleared
+- Local disk images produced by `scripts/package.py` are labelled as not cleared
   for distribution.
 
 These checks catch the GPLv3 FFmpeg mistake and a missing notice. They do not

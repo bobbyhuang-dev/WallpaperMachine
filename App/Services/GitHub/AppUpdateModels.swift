@@ -7,10 +7,10 @@ enum AppUpdateConfiguration {
     static let applicationName = productName + ".app"
     static let maximumDownloadBytes: Int64 = 1_073_741_824
 
-    /// The archive `scripts/package.py` produces and the Build workflow publishes.
-    /// Renaming the product moves both sides of this contract at once.
+    /// The drag-to-install disk image `scripts/package.py` produces and the Build workflow
+    /// publishes. Renaming the product moves both sides of this contract at once.
     static func assetName(for version: SemanticVersion) -> String {
-        "\(productName)-\(version.display)-arm64.zip"
+        "\(productName)-\(version.display)-arm64.dmg"
     }
 
     static var repositoryURL: URL {
@@ -66,7 +66,6 @@ struct GitHubReleaseAsset: Equatable, Sendable {
     let downloadURL: URL
     let size: Int64
     let digest: String?
-    var isZip: Bool { name.lowercased().hasSuffix(".zip") }
     var isDiskImage: Bool { name.lowercased().hasSuffix(".dmg") }
 }
 
@@ -225,7 +224,7 @@ enum AppUpdateErrorClassifier {
             }
         }
         if posixPermission(error) { return .permission }
-        if message.range(of: #"sha-?256|sha-?512|checksum|digest|signature|could not be verified|zip|archive"#, options: [.regularExpression, .caseInsensitive]) != nil {
+        if message.range(of: #"sha-?256|sha-?512|checksum|digest|signature|could not be verified|disk image|archive"#, options: [.regularExpression, .caseInsensitive]) != nil {
             return .verification
         }
         if message.range(of: #"eacces|eperm|permission|not permitted|access denied"#, options: [.regularExpression, .caseInsensitive]) != nil {
@@ -269,18 +268,17 @@ enum GitHubReleaseParser {
                              assets: assets, notes: payload.body ?? "")
     }
 
+    /// The disk image to download: only product-named `.dmg` assets qualify, so the
+    /// `.dmg.sha256` sidecar, zips, feeds and blockmaps never do, and a release without
+    /// one is left to a manual download.
     static func selectAsset(from release: GitHubRelease) -> GitHubReleaseAsset? {
         let expected = AppUpdateConfiguration.assetName(for: release.version).lowercased()
         let candidates = release.assets.filter { asset in
-            let name = asset.name.lowercased()
-            guard asset.isZip || asset.isDiskImage else { return false }
-            if name.contains("blockmap") || name.contains(".yml") { return false }
-            return name.contains(AppUpdateConfiguration.productName.lowercased())
+            asset.isDiskImage && asset.name.lowercased().contains(AppUpdateConfiguration.productName.lowercased())
         }
         return candidates.first { $0.name.lowercased() == expected }
-            ?? candidates.first { $0.isZip && $0.name.lowercased().contains("arm64") }
-            ?? candidates.first { $0.isZip }
-            ?? candidates.first { $0.isDiskImage }
+            ?? candidates.first { $0.name.lowercased().contains("arm64") }
+            ?? candidates.first
     }
 
     private struct Payload: Decodable {

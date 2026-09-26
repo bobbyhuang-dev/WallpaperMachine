@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Attach a built archive to its GitHub Release, draft first, never to a live one.
+"""Attach a built disk image to its GitHub Release, draft first, never to a live one.
 
 The in-app updater reads the newest non-draft release, so a release that is public
-before its archive is uploaded is a release users cannot download. This creates the
+before its image is uploaded is a release users cannot download. This creates the
 release as a draft, uploads, and clears the draft flag last; a failure anywhere in
 between leaves a draft, which `releases/latest` does not return.
-
 Two things the naive `gh` sequence gets wrong, both covered by
 `scripts/tests/test_publish_release.py`:
 
@@ -20,8 +19,8 @@ Two things the naive `gh` sequence gets wrong, both covered by
   whatever order their caches allow; promoting unconditionally lets the older build
   finish last, take Latest, and offer users the wrong version.
 
-    python3 scripts/publish_release.py --tag v0.6.0 --notes notes.md app.zip app.zip.sha256
-    python3 scripts/publish_release.py --tag v0.6.0 --notes notes.md --dry-run app.zip
+    python3 scripts/publish_release.py --tag v0.6.0 --notes notes.md app.dmg app.dmg.sha256
+    python3 scripts/publish_release.py --tag v0.6.0 --notes notes.md --dry-run app.dmg
 
 Called by .github/workflows/build.yml; `gh` reads GH_TOKEN from the environment.
 """
@@ -142,7 +141,7 @@ def main(argv=None):
     parser.add_argument("--tag", required=True, help="Version tag the release belongs to.")
     parser.add_argument("--notes", required=True, help="Markdown file holding the release body.")
     parser.add_argument("--dry-run", action="store_true", help="Print the gh commands and run none of them.")
-    parser.add_argument("assets", nargs="+", help="Files to upload, archive first.")
+    parser.add_argument("assets", nargs="+", help="Files to upload, disk image first.")
     args = parser.parse_args(argv)
     for path in [args.notes, *args.assets]:
         if not Path(path).is_file():

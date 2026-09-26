@@ -14,18 +14,48 @@ final class AppUpdateTests: XCTestCase {
         XCTAssertEqual(SemanticVersion("V2.0.0"), SemanticVersion("2.0.0"))
     }
 
-    func testParserReadsStableReleaseAndPrefersArm64Zip() throws {
+    func testParserReadsStableReleaseAndPrefersTheArm64DiskImage() throws {
         let release = try GitHubReleaseParser.decode(Self.releaseJSON(
             tag: "v1.2.3",
             assets: [
                 ("latest-mac.yml", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/latest-mac.yml", 100, nil),
+                ("WallpaperMachine-1.2.3-arm64.zip", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/WallpaperMachine-1.2.3-arm64.zip", 150, nil),
                 ("WallpaperMachine-1.2.3.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/WallpaperMachine-1.2.3.dmg", 200, nil),
-                ("WallpaperMachine-1.2.3-arm64.zip", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/WallpaperMachine-1.2.3-arm64.zip", 300, "sha256:" + String(repeating: "ab", count: 32))
+                ("WallpaperMachine-1.2.3-arm64.dmg.sha256", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/WallpaperMachine-1.2.3-arm64.dmg.sha256", 90, nil),
+                ("WallpaperMachine-1.2.3-arm64.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/WallpaperMachine-1.2.3-arm64.dmg", 300, "sha256:" + String(repeating: "ab", count: 32))
             ]
         ))
         XCTAssertEqual(release.version.display, "1.2.3")
-        XCTAssertEqual(GitHubReleaseParser.selectAsset(from: release)?.name, "WallpaperMachine-1.2.3-arm64.zip")
+        XCTAssertEqual(GitHubReleaseParser.selectAsset(from: release)?.name, "WallpaperMachine-1.2.3-arm64.dmg")
         XCTAssertEqual(GitHubReleaseParser.selectAsset(from: release)?.digest, "sha256:" + String(repeating: "ab", count: 32))
+    }
+
+    func testParserFallsBackToAnArm64DiskImageThenAnyProductDiskImage() throws {
+        let renamed = try GitHubReleaseParser.decode(Self.releaseJSON(
+            tag: "v1.2.3",
+            assets: [
+                ("WallpaperMachine-1.2.3.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/plain.dmg", 200, nil),
+                ("WallpaperMachine-arm64.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/arm64.dmg", 300, nil)
+            ]
+        ))
+        XCTAssertEqual(GitHubReleaseParser.selectAsset(from: renamed)?.name, "WallpaperMachine-arm64.dmg")
+
+        let plain = try GitHubReleaseParser.decode(Self.releaseJSON(
+            tag: "v1.2.3",
+            assets: [
+                ("Other-1.2.3-arm64.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/other.dmg", 100, nil),
+                ("WallpaperMachine-1.2.3.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/plain.dmg", 200, nil)
+            ]
+        ))
+        XCTAssertEqual(GitHubReleaseParser.selectAsset(from: plain)?.name, "WallpaperMachine-1.2.3.dmg")
+    }
+
+    func testZipOnlyReleaseIsLeftToAManualDownload() throws {
+        let release = try GitHubReleaseParser.decode(Self.releaseJSON(
+            tag: "v1.2.3",
+            assets: [("WallpaperMachine-1.2.3-arm64.zip", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/WallpaperMachine-1.2.3-arm64.zip", 300, nil)]
+        ))
+        XCTAssertNil(GitHubReleaseParser.selectAsset(from: release))
     }
 
     func testParserRejectsPrereleaseAndMissingVersion() {
@@ -47,24 +77,24 @@ final class AppUpdateTests: XCTestCase {
         // to publish anything else. Renaming one side without the others silently
         // drops every user back to a manual download.
         XCTAssertEqual(AppUpdateConfiguration.assetName(for: SemanticVersion("1.2.3")!),
-                       "WallpaperMachine-1.2.3-arm64.zip")
+                       "WallpaperMachine-1.2.3-arm64.dmg")
     }
 
     func testParserPrefersTheArchiveNamedForThisVersion() throws {
         let release = try GitHubReleaseParser.decode(Self.releaseJSON(
             tag: "v1.2.3",
             assets: [
-                ("WallpaperMachine-1.2.2-arm64.zip", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/old.zip", 100, nil),
-                ("WallpaperMachine-1.2.3-arm64.zip", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/new.zip", 300, nil)
+                ("WallpaperMachine-1.2.2-arm64.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/old.dmg", 100, nil),
+                ("WallpaperMachine-1.2.3-arm64.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/new.dmg", 300, nil)
             ]
         ))
-        XCTAssertEqual(GitHubReleaseParser.selectAsset(from: release)?.name, "WallpaperMachine-1.2.3-arm64.zip")
+        XCTAssertEqual(GitHubReleaseParser.selectAsset(from: release)?.name, "WallpaperMachine-1.2.3-arm64.dmg")
     }
 
     func testChecksumSidecarIsNeverDownloadedAsAnUpdate() throws {
         let release = try GitHubReleaseParser.decode(Self.releaseJSON(
             tag: "v1.2.3",
-            assets: [("WallpaperMachine-1.2.3-arm64.zip.sha256", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/sum", 90, nil)]
+            assets: [("WallpaperMachine-1.2.3-arm64.dmg.sha256", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/sum", 90, nil)]
         ))
         XCTAssertNil(GitHubReleaseParser.selectAsset(from: release))
     }
@@ -87,7 +117,7 @@ final class AppUpdateTests: XCTestCase {
 
         ### Install
 
-        1. Download `WallpaperMachine-1.2.3-arm64.zip` and unzip it.
+        1. Open `WallpaperMachine-1.2.3-arm64.dmg` and drag WallpaperMachine to Applications.
         """
         let notes = try XCTUnwrap(ReleaseNotes(version: "1.2.3", body: body))
         XCTAssertEqual(notes.sections.map(\.title), ["New", "Fixed", ""])
@@ -111,7 +141,7 @@ final class AppUpdateTests: XCTestCase {
     }
 
     func testDownloadHostAllowlistAndDigestParsing() {
-        XCTAssertTrue(GitHubReleaseDownload.isAllowed(URL(string: "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1/app.zip")!))
+        XCTAssertTrue(GitHubReleaseDownload.isAllowed(URL(string: "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1/app.dmg")!))
         XCTAssertTrue(GitHubReleaseDownload.isAllowed(URL(string: "https://objects.githubusercontent.com/github-production-release-asset/1")!))
         XCTAssertFalse(GitHubReleaseDownload.isAllowed(URL(string: "http://github.com/file")!))
         XCTAssertFalse(GitHubReleaseDownload.isAllowed(URL(string: "https://evil.example/file")!))
@@ -142,6 +172,34 @@ final class AppUpdateTests: XCTestCase {
         XCTAssertThrowsError(try AppUpdateInstaller.validate(app))
     }
 
+    func testInstallerCopiesTheAppOutOfTheDiskImageAndDetachesIt() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mwe-update-dmg-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = try Self.makeDiskImage(in: root, bundleIdentifier: "app.wallpapermachine")
+        defer { Self.forceDetach(image) }
+
+        let app = try AppUpdateInstaller().prepareInstallation(archive: image)
+        let work = app.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: work) }
+        XCTAssertEqual(app.lastPathComponent, "WallpaperMachine.app")
+        XCTAssertFalse(app.path.hasPrefix(work.appendingPathComponent("mount").path + "/"))
+        XCTAssertFalse(app.path.hasPrefix("/Volumes/"))
+        XCTAssertNoThrow(try AppUpdateInstaller.validate(app))
+        XCTAssertEqual(try Self.attachedDevices(of: image), [])
+    }
+
+    func testInstallerRejectsAForeignAppInTheDiskImageAndDetachesIt() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mwe-update-dmg-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = try Self.makeDiskImage(in: root, bundleIdentifier: "com.example.other")
+        defer { Self.forceDetach(image) }
+
+        XCTAssertThrowsError(try AppUpdateInstaller().prepareInstallation(archive: image)) { error in
+            XCTAssertEqual((error as? AppUpdateIssue)?.code, .verification)
+        }
+        XCTAssertEqual(try Self.attachedDevices(of: image), [])
+    }
+
     func testCheckFindsUpdateWithoutDownloading() async {
         let fixture = Fixture()
         fixture.client.release = fixture.release(version: "1.1.0")
@@ -168,7 +226,7 @@ final class AppUpdateTests: XCTestCase {
         let store = AppUpdateStore(currentVersion: "1.0.0", client: http.client)
         http.respond(latest: .init(status: 200, body: Self.releaseJSON(
             tag: "v1.1.0", body: "### Fixed\n\n- A fixture update",
-            assets: [("WallpaperMachine-1.1.0-arm64.zip", "https://github.com/o/r/update.zip", 100, nil)])))
+            assets: [("WallpaperMachine-1.1.0-arm64.dmg", "https://github.com/o/r/update.dmg", 100, nil)])))
         await expect(store.checkForUpdates(), equals: .available(currentVersion: "1.0.0", availableVersion: "1.1.0"))
         XCTAssertNotNil(store.releaseNotes)
 
@@ -225,6 +283,26 @@ final class AppUpdateTests: XCTestCase {
         XCTAssertTrue(fixture.revealed.isEmpty)
     }
 
+    func testDownloadOpensTheDiskImageOnlyWhenItCannotInstallInPlace() async {
+        let elsewhere = Fixture()
+        elsewhere.installer.canInstallInPlace = false
+        elsewhere.client.release = elsewhere.release(version: "1.1.0")
+        await elsewhere.store.checkForUpdates()
+        await expect(elsewhere.store.downloadUpdate(), equals: .ready(currentVersion: "1.0.0", availableVersion: "1.1.0"))
+        XCTAssertEqual(elsewhere.opened, [elsewhere.destination])
+        XCTAssertTrue(elsewhere.revealed.isEmpty)
+
+        let inPlace = Fixture()
+        inPlace.client.release = inPlace.release(version: "1.1.0")
+        await inPlace.store.checkForUpdates()
+        await expect(inPlace.store.downloadUpdate(), equals: .ready(currentVersion: "1.0.0", availableVersion: "1.1.0"))
+        XCTAssertTrue(inPlace.opened.isEmpty)
+        XCTAssertTrue(inPlace.revealed.isEmpty)
+
+        inPlace.store.revealDownloadedUpdate()
+        XCTAssertEqual(inPlace.revealed, [inPlace.destination])
+    }
+
     func testDownloadProgressIsClampedAndInstallRequiresReadyState() async {
         XCTAssertEqual(AppUpdateProgress.clamped(transferred: 1_500, total: 1_000, rate: 500).percent, 100)
         XCTAssertEqual(AppUpdateProgress.clamped(transferred: 1_500, total: 1_000, rate: 500).transferred, 1_000)
@@ -247,9 +325,9 @@ final class AppUpdateTests: XCTestCase {
 
     func testErrorsAreClassifiedAndDownloadCanBeRetriedAfterCheck() async {
         let fixture = Fixture()
-        fixture.client.fetchError = AppUpdateIssue(code: .verification, detail: "sha256 checksum mismatch at /private/update.zip")
+        fixture.client.fetchError = AppUpdateIssue(code: .verification, detail: "sha256 checksum mismatch at /private/update.dmg")
         await expect(fixture.store.checkForUpdates(), equals: .error(currentVersion: "1.0.0", operation: .check, code: .verification, availableVersion: nil))
-        XCTAssertFalse("\(fixture.store.state)".contains("/private/update.zip"))
+        XCTAssertFalse("\(fixture.store.state)".contains("/private/update.dmg"))
 
         fixture.client.fetchError = nil
         fixture.client.release = fixture.release(version: "1.1.0")
@@ -303,16 +381,17 @@ private final class Fixture {
     let recorder = Recorder()
     var scheduled: [() -> Void] { recorder.scheduled }
     var revealed: [URL] { recorder.revealed }
+    var opened: [URL] { recorder.opened }
     var terminateCalls: Int { recorder.terminateCalls }
     let destination: URL
 
     init(installTimeout: Duration = .seconds(45)) {
-        destination = FileManager.default.temporaryDirectory.appendingPathComponent("private/mwe-\(UUID().uuidString).zip")
+        destination = FileManager.default.temporaryDirectory.appendingPathComponent("private/mwe-\(UUID().uuidString).dmg")
         let recorder = recorder
         let workspace = AppUpdateWorkspace(
             archiveURL: { [destination] _, _ in destination },
             reveal: { url in recorder.revealed.append(url) },
-            open: { _ in }
+            open: { url in recorder.opened.append(url) }
         )
         store = AppUpdateStore(
             currentVersion: "1.0.0",
@@ -328,8 +407,8 @@ private final class Fixture {
     func release(version: String, assets: [GitHubReleaseAsset]? = nil, notes: String = "") -> GitHubRelease {
         let defaultAssets = [
             GitHubReleaseAsset(
-                name: "WallpaperMachine-\(version)-arm64.zip",
-                downloadURL: URL(string: "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v\(version)/WallpaperMachine-\(version)-arm64.zip")!,
+                name: "WallpaperMachine-\(version)-arm64.dmg",
+                downloadURL: URL(string: "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v\(version)/WallpaperMachine-\(version)-arm64.dmg")!,
                 size: 1_000,
                 digest: nil
             )
@@ -347,6 +426,7 @@ private final class Fixture {
 private final class Recorder: @unchecked Sendable {
     var scheduled: [() -> Void] = []
     var revealed: [URL] = []
+    var opened: [URL] = []
     var terminateCalls = 0
 }
 
@@ -372,7 +452,7 @@ private final class FakeAppUpdateClient: AppUpdateClient, @unchecked Sendable {
         if let downloadError { throw downloadError }
         for event in progressEvents { progress(event.0, event.1, event.2) }
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data("zip".utf8).write(to: destination)
+        try Data("dmg".utf8).write(to: destination)
     }
 }
 
@@ -514,5 +594,62 @@ private extension AppUpdateTests {
             "assets": assetObjects,
         ]
         return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+    }
+
+    /// A compressed HFS+ image shaped like the release: the app plus an `Applications` link.
+    static func makeDiskImage(in root: URL, bundleIdentifier: String) throws -> URL {
+        let source = root.appendingPathComponent("source", isDirectory: true)
+        let app = source.appendingPathComponent("WallpaperMachine.app")
+        try FileManager.default.createDirectory(at: app.appendingPathComponent("Contents/MacOS"), withIntermediateDirectories: true)
+        try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": bundleIdentifier], format: .xml, options: 0)
+            .write(to: app.appendingPathComponent("Contents/Info.plist"))
+        let executable = app.appendingPathComponent("Contents/MacOS/WallpaperMachine")
+        try Data("#!/bin/sh\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        try FileManager.default.createSymbolicLink(atPath: source.appendingPathComponent("Applications").path,
+                                                   withDestinationPath: "/Applications")
+        let image = root.appendingPathComponent("WallpaperMachine-1.2.3-arm64.dmg")
+        _ = try hdiutil(["create", "-srcfolder", source.path, "-volname", "WallpaperMachine 1.2.3",
+                         "-fs", "HFS+", "-format", "UDZO", "-ov", image.path])
+        return image
+    }
+
+    /// The devices `image` is attached as, according to `hdiutil info`; empty once detached.
+    static func attachedDevices(of image: URL) throws -> [String] {
+        let output = try hdiutil(["info", "-plist"])
+        let info = try XCTUnwrap(PropertyListSerialization.propertyList(from: output, format: nil) as? [String: Any])
+        let wanted = image.resolvingSymlinksInPath().path
+        let images = info["images"] as? [[String: Any]] ?? []
+        return images.compactMap { entry in
+            guard let path = entry["image-path"] as? String,
+                  URL(fileURLWithPath: path).resolvingSymlinksInPath().path == wanted else { return nil }
+            let entities = entry["system-entities"] as? [[String: Any]] ?? []
+            return entities.compactMap { $0["dev-entry"] as? String }.min() ?? path
+        }
+    }
+
+    /// Leaves nothing attached if an assertion failed before the installer detached.
+    static func forceDetach(_ image: URL) {
+        for device in (try? attachedDevices(of: image)) ?? [] where device.hasPrefix("/dev/") {
+            _ = try? hdiutil(["detach", "-force", device])
+        }
+    }
+
+    @discardableResult
+    static func hdiutil(_ arguments: [String]) throws -> Data {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+        process.arguments = arguments
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw AppUpdateIssue(code: .unknown, detail: "hdiutil \(arguments.first ?? "") exited \(process.terminationStatus)")
+        }
+        return data
     }
 }

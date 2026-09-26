@@ -126,7 +126,7 @@ final class PanelUpdateClient: AppUpdateClient, @unchecked Sendable {
     progress(asset.size, asset.size, 0)
     try FileManager.default.createDirectory(
       at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try Data("zip".utf8).write(to: destination)
+    try Data("dmg".utf8).write(to: destination)
   }
 
   /// A release body in the shape `scripts/release_notes.py --release-body` writes.
@@ -143,7 +143,7 @@ final class PanelUpdateClient: AppUpdateClient, @unchecked Sendable {
 
     ### Install
 
-    1. Download `WallpaperMachine-1.1.0-arm64.zip` and unzip it.
+    1. Open `WallpaperMachine-1.1.0-arm64.dmg` and drag WallpaperMachine to Applications.
     """
 
   static func release(version: String, notes: String = "") -> GitHubRelease {
@@ -154,10 +154,10 @@ final class PanelUpdateClient: AppUpdateClient, @unchecked Sendable {
       prerelease: false,
       assets: [
         GitHubReleaseAsset(
-          name: "WallpaperMachine-\(version)-arm64.zip",
+          name: "WallpaperMachine-\(version)-arm64.dmg",
           downloadURL: URL(
             string:
-              "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v\(version)/WallpaperMachine-\(version)-arm64.zip"
+              "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v\(version)/WallpaperMachine-\(version)-arm64.dmg"
           )!,
           size: 1_000, digest: nil)
       ], notes: notes)

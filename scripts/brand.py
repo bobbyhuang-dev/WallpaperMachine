@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the WallpaperMachine logo, app icon, tray icon and web favicons from one geometry.
+"""Generate the WallpaperMachine logo, app icon, tray icon, web favicons and disk-image background.
 
 The mark is a rounded display frame, open at the bottom-left corner, with an eight-tooth gear
 sitting in the opening: the same two ideas as Wallpaper Engine's badge (a frame and a gear),
@@ -8,14 +8,16 @@ background in light appearance and black in dark, with an aurora wallpaper panel
 The wordmark is Manrope ("Wallpaper" bold, "Machine" medium), embedded as outlines in
 `lib/wordmark.py`.
 
-    python3 scripts/brand.py                      # native app, Dock choices and tray icon
+    python3 scripts/brand.py                      # native app, Dock choices, tray icon and DMG background
+    python3 scripts/brand.py --dmg                # only Packaging/dmg/background.png and background@2x.png
     python3 scripts/brand.py --website ../Site    # plus logo, favicons and manifest there
     python3 scripts/brand.py --panel-glyph        # the inline mark used by WebUI/panel.js
 
 The app icon exports vector layers for Icon Composer. Website app-icon PNGs reuse the
 native Dock renders; website vectors share their geometry and appearances. Quick Look
 and sips render square web icons and tray assets. Dock choices use Icon Composer's
-macOS 26 renderer with a transparent outer margin.
+macOS 26 renderer with a transparent outer margin. The disk-image background is drawn
+with CoreGraphics and CoreText at 1x and 2x from `lib/dmg.py`'s window geometry.
 """
 from __future__ import annotations
 
@@ -29,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 
+from lib.dmg import APP_ICON_CENTER, APPLICATIONS_ICON_CENTER, BACKGROUND, ICON_SIZE, WINDOW
 from lib.glyphs import markers
 from lib.paths import ROOT
 from lib.wordmark import MACHINE_ADVANCE, MACHINE_PATH, WALLPAPER_ADVANCE, WALLPAPER_PATH
@@ -37,12 +40,22 @@ MARK = markers()
 APP_ICON = ROOT / "App/Resources/AppIcon.icon"
 TRAY_ICON_SET = ROOT / "App/Resources/Assets.xcassets/TrayIcon.imageset"
 DOCK_ICONS = ROOT / "WebUI/app-icons"
+DMG_BACKGROUND = BACKGROUND
 
 # The wallpaper panel runs cyan -> blue -> violet in both native and website icons.
 AURORA = ("#7cf0ff", "#3a86ff", "#8a3dff")
 LOGO_ACCENT_ON_LIGHT, LOGO_INK_ON_LIGHT = "#1f6fe5", "#14181f"
 LOGO_ACCENT_ON_DARK, LOGO_INK_ON_DARK = "#3d8bff", "#ffffff"
 FAVICON_BACKGROUND = "#ffffff"
+
+# The disk-image window: a cool near-white field with the aurora as a soft wash along the top
+# edge, black Finder labels (Finder ignores Dark Mode on custom backgrounds) and a gray note.
+DMG_FIELD = ("#f3f5fa", "#fcfcfe")  # top -> bottom
+DMG_NOTE = "#626a78"
+DMG_HEADLINE = "Drag WallpaperMachine into Applications"
+# `*…*` runs are set in medium weight: the UI names the reader has to find.
+DMG_FOOTNOTE = ("This build is ad hoc signed and not notarized, so macOS may block its first launch.",
+                "If it does, open *System Settings \u203a Privacy & Security* and click *Open Anyway*.")
 
 # Mark geometry in a 24-unit box. The frame is a rounded rectangle drawn as a stroke; the
 # gear centre sits on the frame's bottom-left corner and the frame stops short of the gear
@@ -451,11 +464,167 @@ def write_website(site: Path, work: Path) -> list[Path]:
                           site / "apple-touch-icon.png", site / "icon-192.png", site / "icon-512.png", ico]
 
 
+def write_dmg_background(work: Path) -> list[Path]:
+    """Draw the disk-image window background at 1x and 2x from one vector description.
+
+    Finder shows the image from the top-left of the content area, hides its bottom rows
+    under the title bar and draws black icon labels without a halo, so the field stays
+    light everywhere, text keeps clear of the top and bottom edges, and the icon slots stay
+    empty (macOS 26.1 sometimes draws the Applications symlink blank).
+    """
+    targets = [DMG_BACKGROUND, DMG_BACKGROUND.with_name(f"{DMG_BACKGROUND.stem}@2x{DMG_BACKGROUND.suffix}")]
+    staged = [work / target.name for target in targets]
+    spec = {
+        "window": WINDOW, "iconSize": ICON_SIZE,
+        "appCenter": APP_ICON_CENTER, "applicationsCenter": APPLICATIONS_ICON_CENTER,
+        "aurora": AURORA, "ink": LOGO_INK_ON_LIGHT, "field": DMG_FIELD, "note": DMG_NOTE,
+        "headline": DMG_HEADLINE, "footnote": DMG_FOOTNOTE,
+        "outputs": [str(path) for path in staged],
+    }
+    subprocess.run(["swift", "-e", r'''
+import AppKit
+import ImageIO
+import UniformTypeIdentifiers
+
+struct Spec: Decodable {
+    let window: [CGFloat], iconSize: CGFloat
+    let appCenter: [CGFloat], applicationsCenter: [CGFloat]
+    let aurora: [String], ink: String, field: [String], note: String
+    let headline: String, footnote: [String]
+    let outputs: [String]
+}
+let spec = try JSONDecoder().decode(Spec.self, from: CommandLine.arguments[1].data(using: .utf8)!)
+let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
+let (width, height) = (spec.window[0], spec.window[1])
+
+func color(_ hex: String, alpha: CGFloat = 1) -> CGColor {
+    let value = UInt32(hex.dropFirst(), radix: 16)!
+    return CGColor(colorSpace: srgb, components: [CGFloat(value >> 16 & 255) / 255,
+        CGFloat(value >> 8 & 255) / 255, CGFloat(value & 255) / 255, alpha])!
+}
+
+func gradient(_ colors: [CGColor], _ locations: [CGFloat]) -> CGGradient {
+    CGGradient(colorsSpace: srgb, colors: colors as CFArray, locations: locations)!
+}
+
+/// A soft elliptical bloom: alpha falls off quadratically so its edge never reads as a ring.
+func bloom(_ ctx: CGContext, _ hex: String, at center: CGPoint, radius: CGSize, alpha: CGFloat) {
+    let stops: [CGFloat] = [0, 0.25, 0.5, 0.75, 1]
+    let fade = gradient(stops.map { color(hex, alpha: alpha * (1 - $0) * (1 - $0)) }, stops)
+    ctx.saveGState()
+    ctx.translateBy(x: center.x, y: center.y)
+    ctx.scaleBy(x: 1, y: radius.height / radius.width)
+    ctx.drawRadialGradient(fade, startCenter: .zero, startRadius: 0, endCenter: .zero,
+                           endRadius: radius.width, options: [])
+    ctx.restoreGState()
+}
+
+/// `*…*` runs are set in medium weight; everything else in `weight`.
+func line(_ text: String, size: CGFloat, weight: NSFont.Weight, color: CGColor) -> CTLine {
+    let styled = NSMutableAttributedString()
+    for (index, run) in text.components(separatedBy: "*").enumerated() {
+        styled.append(NSAttributedString(string: run, attributes: [
+            kCTFontAttributeName as NSAttributedString.Key:
+                NSFont.systemFont(ofSize: size, weight: index % 2 == 1 ? .medium : weight),
+            kCTForegroundColorAttributeName as NSAttributedString.Key: color]))
+    }
+    return CTLineCreateWithAttributedString(styled)
+}
+
+func drawCentered(_ ctx: CGContext, _ line: CTLine, x: CGFloat, baseline: CGFloat) {
+    let advance = CTLineGetTypographicBounds(line, nil, nil, nil)
+    ctx.textMatrix = CGAffineTransform(scaleX: 1, y: -1)  // upright glyphs in the flipped space below
+    ctx.textPosition = CGPoint(x: x - advance / 2, y: baseline)
+    CTLineDraw(line, ctx)
+}
+
+/// Everything is described in points from the top-left corner of the content area.
+func draw(_ ctx: CGContext, scale: CGFloat) {
+    ctx.scaleBy(x: scale, y: scale)
+    ctx.translateBy(x: 0, y: height)
+    ctx.scaleBy(x: 1, y: -1)
+    ctx.setShouldSmoothFonts(false)  // grayscale antialiasing: no LCD fringes in the file
+    ctx.setShouldSubpixelPositionFonts(true)
+    ctx.setShouldSubpixelQuantizeFonts(false)
+
+    ctx.drawLinearGradient(gradient([color(spec.field[0]), color(spec.field[1])], [0, 1]),
+                           start: .zero, end: CGPoint(x: 0, y: height), options: [])
+    // The aurora as light along the top edge, cyan to violet in the arrow's direction,
+    // faded out above the icons so they and their labels sit on the plain field.
+    bloom(ctx, spec.aurora[0], at: CGPoint(x: width * 0.2, y: 0), radius: CGSize(width: 380, height: 200), alpha: 0.5)
+    bloom(ctx, spec.aurora[1], at: CGPoint(x: width * 0.5, y: -10), radius: CGSize(width: 420, height: 210), alpha: 0.27)
+    bloom(ctx, spec.aurora[2], at: CGPoint(x: width * 0.8, y: 0), radius: CGSize(width: 380, height: 200), alpha: 0.22)
+
+    // Drag cue: a thin arrow between the icon slots, cyan tail to violet head, with a faint glow.
+    let y = spec.appCenter[1]
+    let tail = spec.appCenter[0] + spec.iconSize / 2 + 28
+    let head = spec.applicationsCenter[0] - spec.iconSize / 2 - 28
+    let arrow = CGMutablePath()
+    arrow.move(to: CGPoint(x: tail, y: y))
+    arrow.addLine(to: CGPoint(x: head, y: y))
+    arrow.move(to: CGPoint(x: head - 12, y: y - 12))
+    arrow.addLine(to: CGPoint(x: head, y: y))
+    arrow.addLine(to: CGPoint(x: head - 12, y: y + 12))
+    for pass in 0..<2 {
+        ctx.saveGState()
+        ctx.addPath(arrow)
+        ctx.setLineWidth(3)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+        if pass == 0 {  // shadow geometry is in device space, hence the scale factor
+            ctx.setShadow(offset: .zero, blur: 10 * scale, color: color(spec.aurora[1], alpha: 0.42))
+            ctx.setStrokeColor(color(spec.aurora[1]))
+            ctx.strokePath()
+        } else {
+            ctx.replacePathWithStrokedPath()
+            ctx.clip()
+            ctx.drawLinearGradient(gradient(spec.aurora.map { color($0) }, [0, 0.4, 1]),
+                                   start: CGPoint(x: tail, y: 0), end: CGPoint(x: head, y: 0),
+                                   options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+        }
+        ctx.restoreGState()
+    }
+
+    let iconTop = y - spec.iconSize / 2
+    drawCentered(ctx, line(spec.headline, size: 18, weight: .semibold, color: color(spec.ink)),
+                 x: width / 2, baseline: iconTop - 48)
+    for (index, text) in spec.footnote.enumerated() {
+        drawCentered(ctx, line(text, size: 11.5, weight: .regular, color: color(spec.note)),
+                     x: width / 2, baseline: height - 82 + CGFloat(index) * 17)
+    }
+}
+
+for (index, path) in spec.outputs.enumerated() {
+    let scale = CGFloat(index + 1)
+    guard let ctx = CGContext(data: nil, width: Int(width * scale), height: Int(height * scale),
+                              bitsPerComponent: 8, bytesPerRow: 0, space: srgb,
+                              bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+    else { fatalError("Cannot create the background canvas") }
+    draw(ctx, scale: scale)
+    guard let image = ctx.makeImage(),
+          let sink = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL,
+                                                     UTType.png.identifier as CFString, 1, nil)
+    else { fatalError("Cannot encode the background") }
+    CGImageDestinationAddImage(sink, image, [kCGImagePropertyDPIWidth: 72 * scale,
+                                             kCGImagePropertyDPIHeight: 72 * scale] as CFDictionary)
+    guard CGImageDestinationFinalize(sink) else { fatalError("Cannot write \(path)") }
+}
+''', json.dumps(spec)], check=True, capture_output=True)
+    # The packager pairs the two files with the same check; fail here, where it is fixable.
+    subprocess.run(["tiffutil", "-cathidpicheck", *map(str, staged), "-out", str(work / "background.tiff")],
+                   check=True, capture_output=True)
+    DMG_BACKGROUND.parent.mkdir(parents=True, exist_ok=True)
+    for source, target in zip(staged, targets):
+        shutil.copyfile(source, target)
+    return targets
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--website", type=Path, help="also write logo, favicons and manifest into this directory")
     parser.add_argument("--panel-glyph", action="store_true", help="print the WebUI/panel.js brand glyph and exit")
     parser.add_argument("--skip-app", action="store_true", help="do not touch native app, Dock or tray assets")
+    parser.add_argument("--dmg", action="store_true", help="write only the disk-image background pair (Packaging/dmg)")
     args = parser.parse_args()
     if args.panel_glyph:
         print(panel_glyph())
@@ -465,11 +634,13 @@ def main() -> int:
         return 1
     with tempfile.TemporaryDirectory(prefix="brand-") as scratch:
         work = Path(scratch)
-        written = [] if args.skip_app else write_app_icons(work)
-        if not args.skip_app:
-            written += write_dock_icons(work)
-        if args.website:
-            written += write_website(args.website.resolve(), work)
+        if args.dmg:
+            written = write_dmg_background(work)
+        else:
+            written = [] if args.skip_app else write_app_icons(work) + write_dock_icons(work)
+            written += write_dmg_background(work)
+            if args.website:
+                written += write_website(args.website.resolve(), work)
     for path in written:
         try:
             shown = path.relative_to(ROOT)

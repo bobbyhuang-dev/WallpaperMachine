@@ -206,14 +206,9 @@ protection must allow GitHub Actions.
 publishable artifact is produced, called by Version for CI-produced tags and by
 Release for hand-pushed ones.
 
-**Its first step currently fails unconditionally** with an `::error::` citing
-[../LICENSING.md](../LICENSING.md): distribution of any binary is blocked by the
-Apache-2.0 components in the link closure, and no input or secret bypasses the
-step. The steps below are kept so the pipeline is ready once that step is
-deleted, which happens only after LICENSING.md records the blockers as
-resolved. Until then a `release:` push bumps the version, writes the changelog
-section and tags it, and the Build run fails before checkout. On a `macos-26`
-runner (150-minute timeout) the remaining steps:
+The licensing gate that used to fail this workflow's first step was removed for
+1.0.0 by maintainer decision; the questions in [../LICENSING.md](../LICENSING.md)
+are still open. On a `macos-26` runner (150-minute timeout) it:
 
 1. checks out the tag with full history, which the notes need;
 2. writes the release body with `scripts/release_notes.py --release-body --ai
@@ -367,8 +362,8 @@ from a real disk image.
    pass in [testing/manual-smoke.md](testing/manual-smoke.md) against that copy
    and record it in [testing/verification-log.md](testing/verification-log.md).
 
-Distribution of built binaries is blocked by the unresolved questions in
-[../LICENSING.md](../LICENSING.md), which also records the intended Supporter
+CI publishes the disk image although the questions in
+[../LICENSING.md](../LICENSING.md) remain unresolved. That file also records the intended Supporter
 model (a free Developer ID signed and notarized download, and a one-time
 Supporter purchase for a sponsor place and priority support, under the GPL
 with corresponding source alongside). Neither Developer

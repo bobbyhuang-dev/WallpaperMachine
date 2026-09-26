@@ -355,9 +355,9 @@ As implemented by `scripts/package.py` and `.github/workflows/build.yml`
   `--enable-gpl`, `--enable-version3` or `--enable-nonfree` present), and it
   refuses when any notice it must bundle is missing. `--check` runs only the
   preflight.
-- `.github/workflows/build.yml` fails unconditionally at its first step,
-  citing this file, so CI cannot publish a release disk image while distribution
-  is blocked. The remaining steps are kept for when that step is deleted.
+- `.github/workflows/build.yml` used to fail at its first step, citing this
+  file. The maintainer removed that step for 1.0.0 (2026-09-26), so CI now
+  publishes release disk images while the blockers below are still open.
 - Local disk images produced by `scripts/package.py` are labelled as not cleared
   for distribution.
 

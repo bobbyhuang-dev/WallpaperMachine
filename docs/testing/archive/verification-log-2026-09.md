@@ -15,6 +15,31 @@ renderer behaviour and known-failing tests into
 [../renderer.md](../renderer.md), build and code-signing traps into
 [../../build.md](../../build.md).
 
+## 2026-09-24 — First-seen displays start enabled with the primary wallpaper
+
+- Change: bridge MonitorCfg::for_connected_display enables never-configured displays with the primary's wallpaper (mirror kept); enabled_selectors skips mirror monitors.
+- cargo test --release -p wallpaper-bridge --lib: 323 passed (baseline 322).
+- New test first_seen_display_starts_with_primary_wallpaper_and_keeps_opt_out_after_reconnect fails on HEAD rows.rs (enabled=false), passes after.
+- native_video_routing mirror-group tests failed with only the default change (apply flipped mirror back to independent); pass after the enabled_selectors mirror filter.
+- python3 scripts/test.py: 572 passed, 0 failed, 11 skipped (Swift links the previously built bridge lib; no Swift change).
+- python3 scripts/check_renderer.py: 10 generated cases pooled/isolated exit 0, pixels_equal, reload cycles 0.
+- Not run: wallpaper-core suite (core unchanged); Release build not requested, running app unchanged.
+- Gap: configs saved by 0.5.0 with enabled=false for auto-added displays are not migrated.
+
+## 2026-09-24 — Release rebuild at aaed861; lock screen activated on the private puppet scene
+
+- `python3 scripts/build.py --configuration Release` — exit 0 from a clean tree at `aaed861` (= origin/main); delivered `build/Build/Products/Release/WallpaperMachine.app`, binaries linked 20:12 after the last renderer edit (20:03), 17 `TexturePrefetch` symbols in the extension
+- Runtime, user-launched previous build (d81942d-era renderer): extension started 12:06:29 UTC, `Frame ready display=1 pixels=4112x2658` and `Acquired` at 12:06:37 (about 8 s, under WallpaperAgent's ~31 s limit); `ready-1.json` matches the published revision with no error
+- The running lock-screen extension exited when the bundle was rebuilt; the app was not quit or relaunched, so the new binaries are not yet running
+- Not verified: lock-screen visuals and power; whether the old build would have missed 30 s in this host was not measured
+
+## 2026-09-24 — Release build: lock-screen texture prefetch and acquire-failure reporting
+
+- `python3 scripts/build.py --configuration Release` — exit 0; delivered `build/Build/Products/Release/WallpaperMachine.app`
+- Bundle check: app and extension binaries each contain 17 `TexturePrefetch` symbols, linked 19:43 after the last renderer edit (19:35); the extension contains the new `Acquire failed display=` diagnostic
+- After review, `TexturePrefetch` keeps the workers that started when a thread fails to start; `texture_prefetch_test` — 7 passed (new `WithoutWorkersEveryImageIsLeftToTheCallerAtOnce`), 3 runs
+- Not run: the app was not launched and the lock screen was not re-enabled; Debug and Release copies of the extension are both still registered
+
 ## 2026-09-24 — Lock screen: parallel texture decode at pass preparation; extension reports acquire failures
 
 Animate Lock Screen failed for a private 943 MB puppet scene (122 embedded PNG textures). Confirmed: WallpaperAgent abandoned the extension's acquire after about 31 s with no frame. Likely contributor, not measured inside the extension: the offscreen probe needs 15.6 s to its first frame, dominated by single-threaded stb_image PNG decode. The extension sent no readiness error, so the app showed its generic 'macOS did not load' message.

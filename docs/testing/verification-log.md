@@ -25,6 +25,29 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-26 — Release pipeline follow-ups: reference bytes, real transport, safer rebuild
+
+After review: the .DS_Store and alias writers are held to ds_store 1.3.3 / mac_alias 2.2.3 output, the model call has a 600 s deadline and claim rules, --rebuild-changelog never calls the model and keeps recorded sections, the image copy sheds extended attributes, and DMG inputs are checked in the packaging preflight. Python-only changes after the previous entry's full gate.
+
+- `python3 scripts/tests/test_release_notes.py` — exit 0; 45 tests, including the real HTTP request against a local server (headers, the gateway's 401 message, the deadline)
+- `python3 scripts/tests/test_dmg.py` — exit 0; 11 tests: writers byte-identical to the reference goldens; a bundle carrying Finder info round-trips and verifies
+- `test_brand.py` 6 and `test_publish_release.py` 13 — exit 0
+- `python3 scripts/package.py --configuration Release --check` — exit 0; preflight including the DMG inputs, bundle unchanged
+- `release_notes.py --ai --tag v0.6.0 --to HEAD` through the real request — 37 s; opt-in features read optional and off by default, no power claims
+- Native suite not rerun: no Swift change since the previous entry's full gate
+
+## 2026-09-26 — Release pipeline: drag-to-install disk image and model-written release notes
+
+The distributable is now WallpaperMachine-<version>-arm64.dmg (scripts/lib/dmg.py, standard library only) and the in-app updater installs from it; release notes are written by claude-opus-5-5 through the sub2api gateway and recorded once in CHANGELOG.md. The Release app in build/ was running and was neither rebuilt nor packaged.
+
+- `python3 scripts/test.py` — exit 0; 14 script test modules OK (test_dmg 7, test_release_notes 41, test_brand 6, test_publish_release 13); native 579 passed, 0 failed, 11 skipped of 590
+- `python3 scripts/test.py --only AppUpdateTests --only ControlPanelShellTests` — exit 0; 48 passed, including installs from real hdiutil images that end detached
+- scripts/lib/dmg.py against dmgbuild 1.6.7 in a throwaway venv (not a dependency) — .DS_Store (16388 bytes) and background alias (394 bytes) byte-identical for the same inputs; a built image's records equal dmgbuild's
+- scripts/package.py run on a copy of the Release app outside build/ — preflight, 19 relocated dylibs, ad-hoc signing, 33 MB ULFO image, mounted verification, `shasum -a 256 -c` OK; nothing left attached
+- `release_notes.py --ai --tag v0.6.0 --to HEAD` against the gateway — 93 commits, summary plus 14 New / 8 Improved / 20 Fixed, streamed in 44 s
+- Finder window of that image — checked and confirmed by the user on macOS 27.2 beta; not checked on macOS 26.x
+- Not run: the CI workflows (Build stays behind the LICENSING.md gate; the RELEASE_NOTES_API_KEY repository secret is not set yet)
+
 ## 2026-09-26 — Hide app after wallpaper activation
 
 - python3 scripts/test.py: 574 passed, 0 failed, 11 skipped
@@ -36,6 +59,13 @@ goes. Trimming is allowed; editing an entry's recorded result is not.
 - python3 scripts/test.py: 574 passed, 0 failed, 11 skipped
 - python3 scripts/build.py --configuration Release: OK (renderer changes pulled, full build)
 - Not launched; check_renderer.py not run
+
+## 2026-09-25 — Release build at 6106f50 (Lucy renderer fix on origin/main)
+
+- `python3 scripts/build.py --configuration Release` — exit 0 at 6106f50, which carries the Lucy renderer fix and the first-seen displays and Discover commits; delivered `build/Build/Products/Release/WallpaperMachine.app`
+- Bundle check: app and extension binaries linked 14:37, after the newest tracked source; both contain `ExportKeywordAt`, `ApplyCameraShots` and the camera-aware `FrameVaryingUniforms`; the app also contains the bridge's `for_connected_display`; bundled `WebUI/` identical to the tree; regenerated bindings unchanged
+- Gate for this code: the integrated-tree entry below (574 passed, 0 failed, 11 skipped); the only commit since is a provenance note
+- Not done: the app was not launched or restarted; no desktop, visual or power check
 
 ## 2026-09-25 — Lucy renderer fix moved onto origin/main (first-seen displays, Discover animations) before push
 
@@ -92,28 +122,3 @@ Renderer-only fix: 2D camera layers frame the canvas (zoom plus origin as an off
 - Offscreen: settled 3521337568 frame registers with every preview frame (background, planet, character); Metal and Vulkan agree at rest (mean abs 1.45 at 480x270) and at a zoom-1.5 shot once the puppet clock is matched (1.02); the intro ends on the rest frame on both backends
 - `python3 scripts/build.py --renderer-only` then `python3 scripts/test.py` — exit 0; 574 passed, 0 failed, 11 skipped
 - Not done: Release build, desktop run, visual check of the live wallpaper, parallax under a real cursor; the running app still has the old renderer
-
-## 2026-09-24 — First-seen displays start enabled with the primary wallpaper
-
-- Change: bridge MonitorCfg::for_connected_display enables never-configured displays with the primary's wallpaper (mirror kept); enabled_selectors skips mirror monitors.
-- cargo test --release -p wallpaper-bridge --lib: 323 passed (baseline 322).
-- New test first_seen_display_starts_with_primary_wallpaper_and_keeps_opt_out_after_reconnect fails on HEAD rows.rs (enabled=false), passes after.
-- native_video_routing mirror-group tests failed with only the default change (apply flipped mirror back to independent); pass after the enabled_selectors mirror filter.
-- python3 scripts/test.py: 572 passed, 0 failed, 11 skipped (Swift links the previously built bridge lib; no Swift change).
-- python3 scripts/check_renderer.py: 10 generated cases pooled/isolated exit 0, pixels_equal, reload cycles 0.
-- Not run: wallpaper-core suite (core unchanged); Release build not requested, running app unchanged.
-- Gap: configs saved by 0.5.0 with enabled=false for auto-added displays are not migrated.
-
-## 2026-09-24 — Release rebuild at aaed861; lock screen activated on the private puppet scene
-
-- `python3 scripts/build.py --configuration Release` — exit 0 from a clean tree at `aaed861` (= origin/main); delivered `build/Build/Products/Release/WallpaperMachine.app`, binaries linked 20:12 after the last renderer edit (20:03), 17 `TexturePrefetch` symbols in the extension
-- Runtime, user-launched previous build (d81942d-era renderer): extension started 12:06:29 UTC, `Frame ready display=1 pixels=4112x2658` and `Acquired` at 12:06:37 (about 8 s, under WallpaperAgent's ~31 s limit); `ready-1.json` matches the published revision with no error
-- The running lock-screen extension exited when the bundle was rebuilt; the app was not quit or relaunched, so the new binaries are not yet running
-- Not verified: lock-screen visuals and power; whether the old build would have missed 30 s in this host was not measured
-
-## 2026-09-24 — Release build: lock-screen texture prefetch and acquire-failure reporting
-
-- `python3 scripts/build.py --configuration Release` — exit 0; delivered `build/Build/Products/Release/WallpaperMachine.app`
-- Bundle check: app and extension binaries each contain 17 `TexturePrefetch` symbols, linked 19:43 after the last renderer edit (19:35); the extension contains the new `Acquire failed display=` diagnostic
-- After review, `TexturePrefetch` keeps the workers that started when a thread fails to start; `texture_prefetch_test` — 7 passed (new `WithoutWorkersEveryImageIsLeftToTheCallerAtOnce`), 3 runs
-- Not run: the app was not launched and the lock screen was not re-enabled; Debug and Release copies of the extension are both still registered

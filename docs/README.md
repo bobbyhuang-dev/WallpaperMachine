@@ -30,7 +30,7 @@ live under `testing/`.
 | [../CHANGELOG.md](../CHANGELOG.md) | Published versions, newest first; written by `scripts/release_notes.py` |
 | [development-tools.md](development-tools.md) | Optional diagnostics and the desktop authorization boundary |
 | [../AGENTS.md](../AGENTS.md) / [../CLAUDE.md](../CLAUDE.md) | Agent rules; CLAUDE.md is a symlink, not a separate policy |
-| [../LICENSING.md](../LICENSING.md) | GPL-2.0-only source policy, sales model (official build plus priority support), component licenses, distribution blockers |
+| [../LICENSING.md](../LICENSING.md) | GPL-2.0-only source policy, Supporter model (free signed download; sponsor place and priority support), Mac App Store questions, component licenses, distribution blockers |
 | [../LICENSE](../LICENSE) | GNU GPL version 2 text, the license of this repository's source |
 
 ## Testing

@@ -267,7 +267,7 @@ verification runs.
 the current `distributionStatus`. `scripts/package.py` copies the root `LICENSE`, `LICENSING.md`,
 `upstream/renderer/LICENSE` (as `Renderer-LICENSE.txt`), `upstream/provenance.json` and every
 bundled keg's notices into the bundle's Resources ([build.md](build.md#packaging-and-installing)).
-Licence policy, the sales model and the open distribution blockers live in
+Licence policy, the Supporter model and the open distribution blockers live in
 [../LICENSING.md](../LICENSING.md). The Workshop browser is recorded there and in the provenance
 file as independently implemented.
 

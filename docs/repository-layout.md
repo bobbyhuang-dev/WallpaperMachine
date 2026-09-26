@@ -11,7 +11,7 @@ CLAUDE.md -> AGENTS.md              Claude entry point; relative symlink, same r
 CHANGELOG.md                       published versions, newest first; written by scripts/release_notes.py
 CONTRIBUTING.md                    contributor working agreement
 LICENSE                            GNU GPL version 2 text; the license of this repository's source (verbatim copy of upstream/renderer/LICENSE)
-LICENSING.md                       GPL-2.0-only policy, sales model, component licenses and distribution blockers
+LICENSING.md                       GPL-2.0-only policy, Supporter model, component licenses and distribution blockers
 README.md                          product overview, quickstart, documentation index
 project.yml                        XcodeGen spec: the only source of truth for targets/settings/versions
 WallpaperMachine.xcodeproj/    generated from project.yml by xcodegen; committed, never hand-edited

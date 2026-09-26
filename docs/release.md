@@ -368,9 +368,10 @@ from a real disk image.
    and record it in [testing/verification-log.md](testing/verification-log.md).
 
 Distribution of built binaries is blocked by the unresolved questions in
-[../LICENSING.md](../LICENSING.md), which also records the intended sales
-model (a paid official Developer ID signed and notarized build plus priority
-support, under the GPL with corresponding source alongside). Neither Developer
+[../LICENSING.md](../LICENSING.md), which also records the intended Supporter
+model (a free Developer ID signed and notarized download, and a one-time
+Supporter purchase for a sponsor place and priority support, under the GPL
+with corresponding source alongside). Neither Developer
 ID signing nor notarization exists in this pipeline yet; `scripts/package.py`
 signs ad hoc, a provenance attestation records who built an artifact rather than
 who vouches for it, and neither is license clearance.

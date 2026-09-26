@@ -1,9 +1,10 @@
-# Licensing, sales model and distribution status
+# Licensing, Supporter model and distribution status
 
-Recorded: 2026-09-21 (first recorded 2026-09-14).
-Status: source policy decided (GPL-2.0-only); sales model decided (paid official
-build plus priority support); **binary distribution still blocked** by the
-Apache-2.0 dependencies listed under [Remaining blockers](#remaining-blockers).
+Recorded: 2026-09-26 (first recorded 2026-09-14).
+Status: source policy decided (GPL-2.0-only); Supporter model decided (a free
+signed download, and a one-time Supporter purchase for a sponsor place and
+priority support); **binary distribution still blocked** by the Apache-2.0
+dependencies listed under [Remaining blockers](#remaining-blockers).
 
 This document is the project's own record of what it has checked and decided.
 It is not legal advice and it does not claim clearance that has not been
@@ -15,9 +16,10 @@ source is linked.
 | Question | Answer |
 |---|---|
 | Under which license is this repository's source offered? | GNU GPL version 2 only, the text in the root [`LICENSE`](LICENSE). See [Source license](#source-license-gpl-20-only). |
-| Can the app be sold? | Yes, as a fee for the official build and for support, under the GPL and nothing else. See [Sales model](#sales-model-official-signed-build-and-priority-support). |
+| Is anything sold? | Only the Supporter purchase: a one-time payment for a sponsor place and priority support. The signed download is free and no copy of the software is sold. See [Supporter model](#supporter-model-free-signed-download-paid-sponsorship-and-support). |
 | Can it be distributed today? | No. Homebrew's GPLv3 FFmpeg was replaced, but Apache-2.0 components remain in the link closure of every build. See [Remaining blockers](#remaining-blockers). |
 | Is a Developer ID signed, notarized build available? | No. `scripts/package.py` signs ad hoc. Signing is a platform mechanism, not a license grant. See [Signing and notarization](#signing-and-notarization). |
+| Can it be listed on the Mac App Store? | Not as the app is built today, and not without first settling the GPLv2 question. See [Mac App Store](#mac-app-store). |
 | Does publishing this source resolve the blockers? | No. Distribution of the combined program is what the licenses govern; posting the repository changes nothing about it. |
 
 ## Source license: GPL-2.0-only
@@ -62,70 +64,121 @@ copied, translated or adapted, because GPLv2-only and GPLv3 code cannot be
 combined into one distributed program
 (https://www.gnu.org/licenses/gpl-faq.html#v2v3Compatibility).
 
-## Sales model: official signed build and priority support
+## Supporter model: free signed download, paid sponsorship and support
 
-The intended business is to sell two things, neither of which changes the
-license of the software:
+The website (https://www.wallpapermachine.app) offers WallpaperMachine in two
+tiers. Neither changes the license of the software, and no copy of the software
+is sold:
 
-1. **The official build.** A copy of the application built by this project from
-   a tagged revision, signed with this project's Apple Developer ID and
-   notarized (once that is implemented; see
-   [Signing and notarization](#signing-and-notarization)), delivered for a fee.
-2. **Priority support.** A support service (help, prioritized bug handling) sold
-   alongside or separately from the build.
+1. **Free.** A signed, ready-to-run download, built by this project from a
+   tagged revision, signed with this project's Apple Developer ID and notarized
+   (once that is implemented; see
+   [Signing and notarization](#signing-and-notarization)), or the complete
+   source in this repository to build yourself.
+2. **Supporter.** A one-time purchase through Paddle.com, the website's
+   reseller and Merchant of Record, that buys two things and no software:
+   - a **sponsor place**: a name and picture on the website's sponsor wall
+     (https://www.wallpapermachine.app/sponsors/) and a name in the
+     [README's sponsor list](README.md#thank-you-to-every-supporter), each
+     shown only if the Supporter turns it on;
+   - **priority support**: wallpaper-compatibility questions and feature
+     requests, asked on the website's supporter forum, answered ahead of
+     general requests.
 
-What the GPL permits and requires here, from the FSF's own answers:
+The website's terms (https://www.wallpapermachine.app/terms/) state that the
+license published in this repository, not those terms, governs the source
+code, the signed download and anything built from the source. Its refund
+policy (https://www.wallpapermachine.app/refunds/) ends only the sponsor place
+and priority support; the download stays free and building from source is
+unaffected.
 
-- Charging any fee for distributing a copy is allowed; the right to sell
-  copies is part of the definition of free software
+What the GPL permits and requires here, from the license text and the FSF's
+own answers:
+
+- Distributing copies gratis and charging for them are both allowed
   (https://www.gnu.org/licenses/gpl-faq.html#DoesTheGPLAllowMoney,
-  https://www.gnu.org/philosophy/selling.html).
-- A fee for downloading from this project's site is allowed; under GPLv2 the
-  corresponding source must then be offered with equivalent access from the
-  same place (https://www.gnu.org/licenses/gpl-faq.html#DoesTheGPLAllowDownloadFee,
-  GPLv2 section 3).
-- Selling a modified GPL program commercially is allowed only under the GPL:
-  recipients must receive the source and the same rights
-  (https://www.gnu.org/licenses/gpl-faq.html#GPLCommercially).
+  https://www.gnu.org/philosophy/selling.html). Activities other than copying,
+  distribution and modification are outside the license (GPLv2 section 0), so
+  support and a sponsor listing are services the GPL does not regulate; GPLv2
+  section 1 expressly allows offering warranty protection for a fee.
+- When a binary is offered for download, offering equivalent access to copy
+  the corresponding source from the same place counts as distributing the
+  source (GPLv2 section 3;
+  https://www.gnu.org/licenses/gpl-faq.html#DoesTheGPLAllowDownloadFee).
+- No further restrictions may be imposed on recipients' exercise of the rights
+  the GPL grants (GPLv2 section 6). That covers the terms of every channel a
+  copy is distributed through, an app store's as much as this project's own
+  (https://www.fsf.org/blogs/licensing/more-about-the-app-store-gpl-enforcement).
 - Requiring everyone who obtains a copy to pay this project, or to notify it,
-  is not allowed; a fee may be charged for copies obtained *from this project*
-  only (https://www.gnu.org/licenses/gpl-faq.html#DoesTheGPLAllowRequireFee).
+  is not allowed (https://www.gnu.org/licenses/gpl-faq.html#DoesTheGPLAllowRequireFee).
+- Anyone may sell copies, modified or not, but only under the GPL: recipients
+  must receive the source and the same rights
+  (https://www.gnu.org/licenses/gpl-faq.html#GPLCommercially).
 
 The policy that follows from that:
 
-- **Recipients keep every GPL right.** Anyone who receives the official build
+- **The software is never the product.** The download is free and the source
+  is here. Nothing in the app checks for, unlocks or changes with a Supporter
+  purchase: there is no license key, no Supporter build and no feature gate.
+- **Recipients keep every GPL right.** Anyone who receives the signed download
   may run it, study and modify its source, redistribute it, and sell copies
   themselves, gratis or for any price, under GPLv2. No further restriction is
-  imposed (GPLv2 section 6).
-- **No restrictive EULA.** The official build ships with the GPLv2 text and
+  imposed (GPLv2 section 6). Supporters receive exactly the license everyone
+  else does, and a refund takes none of it back.
+- **No restrictive EULA.** The signed download ships with the GPLv2 text and
   the third-party notices and with no additional end-user agreement. There is
   no anti-redistribution clause, no reverse-engineering prohibition, no
   per-seat or per-device term, and no claim of ownership over third-party
   code (the FFmpeg project's checklist items 11-13 at
   https://ffmpeg.org/legal.html describe exactly the terms that would be
-  incompatible).
-- **Corresponding source travels with every binary.** Each official build is
+  incompatible). The website's account and checkout terms cover the Supporter
+  purchase only.
+- **Corresponding source travels with every binary.** Each signed download is
   produced from a Git tag `vx.y.z` ([docs/release.md](docs/release.md)). The
   complete corresponding source for that exact binary—including this repository,
   vendored code, all covered linked dependencies, modifications, `project.yml`,
-  build/install scripts and the FFmpeg formula—is offered alongside the binary
-  with equivalent access and no separate source fee (GPLv2 section 3(a) and its
+  build/install scripts and the FFmpeg formula—is offered alongside the
+  download with equivalent access and no fee (GPLv2 section 3(a) and its
   download provision). Mirror the exact dependency source, not merely links to
   third-party servers. A future section 3(b) written-offer route would instead
   require an offer valid for at least three years to any third party, subject to
   its source-distribution cost limit; it is not the selected route.
   GPLv2 expressly includes scripts controlling compilation and installation.
-- **Support is a service, not a license condition.** Priority support is sold
-  as time and attention. The software works identically with or without it,
-  and a recipient who never bought support has exactly the same license.
+- **Sponsorship and support are services, not license conditions.** The
+  sponsor place is a listing and priority support is time and attention. The
+  software works identically with or without them.
 - **Warranty.** The GPLv2 disclaimer (sections 11 and 12) applies unless this
   project states otherwise in writing. GPLv2 section 1 allows warranty
   protection to be offered for a fee; if a support tier does so, that is a
   written commitment of this project alone and binds no upstream author.
 
-The sales model is distinct from release readiness: it describes how an
-official build would be sold once distribution is lawful. Until the blockers
-below are resolved, there is no official build to sell.
+The Supporter model is distinct from release readiness: it describes how the
+signed download would be offered once distribution is lawful. Until the
+blockers below are resolved, there is no signed download to offer. The
+Supporter purchase sells no software and does not change that.
+
+### Mac App Store
+
+The website shows a Mac App Store listing as coming soon. That channel has two
+open questions of its own, independent of the Apache-2.0 blockers:
+
+- **License.** In 2010 the FSF found that the App Store Terms of Service's
+  Usage Rules restrict how recipients may use and distribute a program, which
+  GPLv2 section 6 forbids, and Apple removed GNU Go rather than change them
+  (https://www.fsf.org/blogs/licensing/more-about-the-app-store-gpl-enforcement).
+  This project has not reviewed Apple's current terms against section 6.
+  Unless such a review shows they add no further restriction, a listing needs
+  an additional permission from the copyright holders of the GPL-2.0-only
+  code, the upstream renderer's included. This project has none.
+- **App Review.** Apple's App Review Guidelines
+  (https://developer.apple.com/app-store/review/guidelines/) require Mac App
+  Store apps to be sandboxed (2.4.5(i)), not to download additional code
+  (2.4.5(iv)), to take updates only through the Mac App Store (2.4.5(vii)) and
+  to use public APIs only (2.5.1). The app is not sandboxed (only its
+  lock-screen extension is), downloads SteamCMD at runtime, updates itself
+  from GitHub Releases, and uses private interfaces: CoreGraphics and
+  HIServices symbols for per-Space desktop pictures, MediaRemote, and the
+  `WallpaperExtensionKit` ABI.
 
 ## Signing and notarization
 
@@ -207,15 +260,15 @@ How this project follows FFmpeg's LGPL checklist (https://ffmpeg.org/legal.html)
 |---|---|
 | Built without `--enable-gpl` and `--enable-nonfree` | Yes, and without `--enable-version3` |
 | Dynamic linking | Yes: the app links `libav*.dylib` and `scripts/package.py` relocates them into `Contents/Frameworks` |
-| Corresponding FFmpeg source with the exact configure line | Policy above: the formula records URL, checksum and configure arguments; the tarball is to be mirrored beside each official build |
+| Corresponding FFmpeg source with the exact configure line | Policy above: the formula records URL, checksum and configure arguments; the tarball is to be mirrored beside each signed download |
 | No GPL libraries such as libx264 | None are enabled; `scripts/package.py` refuses libraries whose embedded configuration shows a forbidden flag ([Tooling that enforces this record](#tooling-that-enforces-this-record)) |
 | Attribution in the program's about box | Not yet shown. Settings -> About names the renderer and links the GPLv2 text (`WebUI/settings.js`); an FFmpeg/LGPL line there is an open item and is not part of this record |
 | Do not rename the libraries to obscure names | They keep their upstream names |
 
-FFmpeg's page also notes that commercial products using patented codecs have
-been approached by patent licensors. That is a business risk of selling the
-official build, separate from copyright, and is recorded here rather than
-resolved.
+FFmpeg's page also notes that companies making money from products that use
+patented codecs have been approached by patent licensors. That is a business
+risk of offering the signed download beside a paid Supporter purchase,
+separate from copyright, and is recorded here rather than resolved.
 
 ## Remaining blockers
 
@@ -268,7 +321,7 @@ under each of its licenses.
 ## Rights outside software licenses
 
 None of the licenses above authorize anything on this list; each is a separate
-question for any distribution and for the sales model:
+question for any distribution and for the Supporter model:
 
 - **Valve software.** SteamCMD is downloaded by the user at runtime into the
   app's support directory and is never bundled or redistributed. Use of
@@ -280,10 +333,12 @@ question for any distribution and for the sales model:
 - **Workshop content.** Wallpapers belong to their creators and are downloaded
   by the user with the user's own Steam account. The app does not host or
   redistribute them.
-- **Product naming.** The application name contains the third-party product
-  name "Wallpaper Engine". Settings -> About states that the app is not
-  affiliated with Wallpaper Engine or Valve. Whether the name can be used for
-  a paid product is a trademark question this project has not had reviewed.
+- **Product naming.** The application is named WallpaperMachine, but the
+  website and the README lead with the third-party product name "Wallpaper
+  Engine" ("Wallpaper Engine. Meet your Mac."). Settings -> About, the website
+  and the README state that the project is not affiliated with Wallpaper
+  Engine or Valve. Whether that use of the name can accompany a paid Supporter
+  offering is a trademark question this project has not had reviewed.
 - **Private Apple API.** The lock-screen extension uses the private
   `WallpaperExtensionKit` ABI, which is not an Apple-supported public API.
   This is a platform-policy and support risk, not a license question, and it
@@ -365,10 +420,12 @@ prefix is `app.wallpapermachine`.
   remove the unconditional failure from `.github/workflows/build.yml` only
   after the blockers are recorded as resolved.
 - Add the FFmpeg/LGPL attribution to Settings -> About.
-- Mirror the corresponding source (repository at the tag, FFmpeg tarball) at the
-  place the official build is sold.
+- Mirror the corresponding source (repository at the tag, FFmpeg tarball) at
+  the place the signed download is offered.
 - Review Valve's terms and the product-name question with counsel before the
-  first sale.
+  first public download or Supporter sale.
+- Before any Mac App Store listing, settle both questions under
+  [Mac App Store](#mac-app-store).
 - Keep every third-party notice intact and identify modifications as GPLv2
   section 2(a) requires.
 
@@ -399,3 +456,7 @@ Dated verification history: [docs/testing/verification-log.md](docs/testing/veri
 - FSF, selling free software: https://www.gnu.org/philosophy/selling.html
 - FFmpeg license and LGPL compliance checklist: https://ffmpeg.org/legal.html
 - Renderer license file: https://github.com/bigsaltyfishes/wallpaper-engine-for-macos/blob/main/LICENSE
+- FSF, App Store terms and GPL section 6: https://www.fsf.org/blogs/licensing/more-about-the-app-store-gpl-enforcement
+- Apple App Review Guidelines: https://developer.apple.com/app-store/review/guidelines/
+- WallpaperMachine terms of service (Supporter purchase, Paddle): https://www.wallpapermachine.app/terms/
+- WallpaperMachine refund policy: https://www.wallpapermachine.app/refunds/

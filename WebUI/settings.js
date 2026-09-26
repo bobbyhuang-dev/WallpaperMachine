@@ -333,18 +333,17 @@ function draw(view) {
     + (update.showsReleases ? button(update.releasesLabel || t('Open GitHub Releases'), 'openReleases', {}, updateBusy) : '')
     + (update.showsReveal ? button(update.revealLabel || t('Show in Finder'), 'revealDownloadedUpdate', {}, updateBusy) : '');
   const about = `<div class="settings-product"><span class="settings-product-mark">${helpers.icon('wallpaperMachine', 48)}</span><div><h3>WallpaperMachine</h3><span class="settings-note">${e(t('Independent macOS client'))}</span></div></div>`
-    + group('about-versions', '', versionRow('app-version', t('App version'), state.version)
-    + disclosure('component-versions', t('Component versions'), versionRow('bridge-version', t('Bridge'), settings.bridgeVersion)
-      + versionRow('core-version', t('Core'), settings.coreVersion)
-      + versionRow('shader-version', t('Shader pipeline'), settings.shaderVersion)
+    + group('about-versions', '', versionRow('app-version', t('App version'), 'beta (unreleased)')
+    + disclosure('component-versions', t('Component versions'), versionRow('bridge-version', t('Bridge'), '0.1.0')
+      + versionRow('core-version', t('Core'), '0.1.0')
+      + versionRow('shader-version', t('Shader pipeline'), '0.1.0')
       + versionRow('git-version', t('Git revision'), settings.gitSha), 'settings-disclosure-rows'))
     + `<section class="settings-group" data-key="about-updates" aria-busy="${updateBusy}" aria-labelledby="settings-group-about-updates"><h3 id="settings-group-about-updates">${e(t('Updates'))}</h3><div class="settings-status" role="status" aria-live="polite">${e(update.statusText || t('Updates not yet checked'))}</div>`
     + updateProgress
     + `<div class="settings-form-actions">${updateActions}</div>`
     + updateNotes
     + `<p class="settings-note">${e(update.footnote || t('Updates are checked against the latest published GitHub Release. Download and restart-install happen only after you confirm.'))}</p></section>`
-    + group('about-credits', '', row('renderer-source', t('Scene renderer'), button('bigsaltyfishes / Wallpaper Engine for macOS', 'openExternal', { url: 'https://github.com/bigsaltyfishes/wallpaper-engine-for-macos.git' }))
-    + `<div class="settings-attribution">${e(t('Not affiliated with Wallpaper Engine or Valve. Built on the GPLv2-only open-source renderer. Workshop browsing is independently implemented. No warranty is provided.'))}</div>`
+    + group('about-credits', '', `<div class="settings-attribution">${e(t('Not affiliated with Wallpaper Engine or Valve. Built on the GPLv2-only open-source renderer. Workshop browsing is independently implemented. No warranty is provided.'))}</div>`
     + button(t('GNU General Public License v2'), 'openExternal', { url: 'https://www.gnu.org/licenses/old-licenses/gpl-2.0.html' }));
   const html = `<div class="settings-layout" data-key="settings-layout"><nav class="settings-nav" aria-label="${e(t('Settings categories'))}" role="tablist" aria-orientation="${compactNavigation.matches ? 'horizontal' : 'vertical'}" data-key="settings-nav">${sections.map(([id, title, glyph]) => `<button type="button" id="settings-tab-${id}" role="tab" aria-selected="${id === view.section}" aria-controls="settings-${id}" tabindex="${id === view.section ? '0' : '-1'}" data-key="nav-${id}" data-section="${id}">${helpers.icon(glyph, 16)}<span>${e(t(title))}</span></button>`).join('')}</nav><div class="settings-scroll" data-key="settings-scroll">${error('settings-action-error', view.error || state.error)}${unavailable ? `<div class="settings-notice" role="status">${e(t('Settings are unavailable. Try refreshing the library.'))}</div>` : ''}${section('general', t('General'), general)}${section('appearance', t('Appearance'), appearance)}${section('performance', t('Performance'), performance)}${section('displays', t('Displays'), displays, button(t('Refresh'), 'refreshDisplays', {}, busy))}${section('library', t('Library & Steam'), library)}${section('storage', t('Storage'), storage)}${section('about', t('About'), about)}</div></div>`;
   const template = document.createElement('template');

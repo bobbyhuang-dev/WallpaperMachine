@@ -54,6 +54,8 @@ final class NativeVideoWallpaperWindow: NSWindow {
         isRestorable = false
         ignoresMouseEvents = true
         hidesOnDeactivate = false
+        // Hiding the app hides the panel, never the desktop it decorates.
+        canHide = false
         isExcludedFromWindowsMenu = true
         animationBehavior = .none
         backgroundColor = .black

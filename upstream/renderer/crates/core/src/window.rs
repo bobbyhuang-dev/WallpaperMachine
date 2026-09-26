@@ -654,6 +654,10 @@ impl WallpaperWindowBuilder {
                 window.setRestorable(false);
                 window.setIgnoresMouseEvents(true);
                 window.setHidesOnDeactivate(false);
+                // The desktop belongs to the wallpaper, not to the app: hiding
+                // the app (Cmd-H, or hiding the panel after an apply) must not
+                // take every display's wallpaper off screen with it.
+                window.setCanHide(false);
                 window.setExcludedFromWindowsMenu(true);
                 window.setAnimationBehavior(NSWindowAnimationBehavior::None);
                 window.setBackgroundColor(Some(&window_color));

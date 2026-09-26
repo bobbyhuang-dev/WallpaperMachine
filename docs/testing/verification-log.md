@@ -25,6 +25,30 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-26 — Release build with wallpaper-window canHide fix
+
+- python3 scripts/build.py --configuration Release: OK (cargo, uniffi-bindgen, xcodegen, xcodebuild; pre-existing warnings only); generated bindings unchanged.
+- Built binary 2026-09-26 18:56 contains the setCanHide: selector reference.
+- Delivered: build/Build/Products/Release/WallpaperMachine.app. Not launched; two-display apply/hide behavior not checked on the desktop.
+
+## 2026-09-26 — Wallpaper windows survive app hide (canHide=false)
+
+- Bug: after an activation NSApp.hide(nil) (e8aab7b) also hid every wallpaper window (AppKit canHide default YES); occlusion then suspended both displays. Evidence: app log 20260926-180315 shows 'presentation suspended for displays [1, 2]' after each of 5 activations; no [1, 2] suspension in any session before 2026-09-26 14:24.
+- Fix: canHide=false on MWEWallpaperDesktopWindow (crates/core window.rs), MWEWebWallpaperDesktopWindow, MWENativeVideoDesktopWindow; provenance note and architecture.md updated.
+- python3 scripts/build.py --renderer-only: passed (pre-existing unused-code warnings only).
+- cargo test --release -p wallpaper-core --lib window: 12 passed.
+- python3 scripts/test.py: 574 passed, 0 failed, 11 skipped.
+- Not run: desktop hide/apply check on two displays (needs desktop authorization); no Release build.
+- Separate finding, not changed: each scene's text worker reads the 78 MB PingFang fallback font twice per text update under the process-wide g_freetype_mutex (TextLayer.cpp CreateFallbackFace); a sample showed the two scenes' workers waiting on each other (333 mutex-wait samples).
+
+## 2026-09-26 — Top bar/About version display + Release build
+
+- Removed top-bar version and GitHub button; About shows 'beta (unreleased)' and component versions 0.1.0 (display-only); removed bigsaltyfishes renderer row.
+- Updated ControlPanelShellTests top-bar tests (repository link removed).
+- python3 scripts/test.py: 574 passed, 0 failed, 11 skipped.
+- python3 scripts/build.py --swift-only --configuration Release: OK; bundled WebUI identical to WebUI/.
+- Not checked: visual rendering of Settings/About on a desktop run.
+
 ## 2026-09-26 — Release pipeline follow-ups: reference bytes, real transport, safer rebuild
 
 After review: the .DS_Store and alias writers are held to ds_store 1.3.3 / mac_alias 2.2.3 output, the model call has a 600 s deadline and claim rules, --rebuild-changelog never calls the model and keeps recorded sections, the image copy sheds extended attributes, and DMG inputs are checked in the packaging preflight. Python-only changes after the previous entry's full gate.

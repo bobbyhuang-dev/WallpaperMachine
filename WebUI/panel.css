@@ -259,9 +259,6 @@ small, .muted { color: var(--muted); }
 .app-brand-mark { display: flex; flex: none; margin-right: 4px; color: var(--text); }
 .app-title { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
 .app-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.app-version { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.github-link { color: var(--muted); min-height: 26px; min-width: 26px; padding: 4px; }
-.github-link:hover:not(:disabled) { color: var(--text); }
 .top-actions { display: flex; align-items: center; justify-self: end; gap: 8px; min-width: 0; }
 .top-actions select { max-width: 180px; }
 .error-banner { display: flex; align-items: center; gap: 10px; padding: 9px 18px; color: var(--danger); background: var(--danger-surface); border-bottom: 1px solid var(--danger-line); flex: none; }
@@ -647,7 +644,7 @@ progress:indeterminate::-webkit-progress-bar { background: transparent; }
   .topbar { padding: 0 14px; }
 }
 @media (max-width: 840px) {
-  /* Only the GitHub button stays in the middle; the name and version would ellipsize against the picker. */
+  /* The name would ellipsize against the picker. */
   .app-title { display: none; }
   .library-page { --filters-width: 148px; }
   .filter-sidebar .check-icon { display: none; }

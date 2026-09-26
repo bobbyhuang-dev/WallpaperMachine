@@ -25,7 +25,6 @@ export default {
   'Open this panel in WallpaperMachine. Use Reconnect above to try again.': '请在 WallpaperMachine 中打开此面板。点击上方的“重新连接”重试。',
   'Reconnect': '重新连接',
   'Dismiss error': '关闭错误',
-  'WallpaperMachine on GitHub': 'WallpaperMachine 的 GitHub 页面',
   'Target display': '目标显示器',
   ' (mirrored)': '（镜像）',
   ' (disabled)': '（已停用）',

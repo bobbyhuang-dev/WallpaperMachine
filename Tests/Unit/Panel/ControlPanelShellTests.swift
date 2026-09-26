@@ -651,7 +651,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
     await workshop.steamCMDSetup.shutdown()
   }
 
-  func testTopBarCentersTheBrandBesideARepositoryLinkAndOwnsTitleBarGesturesWithoutWindow()
+  func testTopBarCentersTheBrandAndOwnsTitleBarGesturesWithoutWindow()
     async throws
   {
     try await withPanel { panel in
@@ -660,24 +660,19 @@ final class ControlPanelShellTests: ControlPanelTestCase {
       panel.show()
       try await panel.finishWelcome()
       try await panel.waitJS("Math.round(window.innerWidth) === 1240")
-      try await panel.waitJS("document.querySelector('#app-identity [data-action=\"openExternal\"]') !== null")
+      try await panel.waitJS("document.querySelector('#app-identity .app-name') !== null")
       let link = try await panel.js("""
         const bar = document.querySelector('.topbar');
-        const link = document.querySelector('#app-identity [data-action="openExternal"]');
         const barRect = bar.getBoundingClientRect();
         const identity = document.getElementById('app-identity').getBoundingClientRect();
         return {
-          url: link.dataset.url,
           inset: getComputedStyle(document.documentElement).getPropertyValue('--window-controls-inset').trim(),
           offCenter: Math.abs((identity.left + identity.right) / 2 - (barRect.left + barRect.right) / 2),
           title: bar.querySelector('.app-name').textContent,
+          identityControls: document.querySelectorAll('#app-identity button, #app-identity a').length,
         };
         """) as? [String: Any]
-      let url = try XCTUnwrap(URL(string: link?["url"] as? String ?? ""))
-      XCTAssertEqual(url, AppUpdateConfiguration.repositoryURL)
-      XCTAssertTrue(
-        WebPanelController.allowedExternalURL(url),
-        "The repository link must pass the same allowlist as every other external link")
+      XCTAssertEqual(link?["identityControls"] as? Int, 0, "The brand shows no version or repository button")
       XCTAssertEqual(link?["inset"] as? String, "0px", "No window means no traffic lights to clear")
       XCTAssertLessThanOrEqual(
         link?["offCenter"] as? Double ?? .infinity, 1,
@@ -694,7 +689,7 @@ final class ControlPanelShellTests: ControlPanelTestCase {
         """
         const before = window.powerProbe.received.length;
         document.querySelector('.topbar').dispatchEvent(new MouseEvent('mousedown', {bubbles: true, button: 0}));
-        document.querySelector('#app-identity [data-action="openExternal"]').dispatchEvent(new MouseEvent('mousedown', {bubbles: true, button: 0}));
+        document.getElementById('app-identity').dispatchEvent(new MouseEvent('mousedown', {bubbles: true, button: 0}));
         await new Promise(resolve => setTimeout(resolve, 150));
         return window.powerProbe.received.length - before;
         """, equals: 0)
@@ -702,11 +697,11 @@ final class ControlPanelShellTests: ControlPanelTestCase {
     }
   }
 
-  func testTopBarKeepsTheRepositoryLinkAndNeverOverlapsAtTheMinimumWindowWidth() async throws {
+  func testTopBarNeverOverlapsAtTheMinimumWindowWidth() async throws {
     try await withPanel { panel in
       panel.show()
       try await panel.finishWelcome()
-      try await panel.waitJS("document.querySelector('#app-identity [data-action=\"openExternal\"]') !== null")
+      try await panel.waitJS("document.querySelector('#app-identity .app-name') !== null")
       // From the minimum content width up to the default, with a download in flight so the queue button is present too.
       let widths: [Double] = [760, 840, 900, 1040, 1240]
       for width in widths {
@@ -740,7 +735,6 @@ final class ControlPanelShellTests: ControlPanelTestCase {
           return {
             width: barRect.width,
             overlaps, outside,
-            github: !!document.querySelector('#app-identity [data-action="openExternal"]')?.getClientRects().length,
             queue: !!document.querySelector('#top-actions [data-action="openDownloads"]')?.getClientRects().length,
             nameVisible: !!name && name.getClientRects().length > 0,
           };
@@ -748,11 +742,10 @@ final class ControlPanelShellTests: ControlPanelTestCase {
         XCTAssertEqual(layout?["width"] as? Double, width, "Top bar must span the panel at \(width)px")
         XCTAssertEqual(layout?["overlaps"] as? [String], [], "Top bar controls must not overlap at \(width)px")
         XCTAssertEqual(layout?["outside"] as? [String], [], "Top bar controls must stay inside the bar at \(width)px")
-        XCTAssertEqual(layout?["github"] as? Bool, true, "The repository link stays available at \(width)px")
         XCTAssertEqual(layout?["queue"] as? Bool, true, "The downloads button stays available at \(width)px")
         XCTAssertEqual(
           layout?["nameVisible"] as? Bool, width > 840,
-          "Only the repository button stays in the middle of a narrow window; the name returns once there is room (\(width)px)")
+          "The name hides in a narrow window and returns once there is room (\(width)px)")
       }
     }
   }

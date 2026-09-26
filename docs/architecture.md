@@ -124,7 +124,10 @@ by Swift: `upstream/renderer/crates/core/src/window.rs` defines the `NSWindow` s
 `MWEWallpaperDesktopWindow` (stable Objective-C name, deliberately depended on by Swift) hosting
 a `CAMetalLayer` at a wallpaper window level. Web projects get the same window shape from Swift
 (`MWEWebWallpaperDesktopWindow`, `App/Services/WebWallpaper/`); the bridge excludes them from
-engine reconciliation and reports them through `webWallpapers()`.
+engine reconciliation and reports them through `webWallpapers()`. Every wallpaper window kind
+(renderer, web, native video) sets `canHide = false`: hiding the app — Cmd-H, or the panel
+hiding itself after an activation — hides the panel only. With AppKit's default the wallpaper
+windows left the screen too, and occlusion suspended every display.
 
 Swift keeps the *system* wallpaper consistent with that window:
 

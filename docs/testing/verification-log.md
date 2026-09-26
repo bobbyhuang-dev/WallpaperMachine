@@ -25,6 +25,18 @@ move the oldest entries verbatim into
 (or a new dated archive file) first, and promote anything durable before it
 goes. Trimming is allowed; editing an entry's recorded result is not.
 
+## 2026-09-26 — Hide app after wallpaper activation
+
+- python3 scripts/test.py: 574 passed, 0 failed, 11 skipped
+- python3 scripts/build.py --swift-only --configuration Release: OK
+- Manual check of hide-on-activate pending (user verifying)
+
+## 2026-09-26 — Release build after syncing origin/main (6106f50)
+
+- python3 scripts/test.py: 574 passed, 0 failed, 11 skipped
+- python3 scripts/build.py --configuration Release: OK (renderer changes pulled, full build)
+- Not launched; check_renderer.py not run
+
 ## 2026-09-25 — Lucy renderer fix moved onto origin/main (first-seen displays, Discover animations) before push
 
 - `git merge --ff-only origin/main` (aaed861 to e44b960), then the change set reapplied: conflicts only in `upstream/provenance.json`, where both sides prepended to the renderer note (both kept, newest first), and the two logs (entries kept in recording order, trimmed to ten by `scripts/log_verification.py`'s rule); the other 33 changed files matched their pre-move checksums
@@ -105,23 +117,3 @@ Renderer-only fix: 2D camera layers frame the canvas (zoom plus origin as an off
 - Bundle check: app and extension binaries each contain 17 `TexturePrefetch` symbols, linked 19:43 after the last renderer edit (19:35); the extension contains the new `Acquire failed display=` diagnostic
 - After review, `TexturePrefetch` keeps the workers that started when a thread fails to start; `texture_prefetch_test` — 7 passed (new `WithoutWorkersEveryImageIsLeftToTheCallerAtOnce`), 3 runs
 - Not run: the app was not launched and the lock screen was not re-enabled; Debug and Release copies of the extension are both still registered
-
-## 2026-09-24 — Lock screen: parallel texture decode at pass preparation; extension reports acquire failures
-
-Animate Lock Screen failed for a private 943 MB puppet scene (122 embedded PNG textures). Confirmed: WallpaperAgent abandoned the extension's acquire after about 31 s with no frame. Likely contributor, not measured inside the extension: the offscreen probe needs 15.6 s to its first frame, dominated by single-threaded stb_image PNG decode. The extension sent no readiness error, so the app showed its generic 'macOS did not load' message.
-
-- `python3 scripts/check_renderer.py` — exit 0; 25 binaries including new `texture_prefetch_test` (6 tests); 10 generated cases pooled/isolated pixels equal, 0 diagnostics; reload cycles 8x2 clean; no `--project` corpus; asset checks skipped: `MetalSceneDraw.LocalProjectsNamedByTheEnvironmentRunThroughTheNativeBackend` (no `WE_TEST_METAL_PROJECTS`), `TextObjectRuntime.LonelyCatHeadlessRegression` (no local fixture), `TextObjectRuntime.Workshop3409533530FullSceneKeepsClockRenderPassAndTexture` (package absent)
-- `python3 scripts/test.py` — exit 0; 574 passed, 0 failed, 11 skipped of 585
-- `offscreen_scene_probe` on the private scene, warm shader cache — first frame 15.6 s before, 14.7 s with the `FindTex` check, 3.6 s with `TexturePrefetch`; frame SHA-256 identical; peak RSS about 0.8 to 1.1 GB
-- Mutation: admitting past the byte budget fails `HoldsDecodingAndUntakenImagesWithinTheBudget` and `AdmitsAnImageLargerThanTheBudgetOnItsOwn`
-- `python3 scripts/build.py --renderer-only` — exit 0; `libwallpaper_bridge.a` contains `TexturePrefetch`
-- Not run: lock-screen activation through WallpaperAgent (changes the system wallpaper; not authorized) and a Release build (not requested); first-frame time inside the extension is unmeasured
-
-## 2026-09-24 — Requested full Release rebuild after equal-quality and remote integration
-
-- Requested a new build after committing/pushing the equal-quality work and integrating the remote parallax and Workshop download-concurrency changes. Used the full renderer/bridge build, not --swift-only.
-- Prebuild python3 scripts/test.py: exit 0; 152 Python cases passed, native 574 passed, 0 failed, 11 opt-in skipped of 585 (9 native media, 2 live Workshop). No desktop UI or opt-in network/audio-hardware run.
-- python3 scripts/build.py --configuration Release: exit 0; Cargo workspace rebuilt, Swift/FFI bindings regenerated, XcodeGen and Release app/extension build succeeded. Delivered build/Build/Products/Release/WallpaperMachine.app, version 0.5.0 (16).
-- Complete current source-input SHA-256 d9600b9b572197f6d1627ac05d6977be82354ed454137f0d2bbb0b56526137a0, covering 1036 source/config/test files including relevant untracked files. Before/after manifests show no source drift during the gate and build. New executable SHA-256 173c1d51889243657a5d4990bd5b6d43e176abde45abfc6d7e5127a7abca7cbf.
-- All 15 bundled Contents/Resources/WebUI files byte-match the current WebUI sources, including the new download-concurrency settings row. codesign --verify --deep --strict build/Build/Products/Release/WallpaperMachine.app: exit 0.
-- No install, ordinary app launch/quit/restart, desktop visual check or power measurement. User must quit and reopen the delivered app. Earlier power results refer to executable c03902bfae6dddf9cdd929a2dfc73056280dfbe82b7241478d4e86bf048aadbc, not this rebuilt executable.

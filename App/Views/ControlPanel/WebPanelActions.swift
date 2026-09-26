@@ -140,6 +140,8 @@ extension WebPanelController {
     case "activate":
       try await store.activateWallpaperAsync(
         id: try wallpaperID(request), displayId: navigation.targetDisplayID)
+      // Get out of the way so the freshly applied wallpaper is visible.
+      NSApp.hide(nil)
     case "apply": try await store.applyWallpaperOptionsAsync(wallpaperId: try wallpaperID(request))
     case "revert":
       try await store.cancelWallpaperOptionsAsync(wallpaperId: try wallpaperID(request))

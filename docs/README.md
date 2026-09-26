@@ -9,7 +9,7 @@ live under `testing/`.
 
 | Document | Purpose |
 |---|---|
-| [../README.md](../README.md) | What the app is, feature summary, quickstart |
+| [../README.md](../README.md) | What the app is, feature tour, FAQ, build quickstart, sponsor list; follows the website |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Contributor working agreement and day-to-day loop |
 | [build.md](build.md) | Toolchain, dependencies, build, package, install, troubleshooting |
 

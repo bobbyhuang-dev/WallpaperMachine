@@ -79,7 +79,8 @@ the picker previews and the native Dock image loader. These fixed-appearance
 1024 px PNGs use Icon Composer's macOS 26 rendering, retain the 100 px transparent
 outer margin used by the compiled icon, and load as 512-point Retina images.
 All three Dock variants share the regular native mark geometry and frame weight;
-the heavier small-size glyph remains reserved for the panel and menu bar.
+the heavier small-size glyph remains reserved for the panel and menu bar. The
+root README displays `day.png`; update its path there if the export is renamed.
 
 Website export includes `brand/logo.svg` for light backgrounds,
 `brand/logo-dark.svg` for dark backgrounds, and a centered `brand/mark.svg`.
